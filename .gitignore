@@ -1,0 +1,66 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# Android Studio
+*.iml
+.idea/
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/gradle.xml
+.idea/assetWizardSettings.xml
+.idea/dictionaries
+.idea/libraries
+.idea/caches
+.idea/modules.xml
+.idea/misc.xml
+captures/
+.externalNativeBuild/
+.cxx/
+local.properties
+
+# Keystore files
+*.jks
+*.keystore
+
+# Secrets - NEVER commit
+secrets/
+*.pem
+*.p12
+*.key
+.env
+.env.*
+google-services.json
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Test output
+app/build/
+app/release/
+
+# Generated files
+gen/
+out/
+
+# APK files
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# Log files
+*.log
+
+# ProGuard
+proguard/
+
+# Coverage reports
+coverage/
