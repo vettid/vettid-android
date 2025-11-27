@@ -5,7 +5,7 @@ import android.security.keystore.KeyProperties
 import android.util.Base64
 import com.google.crypto.tink.subtle.Hkdf
 import com.google.crypto.tink.subtle.X25519
-import com.google.crypto.tink.subtle.ChaCha20Poly1305
+import javax.crypto.spec.IvParameterSpec
 import org.signal.argon2.Argon2
 import org.signal.argon2.MemoryCost
 import org.signal.argon2.Type
@@ -121,20 +121,43 @@ class CryptoManager @Inject constructor() {
     /**
      * Encrypt data using ChaCha20-Poly1305
      * Returns (ciphertext, nonce) where ciphertext includes the authentication tag
+     *
+     * Note: Android 28+ supports ChaCha20-Poly1305 natively via javax.crypto
+     * For older versions, we fall back to AES-GCM which is also secure
      */
     fun chaChaEncrypt(plaintext: ByteArray, key: ByteArray): Pair<ByteArray, ByteArray> {
         val nonce = randomBytes(CHACHA_NONCE_LENGTH)
-        val cipher = ChaCha20Poly1305.create(key)
-        val ciphertext = cipher.encrypt(nonce, plaintext)
-        return Pair(ciphertext, nonce)
+
+        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            // Use ChaCha20-Poly1305 on Android 9+
+            val cipher = Cipher.getInstance("ChaCha20-Poly1305")
+            cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "ChaCha20"), IvParameterSpec(nonce))
+            val ciphertext = cipher.doFinal(plaintext)
+            Pair(ciphertext, nonce)
+        } else {
+            // Fallback to AES-GCM on older Android (still secure)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            val gcmSpec = GCMParameterSpec(GCM_TAG_LENGTH, nonce)
+            cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(key, "AES"), gcmSpec)
+            val ciphertext = cipher.doFinal(plaintext)
+            Pair(ciphertext, nonce)
+        }
     }
 
     /**
-     * Decrypt data using ChaCha20-Poly1305
+     * Decrypt data using ChaCha20-Poly1305 (or AES-GCM fallback)
      */
     fun chaChaDecrypt(ciphertext: ByteArray, nonce: ByteArray, key: ByteArray): ByteArray {
-        val cipher = ChaCha20Poly1305.create(key)
-        return cipher.decrypt(nonce, ciphertext)
+        return if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            val cipher = Cipher.getInstance("ChaCha20-Poly1305")
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "ChaCha20"), IvParameterSpec(nonce))
+            cipher.doFinal(ciphertext)
+        } else {
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            val gcmSpec = GCMParameterSpec(GCM_TAG_LENGTH, nonce)
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), gcmSpec)
+            cipher.doFinal(ciphertext)
+        }
     }
 
     // MARK: - UTK Password Encryption Flow
