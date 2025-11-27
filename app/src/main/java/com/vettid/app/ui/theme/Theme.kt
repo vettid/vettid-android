@@ -1,88 +1,105 @@
 package com.vettid.app.ui.theme
 
 import android.app.Activity
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
+// VettID Brand Colors
+val VettidGold = Color(0xFFF4B942)
+val VettidGoldDark = Color(0xFFD9A137)
+val VettidGoldLight = Color(0xFFFFD980)
+val VettidBlack = Color(0xFF000000)
+val VettidDarkGray = Color(0xFF121212)
+val VettidMediumGray = Color(0xFF2C2C2C)
+val VettidLightGray = Color(0xFF9E9E9E)
+val VettidOffWhite = Color(0xFFF5F5F5)
+val VettidWhite = Color(0xFFFFFFFF)
+
+// Dark theme - Black background with gold accents
 private val DarkColorScheme = darkColorScheme(
-    primary = Color(0xFF90CAF9),
-    onPrimary = Color(0xFF003258),
-    primaryContainer = Color(0xFF00497D),
-    onPrimaryContainer = Color(0xFFD1E4FF),
-    secondary = Color(0xFFBBC7DB),
-    onSecondary = Color(0xFF253140),
-    secondaryContainer = Color(0xFF3B4858),
-    onSecondaryContainer = Color(0xFFD7E3F7),
-    tertiary = Color(0xFFD6BEE4),
-    onTertiary = Color(0xFF3B2948),
-    tertiaryContainer = Color(0xFF523F5F),
-    onTertiaryContainer = Color(0xFFF2DAFF),
+    primary = VettidGold,
+    onPrimary = VettidBlack,
+    primaryContainer = VettidGoldDark,
+    onPrimaryContainer = VettidWhite,
+    secondary = VettidGold,
+    onSecondary = VettidBlack,
+    secondaryContainer = VettidMediumGray,
+    onSecondaryContainer = VettidGold,
+    tertiary = VettidGoldLight,
+    onTertiary = VettidBlack,
+    tertiaryContainer = VettidDarkGray,
+    onTertiaryContainer = VettidGoldLight,
     error = Color(0xFFFFB4AB),
     onError = Color(0xFF690005),
     errorContainer = Color(0xFF93000A),
     onErrorContainer = Color(0xFFFFDAD6),
-    background = Color(0xFF1A1C1E),
-    onBackground = Color(0xFFE2E2E6),
-    surface = Color(0xFF1A1C1E),
-    onSurface = Color(0xFFE2E2E6),
+    background = VettidBlack,
+    onBackground = VettidWhite,
+    surface = VettidDarkGray,
+    onSurface = VettidWhite,
+    surfaceVariant = VettidMediumGray,
+    onSurfaceVariant = VettidLightGray,
+    outline = VettidLightGray,
+    outlineVariant = VettidMediumGray,
+    inverseSurface = VettidWhite,
+    inverseOnSurface = VettidBlack,
+    inversePrimary = VettidGoldDark,
 )
 
+// Light theme - White/off-white background with black and gold accents
 private val LightColorScheme = lightColorScheme(
-    primary = Color(0xFF0061A4),
-    onPrimary = Color(0xFFFFFFFF),
-    primaryContainer = Color(0xFFD1E4FF),
-    onPrimaryContainer = Color(0xFF001D36),
-    secondary = Color(0xFF535F70),
-    onSecondary = Color(0xFFFFFFFF),
-    secondaryContainer = Color(0xFFD7E3F7),
-    onSecondaryContainer = Color(0xFF101C2B),
-    tertiary = Color(0xFF6B5778),
-    onTertiary = Color(0xFFFFFFFF),
-    tertiaryContainer = Color(0xFFF2DAFF),
-    onTertiaryContainer = Color(0xFF251431),
+    primary = VettidBlack,
+    onPrimary = VettidWhite,
+    primaryContainer = VettidGold,
+    onPrimaryContainer = VettidBlack,
+    secondary = VettidGold,
+    onSecondary = VettidBlack,
+    secondaryContainer = VettidGoldLight,
+    onSecondaryContainer = VettidBlack,
+    tertiary = VettidDarkGray,
+    onTertiary = VettidWhite,
+    tertiaryContainer = VettidLightGray,
+    onTertiaryContainer = VettidBlack,
     error = Color(0xFFBA1A1A),
-    onError = Color(0xFFFFFFFF),
+    onError = VettidWhite,
     errorContainer = Color(0xFFFFDAD6),
     onErrorContainer = Color(0xFF410002),
-    background = Color(0xFFFDFCFF),
-    onBackground = Color(0xFF1A1C1E),
-    surface = Color(0xFFFDFCFF),
-    onSurface = Color(0xFF1A1C1E),
+    background = VettidWhite,
+    onBackground = VettidBlack,
+    surface = VettidOffWhite,
+    onSurface = VettidBlack,
+    surfaceVariant = VettidOffWhite,
+    onSurfaceVariant = VettidDarkGray,
+    outline = VettidLightGray,
+    outlineVariant = VettidOffWhite,
+    inverseSurface = VettidBlack,
+    inverseOnSurface = VettidWhite,
+    inversePrimary = VettidGold,
 )
 
 @Composable
 fun VettIDTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
-    }
+    // Always use VettID brand colors, no dynamic colors
+    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
-            window.statusBarColor = colorScheme.primary.toArgb()
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
+            // Status bar matches the theme
+            window.statusBarColor = if (darkTheme) VettidBlack.toArgb() else VettidBlack.toArgb()
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false
         }
     }
 
