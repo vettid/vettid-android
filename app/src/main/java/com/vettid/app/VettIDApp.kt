@@ -1,5 +1,7 @@
 package com.vettid.app
 
+import android.util.Log
+import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -7,6 +9,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -14,6 +17,9 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.vettid.app.ui.components.QrCodeScanner
+
+private const val TAG = "VettIDApp"
 
 sealed class Screen(val route: String) {
     object Welcome : Screen("welcome")
@@ -131,20 +137,170 @@ fun WelcomeScreen(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EnrollmentScreen(
     onComplete: () -> Unit,
     onBack: () -> Unit
 ) {
-    // Placeholder - will be replaced with QR scanner
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text("QR Scanner - Coming Soon")
+    val context = LocalContext.current
+    var scannedCode by remember { mutableStateOf<String?>(null) }
+    var isProcessing by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Scan Enrollment QR") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
+            when {
+                isProcessing -> {
+                    // Processing scanned code
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        CircularProgressIndicator()
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Text("Processing enrollment...")
+                    }
+                }
+                scannedCode != null -> {
+                    // Show scanned result (for now just display it)
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            modifier = Modifier.size(64.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+
+                        Spacer(modifier = Modifier.height(16.dp))
+
+                        Text(
+                            text = "QR Code Scanned!",
+                            style = MaterialTheme.typography.headlineSmall
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        Text(
+                            text = "Invitation code detected",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        Spacer(modifier = Modifier.height(24.dp))
+
+                        // Show the scanned code (truncated for display)
+                        Card(
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp)
+                            ) {
+                                Text(
+                                    text = "Scanned Data:",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = scannedCode?.take(100) ?: "",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                if ((scannedCode?.length ?: 0) > 100) {
+                                    Text(
+                                        text = "...",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(24.dp))
+
+                        Button(
+                            onClick = {
+                                // TODO: Start enrollment API flow
+                                isProcessing = true
+                                // For now, just show a toast
+                                Toast.makeText(
+                                    context,
+                                    "Enrollment flow coming soon!",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                                isProcessing = false
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Continue Enrollment")
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        OutlinedButton(
+                            onClick = { scannedCode = null },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Scan Again")
+                        }
+                    }
+                }
+                else -> {
+                    // Show QR scanner
+                    QrCodeScanner(
+                        onQrCodeScanned = { code ->
+                            Log.d(TAG, "Scanned QR code: $code")
+                            scannedCode = code
+                        },
+                        onError = { error ->
+                            Log.e(TAG, "Scanner error: $error")
+                            errorMessage = error
+                            Toast.makeText(context, error, Toast.LENGTH_LONG).show()
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+
+            // Error snackbar
+            errorMessage?.let { error ->
+                Snackbar(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(16.dp),
+                    action = {
+                        TextButton(onClick = { errorMessage = null }) {
+                            Text("Dismiss")
+                        }
+                    }
+                ) {
+                    Text(error)
+                }
+            }
+        }
     }
 }
 
