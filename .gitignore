@@ -56,6 +56,9 @@ out/
 *.ap_
 *.dex
 
+# Exception: track APKs in releases directory
+!releases/*.apk
+
 # Log files
 *.log
 
