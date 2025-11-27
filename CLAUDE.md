@@ -29,33 +29,58 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture
 
-**Stack**: Kotlin 1.9, Jetpack Compose, Hilt DI, Retrofit, Coroutines
+**Stack**: Kotlin 1.9, Jetpack Compose, Hilt DI, Retrofit, Tink, Argon2, Coroutines
 
 **Package structure** (`app/src/main/java/com/vettid/app/`):
-- `core/crypto/` - CryptoManager handles ECDH key exchange (secp256r1), AES-GCM encryption, ECDSA signing. Keys stored in Android Keystore with optional biometric protection.
+- `core/crypto/` - CryptoManager handles X25519 key exchange, ChaCha20-Poly1305 encryption, Argon2id hashing, HKDF key derivation. Hardware-backed EC keys in Android Keystore for attestation.
 - `core/attestation/` - HardwareAttestationManager generates hardware-backed attestation certificates. Supports StrongBox (Pixel 3+), TEE, and software fallback.
-- `core/storage/` - CredentialStore uses EncryptedSharedPreferences for Protean Credential persistence (LAT tokens, transaction keys).
-- `core/network/` - ApiClient wraps Retrofit for VettID Ledger Service API (enrollment, auth, vault operations, key rotation).
+- `core/storage/` - CredentialStore uses EncryptedSharedPreferences for credential persistence (encrypted blob, UTK pool, LAT, password salt).
+- `core/network/` - ApiClient wraps Retrofit for VettID Ledger Service API (multi-step enrollment, action-based auth).
 - `features/auth/` - BiometricAuthManager handles fingerprint/face authentication with device credential fallback.
 - `di/` - Hilt AppModule provides singleton instances of core managers.
 - `ui/` - Compose screens and theme.
 
 **Navigation flow** (VettIDApp.kt): Welcome → Enrollment (QR scan) → Authentication (biometric) → Main (vault/credentials/settings tabs)
 
-**Key concepts**:
-- **LAT (Lightweight Authentication Token)**: 32-byte token rotated on each authentication
-- **CEK (Credential Encryption Key)**: ECDH key pair for encrypting credential data
-- **Transaction Keys**: Pre-generated one-time-use keys for vault operations
+## Key Ownership Model
+
+**Ledger (Backend) Owns:**
+- CEK (Credential Encryption Key) - X25519 private key for encrypting credential blob
+- LTK (Ledger Transaction Key) - X25519 private key for decrypting password hashes
+
+**Mobile Stores:**
+- Encrypted credential blob (opaque, cannot decrypt locally)
+- UTK pool (User Transaction Keys) - X25519 **public** keys for encrypting password
+- LAT (Ledger Auth Token) - 256-bit hex token for verifying server authenticity
+- Password salt - For Argon2id hashing
 
 ## API Endpoints
 
 Base URL: `https://api.vettid.com/`
-- `POST /v1/enroll` - Device enrollment with attestation
-- `POST /v1/auth` - Authenticate with LAT + signature
-- `GET /v1/vaults/{vaultId}/status` - Vault status
-- `POST /v1/vaults/{vaultId}/actions` - Vault control (start/stop/restart/terminate)
-- `POST /v1/keys/cek/rotate` - CEK rotation
-- `POST /v1/keys/tk/replenish` - Replenish transaction keys
+
+**Enrollment (Multi-Step):**
+- `POST /api/v1/enroll/start` - Start enrollment with invitation code
+- `POST /api/v1/enroll/set-password` - Set encrypted password hash
+- `POST /api/v1/enroll/finalize` - Complete enrollment, receive credential package
+
+**Authentication (Action-Specific):**
+- `POST /api/v1/action/request` - Request scoped action token (requires Cognito token)
+- `POST /api/v1/auth/execute` - Execute auth with action token (NOT Cognito token)
+
+**Vault (Phase 5 - Not Yet Deployed):**
+- `GET /member/vaults/{id}/status` - Vault status
+- `POST /member/vaults/{id}/start` - Start vault
+- `POST /member/vaults/{id}/stop` - Stop vault
+
+## Crypto Flow
+
+**Password Encryption (for API):**
+1. Hash password: `Argon2id(password, salt)` → 32-byte hash
+2. Generate ephemeral X25519 keypair
+3. Compute shared secret: `X25519(ephemeral_private, UTK_public)`
+4. Derive key: `HKDF-SHA256(shared, "password-encryption")` → 32-byte key
+5. Encrypt: `ChaCha20-Poly1305(password_hash, key, nonce)`
+6. Send: `encrypted_password_hash`, `ephemeral_public_key`, `nonce`, `key_id`
 
 ## Platform Requirements
 
@@ -63,3 +88,7 @@ Base URL: `https://api.vettid.com/`
 - targetSdk 34
 - Java 17
 - Supports GrapheneOS and other security-focused ROMs with hardware-backed Keystore
+
+## Reference Documentation
+
+See `API-STATUS.md` for current API status and detailed endpoint specifications.

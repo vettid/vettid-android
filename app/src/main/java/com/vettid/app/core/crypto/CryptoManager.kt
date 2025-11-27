@@ -2,6 +2,14 @@ package com.vettid.app.core.crypto
 
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import android.util.Base64
+import com.google.crypto.tink.subtle.Hkdf
+import com.google.crypto.tink.subtle.X25519
+import com.google.crypto.tink.subtle.ChaCha20Poly1305
+import org.signal.argon2.Argon2
+import org.signal.argon2.MemoryCost
+import org.signal.argon2.Type
+import org.signal.argon2.Version
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.PrivateKey
@@ -20,12 +28,16 @@ import javax.inject.Singleton
 
 /**
  * Manages all cryptographic operations for VettID
- * Uses X25519 for key exchange and ChaCha20-Poly1305 for authenticated encryption
  *
- * Note: Android's native Keystore doesn't support X25519 directly, so we use
- * software-based X25519 with the keys protected by Android Keystore wrapping.
- * For this implementation, we use ECDH with secp256r1 as a fallback with
- * hardware-backed key storage.
+ * Key ownership model:
+ * - Ledger owns: CEK (Credential Encryption Key), LTK (Ledger Transaction Key)
+ * - Mobile stores: UTK pool (public keys only), LAT, encrypted blob
+ *
+ * Crypto operations:
+ * - X25519 key exchange for UTK encryption
+ * - ChaCha20-Poly1305 for authenticated encryption
+ * - Argon2id for password hashing
+ * - HKDF-SHA256 for key derivation
  */
 @Singleton
 class CryptoManager @Inject constructor() {
@@ -39,9 +51,144 @@ class CryptoManager @Inject constructor() {
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val GCM_TAG_LENGTH = 128
         private const val GCM_NONCE_LENGTH = 12
+        private const val CHACHA_NONCE_LENGTH = 12
+
+        // Argon2id parameters (OWASP recommendations)
+        private const val ARGON2_ITERATIONS = 3
+        private const val ARGON2_MEMORY_KB = 65536  // 64 MB
+        private const val ARGON2_PARALLELISM = 4
+        private const val ARGON2_HASH_LENGTH = 32
     }
 
-    // MARK: - Key Generation
+    // MARK: - Password Hashing (Argon2id)
+
+    /**
+     * Hash password using Argon2id
+     * Returns 32-byte hash suitable for encryption
+     */
+    fun hashPassword(password: String, salt: ByteArray): ByteArray {
+        val argon2 = Argon2.Builder(Version.V13)
+            .type(Type.Argon2id)
+            .memoryCost(MemoryCost.KiB(ARGON2_MEMORY_KB))
+            .parallelism(ARGON2_PARALLELISM)
+            .iterations(ARGON2_ITERATIONS)
+            .hashLength(ARGON2_HASH_LENGTH)
+            .build()
+
+        val result = argon2.hash(password.toByteArray(Charsets.UTF_8), salt)
+        return result.hash
+    }
+
+    /**
+     * Generate a random salt for Argon2
+     */
+    fun generateSalt(): ByteArray = randomBytes(16)
+
+    // MARK: - X25519 Key Exchange
+
+    /**
+     * Generate an ephemeral X25519 key pair for UTK encryption
+     * Returns (privateKey, publicKey) as raw byte arrays
+     */
+    fun generateX25519KeyPair(): Pair<ByteArray, ByteArray> {
+        val privateKey = X25519.generatePrivateKey()
+        val publicKey = X25519.publicFromPrivate(privateKey)
+        return Pair(privateKey, publicKey)
+    }
+
+    /**
+     * Compute X25519 shared secret
+     */
+    fun x25519SharedSecret(privateKey: ByteArray, publicKey: ByteArray): ByteArray {
+        return X25519.computeSharedSecret(privateKey, publicKey)
+    }
+
+    /**
+     * Derive encryption key from shared secret using HKDF-SHA256
+     */
+    fun deriveEncryptionKey(sharedSecret: ByteArray, info: String = "password-encryption"): ByteArray {
+        return Hkdf.computeHkdf(
+            "HMACSHA256",
+            sharedSecret,
+            ByteArray(0),  // empty salt
+            info.toByteArray(Charsets.UTF_8),
+            32  // 256-bit key
+        )
+    }
+
+    // MARK: - ChaCha20-Poly1305 Encryption
+
+    /**
+     * Encrypt data using ChaCha20-Poly1305
+     * Returns (ciphertext, nonce) where ciphertext includes the authentication tag
+     */
+    fun chaChaEncrypt(plaintext: ByteArray, key: ByteArray): Pair<ByteArray, ByteArray> {
+        val nonce = randomBytes(CHACHA_NONCE_LENGTH)
+        val cipher = ChaCha20Poly1305.create(key)
+        val ciphertext = cipher.encrypt(nonce, plaintext)
+        return Pair(ciphertext, nonce)
+    }
+
+    /**
+     * Decrypt data using ChaCha20-Poly1305
+     */
+    fun chaChaDecrypt(ciphertext: ByteArray, nonce: ByteArray, key: ByteArray): ByteArray {
+        val cipher = ChaCha20Poly1305.create(key)
+        return cipher.decrypt(nonce, ciphertext)
+    }
+
+    // MARK: - UTK Password Encryption Flow
+
+    /**
+     * Encrypt password hash for sending to server
+     *
+     * Flow:
+     * 1. Hash password with Argon2id
+     * 2. Generate ephemeral X25519 keypair
+     * 3. Compute shared secret with UTK public key
+     * 4. Derive encryption key with HKDF
+     * 5. Encrypt password hash with ChaCha20-Poly1305
+     *
+     * @param password User's password
+     * @param salt Salt for Argon2 (should be stored locally)
+     * @param utkPublicKeyBase64 UTK public key from server (Base64)
+     * @return PasswordEncryptionResult with encrypted data for API
+     */
+    fun encryptPasswordForServer(
+        password: String,
+        salt: ByteArray,
+        utkPublicKeyBase64: String
+    ): PasswordEncryptionResult {
+        // 1. Hash password
+        val passwordHash = hashPassword(password, salt)
+
+        // 2. Generate ephemeral X25519 keypair
+        val (ephemeralPrivate, ephemeralPublic) = generateX25519KeyPair()
+
+        // 3. Decode UTK public key and compute shared secret
+        val utkPublicKey = Base64.decode(utkPublicKeyBase64, Base64.NO_WRAP)
+        val sharedSecret = x25519SharedSecret(ephemeralPrivate, utkPublicKey)
+
+        // 4. Derive encryption key
+        val encryptionKey = deriveEncryptionKey(sharedSecret)
+
+        // 5. Encrypt password hash
+        val (ciphertext, nonce) = chaChaEncrypt(passwordHash, encryptionKey)
+
+        // Clear sensitive data
+        ephemeralPrivate.fill(0)
+        sharedSecret.fill(0)
+        encryptionKey.fill(0)
+        passwordHash.fill(0)
+
+        return PasswordEncryptionResult(
+            encryptedPasswordHash = Base64.encodeToString(ciphertext, Base64.NO_WRAP),
+            ephemeralPublicKey = Base64.encodeToString(ephemeralPublic, Base64.NO_WRAP),
+            nonce = Base64.encodeToString(nonce, Base64.NO_WRAP)
+        )
+    }
+
+    // MARK: - Legacy EC Key Operations (for attestation)
 
     /**
      * Generate a new EC key pair in the Android Keystore
@@ -50,7 +197,6 @@ class CryptoManager @Inject constructor() {
     fun generateKeyPair(alias: String): KeyPair {
         val keyAlias = "$KEY_ALIAS_PREFIX$alias"
 
-        // Delete existing key if present
         if (keyStore.containsAlias(keyAlias)) {
             keyStore.deleteEntry(keyAlias)
         }
@@ -66,7 +212,7 @@ class CryptoManager @Inject constructor() {
         )
             .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
             .setDigests(KeyProperties.DIGEST_SHA256)
-            .setUserAuthenticationRequired(false) // Enable for biometric-protected keys
+            .setUserAuthenticationRequired(false)
             .build()
 
         keyPairGenerator.initialize(parameterSpec)
@@ -113,118 +259,7 @@ class CryptoManager @Inject constructor() {
         )
     }
 
-    // MARK: - Key Agreement (ECDH)
-
-    /**
-     * Perform ECDH key agreement to derive a shared secret
-     */
-    fun deriveSharedSecret(privateKey: PrivateKey, publicKey: PublicKey): ByteArray {
-        val keyAgreement = KeyAgreement.getInstance("ECDH")
-        keyAgreement.init(privateKey)
-        keyAgreement.doPhase(publicKey, true)
-        return keyAgreement.generateSecret()
-    }
-
-    /**
-     * Derive a symmetric key from shared secret using HKDF-like derivation
-     */
-    fun deriveSymmetricKey(
-        sharedSecret: ByteArray,
-        info: String = "credential-encryption-v1"
-    ): SecretKey {
-        // Simple HKDF-Extract + Expand (SHA-256)
-        val digest = MessageDigest.getInstance("SHA-256")
-        val infoBytes = info.toByteArray(Charsets.UTF_8)
-
-        // HKDF-Extract (PRK = HMAC-Hash(salt, IKM))
-        // Using empty salt (all zeros), extract phase simplifies to hash
-        digest.update(sharedSecret)
-        val prk = digest.digest()
-
-        // HKDF-Expand
-        digest.reset()
-        digest.update(prk)
-        digest.update(infoBytes)
-        digest.update(0x01.toByte())
-        val okm = digest.digest()
-
-        return SecretKeySpec(okm, "AES")
-    }
-
-    // MARK: - Encryption/Decryption
-
-    /**
-     * Encrypt data using AES-GCM (ChaCha20-Poly1305 alternative for Android)
-     */
-    fun encrypt(plaintext: ByteArray, key: SecretKey): EncryptedPayload {
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        val nonce = ByteArray(GCM_NONCE_LENGTH)
-        SecureRandom().nextBytes(nonce)
-
-        val gcmSpec = GCMParameterSpec(GCM_TAG_LENGTH, nonce)
-        cipher.init(Cipher.ENCRYPT_MODE, key, gcmSpec)
-
-        val ciphertext = cipher.doFinal(plaintext)
-
-        // GCM appends tag to ciphertext, extract it
-        val tagStart = ciphertext.size - (GCM_TAG_LENGTH / 8)
-        val actualCiphertext = ciphertext.copyOfRange(0, tagStart)
-        val tag = ciphertext.copyOfRange(tagStart, ciphertext.size)
-
-        return EncryptedPayload(
-            nonce = nonce,
-            ciphertext = actualCiphertext,
-            tag = tag
-        )
-    }
-
-    /**
-     * Decrypt data using AES-GCM
-     */
-    fun decrypt(payload: EncryptedPayload, key: SecretKey): ByteArray {
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        val gcmSpec = GCMParameterSpec(GCM_TAG_LENGTH, payload.nonce)
-        cipher.init(Cipher.DECRYPT_MODE, key, gcmSpec)
-
-        // GCM expects ciphertext + tag combined
-        val combined = payload.ciphertext + payload.tag
-        return cipher.doFinal(combined)
-    }
-
-    /**
-     * Hybrid encryption: ECDH + AES-GCM
-     */
-    fun hybridEncrypt(
-        plaintext: ByteArray,
-        recipientPublicKey: PublicKey
-    ): HybridEncryptedPayload {
-        // Generate ephemeral key pair
-        val ephemeralKeyPair = generateEphemeralKeyPair()
-
-        // Derive shared secret
-        val sharedSecret = deriveSharedSecret(ephemeralKeyPair.private, recipientPublicKey)
-
-        // Derive symmetric key
-        val symmetricKey = deriveSymmetricKey(sharedSecret)
-
-        // Encrypt
-        val encrypted = encrypt(plaintext, symmetricKey)
-
-        return HybridEncryptedPayload(
-            ephemeralPublicKey = ephemeralKeyPair.public.encoded,
-            nonce = encrypted.nonce,
-            ciphertext = encrypted.ciphertext,
-            tag = encrypted.tag
-        )
-    }
-
-    private fun generateEphemeralKeyPair(): java.security.KeyPair {
-        val keyPairGenerator = KeyPairGenerator.getInstance("EC")
-        keyPairGenerator.initialize(ECGenParameterSpec("secp256r1"), SecureRandom())
-        return keyPairGenerator.generateKeyPair()
-    }
-
-    // MARK: - Signing
+    // MARK: - Signing (for attestation)
 
     /**
      * Sign data using ECDSA
@@ -249,6 +284,18 @@ class CryptoManager @Inject constructor() {
         return signature.verify(signatureBytes)
     }
 
+    // MARK: - LAT Verification
+
+    /**
+     * Verify LAT matches stored value (phishing protection)
+     */
+    fun verifyLat(receivedLatHex: String, storedLatHex: String): Boolean {
+        return MessageDigest.isEqual(
+            receivedLatHex.lowercase().toByteArray(),
+            storedLatHex.lowercase().toByteArray()
+        )
+    }
+
     // MARK: - Secure Random
 
     /**
@@ -260,23 +307,12 @@ class CryptoManager @Inject constructor() {
         return bytes
     }
 
-    /**
-     * Generate a 256-bit random token (for LAT)
-     */
-    fun generateToken(): ByteArray = randomBytes(32)
-
     // MARK: - Key Management
 
-    /**
-     * Check if a key exists in the keystore
-     */
     fun hasKey(alias: String): Boolean {
         return keyStore.containsAlias("$KEY_ALIAS_PREFIX$alias")
     }
 
-    /**
-     * Delete a key from the keystore
-     */
     fun deleteKey(alias: String) {
         val keyAlias = "$KEY_ALIAS_PREFIX$alias"
         if (keyStore.containsAlias(keyAlias)) {
@@ -284,9 +320,6 @@ class CryptoManager @Inject constructor() {
         }
     }
 
-    /**
-     * Retrieve a public key from the keystore
-     */
     fun getPublicKey(alias: String): PublicKey? {
         val keyAlias = "$KEY_ALIAS_PREFIX$alias"
         return keyStore.getCertificate(keyAlias)?.publicKey
@@ -300,49 +333,11 @@ data class KeyPair(
     val publicKey: PublicKey
 )
 
-data class EncryptedPayload(
-    val nonce: ByteArray,
-    val ciphertext: ByteArray,
-    val tag: ByteArray
-) {
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (javaClass != other?.javaClass) return false
-        other as EncryptedPayload
-        return nonce.contentEquals(other.nonce) &&
-                ciphertext.contentEquals(other.ciphertext) &&
-                tag.contentEquals(other.tag)
-    }
-
-    override fun hashCode(): Int {
-        var result = nonce.contentHashCode()
-        result = 31 * result + ciphertext.contentHashCode()
-        result = 31 * result + tag.contentHashCode()
-        return result
-    }
-}
-
-data class HybridEncryptedPayload(
-    val ephemeralPublicKey: ByteArray, // Encoded public key
-    val nonce: ByteArray,
-    val ciphertext: ByteArray,
-    val tag: ByteArray
-) {
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (javaClass != other?.javaClass) return false
-        other as HybridEncryptedPayload
-        return ephemeralPublicKey.contentEquals(other.ephemeralPublicKey) &&
-                nonce.contentEquals(other.nonce) &&
-                ciphertext.contentEquals(other.ciphertext) &&
-                tag.contentEquals(other.tag)
-    }
-
-    override fun hashCode(): Int {
-        var result = ephemeralPublicKey.contentHashCode()
-        result = 31 * result + nonce.contentHashCode()
-        result = 31 * result + ciphertext.contentHashCode()
-        result = 31 * result + tag.contentHashCode()
-        return result
-    }
-}
+/**
+ * Result of encrypting password for server transmission
+ */
+data class PasswordEncryptionResult(
+    val encryptedPasswordHash: String,  // Base64
+    val ephemeralPublicKey: String,     // Base64
+    val nonce: String                   // Base64
+)

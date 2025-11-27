@@ -4,12 +4,23 @@ import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.google.gson.Gson
+import com.vettid.app.core.network.CredentialPackage
+import com.vettid.app.core.network.LedgerAuthToken
+import com.vettid.app.core.network.TransactionKeyInfo
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Secure storage for Protean Credentials using EncryptedSharedPreferences
+ * Secure storage for VettID credentials using EncryptedSharedPreferences
+ *
+ * Storage model (per API-STATUS.md):
+ * - encrypted_blob: Opaque blob from server (cannot decrypt locally)
+ * - UTK pool: X25519 public keys for encrypting passwords
+ * - LAT: Ledger Auth Token for verifying server authenticity
+ * - Password salt: For Argon2id hashing
+ *
+ * Note: CEK and LTK are owned by the Ledger, not stored locally
  */
 @Singleton
 class CredentialStore @Inject constructor(
@@ -30,174 +41,220 @@ class CredentialStore @Inject constructor(
     )
 
     companion object {
-        private const val KEY_CREDENTIAL_IDS = "credential_ids"
-        private const val KEY_CREDENTIAL_PREFIX = "credential_"
+        private const val KEY_USER_GUID = "user_guid"
+        private const val KEY_ENCRYPTED_BLOB = "encrypted_blob"
+        private const val KEY_CEK_VERSION = "cek_version"
+        private const val KEY_LAT_ID = "lat_id"
+        private const val KEY_LAT_TOKEN = "lat_token"
+        private const val KEY_LAT_VERSION = "lat_version"
+        private const val KEY_UTK_POOL = "utk_pool"
+        private const val KEY_PASSWORD_SALT = "password_salt"
+        private const val KEY_CREATED_AT = "created_at"
+        private const val KEY_LAST_USED_AT = "last_used_at"
     }
 
     // MARK: - Credential Storage
 
     /**
-     * Store a credential securely
+     * Store credential package from enrollment or auth response
      */
-    fun store(credential: StoredCredential) {
-        val json = gson.toJson(credential)
-        encryptedPrefs.edit()
-            .putString("$KEY_CREDENTIAL_PREFIX${credential.credentialId}", json)
-            .apply()
+    fun storeCredentialPackage(
+        credentialPackage: CredentialPackage,
+        passwordSalt: String? = null
+    ) {
+        encryptedPrefs.edit().apply {
+            putString(KEY_USER_GUID, credentialPackage.userGuid)
+            putString(KEY_ENCRYPTED_BLOB, credentialPackage.encryptedBlob)
+            putInt(KEY_CEK_VERSION, credentialPackage.cekVersion)
+            putString(KEY_LAT_ID, credentialPackage.ledgerAuthToken.latId)
+            putString(KEY_LAT_TOKEN, credentialPackage.ledgerAuthToken.token)
+            putInt(KEY_LAT_VERSION, credentialPackage.ledgerAuthToken.version)
+            putString(KEY_UTK_POOL, gson.toJson(credentialPackage.transactionKeys))
+            putLong(KEY_LAST_USED_AT, System.currentTimeMillis())
 
-        // Update credential IDs list
-        val ids = getCredentialIds().toMutableSet()
-        ids.add(credential.credentialId)
-        encryptedPrefs.edit()
-            .putStringSet(KEY_CREDENTIAL_IDS, ids)
-            .apply()
+            // Only set password salt on initial enrollment
+            passwordSalt?.let { putString(KEY_PASSWORD_SALT, it) }
+
+            // Set created_at only if not already set
+            if (!encryptedPrefs.contains(KEY_CREATED_AT)) {
+                putLong(KEY_CREATED_AT, System.currentTimeMillis())
+            }
+        }.apply()
     }
 
     /**
-     * Retrieve a credential by ID
+     * Get stored credential for display/use
      */
-    fun retrieve(credentialId: String): StoredCredential? {
-        val json = encryptedPrefs.getString("$KEY_CREDENTIAL_PREFIX$credentialId", null)
-            ?: return null
-        return gson.fromJson(json, StoredCredential::class.java)
+    fun getStoredCredential(): StoredCredential? {
+        val userGuid = encryptedPrefs.getString(KEY_USER_GUID, null) ?: return null
+
+        return StoredCredential(
+            userGuid = userGuid,
+            encryptedBlob = encryptedPrefs.getString(KEY_ENCRYPTED_BLOB, "") ?: "",
+            cekVersion = encryptedPrefs.getInt(KEY_CEK_VERSION, 0),
+            latId = encryptedPrefs.getString(KEY_LAT_ID, "") ?: "",
+            latToken = encryptedPrefs.getString(KEY_LAT_TOKEN, "") ?: "",
+            latVersion = encryptedPrefs.getInt(KEY_LAT_VERSION, 0),
+            passwordSalt = encryptedPrefs.getString(KEY_PASSWORD_SALT, "") ?: "",
+            createdAt = encryptedPrefs.getLong(KEY_CREATED_AT, 0),
+            lastUsedAt = encryptedPrefs.getLong(KEY_LAST_USED_AT, 0)
+        )
     }
 
     /**
-     * Check if any credential is stored
+     * Check if a credential is stored
      */
     fun hasStoredCredential(): Boolean {
-        return getCredentialIds().isNotEmpty()
+        return encryptedPrefs.contains(KEY_USER_GUID)
     }
 
     /**
-     * Get all stored credential IDs
+     * Get user GUID
      */
-    fun getCredentialIds(): Set<String> {
-        return encryptedPrefs.getStringSet(KEY_CREDENTIAL_IDS, emptySet()) ?: emptySet()
+    fun getUserGuid(): String? {
+        return encryptedPrefs.getString(KEY_USER_GUID, null)
+    }
+
+    // MARK: - Encrypted Blob
+
+    /**
+     * Get current encrypted blob for auth requests
+     */
+    fun getEncryptedBlob(): String? {
+        return encryptedPrefs.getString(KEY_ENCRYPTED_BLOB, null)
     }
 
     /**
-     * Delete a credential by ID
+     * Get current CEK version
      */
-    fun delete(credentialId: String) {
-        encryptedPrefs.edit()
-            .remove("$KEY_CREDENTIAL_PREFIX$credentialId")
-            .apply()
+    fun getCekVersion(): Int {
+        return encryptedPrefs.getInt(KEY_CEK_VERSION, 0)
+    }
 
-        // Update credential IDs list
-        val ids = getCredentialIds().toMutableSet()
-        ids.remove(credentialId)
-        encryptedPrefs.edit()
-            .putStringSet(KEY_CREDENTIAL_IDS, ids)
-            .apply()
+    // MARK: - LAT (Ledger Auth Token)
+
+    /**
+     * Get stored LAT token for verification
+     */
+    fun getStoredLatToken(): String? {
+        return encryptedPrefs.getString(KEY_LAT_TOKEN, null)
     }
 
     /**
-     * Update a credential's LAT token after authentication
+     * Verify received LAT matches stored LAT (phishing protection)
      */
-    fun updateLat(credentialId: String, newLat: ByteArray) {
-        val credential = retrieve(credentialId) ?: return
-        val updated = credential.copy(
-            latCurrent = newLat,
-            lastUsedAt = System.currentTimeMillis()
-        )
-        store(updated)
+    fun verifyLat(receivedLat: LedgerAuthToken): Boolean {
+        val storedToken = encryptedPrefs.getString(KEY_LAT_TOKEN, null) ?: return false
+        val storedLatId = encryptedPrefs.getString(KEY_LAT_ID, null) ?: return false
+
+        // Constant-time comparison
+        return receivedLat.latId == storedLatId &&
+               receivedLat.token.lowercase() == storedToken.lowercase()
     }
 
     /**
-     * Mark a transaction key as used
+     * Update LAT after successful auth (LAT rotation)
      */
-    fun markTransactionKeyUsed(credentialId: String, keyId: String) {
-        val credential = retrieve(credentialId) ?: return
-        val updatedKeys = credential.transactionKeys.map { key ->
-            if (key.keyId == keyId) key.copy(isUsed = true) else key
+    fun updateLat(newLat: LedgerAuthToken) {
+        encryptedPrefs.edit().apply {
+            putString(KEY_LAT_ID, newLat.latId)
+            putString(KEY_LAT_TOKEN, newLat.token)
+            putInt(KEY_LAT_VERSION, newLat.version)
+            putLong(KEY_LAST_USED_AT, System.currentTimeMillis())
+        }.apply()
+    }
+
+    // MARK: - UTK Pool (User Transaction Keys)
+
+    /**
+     * Get all UTKs in the pool
+     */
+    fun getUtkPool(): List<TransactionKeyInfo> {
+        val json = encryptedPrefs.getString(KEY_UTK_POOL, null) ?: return emptyList()
+        return try {
+            gson.fromJson(json, Array<TransactionKeyInfo>::class.java).toList()
+        } catch (e: Exception) {
+            emptyList()
         }
-        val updated = credential.copy(transactionKeys = updatedKeys)
-        store(updated)
     }
 
     /**
-     * Get available (unused) transaction keys
+     * Get a specific UTK by ID
      */
-    fun getAvailableTransactionKeys(credentialId: String): List<TransactionKey> {
-        val credential = retrieve(credentialId) ?: return emptyList()
-        return credential.transactionKeys.filter { !it.isUsed }
+    fun getUtk(keyId: String): TransactionKeyInfo? {
+        return getUtkPool().find { it.keyId == keyId }
     }
 
     /**
-     * Clear all credentials (for logout/reset)
+     * Remove a used UTK from the pool
+     */
+    fun removeUtk(keyId: String) {
+        val pool = getUtkPool().toMutableList()
+        pool.removeAll { it.keyId == keyId }
+        encryptedPrefs.edit()
+            .putString(KEY_UTK_POOL, gson.toJson(pool))
+            .apply()
+    }
+
+    /**
+     * Add new UTKs to the pool (after replenishment)
+     */
+    fun addUtks(newKeys: List<TransactionKeyInfo>) {
+        val pool = getUtkPool().toMutableList()
+        pool.addAll(newKeys)
+        encryptedPrefs.edit()
+            .putString(KEY_UTK_POOL, gson.toJson(pool))
+            .apply()
+    }
+
+    /**
+     * Get count of available UTKs
+     */
+    fun getUtkCount(): Int {
+        return getUtkPool().size
+    }
+
+    // MARK: - Password Salt
+
+    /**
+     * Get password salt for Argon2
+     */
+    fun getPasswordSalt(): String? {
+        return encryptedPrefs.getString(KEY_PASSWORD_SALT, null)
+    }
+
+    /**
+     * Store password salt (set during enrollment)
+     */
+    fun setPasswordSalt(saltBase64: String) {
+        encryptedPrefs.edit()
+            .putString(KEY_PASSWORD_SALT, saltBase64)
+            .apply()
+    }
+
+    // MARK: - Cleanup
+
+    /**
+     * Clear all stored credential data (for logout/reset)
      */
     fun clearAll() {
-        val ids = getCredentialIds()
-        val editor = encryptedPrefs.edit()
-        ids.forEach { id ->
-            editor.remove("$KEY_CREDENTIAL_PREFIX$id")
-        }
-        editor.remove(KEY_CREDENTIAL_IDS)
-        editor.apply()
+        encryptedPrefs.edit().clear().apply()
     }
 }
 
 // MARK: - Data Classes
 
+/**
+ * Stored credential data (read-only view)
+ */
 data class StoredCredential(
-    val credentialId: String,
-    val vaultId: String,
-    val cekKeyAlias: String,        // Keystore alias for CEK
-    val signingKeyAlias: String,    // Keystore alias for signing key
-    val latCurrent: ByteArray,      // Current LAT token (32 bytes)
-    val transactionKeys: List<TransactionKey>,
+    val userGuid: String,
+    val encryptedBlob: String,
+    val cekVersion: Int,
+    val latId: String,
+    val latToken: String,
+    val latVersion: Int,
+    val passwordSalt: String,
     val createdAt: Long,
     val lastUsedAt: Long
-) {
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (javaClass != other?.javaClass) return false
-        other as StoredCredential
-        return credentialId == other.credentialId &&
-                vaultId == other.vaultId &&
-                cekKeyAlias == other.cekKeyAlias &&
-                signingKeyAlias == other.signingKeyAlias &&
-                latCurrent.contentEquals(other.latCurrent) &&
-                transactionKeys == other.transactionKeys &&
-                createdAt == other.createdAt &&
-                lastUsedAt == other.lastUsedAt
-    }
-
-    override fun hashCode(): Int {
-        var result = credentialId.hashCode()
-        result = 31 * result + vaultId.hashCode()
-        result = 31 * result + cekKeyAlias.hashCode()
-        result = 31 * result + signingKeyAlias.hashCode()
-        result = 31 * result + latCurrent.contentHashCode()
-        result = 31 * result + transactionKeys.hashCode()
-        result = 31 * result + createdAt.hashCode()
-        result = 31 * result + lastUsedAt.hashCode()
-        return result
-    }
-}
-
-data class TransactionKey(
-    val keyId: String,
-    val keyAlias: String,  // Keystore alias
-    val publicKey: ByteArray,
-    val isUsed: Boolean
-) {
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (javaClass != other?.javaClass) return false
-        other as TransactionKey
-        return keyId == other.keyId &&
-                keyAlias == other.keyAlias &&
-                publicKey.contentEquals(other.publicKey) &&
-                isUsed == other.isUsed
-    }
-
-    override fun hashCode(): Int {
-        var result = keyId.hashCode()
-        result = 31 * result + keyAlias.hashCode()
-        result = 31 * result + publicKey.contentHashCode()
-        result = 31 * result + isUsed.hashCode()
-        return result
-    }
-}
+)

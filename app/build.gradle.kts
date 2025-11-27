@@ -73,6 +73,8 @@ dependencies {
 
     // Security / Crypto
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("com.google.crypto.tink:tink-android:1.12.0")  // X25519, ChaCha20-Poly1305
+    implementation("org.signal:argon2:13.1")  // Argon2id password hashing
 
     // Biometrics
     implementation("androidx.biometric:biometric:1.1.0")
