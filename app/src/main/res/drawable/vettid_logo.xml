@@ -5,11 +5,11 @@
     android:viewportWidth="1024"
     android:viewportHeight="1024">
 
-    <!-- VettID Logo - Castle tower with keyhole -->
+    <!-- VettID Logo - Castle tower with keyhole on black background -->
 
     <!-- Background -->
     <path
-        android:fillColor="#2E3192"
+        android:fillColor="#000000"
         android:pathData="M0,0 L1024,0 L1024,1024 L0,1024 Z"/>
 
     <!-- Castle tower battlements -->
@@ -24,11 +24,11 @@
 
     <!-- Keyhole circle -->
     <path
-        android:fillColor="#2E3192"
+        android:fillColor="#000000"
         android:pathData="M512,440 m-70,0 a70,70 0,1 1,140 0 a70,70 0,1 1,-140 0"/>
 
     <!-- Keyhole slot -->
     <path
-        android:fillColor="#2E3192"
+        android:fillColor="#000000"
         android:pathData="M480,490 L544,490 L530,640 L494,640 Z"/>
 </vector>
