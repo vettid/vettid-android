@@ -6,14 +6,11 @@ import io.nats.client.Message
 import io.nats.client.Nats
 import io.nats.client.Options
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 /**
  * Wrapper around the NATS Java client for Android.
@@ -61,7 +58,7 @@ class NatsClient @Inject constructor() {
             // Build connection options
             val options = Options.Builder()
                 .server(credentials.endpoint)
-                .userInfo(credentials.jwt.toCharArray(), credentials.seed)
+                .userInfo(credentials.jwt, credentials.seed)
                 .connectionTimeout(Duration.ofSeconds(10))
                 .pingInterval(Duration.ofSeconds(30))
                 .reconnectWait(Duration.ofSeconds(2))
@@ -69,9 +66,14 @@ class NatsClient @Inject constructor() {
                 .connectionListener { conn, type ->
                     android.util.Log.d(TAG, "NATS connection event: $type")
                 }
-                .errorListener { conn, error, _ ->
-                    android.util.Log.e(TAG, "NATS error: ${error?.message}")
-                }
+                .errorListener(object : io.nats.client.ErrorListener {
+                    override fun errorOccurred(conn: Connection, error: String) {
+                        android.util.Log.e(TAG, "NATS error: $error")
+                    }
+                    override fun exceptionOccurred(conn: Connection, exp: Exception) {
+                        android.util.Log.e(TAG, "NATS exception: ${exp.message}", exp)
+                    }
+                })
                 .build()
 
             // Connect to NATS

@@ -6,6 +6,7 @@ import com.vettid.app.core.storage.StoredCredential
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.*
 import org.junit.After
 import org.junit.Assert.*
@@ -210,7 +211,7 @@ class VaultStatusViewModelTest {
         advanceUntilIdle()
 
         var effectEmitted = false
-        val job = kotlinx.coroutines.launch {
+        val job = backgroundScope.launch {
             viewModel.effects.collect { effect ->
                 if (effect is VaultStatusEffect.NavigateToEnrollment) {
                     effectEmitted = true
@@ -245,7 +246,7 @@ class VaultStatusViewModelTest {
         viewModel.setActionToken("")
 
         var requireAuthEffect: VaultStatusEffect.RequireAuth? = null
-        val job = kotlinx.coroutines.launch {
+        val job = backgroundScope.launch {
             viewModel.effects.collect { effect ->
                 if (effect is VaultStatusEffect.RequireAuth) {
                     requireAuthEffect = effect
@@ -311,7 +312,7 @@ class VaultStatusViewModelTest {
         advanceUntilIdle()
 
         var successEffect: VaultStatusEffect.ShowSuccess? = null
-        val job = kotlinx.coroutines.launch {
+        val job = backgroundScope.launch {
             viewModel.effects.collect { effect ->
                 if (effect is VaultStatusEffect.ShowSuccess) {
                     successEffect = effect

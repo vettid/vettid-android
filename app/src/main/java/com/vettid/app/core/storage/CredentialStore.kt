@@ -5,9 +5,9 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.google.gson.Gson
 import android.util.Base64
-import com.vettid.app.core.network.CredentialPackage
+import com.vettid.app.core.network.LegacyCredentialPackage
 import com.vettid.app.core.network.LAT
-import com.vettid.app.core.network.LedgerAuthToken
+import com.vettid.app.core.network.LegacyLedgerAuthToken
 import com.vettid.app.core.network.TransactionKeyInfo
 import com.vettid.app.core.network.TransactionKeyPublic
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -62,7 +62,7 @@ class CredentialStore @Inject constructor(
      * Store credential package from enrollment or auth response
      */
     fun storeCredentialPackage(
-        credentialPackage: CredentialPackage,
+        credentialPackage: LegacyCredentialPackage,
         passwordSalt: String? = null
     ) {
         encryptedPrefs.edit().apply {
@@ -146,7 +146,7 @@ class CredentialStore @Inject constructor(
     /**
      * Verify received LAT matches stored LAT (phishing protection)
      */
-    fun verifyLat(receivedLat: LedgerAuthToken): Boolean {
+    fun verifyLat(receivedLat: LegacyLedgerAuthToken): Boolean {
         val storedToken = encryptedPrefs.getString(KEY_LAT_TOKEN, null) ?: return false
         val storedLatId = encryptedPrefs.getString(KEY_LAT_ID, null) ?: return false
 
@@ -158,7 +158,7 @@ class CredentialStore @Inject constructor(
     /**
      * Update LAT after successful auth (LAT rotation)
      */
-    fun updateLat(newLat: LedgerAuthToken) {
+    fun updateLat(newLat: LegacyLedgerAuthToken) {
         encryptedPrefs.edit().apply {
             putString(KEY_LAT_ID, newLat.latId)
             putString(KEY_LAT_TOKEN, newLat.token)

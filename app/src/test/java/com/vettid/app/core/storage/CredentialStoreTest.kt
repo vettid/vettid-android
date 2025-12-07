@@ -2,8 +2,8 @@ package com.vettid.app.core.storage
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import com.vettid.app.core.network.CredentialPackage
-import com.vettid.app.core.network.LedgerAuthToken
+import com.vettid.app.core.network.LegacyCredentialPackage
+import com.vettid.app.core.network.LegacyLedgerAuthToken
 import com.vettid.app.core.network.TransactionKeyInfo
 import org.junit.Assert.*
 import org.junit.Before
@@ -29,11 +29,11 @@ class CredentialStoreTest {
     private lateinit var context: Context
     private lateinit var credentialStore: CredentialStore
 
-    private val testCredentialPackage = CredentialPackage(
+    private val testCredentialPackage = LegacyCredentialPackage(
         userGuid = "test-user-guid-12345",
         encryptedBlob = "dGVzdC1lbmNyeXB0ZWQtYmxvYg==",
         cekVersion = 1,
-        ledgerAuthToken = LedgerAuthToken(
+        ledgerAuthToken = LegacyLedgerAuthToken(
             latId = "lat-id-123",
             token = "abcdef123456789",
             version = 1
@@ -126,54 +126,54 @@ class CredentialStoreTest {
     fun `verifyLat returns true for matching LAT`() {
         credentialStore.storeCredentialPackage(testCredentialPackage)
 
-        val matchingLat = LedgerAuthToken(
+        val matchingLat = LegacyLedgerAuthToken(
             latId = "lat-id-123",
             token = "abcdef123456789",
             version = 1
         )
 
-        assertTrue("Should verify matching LAT", credentialStore.verifyLat(matchingLat))
+        assertTrue("Should verify matching LAT", credentialStore.verifyLat(matchingLat as LegacyLedgerAuthToken))
     }
 
     @Test
     fun `verifyLat returns false for different token`() {
         credentialStore.storeCredentialPackage(testCredentialPackage)
 
-        val differentLat = LedgerAuthToken(
+        val differentLat = LegacyLedgerAuthToken(
             latId = "lat-id-123",
             token = "different-token",
             version = 1
         )
 
-        assertFalse("Should reject different token", credentialStore.verifyLat(differentLat))
+        assertFalse("Should reject different token", credentialStore.verifyLat(differentLat as LegacyLedgerAuthToken))
     }
 
     @Test
     fun `verifyLat returns false for different latId`() {
         credentialStore.storeCredentialPackage(testCredentialPackage)
 
-        val differentLat = LedgerAuthToken(
+        val differentLat = LegacyLedgerAuthToken(
             latId = "different-lat-id",
             token = "abcdef123456789",
             version = 1
         )
 
-        assertFalse("Should reject different LAT ID", credentialStore.verifyLat(differentLat))
+        assertFalse("Should reject different LAT ID", credentialStore.verifyLat(differentLat as LegacyLedgerAuthToken))
     }
 
     @Test
     fun `updateLat updates token correctly`() {
         credentialStore.storeCredentialPackage(testCredentialPackage)
 
-        val newLat = LedgerAuthToken(
+        val newLat = LegacyLedgerAuthToken(
             latId = "new-lat-id",
             token = "new-token-value",
             version = 2
         )
 
-        credentialStore.updateLat(newLat)
+        credentialStore.updateLat(newLat as LegacyLedgerAuthToken)
 
-        assertTrue("Should verify new LAT after update", credentialStore.verifyLat(newLat))
+        assertTrue("Should verify new LAT after update", credentialStore.verifyLat(newLat as LegacyLedgerAuthToken))
     }
 
     // MARK: - UTK Pool Tests

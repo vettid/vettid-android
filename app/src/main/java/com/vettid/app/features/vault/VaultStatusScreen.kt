@@ -251,8 +251,8 @@ private fun ProvisioningContent(
         verticalArrangement = Arrangement.Center
     ) {
         CircularProgressIndicator(
-            modifier = Modifier.size(80.dp),
-            progress = { state.progress }
+            progress = state.progress,
+            modifier = Modifier.size(80.dp)
         )
 
         Spacer(modifier = Modifier.height(32.dp))
@@ -469,7 +469,7 @@ private fun MetricRow(label: String, value: Float, unit: String) {
         Text(label, style = MaterialTheme.typography.bodyMedium)
         Row(verticalAlignment = Alignment.CenterVertically) {
             LinearProgressIndicator(
-                progress = { value / 100f },
+                progress = value / 100f,
                 modifier = Modifier
                     .width(100.dp)
                     .height(8.dp)

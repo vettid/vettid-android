@@ -179,6 +179,7 @@ private fun QRScannerContent(
                         onCodeScanned(inviteCode)
                     }
                 },
+                onError = { /* Error handled via error parameter */ },
                 modifier = Modifier.fillMaxSize()
             )
         }
@@ -252,7 +253,7 @@ private fun AttestationContent(
         Spacer(modifier = Modifier.height(32.dp))
 
         LinearProgressIndicator(
-            progress = { progress },
+            progress = progress,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(8.dp),
@@ -443,7 +444,7 @@ private fun PasswordStrengthIndicator(strength: PasswordStrength) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         LinearProgressIndicator(
-            progress = { (strength.ordinal + 1) / 4f },
+            progress = (strength.ordinal + 1) / 4f,
             modifier = Modifier
                 .weight(1f)
                 .height(4.dp),
@@ -492,7 +493,7 @@ private fun FinalizingContent(progress: Float) {
         Spacer(modifier = Modifier.height(24.dp))
 
         LinearProgressIndicator(
-            progress = { progress },
+            progress = progress,
             modifier = Modifier
                 .fillMaxWidth(0.7f)
                 .height(8.dp),

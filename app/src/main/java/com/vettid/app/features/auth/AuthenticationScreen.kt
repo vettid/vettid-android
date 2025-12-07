@@ -155,8 +155,8 @@ private fun RequestingActionContent(
         verticalArrangement = Arrangement.Center
     ) {
         CircularProgressIndicator(
-            modifier = Modifier.size(64.dp),
-            progress = { state?.progress ?: 0f }
+            progress = state?.progress ?: 0f,
+            modifier = Modifier.size(64.dp)
         )
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -473,8 +473,8 @@ private fun ExecutingContent(
         verticalArrangement = Arrangement.Center
     ) {
         CircularProgressIndicator(
-            modifier = Modifier.size(80.dp),
-            progress = { state.progress }
+            progress = state.progress,
+            modifier = Modifier.size(80.dp)
         )
 
         Spacer(modifier = Modifier.height(32.dp))
@@ -487,7 +487,7 @@ private fun ExecutingContent(
         Spacer(modifier = Modifier.height(16.dp))
 
         LinearProgressIndicator(
-            progress = { state.progress },
+            progress = state.progress,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(8.dp)
