@@ -162,6 +162,57 @@ class VaultServiceClient @Inject constructor() {
         return safeApiCall { api.replenishTransactionKeys("Bearer $authToken", request) }
     }
 
+    // MARK: - Vault Lifecycle
+
+    /**
+     * Get vault status
+     */
+    suspend fun getVaultStatus(authToken: String): Result<VaultStatusResponse> {
+        return safeApiCall { api.getVaultStatus("Bearer $authToken") }
+    }
+
+    /**
+     * Get vault health
+     */
+    suspend fun getVaultHealth(authToken: String): Result<VaultHealthResponse> {
+        return safeApiCall { api.getVaultHealth("Bearer $authToken") }
+    }
+
+    /**
+     * Provision vault instance
+     */
+    suspend fun provisionVault(authToken: String): Result<ProvisionResponse> {
+        return safeApiCall { api.provisionVault("Bearer $authToken") }
+    }
+
+    /**
+     * Start a stopped vault
+     */
+    suspend fun startVault(authToken: String): Result<Unit> {
+        return safeApiCall { api.startVault("Bearer $authToken") }
+    }
+
+    /**
+     * Stop a running vault
+     */
+    suspend fun stopVault(authToken: String): Result<Unit> {
+        return safeApiCall { api.stopVault("Bearer $authToken") }
+    }
+
+    /**
+     * Trigger manual backup
+     */
+    suspend fun triggerBackup(authToken: String): Result<BackupStatusResponse> {
+        return safeApiCall { api.triggerBackup("Bearer $authToken") }
+    }
+
+    /**
+     * Get list of backups
+     */
+    suspend fun listBackups(authToken: String): Result<BackupListResponse> {
+        return safeApiCall { api.listBackups("Bearer $authToken") }
+    }
+
     // MARK: - Helper
 
     private suspend fun <T> safeApiCall(call: suspend () -> Response<T>): Result<T> {
@@ -219,6 +270,42 @@ interface VaultServiceApi {
         @Header("Authorization") authToken: String,
         @Body request: ReplenishKeysRequest
     ): Response<TransactionKeysResponse>
+
+    // Vault Lifecycle
+    @GET("member/vault/status")
+    suspend fun getVaultStatus(
+        @Header("Authorization") authToken: String
+    ): Response<VaultStatusResponse>
+
+    @GET("vault/health")
+    suspend fun getVaultHealth(
+        @Header("Authorization") authToken: String
+    ): Response<VaultHealthResponse>
+
+    @POST("vault/provision")
+    suspend fun provisionVault(
+        @Header("Authorization") authToken: String
+    ): Response<ProvisionResponse>
+
+    @POST("vault/start")
+    suspend fun startVault(
+        @Header("Authorization") authToken: String
+    ): Response<Unit>
+
+    @POST("vault/stop")
+    suspend fun stopVault(
+        @Header("Authorization") authToken: String
+    ): Response<Unit>
+
+    @POST("vault/backup")
+    suspend fun triggerBackup(
+        @Header("Authorization") authToken: String
+    ): Response<BackupStatusResponse>
+
+    @GET("vault/backup")
+    suspend fun listBackups(
+        @Header("Authorization") authToken: String
+    ): Response<BackupListResponse>
 }
 
 // MARK: - Request Types
@@ -342,6 +429,51 @@ data class AuthExecuteResponse(
 
 data class TransactionKeysResponse(
     val keys: List<TransactionKeyPublic>
+)
+
+// MARK: - Vault Lifecycle Response Types
+
+data class VaultStatusResponse(
+    @SerializedName("vaultId") val vaultId: String,
+    val status: String, // pending_enrollment, enrolled, provisioning, running, stopped, terminated
+    @SerializedName("instanceId") val instanceId: String? = null,
+    val region: String? = null,
+    @SerializedName("enrolledAt") val enrolledAt: String? = null,
+    @SerializedName("lastBackup") val lastBackup: String? = null,
+    val health: VaultHealthResponse? = null
+)
+
+data class VaultHealthResponse(
+    val status: String, // healthy, degraded, unhealthy, unknown
+    @SerializedName("memoryUsagePercent") val memoryUsagePercent: Float? = null,
+    @SerializedName("diskUsagePercent") val diskUsagePercent: Float? = null,
+    @SerializedName("cpuUsagePercent") val cpuUsagePercent: Float? = null,
+    @SerializedName("natsConnected") val natsConnected: Boolean? = null,
+    @SerializedName("lastChecked") val lastChecked: String? = null
+)
+
+data class ProvisionResponse(
+    @SerializedName("vaultId") val vaultId: String,
+    val status: String, // provisioning
+    @SerializedName("estimatedReadyTime") val estimatedReadyTime: String? = null
+)
+
+data class BackupStatusResponse(
+    @SerializedName("backupId") val backupId: String,
+    val status: String, // in_progress, completed, failed
+    @SerializedName("startedAt") val startedAt: String? = null,
+    @SerializedName("completedAt") val completedAt: String? = null
+)
+
+data class BackupListResponse(
+    val backups: List<BackupInfo>
+)
+
+data class BackupInfo(
+    @SerializedName("backupId") val backupId: String,
+    @SerializedName("createdAt") val createdAt: String,
+    @SerializedName("sizeBytes") val sizeBytes: Long? = null,
+    val type: String? = null // automatic, manual, pre_stop
 )
 
 // MARK: - Exceptions
