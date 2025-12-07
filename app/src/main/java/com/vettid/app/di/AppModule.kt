@@ -4,6 +4,7 @@ import android.content.Context
 import com.vettid.app.core.attestation.HardwareAttestationManager
 import com.vettid.app.core.crypto.CryptoManager
 import com.vettid.app.core.network.ApiClient
+import com.vettid.app.core.network.VaultServiceClient
 import com.vettid.app.core.storage.CredentialStore
 import com.vettid.app.features.auth.BiometricAuthManager
 import dagger.Module
@@ -33,6 +34,12 @@ object AppModule {
     @Singleton
     fun provideApiClient(): ApiClient {
         return ApiClient()
+    }
+
+    @Provides
+    @Singleton
+    fun provideVaultServiceClient(): VaultServiceClient {
+        return VaultServiceClient()
     }
 
     @Provides

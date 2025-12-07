@@ -1,0 +1,267 @@
+package com.vettid.app.features.enrollment
+
+import com.vettid.app.core.attestation.AttestationResult
+import com.vettid.app.core.attestation.HardwareAttestationManager
+import com.vettid.app.core.crypto.CryptoManager
+import com.vettid.app.core.crypto.PasswordEncryptionResult
+import com.vettid.app.core.network.*
+import com.vettid.app.core.storage.CredentialStore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.*
+import org.junit.After
+import org.junit.Assert.*
+import org.junit.Before
+import org.junit.Test
+import org.mockito.kotlin.*
+import java.security.cert.X509Certificate
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class EnrollmentViewModelTest {
+
+    private lateinit var viewModel: EnrollmentViewModel
+    private lateinit var vaultServiceClient: VaultServiceClient
+    private lateinit var cryptoManager: CryptoManager
+    private lateinit var attestationManager: HardwareAttestationManager
+    private lateinit var credentialStore: CredentialStore
+
+    private val testDispatcher = StandardTestDispatcher()
+
+    @Before
+    fun setup() {
+        Dispatchers.setMain(testDispatcher)
+
+        vaultServiceClient = mock()
+        cryptoManager = mock()
+        attestationManager = mock()
+        credentialStore = mock()
+
+        viewModel = EnrollmentViewModel(
+            vaultServiceClient = vaultServiceClient,
+            cryptoManager = cryptoManager,
+            attestationManager = attestationManager,
+            credentialStore = credentialStore
+        )
+    }
+
+    @After
+    fun tearDown() {
+        Dispatchers.resetMain()
+    }
+
+    // MARK: - Initial State Tests
+
+    @Test
+    fun `initial state is Initial`() = runTest {
+        assertEquals(EnrollmentState.Initial, viewModel.state.first())
+    }
+
+    @Test
+    fun `StartScanning event transitions to ScanningQR state`() = runTest {
+        viewModel.onEvent(EnrollmentEvent.StartScanning)
+        advanceUntilIdle()
+
+        val state = viewModel.state.first()
+        assertTrue(state is EnrollmentState.ScanningQR)
+    }
+
+    // MARK: - Invite Code Processing Tests
+
+    @Test
+    fun `InviteCodeScanned transitions to ProcessingInvite then Attesting on success`() = runTest {
+        val inviteCode = "TEST-INVITE-123"
+        val sessionId = "session-uuid"
+        val challenge = ByteArray(32) { it.toByte() }
+
+        val enrollStartResponse = EnrollStartResponse(
+            sessionId = sessionId,
+            attestationChallenge = android.util.Base64.encodeToString(challenge, android.util.Base64.NO_WRAP),
+            transactionKeys = listOf(
+                TransactionKeyPublic(keyId = "key1", publicKey = "base64pubkey", algorithm = "X25519")
+            )
+        )
+
+        whenever(vaultServiceClient.enrollStart(eq(inviteCode), any()))
+            .thenReturn(Result.success(enrollStartResponse))
+
+        // Mock attestation
+        val mockCert = mock<X509Certificate>()
+        whenever(mockCert.encoded).thenReturn(ByteArray(100))
+        val attestationResult = AttestationResult(
+            certificateChain = listOf(mockCert),
+            attestationExtension = null
+        )
+        whenever(attestationManager.generateAttestationKey(any())).thenReturn(attestationResult)
+
+        val attestationResponse = AttestationResponse(
+            verified = true,
+            securityLevel = "tee",
+            platform = "android",
+            osVersion = "14"
+        )
+        whenever(vaultServiceClient.submitAttestation(eq(sessionId), any()))
+            .thenReturn(Result.success(attestationResponse))
+
+        whenever(cryptoManager.generateSalt()).thenReturn(ByteArray(16))
+
+        // Start scanning first
+        viewModel.onEvent(EnrollmentEvent.StartScanning)
+        advanceUntilIdle()
+
+        // Scan invite code
+        viewModel.onEvent(EnrollmentEvent.InviteCodeScanned(inviteCode))
+        advanceUntilIdle()
+
+        val state = viewModel.state.first()
+        // After attestation completes successfully, should be in SettingPassword
+        assertTrue("Expected SettingPassword state but got $state", state is EnrollmentState.SettingPassword)
+    }
+
+    @Test
+    fun `InviteCodeScanned transitions to Error on API failure`() = runTest {
+        val inviteCode = "INVALID-CODE"
+
+        whenever(vaultServiceClient.enrollStart(eq(inviteCode), any()))
+            .thenReturn(Result.failure(VaultServiceException("Invalid invite code", code = 400)))
+
+        viewModel.onEvent(EnrollmentEvent.StartScanning)
+        advanceUntilIdle()
+
+        viewModel.onEvent(EnrollmentEvent.InviteCodeScanned(inviteCode))
+        advanceUntilIdle()
+
+        val state = viewModel.state.first()
+        assertTrue("Expected Error state but got $state", state is EnrollmentState.Error)
+        assertTrue((state as EnrollmentState.Error).retryable)
+    }
+
+    // MARK: - Password Validation Tests
+
+    @Test
+    fun `PasswordChanged updates password and strength`() = runTest {
+        // Setup a SettingPassword state
+        setUpSettingPasswordState()
+
+        viewModel.onEvent(EnrollmentEvent.PasswordChanged("weakpass"))
+        advanceUntilIdle()
+
+        val state = viewModel.state.first() as EnrollmentState.SettingPassword
+        assertEquals("weakpass", state.password)
+        assertEquals(PasswordStrength.WEAK, state.strength)
+    }
+
+    @Test
+    fun `strong password has STRONG strength`() = runTest {
+        setUpSettingPasswordState()
+
+        viewModel.onEvent(EnrollmentEvent.PasswordChanged("MyStr0ng!P@ssword123"))
+        advanceUntilIdle()
+
+        val state = viewModel.state.first() as EnrollmentState.SettingPassword
+        assertEquals(PasswordStrength.STRONG, state.strength)
+    }
+
+    @Test
+    fun `SubmitPassword with mismatched passwords shows error`() = runTest {
+        setUpSettingPasswordState()
+
+        viewModel.onEvent(EnrollmentEvent.PasswordChanged("StrongP@ssword123"))
+        viewModel.onEvent(EnrollmentEvent.ConfirmPasswordChanged("DifferentPassword"))
+        viewModel.onEvent(EnrollmentEvent.SubmitPassword)
+        advanceUntilIdle()
+
+        val state = viewModel.state.first() as EnrollmentState.SettingPassword
+        assertNotNull(state.error)
+        assertTrue(state.error!!.contains("match"))
+    }
+
+    @Test
+    fun `SubmitPassword with short password shows error`() = runTest {
+        setUpSettingPasswordState()
+
+        viewModel.onEvent(EnrollmentEvent.PasswordChanged("short"))
+        viewModel.onEvent(EnrollmentEvent.ConfirmPasswordChanged("short"))
+        viewModel.onEvent(EnrollmentEvent.SubmitPassword)
+        advanceUntilIdle()
+
+        val state = viewModel.state.first() as EnrollmentState.SettingPassword
+        assertNotNull(state.error)
+        assertTrue(state.error!!.contains("12 characters"))
+    }
+
+    // MARK: - Retry and Cancel Tests
+
+    @Test
+    fun `Cancel event resets to Initial state`() = runTest {
+        setUpSettingPasswordState()
+
+        viewModel.onEvent(EnrollmentEvent.Cancel)
+        advanceUntilIdle()
+
+        val state = viewModel.state.first()
+        assertEquals(EnrollmentState.Initial, state)
+    }
+
+    @Test
+    fun `Retry from Error returns to previous state`() = runTest {
+        // Force an error state with retryable = true
+        val inviteCode = "INVALID-CODE"
+        whenever(vaultServiceClient.enrollStart(eq(inviteCode), any()))
+            .thenReturn(Result.failure(VaultServiceException("Network error")))
+
+        viewModel.onEvent(EnrollmentEvent.StartScanning)
+        advanceUntilIdle()
+
+        viewModel.onEvent(EnrollmentEvent.InviteCodeScanned(inviteCode))
+        advanceUntilIdle()
+
+        // Should be in Error state
+        assertTrue(viewModel.state.first() is EnrollmentState.Error)
+
+        viewModel.onEvent(EnrollmentEvent.Retry)
+        advanceUntilIdle()
+
+        // Should return to scanning state
+        assertTrue(viewModel.state.first() is EnrollmentState.ScanningQR)
+    }
+
+    // MARK: - Password Strength Tests
+
+    @Test
+    fun `password strength calculation - weak`() {
+        assertEquals(PasswordStrength.WEAK, PasswordStrength.calculate("abc"))
+        assertEquals(PasswordStrength.WEAK, PasswordStrength.calculate("password"))
+    }
+
+    @Test
+    fun `password strength calculation - fair`() {
+        assertEquals(PasswordStrength.FAIR, PasswordStrength.calculate("Password1"))
+    }
+
+    @Test
+    fun `password strength calculation - good`() {
+        assertEquals(PasswordStrength.GOOD, PasswordStrength.calculate("Password1!"))
+    }
+
+    @Test
+    fun `password strength calculation - strong`() {
+        assertEquals(PasswordStrength.STRONG, PasswordStrength.calculate("MyStr0ng!P@ssword"))
+    }
+
+    // MARK: - Helper Methods
+
+    private suspend fun setUpSettingPasswordState() {
+        // Directly set state to SettingPassword for testing password-related events
+        val field = EnrollmentViewModel::class.java.getDeclaredField("_state")
+        field.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val stateFlow = field.get(viewModel) as kotlinx.coroutines.flow.MutableStateFlow<EnrollmentState>
+        stateFlow.value = EnrollmentState.SettingPassword(
+            sessionId = "test-session",
+            transactionKeys = listOf(
+                TransactionKeyPublic(keyId = "key1", publicKey = "base64key", algorithm = "X25519")
+            )
+        )
+    }
+}

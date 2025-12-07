@@ -4,9 +4,12 @@ import android.content.Context
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.google.gson.Gson
+import android.util.Base64
 import com.vettid.app.core.network.CredentialPackage
+import com.vettid.app.core.network.LAT
 import com.vettid.app.core.network.LedgerAuthToken
 import com.vettid.app.core.network.TransactionKeyInfo
+import com.vettid.app.core.network.TransactionKeyPublic
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -230,6 +233,110 @@ class CredentialStore @Inject constructor(
         encryptedPrefs.edit()
             .putString(KEY_PASSWORD_SALT, saltBase64)
             .apply()
+    }
+
+    // MARK: - New Vault Services API Support
+
+    /**
+     * Store credential blob from new vault services enrollment
+     */
+    fun storeCredentialBlob(
+        userGuid: String,
+        encryptedBlob: String,
+        cekVersion: Int,
+        lat: LAT,
+        transactionKeys: List<TransactionKeyPublic>,
+        passwordSalt: ByteArray
+    ) {
+        // Convert TransactionKeyPublic to TransactionKeyInfo for backward compatibility
+        val keyInfoList = transactionKeys.map { key ->
+            TransactionKeyInfo(
+                keyId = key.keyId,
+                publicKey = key.publicKey,
+                algorithm = key.algorithm
+            )
+        }
+
+        encryptedPrefs.edit().apply {
+            putString(KEY_USER_GUID, userGuid)
+            putString(KEY_ENCRYPTED_BLOB, encryptedBlob)
+            putInt(KEY_CEK_VERSION, cekVersion)
+            putString(KEY_LAT_ID, lat.latId)
+            putString(KEY_LAT_TOKEN, lat.token)
+            putInt(KEY_LAT_VERSION, lat.version)
+            putString(KEY_UTK_POOL, gson.toJson(keyInfoList))
+            putString(KEY_PASSWORD_SALT, Base64.encodeToString(passwordSalt, Base64.NO_WRAP))
+            putLong(KEY_CREATED_AT, System.currentTimeMillis())
+            putLong(KEY_LAST_USED_AT, System.currentTimeMillis())
+        }.apply()
+    }
+
+    /**
+     * Verify received LAT from new API format
+     */
+    fun verifyLat(receivedLat: LAT): Boolean {
+        val storedToken = encryptedPrefs.getString(KEY_LAT_TOKEN, null) ?: return false
+        val storedLatId = encryptedPrefs.getString(KEY_LAT_ID, null) ?: return false
+
+        return receivedLat.latId == storedLatId &&
+               receivedLat.token.lowercase() == storedToken.lowercase()
+    }
+
+    /**
+     * Update LAT after successful auth (new API format)
+     */
+    fun updateLat(newLat: LAT) {
+        encryptedPrefs.edit().apply {
+            putString(KEY_LAT_ID, newLat.latId)
+            putString(KEY_LAT_TOKEN, newLat.token)
+            putInt(KEY_LAT_VERSION, newLat.version)
+            putLong(KEY_LAST_USED_AT, System.currentTimeMillis())
+        }.apply()
+    }
+
+    /**
+     * Update credential blob after auth (rotated CEK)
+     */
+    fun updateCredentialBlob(
+        encryptedBlob: String,
+        cekVersion: Int,
+        newLat: LAT,
+        newTransactionKeys: List<TransactionKeyPublic>?
+    ) {
+        encryptedPrefs.edit().apply {
+            putString(KEY_ENCRYPTED_BLOB, encryptedBlob)
+            putInt(KEY_CEK_VERSION, cekVersion)
+            putString(KEY_LAT_ID, newLat.latId)
+            putString(KEY_LAT_TOKEN, newLat.token)
+            putInt(KEY_LAT_VERSION, newLat.version)
+            putLong(KEY_LAST_USED_AT, System.currentTimeMillis())
+
+            // Add new transaction keys if provided
+            if (newTransactionKeys != null) {
+                val currentPool = getUtkPool().toMutableList()
+                val newKeyInfoList = newTransactionKeys.map { key ->
+                    TransactionKeyInfo(
+                        keyId = key.keyId,
+                        publicKey = key.publicKey,
+                        algorithm = key.algorithm
+                    )
+                }
+                currentPool.addAll(newKeyInfoList)
+                putString(KEY_UTK_POOL, gson.toJson(currentPool))
+            }
+        }.apply()
+    }
+
+    /**
+     * Get password salt as ByteArray
+     */
+    fun getPasswordSaltBytes(): ByteArray? {
+        val saltBase64 = encryptedPrefs.getString(KEY_PASSWORD_SALT, null) ?: return null
+        return try {
+            Base64.decode(saltBase64, Base64.NO_WRAP)
+        } catch (e: Exception) {
+            null
+        }
     }
 
     // MARK: - Cleanup
