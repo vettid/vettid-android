@@ -1,8 +1,15 @@
 package com.vettid.app.di
 
 import android.content.Context
+import android.content.SharedPreferences
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import com.vettid.app.core.attestation.HardwareAttestationManager
 import com.vettid.app.core.crypto.CryptoManager
+import com.vettid.app.core.nats.NatsApiClient
+import com.vettid.app.core.nats.NatsClient
+import com.vettid.app.core.nats.NatsConnectionManager
+import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.network.ApiClient
 import com.vettid.app.core.network.VaultServiceClient
 import com.vettid.app.core.storage.CredentialStore
@@ -12,6 +19,7 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import javax.inject.Named
 import javax.inject.Singleton
 
 @Module
@@ -52,5 +60,52 @@ object AppModule {
     @Singleton
     fun provideBiometricAuthManager(@ApplicationContext context: Context): BiometricAuthManager {
         return BiometricAuthManager(context)
+    }
+
+    // NATS Dependencies
+
+    @Provides
+    @Singleton
+    @Named("nats")
+    fun provideNatsSharedPreferences(@ApplicationContext context: Context): SharedPreferences {
+        val masterKey = MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
+
+        return EncryptedSharedPreferences.create(
+            context,
+            "nats_prefs",
+            masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
+    }
+
+    @Provides
+    @Singleton
+    fun provideNatsClient(): NatsClient {
+        return NatsClient()
+    }
+
+    @Provides
+    @Singleton
+    fun provideNatsApiClient(): NatsApiClient {
+        return NatsApiClient()
+    }
+
+    @Provides
+    @Singleton
+    fun provideNatsConnectionManager(
+        natsClient: NatsClient,
+        natsApiClient: NatsApiClient,
+        @Named("nats") sharedPreferences: SharedPreferences
+    ): NatsConnectionManager {
+        return NatsConnectionManager(natsClient, natsApiClient, sharedPreferences)
+    }
+
+    @Provides
+    @Singleton
+    fun provideOwnerSpaceClient(connectionManager: NatsConnectionManager): OwnerSpaceClient {
+        return OwnerSpaceClient(connectionManager)
     }
 }
