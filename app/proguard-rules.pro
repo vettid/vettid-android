@@ -81,6 +81,11 @@
 -dontwarn org.openjsse.**
 -dontwarn javax.naming.**
 
+# EdDSA/NATS dependencies (uses Sun internal classes not available on Android)
+-dontwarn sun.security.x509.**
+-dontwarn net.i2p.crypto.eddsa.**
+-keep class net.i2p.crypto.eddsa.** { *; }
+
 # ==================== NATIVE METHODS ====================
 
 # Keep native methods

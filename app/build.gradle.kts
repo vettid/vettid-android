@@ -14,11 +14,21 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = 1
-        versionName = "1.0"
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true
+        }
+    }
+
+    signingConfigs {
+        create("release") {
+            // Read from environment variables (for CI) or fallback to local keystore
+            storeFile = file(System.getenv("VETTID_KEYSTORE_PATH") ?: "../release.keystore")
+            storePassword = System.getenv("VETTID_KEYSTORE_PASSWORD") ?: "vettid-release-2024"
+            keyAlias = System.getenv("VETTID_KEY_ALIAS") ?: "vettid"
+            keyPassword = System.getenv("VETTID_KEY_PASSWORD") ?: "vettid-release-2024"
         }
     }
 
@@ -34,6 +44,7 @@ android {
             ndk {
                 debugSymbolLevel = "NONE"
             }
+            signingConfig = signingConfigs.getByName("release")
         }
         debug {
             isMinifyEnabled = false
