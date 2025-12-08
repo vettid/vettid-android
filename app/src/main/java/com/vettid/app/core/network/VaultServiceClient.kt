@@ -223,7 +223,7 @@ class VaultServiceClient @Inject constructor() {
     /**
      * Get list of backups
      */
-    suspend fun listBackups(authToken: String): Result<BackupListResponse> {
+    suspend fun listBackups(authToken: String): Result<VaultBackupListResponse> {
         return safeApiCall { api.listBackups("Bearer $authToken") }
     }
 
@@ -329,7 +329,7 @@ interface VaultServiceApi {
     @GET("vault/backup")
     suspend fun listBackups(
         @Header("Authorization") authToken: String
-    ): Response<BackupListResponse>
+    ): Response<VaultBackupListResponse>
 }
 
 // MARK: - Request Types
@@ -530,7 +530,7 @@ data class BackupStatusResponse(
     @SerializedName("completedAt") val completedAt: String? = null
 )
 
-data class BackupListResponse(
+data class VaultBackupListResponse(
     val backups: List<BackupInfo>
 )
 

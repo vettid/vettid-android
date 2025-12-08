@@ -25,7 +25,12 @@ import com.vettid.app.features.handlers.HandlerDiscoveryScreen
 import com.vettid.app.features.handlers.HandlerExecutionScreen
 import com.vettid.app.features.messaging.ConversationScreen
 import com.vettid.app.features.profile.ProfileScreen
+import com.vettid.app.ui.backup.BackupDetailScreen
+import com.vettid.app.ui.backup.BackupListScreen
+import com.vettid.app.ui.backup.BackupSettingsScreen
+import com.vettid.app.ui.backup.CredentialBackupScreen
 import com.vettid.app.ui.components.QrCodeScanner
+import com.vettid.app.ui.recovery.CredentialRecoveryScreen
 
 private const val TAG = "VettIDApp"
 
@@ -53,6 +58,14 @@ sealed class Screen(val route: String) {
     }
     // Profile
     object Profile : Screen("profile")
+    // Backup
+    object Backups : Screen("backups")
+    object BackupSettings : Screen("backups/settings")
+    object BackupDetail : Screen("backups/{backupId}") {
+        fun createRoute(backupId: String) = "backups/$backupId"
+    }
+    object CredentialBackup : Screen("backup/credential")
+    object CredentialRecovery : Screen("recovery/credential")
 }
 
 @Composable
@@ -107,6 +120,12 @@ fun VettIDApp(
                 },
                 onNavigateToProfile = {
                     navController.navigate(Screen.Profile.route)
+                },
+                onNavigateToBackups = {
+                    navController.navigate(Screen.Backups.route)
+                },
+                onNavigateToCredentialBackup = {
+                    navController.navigate(Screen.CredentialBackup.route)
                 }
             )
         }
@@ -203,6 +222,53 @@ fun VettIDApp(
         // Profile route
         composable(Screen.Profile.route) {
             ProfileScreen(
+                onBack = { navController.popBackStack() }
+            )
+        }
+        // Backup routes
+        composable(Screen.Backups.route) {
+            BackupListScreen(
+                onBackupClick = { backupId ->
+                    navController.navigate(Screen.BackupDetail.createRoute(backupId))
+                },
+                onSettingsClick = {
+                    navController.navigate(Screen.BackupSettings.route)
+                },
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(Screen.BackupSettings.route) {
+            BackupSettingsScreen(
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(
+            route = Screen.BackupDetail.route,
+            arguments = listOf(navArgument("backupId") { type = NavType.StringType })
+        ) {
+            BackupDetailScreen(
+                onRestoreComplete = {
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(Screen.Backups.route) { inclusive = true }
+                    }
+                },
+                onDeleted = { navController.popBackStack() },
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(Screen.CredentialBackup.route) {
+            CredentialBackupScreen(
+                onComplete = { navController.popBackStack() },
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(Screen.CredentialRecovery.route) {
+            CredentialRecoveryScreen(
+                onRecoveryComplete = {
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                },
                 onBack = { navController.popBackStack() }
             )
         }
@@ -475,7 +541,9 @@ fun AuthenticationScreen(
 fun MainScreen(
     onNavigateToHandlers: () -> Unit = {},
     onNavigateToConnections: () -> Unit = {},
-    onNavigateToProfile: () -> Unit = {}
+    onNavigateToProfile: () -> Unit = {},
+    onNavigateToBackups: () -> Unit = {},
+    onNavigateToCredentialBackup: () -> Unit = {}
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
 
@@ -516,11 +584,73 @@ fun MainScreen(
             contentAlignment = Alignment.Center
         ) {
             when (selectedTab) {
-                0 -> Text("Vault Status - Coming Soon")
+                0 -> VaultTab(
+                    onNavigateToBackups = onNavigateToBackups,
+                    onNavigateToCredentialBackup = onNavigateToCredentialBackup
+                )
                 1 -> ConnectionsTab(onNavigateToConnections = onNavigateToConnections)
                 2 -> HandlersTab(onNavigateToHandlers = onNavigateToHandlers)
                 3 -> ProfileTab(onNavigateToProfile = onNavigateToProfile)
             }
+        }
+    }
+}
+
+@Composable
+private fun VaultTab(
+    onNavigateToBackups: () -> Unit,
+    onNavigateToCredentialBackup: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            imageVector = Icons.Default.AccountBalance,
+            contentDescription = null,
+            modifier = Modifier.size(64.dp),
+            tint = MaterialTheme.colorScheme.primary
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = "Your Vault",
+            style = MaterialTheme.typography.headlineSmall
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "Manage your vault backups\nand credential security",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Button(
+            onClick = onNavigateToBackups,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.Backup, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Manage Backups")
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        OutlinedButton(
+            onClick = onNavigateToCredentialBackup,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.Key, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Backup Credentials")
         }
     }
 }

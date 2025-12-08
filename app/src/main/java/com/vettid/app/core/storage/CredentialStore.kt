@@ -410,6 +410,32 @@ class CredentialStore @Inject constructor(
         }
     }
 
+    // MARK: - Credential Backup/Recovery
+
+    /**
+     * Get credential blob as ByteArray for backup
+     */
+    fun getCredentialBlob(): ByteArray? {
+        val blobBase64 = encryptedPrefs.getString(KEY_ENCRYPTED_BLOB, null) ?: return null
+        return try {
+            Base64.decode(blobBase64, Base64.NO_WRAP)
+        } catch (e: Exception) {
+            // If not base64, return as UTF-8 bytes
+            blobBase64.toByteArray(Charsets.UTF_8)
+        }
+    }
+
+    /**
+     * Store credential blob from recovery (ByteArray version)
+     */
+    fun storeCredentialBlob(blob: ByteArray) {
+        val blobBase64 = Base64.encodeToString(blob, Base64.NO_WRAP)
+        encryptedPrefs.edit()
+            .putString(KEY_ENCRYPTED_BLOB, blobBase64)
+            .putLong(KEY_LAST_USED_AT, System.currentTimeMillis())
+            .apply()
+    }
+
     // MARK: - Cleanup
 
     /**

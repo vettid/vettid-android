@@ -6,7 +6,13 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.vettid.app.core.attestation.HardwareAttestationManager
 import com.vettid.app.core.crypto.CryptoManager
+import com.vettid.app.core.crypto.RecoveryPhraseManager
 import com.vettid.app.core.nats.NatsApiClient
+import com.vettid.app.core.network.BackupApiClient
+import com.vettid.app.core.network.CredentialBackupApiClient
+import okhttp3.OkHttpClient
+import okhttp3.logging.HttpLoggingInterceptor
+import java.util.concurrent.TimeUnit
 import com.vettid.app.core.nats.NatsClient
 import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.OwnerSpaceClient
@@ -107,5 +113,46 @@ object AppModule {
     @Singleton
     fun provideOwnerSpaceClient(connectionManager: NatsConnectionManager): OwnerSpaceClient {
         return OwnerSpaceClient(connectionManager)
+    }
+
+    // Backup Dependencies
+
+    @Provides
+    @Singleton
+    fun provideOkHttpClient(): OkHttpClient {
+        val loggingInterceptor = HttpLoggingInterceptor().apply {
+            level = HttpLoggingInterceptor.Level.BODY
+        }
+
+        return OkHttpClient.Builder()
+            .addInterceptor(loggingInterceptor)
+            .connectTimeout(30, TimeUnit.SECONDS)
+            .readTimeout(30, TimeUnit.SECONDS)
+            .writeTimeout(30, TimeUnit.SECONDS)
+            .build()
+    }
+
+    @Provides
+    @Singleton
+    fun provideBackupApiClient(
+        httpClient: OkHttpClient,
+        credentialStore: CredentialStore
+    ): BackupApiClient {
+        return BackupApiClient(httpClient, credentialStore)
+    }
+
+    @Provides
+    @Singleton
+    fun provideCredentialBackupApiClient(
+        httpClient: OkHttpClient,
+        credentialStore: CredentialStore
+    ): CredentialBackupApiClient {
+        return CredentialBackupApiClient(httpClient, credentialStore)
+    }
+
+    @Provides
+    @Singleton
+    fun provideRecoveryPhraseManager(cryptoManager: CryptoManager): RecoveryPhraseManager {
+        return RecoveryPhraseManager(cryptoManager)
     }
 }
