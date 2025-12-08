@@ -186,6 +186,13 @@ class VaultServiceClient @Inject constructor() {
     }
 
     /**
+     * Initialize vault after EC2 is running
+     */
+    suspend fun initializeVault(authToken: String): Result<InitializeResponse> {
+        return safeApiCall { api.initializeVault("Bearer $authToken") }
+    }
+
+    /**
      * Start a stopped vault
      */
     suspend fun startVault(authToken: String): Result<Unit> {
@@ -197,6 +204,13 @@ class VaultServiceClient @Inject constructor() {
      */
     suspend fun stopVault(authToken: String): Result<Unit> {
         return safeApiCall { api.stopVault("Bearer $authToken") }
+    }
+
+    /**
+     * Terminate vault (cleanup)
+     */
+    suspend fun terminateVault(authToken: String): Result<TerminateResponse> {
+        return safeApiCall { api.terminateVault("Bearer $authToken") }
     }
 
     /**
@@ -287,6 +301,11 @@ interface VaultServiceApi {
         @Header("Authorization") authToken: String
     ): Response<ProvisionResponse>
 
+    @POST("vault/initialize")
+    suspend fun initializeVault(
+        @Header("Authorization") authToken: String
+    ): Response<InitializeResponse>
+
     @POST("vault/start")
     suspend fun startVault(
         @Header("Authorization") authToken: String
@@ -296,6 +315,11 @@ interface VaultServiceApi {
     suspend fun stopVault(
         @Header("Authorization") authToken: String
     ): Response<Unit>
+
+    @POST("vault/terminate")
+    suspend fun terminateVault(
+        @Header("Authorization") authToken: String
+    ): Response<TerminateResponse>
 
     @POST("vault/backup")
     suspend fun triggerBackup(
@@ -445,6 +469,12 @@ data class VaultStatusResponse(
 
 data class VaultHealthResponse(
     val status: String, // healthy, degraded, unhealthy, unknown
+    @SerializedName("uptime_seconds") val uptimeSeconds: Long? = null,
+    @SerializedName("local_nats") val localNats: NatsHealthResponse? = null,
+    @SerializedName("central_nats") val centralNats: CentralNatsHealthResponse? = null,
+    @SerializedName("vault_manager") val vaultManager: VaultManagerHealthResponse? = null,
+    @SerializedName("last_event_at") val lastEventAt: String? = null,
+    // Legacy fields for backward compatibility
     @SerializedName("memoryUsagePercent") val memoryUsagePercent: Float? = null,
     @SerializedName("diskUsagePercent") val diskUsagePercent: Float? = null,
     @SerializedName("cpuUsagePercent") val cpuUsagePercent: Float? = null,
@@ -452,10 +482,45 @@ data class VaultHealthResponse(
     @SerializedName("lastChecked") val lastChecked: String? = null
 )
 
+data class NatsHealthResponse(
+    val status: String, // running, stopped, error
+    val connections: Int = 0
+)
+
+data class CentralNatsHealthResponse(
+    val status: String, // connected, disconnected, error
+    @SerializedName("latency_ms") val latencyMs: Long = 0
+)
+
+data class VaultManagerHealthResponse(
+    val status: String, // running, stopped, error
+    @SerializedName("memory_mb") val memoryMb: Int = 0,
+    @SerializedName("cpu_percent") val cpuPercent: Float = 0f,
+    @SerializedName("handlers_loaded") val handlersLoaded: Int = 0
+)
+
 data class ProvisionResponse(
     @SerializedName("vaultId") val vaultId: String,
-    val status: String, // provisioning
-    @SerializedName("estimatedReadyTime") val estimatedReadyTime: String? = null
+    @SerializedName("instance_id") val instanceId: String? = null,
+    val status: String, // provisioning, running, failed
+    val region: String? = null,
+    @SerializedName("availability_zone") val availabilityZone: String? = null,
+    @SerializedName("private_ip") val privateIp: String? = null,
+    @SerializedName("estimatedReadyTime") val estimatedReadyTime: String? = null,
+    @SerializedName("estimated_ready_at") val estimatedReadyAt: String? = null
+)
+
+data class InitializeResponse(
+    val status: String, // initialized, failed
+    @SerializedName("local_nats_status") val localNatsStatus: String? = null,
+    @SerializedName("central_nats_status") val centralNatsStatus: String? = null,
+    @SerializedName("owner_space_id") val ownerSpaceId: String? = null,
+    @SerializedName("message_space_id") val messageSpaceId: String? = null
+)
+
+data class TerminateResponse(
+    val status: String, // terminated, failed
+    @SerializedName("terminatedAt") val terminatedAt: String? = null
 )
 
 data class BackupStatusResponse(
