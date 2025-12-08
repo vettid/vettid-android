@@ -54,6 +54,8 @@ class CredentialStore @Inject constructor(
         private const val KEY_PASSWORD_SALT = "password_salt"
         private const val KEY_CREATED_AT = "created_at"
         private const val KEY_LAST_USED_AT = "last_used_at"
+        private const val KEY_AUTH_TOKEN = "auth_token"
+        private const val KEY_CONNECTION_KEYS = "connection_keys"
     }
 
     // MARK: - Credential Storage
@@ -215,6 +217,75 @@ class CredentialStore @Inject constructor(
      */
     fun getUtkCount(): Int {
         return getUtkPool().size
+    }
+
+    // MARK: - Auth Token (for API calls)
+
+    /**
+     * Store auth token for API calls (JWT from Cognito or session token)
+     */
+    fun setAuthToken(token: String) {
+        encryptedPrefs.edit()
+            .putString(KEY_AUTH_TOKEN, token)
+            .apply()
+    }
+
+    /**
+     * Get auth token for API calls
+     */
+    fun getAuthToken(): String? {
+        return encryptedPrefs.getString(KEY_AUTH_TOKEN, null)
+    }
+
+    /**
+     * Clear auth token (on logout)
+     */
+    fun clearAuthToken() {
+        encryptedPrefs.edit()
+            .remove(KEY_AUTH_TOKEN)
+            .apply()
+    }
+
+    // MARK: - Connection Keys (for per-connection encryption)
+
+    /**
+     * Store a connection encryption key
+     */
+    fun storeConnectionKey(connectionId: String, key: ByteArray) {
+        val keys = getConnectionKeysMap().toMutableMap()
+        keys[connectionId] = Base64.encodeToString(key, Base64.NO_WRAP)
+        encryptedPrefs.edit()
+            .putString(KEY_CONNECTION_KEYS, gson.toJson(keys))
+            .apply()
+    }
+
+    /**
+     * Get a connection encryption key
+     */
+    fun getConnectionKey(connectionId: String): ByteArray? {
+        val keys = getConnectionKeysMap()
+        return keys[connectionId]?.let { Base64.decode(it, Base64.NO_WRAP) }
+    }
+
+    /**
+     * Delete a connection encryption key
+     */
+    fun deleteConnectionKey(connectionId: String) {
+        val keys = getConnectionKeysMap().toMutableMap()
+        keys.remove(connectionId)
+        encryptedPrefs.edit()
+            .putString(KEY_CONNECTION_KEYS, gson.toJson(keys))
+            .apply()
+    }
+
+    private fun getConnectionKeysMap(): Map<String, String> {
+        val json = encryptedPrefs.getString(KEY_CONNECTION_KEYS, null) ?: return emptyMap()
+        return try {
+            @Suppress("UNCHECKED_CAST")
+            gson.fromJson(json, Map::class.java) as Map<String, String>
+        } catch (e: Exception) {
+            emptyMap()
+        }
     }
 
     // MARK: - Password Salt

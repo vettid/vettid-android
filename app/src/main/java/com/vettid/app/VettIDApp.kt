@@ -19,9 +19,12 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.vettid.app.features.connections.*
 import com.vettid.app.features.handlers.HandlerDetailScreen
 import com.vettid.app.features.handlers.HandlerDiscoveryScreen
 import com.vettid.app.features.handlers.HandlerExecutionScreen
+import com.vettid.app.features.messaging.ConversationScreen
+import com.vettid.app.features.profile.ProfileScreen
 import com.vettid.app.ui.components.QrCodeScanner
 
 private const val TAG = "VettIDApp"
@@ -38,6 +41,18 @@ sealed class Screen(val route: String) {
     object HandlerExecution : Screen("handlers/{handlerId}/execute") {
         fun createRoute(handlerId: String) = "handlers/$handlerId/execute"
     }
+    // Connections
+    object Connections : Screen("connections")
+    object CreateInvitation : Screen("connections/create-invitation")
+    object ScanInvitation : Screen("connections/scan-invitation")
+    object ConnectionDetail : Screen("connections/{connectionId}") {
+        fun createRoute(connectionId: String) = "connections/$connectionId"
+    }
+    object Conversation : Screen("connections/{connectionId}/messages") {
+        fun createRoute(connectionId: String) = "connections/$connectionId/messages"
+    }
+    // Profile
+    object Profile : Screen("profile")
 }
 
 @Composable
@@ -86,6 +101,12 @@ fun VettIDApp(
             MainScreen(
                 onNavigateToHandlers = {
                     navController.navigate(Screen.HandlerDiscovery.route)
+                },
+                onNavigateToConnections = {
+                    navController.navigate(Screen.Connections.route)
+                },
+                onNavigateToProfile = {
+                    navController.navigate(Screen.Profile.route)
                 }
             )
         }
@@ -123,6 +144,66 @@ fun VettIDApp(
                 onRequireAuth = {
                     // TODO: Handle auth requirement
                 }
+            )
+        }
+        // Connections routes
+        composable(Screen.Connections.route) {
+            ConnectionsScreen(
+                onConnectionClick = { connectionId ->
+                    navController.navigate(Screen.ConnectionDetail.createRoute(connectionId))
+                },
+                onCreateInvitation = {
+                    navController.navigate(Screen.CreateInvitation.route)
+                },
+                onScanInvitation = {
+                    navController.navigate(Screen.ScanInvitation.route)
+                }
+            )
+        }
+        composable(Screen.CreateInvitation.route) {
+            CreateInvitationScreen(
+                onInvitationCreated = { /* Handle invitation created */ },
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(Screen.ScanInvitation.route) {
+            ScanInvitationScreen(
+                onConnectionEstablished = { connectionId ->
+                    navController.navigate(Screen.ConnectionDetail.createRoute(connectionId)) {
+                        popUpTo(Screen.Connections.route)
+                    }
+                },
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(
+            route = Screen.ConnectionDetail.route,
+            arguments = listOf(navArgument("connectionId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val connectionId = backStackEntry.arguments?.getString("connectionId") ?: return@composable
+            ConnectionDetailScreen(
+                onMessageClick = {
+                    navController.navigate(Screen.Conversation.createRoute(connectionId))
+                },
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(
+            route = Screen.Conversation.route,
+            arguments = listOf(navArgument("connectionId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val connectionId = backStackEntry.arguments?.getString("connectionId") ?: return@composable
+            ConversationScreen(
+                onBack = { navController.popBackStack() },
+                onConnectionDetail = {
+                    navController.navigate(Screen.ConnectionDetail.createRoute(connectionId))
+                }
+            )
+        }
+        // Profile route
+        composable(Screen.Profile.route) {
+            ProfileScreen(
+                onBack = { navController.popBackStack() }
             )
         }
     }
@@ -392,7 +473,9 @@ fun AuthenticationScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
-    onNavigateToHandlers: () -> Unit = {}
+    onNavigateToHandlers: () -> Unit = {},
+    onNavigateToConnections: () -> Unit = {},
+    onNavigateToProfile: () -> Unit = {}
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
 
@@ -406,16 +489,22 @@ fun MainScreen(
                     onClick = { selectedTab = 0 }
                 )
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.Extension, contentDescription = null) },
-                    label = { Text("Handlers") },
+                    icon = { Icon(Icons.Default.People, contentDescription = null) },
+                    label = { Text("Connections") },
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 }
                 )
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.Settings, contentDescription = null) },
-                    label = { Text("Settings") },
+                    icon = { Icon(Icons.Default.Extension, contentDescription = null) },
+                    label = { Text("Handlers") },
                     selected = selectedTab == 2,
                     onClick = { selectedTab = 2 }
+                )
+                NavigationBarItem(
+                    icon = { Icon(Icons.Default.Person, contentDescription = null) },
+                    label = { Text("Profile") },
+                    selected = selectedTab == 3,
+                    onClick = { selectedTab = 3 }
                 )
             }
         }
@@ -428,9 +517,54 @@ fun MainScreen(
         ) {
             when (selectedTab) {
                 0 -> Text("Vault Status - Coming Soon")
-                1 -> HandlersTab(onNavigateToHandlers = onNavigateToHandlers)
-                2 -> Text("Settings - Coming Soon")
+                1 -> ConnectionsTab(onNavigateToConnections = onNavigateToConnections)
+                2 -> HandlersTab(onNavigateToHandlers = onNavigateToHandlers)
+                3 -> ProfileTab(onNavigateToProfile = onNavigateToProfile)
             }
+        }
+    }
+}
+
+@Composable
+private fun ConnectionsTab(
+    onNavigateToConnections: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            imageVector = Icons.Default.People,
+            contentDescription = null,
+            modifier = Modifier.size(64.dp),
+            tint = MaterialTheme.colorScheme.primary
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = "Connections",
+            style = MaterialTheme.typography.headlineSmall
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "Connect with others and send\nend-to-end encrypted messages",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Button(onClick = onNavigateToConnections) {
+            Icon(Icons.Default.PersonAdd, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("View Connections")
         }
     }
 }
@@ -475,6 +609,50 @@ private fun HandlersTab(
             Icon(Icons.Default.Search, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
             Text("Browse Handlers")
+        }
+    }
+}
+
+@Composable
+private fun ProfileTab(
+    onNavigateToProfile: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            imageVector = Icons.Default.Person,
+            contentDescription = null,
+            modifier = Modifier.size(64.dp),
+            tint = MaterialTheme.colorScheme.primary
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = "Your Profile",
+            style = MaterialTheme.typography.headlineSmall
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "Manage your profile and\naccount settings",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Button(onClick = onNavigateToProfile) {
+            Icon(Icons.Default.Edit, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Edit Profile")
         }
     }
 }

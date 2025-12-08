@@ -1,0 +1,176 @@
+package com.vettid.app.features.connections
+
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import com.vettid.app.core.crypto.ConnectionCryptoManager
+import com.vettid.app.core.network.Connection
+import com.vettid.app.core.network.ConnectionApiClient
+import com.vettid.app.core.network.Profile
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
+import javax.inject.Inject
+
+/**
+ * ViewModel for connection detail screen.
+ *
+ * Features:
+ * - Display connection details and profile
+ * - Revoke connection
+ * - Navigate to messaging
+ */
+@HiltViewModel
+class ConnectionDetailViewModel @Inject constructor(
+    private val connectionApiClient: ConnectionApiClient,
+    private val connectionCryptoManager: ConnectionCryptoManager,
+    savedStateHandle: SavedStateHandle
+) : ViewModel() {
+
+    private val connectionId: String = savedStateHandle["connectionId"]
+        ?: throw IllegalArgumentException("connectionId is required")
+
+    private val _state = MutableStateFlow<ConnectionDetailState>(ConnectionDetailState.Loading)
+    val state: StateFlow<ConnectionDetailState> = _state.asStateFlow()
+
+    private val _effects = MutableSharedFlow<ConnectionDetailEffect>()
+    val effects: SharedFlow<ConnectionDetailEffect> = _effects.asSharedFlow()
+
+    // Dialog state for revoke confirmation
+    private val _showRevokeDialog = MutableStateFlow(false)
+    val showRevokeDialog: StateFlow<Boolean> = _showRevokeDialog.asStateFlow()
+
+    init {
+        loadConnection()
+    }
+
+    /**
+     * Load connection details and profile.
+     */
+    fun loadConnection() {
+        viewModelScope.launch {
+            _state.value = ConnectionDetailState.Loading
+
+            // Load connection details
+            connectionApiClient.getConnection(connectionId).fold(
+                onSuccess = { connection ->
+                    // Load profile
+                    connectionApiClient.getConnectionProfile(connectionId).fold(
+                        onSuccess = { profile ->
+                            _state.value = ConnectionDetailState.Loaded(
+                                connection = connection,
+                                profile = profile
+                            )
+                        },
+                        onFailure = {
+                            // Profile might not be available, still show connection
+                            _state.value = ConnectionDetailState.Loaded(
+                                connection = connection,
+                                profile = null
+                            )
+                        }
+                    )
+                },
+                onFailure = { error ->
+                    _state.value = ConnectionDetailState.Error(
+                        message = error.message ?: "Failed to load connection"
+                    )
+                }
+            )
+        }
+    }
+
+    /**
+     * Navigate to messaging.
+     */
+    fun onMessageClick() {
+        viewModelScope.launch {
+            _effects.emit(ConnectionDetailEffect.NavigateToMessages(connectionId))
+        }
+    }
+
+    /**
+     * Show revoke confirmation dialog.
+     */
+    fun onRevokeClick() {
+        _showRevokeDialog.value = true
+    }
+
+    /**
+     * Dismiss revoke confirmation dialog.
+     */
+    fun dismissRevokeDialog() {
+        _showRevokeDialog.value = false
+    }
+
+    /**
+     * Confirm and execute revocation.
+     */
+    fun confirmRevoke() {
+        _showRevokeDialog.value = false
+
+        viewModelScope.launch {
+            val currentState = _state.value
+            if (currentState is ConnectionDetailState.Loaded) {
+                _state.value = currentState.copy(isRevoking = true)
+            }
+
+            connectionApiClient.revokeConnection(connectionId).fold(
+                onSuccess = {
+                    // Delete the connection key
+                    connectionCryptoManager.deleteConnectionKey(connectionId)
+
+                    _effects.emit(ConnectionDetailEffect.ShowSuccess("Connection revoked"))
+                    _effects.emit(ConnectionDetailEffect.NavigateBack)
+                },
+                onFailure = { error ->
+                    if (currentState is ConnectionDetailState.Loaded) {
+                        _state.value = currentState.copy(isRevoking = false)
+                    }
+                    _effects.emit(ConnectionDetailEffect.ShowError(
+                        error.message ?: "Failed to revoke connection"
+                    ))
+                }
+            )
+        }
+    }
+
+    /**
+     * View profile details.
+     */
+    fun onViewProfileClick() {
+        viewModelScope.launch {
+            _effects.emit(ConnectionDetailEffect.NavigateToProfile(connectionId))
+        }
+    }
+}
+
+// MARK: - State Types
+
+/**
+ * Connection detail state.
+ */
+sealed class ConnectionDetailState {
+    object Loading : ConnectionDetailState()
+
+    data class Loaded(
+        val connection: Connection,
+        val profile: Profile?,
+        val isRevoking: Boolean = false
+    ) : ConnectionDetailState()
+
+    data class Error(val message: String) : ConnectionDetailState()
+}
+
+// MARK: - Effects
+
+/**
+ * One-time effects from the ViewModel.
+ */
+sealed class ConnectionDetailEffect {
+    data class NavigateToMessages(val connectionId: String) : ConnectionDetailEffect()
+    data class NavigateToProfile(val connectionId: String) : ConnectionDetailEffect()
+    object NavigateBack : ConnectionDetailEffect()
+    data class ShowSuccess(val message: String) : ConnectionDetailEffect()
+    data class ShowError(val message: String) : ConnectionDetailEffect()
+}
