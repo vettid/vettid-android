@@ -10,6 +10,9 @@ import com.vettid.app.core.crypto.RecoveryPhraseManager
 import com.vettid.app.core.nats.NatsApiClient
 import com.vettid.app.core.network.BackupApiClient
 import com.vettid.app.core.network.CredentialBackupApiClient
+import com.vettid.app.core.security.ApiSecurity
+import com.vettid.app.core.security.RuntimeProtection
+import com.vettid.app.core.security.SecureClipboard
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import java.util.concurrent.TimeUnit
@@ -154,5 +157,25 @@ object AppModule {
     @Singleton
     fun provideRecoveryPhraseManager(cryptoManager: CryptoManager): RecoveryPhraseManager {
         return RecoveryPhraseManager(cryptoManager)
+    }
+
+    // Security Dependencies
+
+    @Provides
+    @Singleton
+    fun provideRuntimeProtection(@ApplicationContext context: Context): RuntimeProtection {
+        return RuntimeProtection(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideSecureClipboard(@ApplicationContext context: Context): SecureClipboard {
+        return SecureClipboard(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideApiSecurity(): ApiSecurity {
+        return ApiSecurity()
     }
 }

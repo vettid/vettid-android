@@ -25,11 +25,27 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Don't include debug info in release builds
+            ndk {
+                debugSymbolLevel = "NONE"
+            }
         }
+        debug {
+            isMinifyEnabled = false
+            // Enable minification in debug for testing ProGuard rules
+            // isMinifyEnabled = true
+            // proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
+
+    // Enable build config fields
+    buildFeatures {
+        buildConfig = true
     }
 
     compileOptions {

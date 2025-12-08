@@ -1,10 +1,13 @@
 package com.vettid.app.core.crypto
 
+import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import com.google.crypto.tink.subtle.Hkdf
 import com.google.crypto.tink.subtle.X25519
+import com.vettid.app.core.security.SecureByteArray
+import com.vettid.app.core.security.secureClear
 import javax.crypto.spec.IvParameterSpec
 import org.signal.argon2.Argon2
 import org.signal.argon2.MemoryCost
@@ -18,6 +21,7 @@ import java.security.Signature
 import java.security.spec.ECGenParameterSpec
 import javax.crypto.Cipher
 import javax.crypto.KeyAgreement
+import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -38,12 +42,32 @@ import javax.inject.Singleton
  * - ChaCha20-Poly1305 for authenticated encryption
  * - Argon2id for password hashing
  * - HKDF-SHA256 for key derivation
+ *
+ * Security notes:
+ * - Uses SecureRandom for all random number generation
+ * - Clears sensitive data from memory after use
+ * - Uses hardware-backed keys when available (StrongBox/TEE)
+ * - Argon2id parameters follow OWASP 2024 guidelines
  */
 @Singleton
 class CryptoManager @Inject constructor() {
 
     private val keyStore: KeyStore = KeyStore.getInstance("AndroidKeyStore").apply {
         load(null)
+    }
+
+    // Thread-safe SecureRandom instance
+    private val secureRandom: SecureRandom by lazy {
+        // Use getInstanceStrong() on Android 8+ for best entropy source
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            try {
+                SecureRandom.getInstanceStrong()
+            } catch (e: Exception) {
+                SecureRandom()
+            }
+        } else {
+            SecureRandom()
+        }
     }
 
     companion object {
@@ -53,11 +77,28 @@ class CryptoManager @Inject constructor() {
         private const val GCM_NONCE_LENGTH = 12
         private const val CHACHA_NONCE_LENGTH = 12
 
-        // Argon2id parameters (OWASP recommendations)
+        /**
+         * Argon2id parameters (OWASP 2024 recommendations)
+         *
+         * These parameters provide strong security while being usable on mobile:
+         * - Type: Argon2id (hybrid protection against GPU/side-channel attacks)
+         * - Memory: 64 MB (balances security with mobile memory constraints)
+         * - Iterations: 3 (minimum recommended for interactive use)
+         * - Parallelism: 4 (good for multi-core mobile devices)
+         * - Hash length: 32 bytes (256-bit output)
+         *
+         * For first-generation recommendation: m=47104 (46 MiB), t=1, p=1
+         * For second-generation: m=19456 (19 MiB), t=2, p=1
+         * We use higher memory (64 MiB) for better security on capable devices.
+         */
         private const val ARGON2_ITERATIONS = 3
         private const val ARGON2_MEMORY_KB = 65536  // 64 MB
         private const val ARGON2_PARALLELISM = 4
         private const val ARGON2_HASH_LENGTH = 32
+
+        // Salt lengths
+        private const val SALT_LENGTH = 16
+        private const val KEY_LENGTH = 32  // 256-bit keys
     }
 
     // MARK: - Password Hashing (Argon2id)
@@ -323,11 +364,19 @@ class CryptoManager @Inject constructor() {
 
     /**
      * Generate cryptographically secure random bytes
+     * Uses the system's best available entropy source
      */
     fun randomBytes(count: Int): ByteArray {
         val bytes = ByteArray(count)
-        SecureRandom().nextBytes(bytes)
+        secureRandom.nextBytes(bytes)
         return bytes
+    }
+
+    /**
+     * Generate random bytes as SecureByteArray (auto-clearing)
+     */
+    fun secureRandomBytes(count: Int): SecureByteArray {
+        return SecureByteArray.random(count)
     }
 
     // MARK: - Key Management
