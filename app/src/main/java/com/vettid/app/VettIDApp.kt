@@ -14,9 +14,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
+import com.vettid.app.features.handlers.HandlerDetailScreen
+import com.vettid.app.features.handlers.HandlerDiscoveryScreen
+import com.vettid.app.features.handlers.HandlerExecutionScreen
 import com.vettid.app.ui.components.QrCodeScanner
 
 private const val TAG = "VettIDApp"
@@ -26,6 +31,13 @@ sealed class Screen(val route: String) {
     object Enrollment : Screen("enrollment")
     object Authentication : Screen("authentication")
     object Main : Screen("main")
+    object HandlerDiscovery : Screen("handlers")
+    object HandlerDetail : Screen("handlers/{handlerId}") {
+        fun createRoute(handlerId: String) = "handlers/$handlerId"
+    }
+    object HandlerExecution : Screen("handlers/{handlerId}/execute") {
+        fun createRoute(handlerId: String) = "handlers/$handlerId/execute"
+    }
 }
 
 @Composable
@@ -71,7 +83,47 @@ fun VettIDApp(
             )
         }
         composable(Screen.Main.route) {
-            MainScreen()
+            MainScreen(
+                onNavigateToHandlers = {
+                    navController.navigate(Screen.HandlerDiscovery.route)
+                }
+            )
+        }
+        composable(Screen.HandlerDiscovery.route) {
+            HandlerDiscoveryScreen(
+                onHandlerSelected = { handlerId ->
+                    navController.navigate(Screen.HandlerDetail.createRoute(handlerId))
+                },
+                onNavigateBack = { navController.popBackStack() },
+                onRequireAuth = {
+                    // TODO: Handle auth requirement
+                }
+            )
+        }
+        composable(
+            route = Screen.HandlerDetail.route,
+            arguments = listOf(navArgument("handlerId") { type = NavType.StringType })
+        ) {
+            HandlerDetailScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToExecution = { handlerId ->
+                    navController.navigate(Screen.HandlerExecution.createRoute(handlerId))
+                },
+                onRequireAuth = {
+                    // TODO: Handle auth requirement
+                }
+            )
+        }
+        composable(
+            route = Screen.HandlerExecution.route,
+            arguments = listOf(navArgument("handlerId") { type = NavType.StringType })
+        ) {
+            HandlerExecutionScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onRequireAuth = {
+                    // TODO: Handle auth requirement
+                }
+            )
         }
     }
 }
@@ -339,7 +391,9 @@ fun AuthenticationScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainScreen() {
+fun MainScreen(
+    onNavigateToHandlers: () -> Unit = {}
+) {
     var selectedTab by remember { mutableIntStateOf(0) }
 
     Scaffold(
@@ -352,8 +406,8 @@ fun MainScreen() {
                     onClick = { selectedTab = 0 }
                 )
                 NavigationBarItem(
-                    icon = { Icon(Icons.Default.Key, contentDescription = null) },
-                    label = { Text("Credentials") },
+                    icon = { Icon(Icons.Default.Extension, contentDescription = null) },
+                    label = { Text("Handlers") },
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 }
                 )
@@ -374,9 +428,53 @@ fun MainScreen() {
         ) {
             when (selectedTab) {
                 0 -> Text("Vault Status - Coming Soon")
-                1 -> Text("Credentials - Coming Soon")
+                1 -> HandlersTab(onNavigateToHandlers = onNavigateToHandlers)
                 2 -> Text("Settings - Coming Soon")
             }
+        }
+    }
+}
+
+@Composable
+private fun HandlersTab(
+    onNavigateToHandlers: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            imageVector = Icons.Default.Extension,
+            contentDescription = null,
+            modifier = Modifier.size(64.dp),
+            tint = MaterialTheme.colorScheme.primary
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = "Handler Marketplace",
+            style = MaterialTheme.typography.headlineSmall
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "Browse, install, and run handlers\nto extend your vault capabilities",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Button(onClick = onNavigateToHandlers) {
+            Icon(Icons.Default.Search, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Browse Handlers")
         }
     }
 }

@@ -95,6 +95,9 @@ dependencies {
     implementation("androidx.camera:camera-view:1.3.0")
     implementation("com.google.mlkit:barcode-scanning:17.2.0")
 
+    // Image loading
+    implementation("io.coil-kt:coil-compose:2.5.0")
+
     // Networking
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
