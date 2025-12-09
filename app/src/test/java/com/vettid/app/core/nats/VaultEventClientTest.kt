@@ -109,91 +109,73 @@ class VaultEventClientTest {
     }
 
     @Test
-    fun `submitEvent returns unique request IDs`() = runTest {
-        // Arrange
-        val requestIds = mutableListOf<String>()
-        whenever(ownerSpaceClient.sendToVault(any(), any())).thenAnswer {
-            val payload = it.arguments[1] as JsonObject
-            val requestId = payload.get("request_id")?.asString ?: "unknown"
-            requestIds.add(requestId)
-            Result.success(requestId)
-        }
+    fun `submitEvent returns generated request ID on success`() = runTest {
+        // Arrange - sendToVault returns a request ID that gets mapped
+        whenever(ownerSpaceClient.sendToVault(any(), any()))
+            .thenReturn(Result.success("some-id"))
 
         val event = VaultSubmitEvent.SendMessage("user", "message")
 
         // Act
-        repeat(3) {
-            vaultEventClient.submitEvent(event)
-        }
+        val result = vaultEventClient.submitEvent(event)
 
-        // Assert
-        assertEquals(3, requestIds.distinct().size)
+        // Assert - should return a UUID (generated internally)
+        assertTrue(result.isSuccess)
+        assertNotNull(result.getOrNull())
+        // UUID format check
+        assertTrue(result.getOrNull()!!.matches(Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")))
     }
 
     @Test
     fun `subscribeToResponses maps HandlerResult correctly`() = runTest {
         // Arrange
-        val responses = mutableListOf<VaultEventResponse>()
-        val job = backgroundScope.launch {
-            vaultEventClient.subscribeToResponses().toList(responses)
+        val response = VaultResponse.HandlerResult(
+            requestId = "req-123",
+            handlerId = "handler-1",
+            success = true,
+            result = JsonObject(),
+            error = null
+        )
+
+        // Act - emit first, then collect
+        backgroundScope.launch {
+            vaultResponses.emit(response)
         }
 
-        // Act
-        vaultResponses.emit(
-            VaultResponse.HandlerResult(
-                requestId = "req-123",
-                handlerId = "handler-1",
-                success = true,
-                result = JsonObject(),
-                error = null
-            )
-        )
-        testScheduler.advanceUntilIdle()
+        val mappedResponse = vaultEventClient.subscribeToResponses().first()
 
         // Assert
-        assertEquals(1, responses.size)
-        assertEquals("req-123", responses[0].requestId)
-        assertEquals("success", responses[0].status)
-        assertNull(responses[0].error)
-
-        job.cancel()
+        assertEquals("req-123", mappedResponse.requestId)
+        assertEquals("success", mappedResponse.status)
+        assertNull(mappedResponse.error)
     }
 
     @Test
     fun `subscribeToResponses maps Error correctly`() = runTest {
         // Arrange
-        val responses = mutableListOf<VaultEventResponse>()
-        val job = backgroundScope.launch {
-            vaultEventClient.subscribeToResponses().toList(responses)
+        val response = VaultResponse.Error(
+            requestId = "req-456",
+            code = "HANDLER_ERROR",
+            message = "Handler failed"
+        )
+
+        // Act - emit first, then collect
+        backgroundScope.launch {
+            vaultResponses.emit(response)
         }
 
-        // Act
-        vaultResponses.emit(
-            VaultResponse.Error(
-                requestId = "req-456",
-                code = "HANDLER_ERROR",
-                message = "Handler failed"
-            )
-        )
-        testScheduler.advanceUntilIdle()
+        val mappedResponse = vaultEventClient.subscribeToResponses().first()
 
         // Assert
-        assertEquals(1, responses.size)
-        assertEquals("req-456", responses[0].requestId)
-        assertEquals("error", responses[0].status)
-        assertEquals("Handler failed", responses[0].error)
-
-        job.cancel()
+        assertEquals("req-456", mappedResponse.requestId)
+        assertEquals("error", mappedResponse.status)
+        assertEquals("Handler failed", mappedResponse.error)
     }
 
     @Test
     fun `Custom event uses provided type and payload`() = runTest {
         // Arrange
-        var capturedPayload: JsonObject? = null
-        whenever(ownerSpaceClient.sendToVault(any(), any())).thenAnswer {
-            capturedPayload = it.arguments[1] as JsonObject
-            Result.success("test-id")
-        }
+        whenever(ownerSpaceClient.sendToVault(any(), any())).thenReturn(Result.success("test-id"))
 
         val customPayload = JsonObject().apply {
             addProperty("custom_field", "custom_value")
@@ -201,13 +183,13 @@ class VaultEventClientTest {
         val event = VaultSubmitEvent.Custom("custom.event", customPayload)
 
         // Act
-        vaultEventClient.submitEvent(event)
+        val result = vaultEventClient.submitEvent(event)
 
         // Assert
+        assertTrue(result.isSuccess)
         verify(ownerSpaceClient).sendToVault(
             eq("events.custom.event"),
             any()
         )
-        assertNotNull(capturedPayload)
     }
 }

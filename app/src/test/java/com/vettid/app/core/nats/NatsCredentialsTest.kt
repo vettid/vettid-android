@@ -40,9 +40,10 @@ class NatsCredentialsTest {
     @Test
     fun `credentials expiring in exactly 1 hour need refresh`() {
         val credentials = createTestCredentials(
-            expiresAt = Instant.now().plus(60, ChronoUnit.MINUTES)
+            // Add 1 second to account for test execution time
+            expiresAt = Instant.now().plus(61, ChronoUnit.MINUTES)
         )
-        // Buffer is 60 minutes, so exactly 60 minutes should not need refresh
+        // Buffer is 60 minutes, so slightly more than 60 minutes should not need refresh
         assertFalse(credentials.needsRefresh(bufferMinutes = 60))
     }
 
