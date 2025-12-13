@@ -549,13 +549,47 @@ data class SetPasswordResponse(
     val isSuccess: Boolean get() = status == "password_set"
 }
 
+/**
+ * Response from /vault/enroll/finalize
+ */
 data class FinalizeResponse(
-    @SerializedName("credentialBlob") val credentialBlob: CredentialBlob,
-    val lat: LAT,
-    @SerializedName("userGuid") val userGuid: String,
-    @SerializedName("backupPublicKey") val backupPublicKey: String? = null
+    val status: String,
+    @SerializedName("credential_package") val credentialPackage: CredentialPackage,
+    @SerializedName("vault_status") val vaultStatus: String
 )
 
+/**
+ * Credential package from finalize response
+ */
+data class CredentialPackage(
+    @SerializedName("user_guid") val userGuid: String,
+    @SerializedName("credential_id") val credentialId: String,
+    @SerializedName("encrypted_blob") val encryptedBlob: String,
+    @SerializedName("ephemeral_public_key") val ephemeralPublicKey: String,
+    val nonce: String,
+    @SerializedName("cek_version") val cekVersion: Int,
+    @SerializedName("ledger_auth_token") val ledgerAuthToken: LedgerAuthToken,
+    @SerializedName("transaction_keys") val transactionKeys: List<TransactionKey>
+)
+
+/**
+ * Ledger auth token for anti-phishing verification
+ */
+data class LedgerAuthToken(
+    val token: String, // lat_xxx... format
+    val version: Int
+)
+
+/**
+ * Transaction key from credential package
+ */
+data class TransactionKey(
+    @SerializedName("key_id") val keyId: String,
+    @SerializedName("public_key") val publicKey: String,
+    val algorithm: String
+)
+
+// Legacy types for backward compatibility with existing auth flow
 data class CredentialBlob(
     val data: String, // Base64 encrypted blob
     val version: Int,

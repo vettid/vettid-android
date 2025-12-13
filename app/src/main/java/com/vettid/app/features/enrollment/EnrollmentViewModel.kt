@@ -365,13 +365,9 @@ class EnrollmentViewModel @Inject constructor(
 
             result.fold(
                 onSuccess = { response ->
-                    // Store credentials
-                    credentialStore.storeCredentialBlob(
-                        userGuid = response.userGuid,
-                        encryptedBlob = response.credentialBlob.data,
-                        cekVersion = response.credentialBlob.cekVersion,
-                        lat = response.lat,
-                        transactionKeys = currentTransactionKeys,
+                    // Store credentials using new credential package format
+                    credentialStore.storeCredentialPackage(
+                        credentialPackage = response.credentialPackage,
                         passwordSalt = passwordSalt
                     )
 
@@ -379,7 +375,8 @@ class EnrollmentViewModel @Inject constructor(
                     delay(300)
 
                     _state.value = EnrollmentState.Complete(
-                        userGuid = response.userGuid
+                        userGuid = response.credentialPackage.userGuid,
+                        vaultStatus = response.vaultStatus
                     )
 
                     _effects.emit(EnrollmentEffect.NavigateToMain)

@@ -5,9 +5,12 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.google.gson.Gson
 import android.util.Base64
+import com.vettid.app.core.network.CredentialPackage
+import com.vettid.app.core.network.LedgerAuthToken
 import com.vettid.app.core.network.LegacyCredentialPackage
 import com.vettid.app.core.network.LAT
 import com.vettid.app.core.network.LegacyLedgerAuthToken
+import com.vettid.app.core.network.TransactionKey
 import com.vettid.app.core.network.TransactionKeyInfo
 import com.vettid.app.core.network.TransactionKeyPublic
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -45,7 +48,10 @@ class CredentialStore @Inject constructor(
 
     companion object {
         private const val KEY_USER_GUID = "user_guid"
+        private const val KEY_CREDENTIAL_ID = "credential_id"
         private const val KEY_ENCRYPTED_BLOB = "encrypted_blob"
+        private const val KEY_EPHEMERAL_PUBLIC_KEY = "ephemeral_public_key"
+        private const val KEY_NONCE = "nonce"
         private const val KEY_CEK_VERSION = "cek_version"
         private const val KEY_LAT_ID = "lat_id"
         private const val KEY_LAT_TOKEN = "lat_token"
@@ -309,7 +315,41 @@ class CredentialStore @Inject constructor(
     // MARK: - New Vault Services API Support
 
     /**
-     * Store credential blob from new vault services enrollment
+     * Store credential package from new finalize response format
+     */
+    fun storeCredentialPackage(
+        credentialPackage: CredentialPackage,
+        passwordSalt: ByteArray
+    ) {
+        // Convert TransactionKey to TransactionKeyInfo for backward compatibility
+        val keyInfoList = credentialPackage.transactionKeys.map { key ->
+            TransactionKeyInfo(
+                keyId = key.keyId,
+                publicKey = key.publicKey,
+                algorithm = key.algorithm
+            )
+        }
+
+        encryptedPrefs.edit().apply {
+            putString(KEY_USER_GUID, credentialPackage.userGuid)
+            putString(KEY_CREDENTIAL_ID, credentialPackage.credentialId)
+            putString(KEY_ENCRYPTED_BLOB, credentialPackage.encryptedBlob)
+            putString(KEY_EPHEMERAL_PUBLIC_KEY, credentialPackage.ephemeralPublicKey)
+            putString(KEY_NONCE, credentialPackage.nonce)
+            putInt(KEY_CEK_VERSION, credentialPackage.cekVersion)
+            // LedgerAuthToken uses token directly (lat_xxx format), no separate latId
+            putString(KEY_LAT_ID, credentialPackage.ledgerAuthToken.token) // Use token as ID
+            putString(KEY_LAT_TOKEN, credentialPackage.ledgerAuthToken.token)
+            putInt(KEY_LAT_VERSION, credentialPackage.ledgerAuthToken.version)
+            putString(KEY_UTK_POOL, gson.toJson(keyInfoList))
+            putString(KEY_PASSWORD_SALT, Base64.encodeToString(passwordSalt, Base64.NO_WRAP))
+            putLong(KEY_CREATED_AT, System.currentTimeMillis())
+            putLong(KEY_LAST_USED_AT, System.currentTimeMillis())
+        }.apply()
+    }
+
+    /**
+     * Store credential blob from new vault services enrollment (legacy signature)
      */
     fun storeCredentialBlob(
         userGuid: String,
