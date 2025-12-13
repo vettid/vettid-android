@@ -484,7 +484,7 @@ private fun PasswordSetupContent(
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = "Create a strong password to protect your vault credentials.",
+            text = "Create a password for managing Vault Services",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
