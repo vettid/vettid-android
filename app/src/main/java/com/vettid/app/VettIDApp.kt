@@ -313,7 +313,8 @@ fun WelcomeScreen(
 
         Text(
             text = "Welcome to VettID",
-            style = MaterialTheme.typography.headlineLarge
+            style = MaterialTheme.typography.headlineLarge,
+            textAlign = TextAlign.Center
         )
 
         Spacer(modifier = Modifier.height(8.dp))
