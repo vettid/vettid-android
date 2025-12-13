@@ -34,6 +34,7 @@ import com.vettid.app.ui.components.QrCodeScanner
 fun EnrollmentScreen(
     onEnrollmentComplete: () -> Unit,
     onCancel: () -> Unit,
+    startWithManualEntry: Boolean = false,
     viewModel: EnrollmentViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
@@ -48,10 +49,14 @@ fun EnrollmentScreen(
         }
     }
 
-    // Auto-start scanning when screen opens
-    LaunchedEffect(Unit) {
+    // Auto-start scanning or manual entry when screen opens
+    LaunchedEffect(startWithManualEntry) {
         if (state is EnrollmentState.Initial) {
-            viewModel.onEvent(EnrollmentEvent.StartScanning)
+            if (startWithManualEntry) {
+                viewModel.onEvent(EnrollmentEvent.SwitchToManualEntry)
+            } else {
+                viewModel.onEvent(EnrollmentEvent.StartScanning)
+            }
         }
     }
 
@@ -73,6 +78,25 @@ fun EnrollmentScreen(
                         error = currentState.error,
                         onCodeScanned = { code ->
                             viewModel.onEvent(EnrollmentEvent.InviteCodeScanned(code))
+                        },
+                        onManualEntry = {
+                            viewModel.onEvent(EnrollmentEvent.SwitchToManualEntry)
+                        },
+                        onCancel = onCancel
+                    )
+                }
+                is EnrollmentState.ManualEntry -> {
+                    ManualEntryContent(
+                        inviteCode = currentState.inviteCode,
+                        error = currentState.error,
+                        onInviteCodeChange = { code ->
+                            viewModel.onEvent(EnrollmentEvent.InviteCodeChanged(code))
+                        },
+                        onSubmit = {
+                            viewModel.onEvent(EnrollmentEvent.SubmitInviteCode)
+                        },
+                        onScanQR = {
+                            viewModel.onEvent(EnrollmentEvent.SwitchToScanning)
                         },
                         onCancel = onCancel
                     )
@@ -127,6 +151,7 @@ fun EnrollmentScreen(
 private fun QRScannerContent(
     error: String?,
     onCodeScanned: (String) -> Unit,
+    onManualEntry: () -> Unit,
     onCancel: () -> Unit
 ) {
     Column(
@@ -148,7 +173,9 @@ private fun QRScannerContent(
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
             )
-            Spacer(modifier = Modifier.width(48.dp))
+            IconButton(onClick = onManualEntry) {
+                Icon(Icons.Default.Edit, contentDescription = "Enter code manually")
+            }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -200,6 +227,21 @@ private fun QRScannerContent(
                 )
             }
         }
+
+        // Manual entry option
+        Spacer(modifier = Modifier.height(16.dp))
+        TextButton(
+            onClick = onManualEntry,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(
+                Icons.Default.Edit,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Enter code manually")
+        }
     }
 }
 
@@ -209,6 +251,130 @@ private fun extractInviteCode(qrData: String): String? {
         qrData.substringAfter("code=").takeIf { it.isNotEmpty() }
     } else {
         qrData.takeIf { it.isNotEmpty() }
+    }
+}
+
+// MARK: - Manual Entry Content
+
+@Composable
+private fun ManualEntryContent(
+    inviteCode: String,
+    error: String?,
+    onInviteCodeChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onScanQR: () -> Unit,
+    onCancel: () -> Unit
+) {
+    val focusManager = LocalFocusManager.current
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        // Header
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onCancel) {
+                Icon(Icons.Default.Close, contentDescription = "Cancel")
+            }
+            Text(
+                text = "Enter Invitation Code",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+            IconButton(onClick = onScanQR) {
+                Icon(Icons.Default.QrCodeScanner, contentDescription = "Scan QR code")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        // Icon
+        Icon(
+            imageVector = Icons.Default.VpnKey,
+            contentDescription = null,
+            modifier = Modifier
+                .size(64.dp)
+                .align(Alignment.CenterHorizontally),
+            tint = MaterialTheme.colorScheme.primary
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Instructions
+        Text(
+            text = "Enter the invitation code from your VettID web portal or paste the enrollment link.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        // Invite code input
+        OutlinedTextField(
+            value = inviteCode,
+            onValueChange = onInviteCodeChange,
+            label = { Text("Invitation Code") },
+            placeholder = { Text("Enter code or paste link") },
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Text,
+                imeAction = ImeAction.Done
+            ),
+            keyboardActions = KeyboardActions(
+                onDone = {
+                    focusManager.clearFocus()
+                    onSubmit()
+                }
+            ),
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            isError = error != null
+        )
+
+        // Error message
+        if (error != null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = error,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        // Submit button
+        Button(
+            onClick = onSubmit,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            enabled = inviteCode.isNotBlank()
+        ) {
+            Text("Continue")
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Scan QR option
+        TextButton(
+            onClick = onScanQR,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(
+                Icons.Default.QrCodeScanner,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Scan QR code instead")
+        }
     }
 }
 

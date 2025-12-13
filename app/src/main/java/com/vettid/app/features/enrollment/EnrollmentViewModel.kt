@@ -55,6 +55,10 @@ class EnrollmentViewModel @Inject constructor(
         viewModelScope.launch {
             when (event) {
                 is EnrollmentEvent.StartScanning -> startScanning()
+                is EnrollmentEvent.SwitchToManualEntry -> switchToManualEntry()
+                is EnrollmentEvent.SwitchToScanning -> startScanning()
+                is EnrollmentEvent.InviteCodeChanged -> updateInviteCode(event.inviteCode)
+                is EnrollmentEvent.SubmitInviteCode -> submitManualInviteCode()
                 is EnrollmentEvent.InviteCodeScanned -> processInviteCode(event.inviteCode)
                 is EnrollmentEvent.AttestationComplete -> handleAttestationResult(event.success)
                 is EnrollmentEvent.PasswordChanged -> updatePassword(event.password)
@@ -68,6 +72,41 @@ class EnrollmentViewModel @Inject constructor(
 
     private fun startScanning() {
         _state.value = EnrollmentState.ScanningQR()
+    }
+
+    private fun switchToManualEntry() {
+        _state.value = EnrollmentState.ManualEntry()
+    }
+
+    private fun updateInviteCode(inviteCode: String) {
+        val currentState = _state.value
+        if (currentState is EnrollmentState.ManualEntry) {
+            _state.value = currentState.copy(inviteCode = inviteCode, error = null)
+        }
+    }
+
+    private suspend fun submitManualInviteCode() {
+        val currentState = _state.value
+        if (currentState !is EnrollmentState.ManualEntry) return
+
+        val code = currentState.inviteCode.trim()
+        if (code.isEmpty()) {
+            _state.value = currentState.copy(error = "Please enter an invitation code")
+            return
+        }
+
+        // Extract code if user pasted a full URL
+        val inviteCode = extractInviteCode(code)
+        processInviteCode(inviteCode)
+    }
+
+    private fun extractInviteCode(input: String): String {
+        // Handle vettid://enroll?code=XXXX format
+        return if (input.startsWith("vettid://")) {
+            input.substringAfter("code=").takeIf { it.isNotEmpty() } ?: input
+        } else {
+            input
+        }
     }
 
     private suspend fun processInviteCode(inviteCode: String) {

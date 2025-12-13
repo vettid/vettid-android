@@ -5,7 +5,7 @@ import com.vettid.app.core.network.TransactionKeyPublic
 /**
  * Enrollment flow state machine
  *
- * Flow: Initial → ScanningQR → Attesting → SettingPassword → Finalizing → Complete
+ * Flow: Initial → ScanningQR/ManualEntry → Attesting → SettingPassword → Finalizing → Complete
  */
 sealed class EnrollmentState {
     /** Initial state before enrollment starts */
@@ -13,6 +13,12 @@ sealed class EnrollmentState {
 
     /** Scanning QR code for invitation */
     data class ScanningQR(
+        val error: String? = null
+    ) : EnrollmentState()
+
+    /** Manual entry of invitation code */
+    data class ManualEntry(
+        val inviteCode: String = "",
         val error: String? = null
     ) : EnrollmentState()
 
@@ -126,6 +132,18 @@ enum class PasswordStrength {
 sealed class EnrollmentEvent {
     /** Start QR scanning */
     object StartScanning : EnrollmentEvent()
+
+    /** Switch to manual code entry */
+    object SwitchToManualEntry : EnrollmentEvent()
+
+    /** Switch back to QR scanning */
+    object SwitchToScanning : EnrollmentEvent()
+
+    /** Manual invite code changed */
+    data class InviteCodeChanged(val inviteCode: String) : EnrollmentEvent()
+
+    /** Submit manually entered invite code */
+    object SubmitInviteCode : EnrollmentEvent()
 
     /** QR code scanned with invite code */
     data class InviteCodeScanned(val inviteCode: String) : EnrollmentEvent()

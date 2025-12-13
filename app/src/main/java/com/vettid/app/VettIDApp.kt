@@ -20,6 +20,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.vettid.app.features.connections.*
+import com.vettid.app.features.enrollment.EnrollmentScreen
 import com.vettid.app.features.handlers.HandlerDetailScreen
 import com.vettid.app.features.handlers.HandlerDiscoveryScreen
 import com.vettid.app.features.handlers.HandlerExecutionScreen
@@ -36,7 +37,9 @@ private const val TAG = "VettIDApp"
 
 sealed class Screen(val route: String) {
     object Welcome : Screen("welcome")
-    object Enrollment : Screen("enrollment")
+    object Enrollment : Screen("enrollment?startWithManualEntry={startWithManualEntry}") {
+        fun createRoute(startWithManualEntry: Boolean = false) = "enrollment?startWithManualEntry=$startWithManualEntry"
+    }
     object Authentication : Screen("authentication")
     object Main : Screen("main")
     object HandlerDiscovery : Screen("handlers")
@@ -95,14 +98,24 @@ fun VettIDApp(
     ) {
         composable(Screen.Welcome.route) {
             WelcomeScreen(
-                onScanQR = { navController.navigate(Screen.Enrollment.route) },
-                onEnterCode = { /* Navigate to manual entry */ }
+                onScanQR = { navController.navigate(Screen.Enrollment.createRoute(startWithManualEntry = false)) },
+                onEnterCode = { navController.navigate(Screen.Enrollment.createRoute(startWithManualEntry = true)) }
             )
         }
-        composable(Screen.Enrollment.route) {
+        composable(
+            route = Screen.Enrollment.route,
+            arguments = listOf(
+                navArgument("startWithManualEntry") {
+                    type = NavType.BoolType
+                    defaultValue = false
+                }
+            )
+        ) { backStackEntry ->
+            val startWithManualEntry = backStackEntry.arguments?.getBoolean("startWithManualEntry") ?: false
             EnrollmentScreen(
-                onComplete = { appViewModel.refreshCredentialStatus() },
-                onBack = { navController.popBackStack() }
+                onEnrollmentComplete = { appViewModel.refreshCredentialStatus() },
+                onCancel = { navController.popBackStack() },
+                startWithManualEntry = startWithManualEntry
             )
         }
         composable(Screen.Authentication.route) {
@@ -306,7 +319,7 @@ fun WelcomeScreen(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "Secure credential management\nfor your personal vault",
+            text = "Control your data.\nSecure your keys.\nOwn your future.",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
@@ -336,172 +349,6 @@ fun WelcomeScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun EnrollmentScreen(
-    onComplete: () -> Unit,
-    onBack: () -> Unit
-) {
-    val context = LocalContext.current
-    var scannedCode by remember { mutableStateOf<String?>(null) }
-    var isProcessing by remember { mutableStateOf(false) }
-    var errorMessage by remember { mutableStateOf<String?>(null) }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Scan Enrollment QR") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
-        }
-    ) { padding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-            when {
-                isProcessing -> {
-                    // Processing scanned code
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        CircularProgressIndicator()
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text("Processing enrollment...")
-                    }
-                }
-                scannedCode != null -> {
-                    // Show scanned result (for now just display it)
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CheckCircle,
-                            contentDescription = null,
-                            modifier = Modifier.size(64.dp),
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        Text(
-                            text = "QR Code Scanned!",
-                            style = MaterialTheme.typography.headlineSmall
-                        )
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Text(
-                            text = "Invitation code detected",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        // Show the scanned code (truncated for display)
-                        Card(
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(16.dp)
-                            ) {
-                                Text(
-                                    text = "Scanned Data:",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Text(
-                                    text = scannedCode?.take(100) ?: "",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                if ((scannedCode?.length ?: 0) > 100) {
-                                    Text(
-                                        text = "...",
-                                        style = MaterialTheme.typography.bodySmall
-                                    )
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(24.dp))
-
-                        Button(
-                            onClick = {
-                                // TODO: Start enrollment API flow
-                                isProcessing = true
-                                // For now, just show a toast
-                                Toast.makeText(
-                                    context,
-                                    "Enrollment flow coming soon!",
-                                    Toast.LENGTH_SHORT
-                                ).show()
-                                isProcessing = false
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Continue Enrollment")
-                        }
-
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        OutlinedButton(
-                            onClick = { scannedCode = null },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text("Scan Again")
-                        }
-                    }
-                }
-                else -> {
-                    // Show QR scanner
-                    QrCodeScanner(
-                        onQrCodeScanned = { code ->
-                            Log.d(TAG, "Scanned QR code: $code")
-                            scannedCode = code
-                        },
-                        onError = { error ->
-                            Log.e(TAG, "Scanner error: $error")
-                            errorMessage = error
-                            Toast.makeText(context, error, Toast.LENGTH_LONG).show()
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-            }
-
-            // Error snackbar
-            errorMessage?.let { error ->
-                Snackbar(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(16.dp),
-                    action = {
-                        TextButton(onClick = { errorMessage = null }) {
-                            Text("Dismiss")
-                        }
-                    }
-                ) {
-                    Text(error)
-                }
-            }
-        }
-    }
-}
 
 @Composable
 fun AuthenticationScreen(
