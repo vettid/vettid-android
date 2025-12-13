@@ -77,7 +77,7 @@ fun EnrollmentScreen(
                     QRScannerContent(
                         error = currentState.error,
                         onCodeScanned = { code ->
-                            viewModel.onEvent(EnrollmentEvent.InviteCodeScanned(code))
+                            viewModel.onEvent(EnrollmentEvent.QRCodeScanned(code))
                         },
                         onManualEntry = {
                             viewModel.onEvent(EnrollmentEvent.SwitchToManualEntry)
@@ -200,10 +200,9 @@ private fun QRScannerContent(
         ) {
             QrCodeScanner(
                 onQrCodeScanned = { code ->
-                    // Extract invite code from QR data
-                    val inviteCode = extractInviteCode(code)
-                    if (inviteCode != null) {
-                        onCodeScanned(inviteCode)
+                    // Pass raw QR data to be parsed by ViewModel
+                    if (code.isNotEmpty()) {
+                        onCodeScanned(code)
                     }
                 },
                 onError = { /* Error handled via error parameter */ },
@@ -242,15 +241,6 @@ private fun QRScannerContent(
             Spacer(modifier = Modifier.width(8.dp))
             Text("Enter code manually")
         }
-    }
-}
-
-private fun extractInviteCode(qrData: String): String? {
-    // QR code format: vettid://enroll?code=XXXX or just the code
-    return if (qrData.startsWith("vettid://")) {
-        qrData.substringAfter("code=").takeIf { it.isNotEmpty() }
-    } else {
-        qrData.takeIf { it.isNotEmpty() }
     }
 }
 

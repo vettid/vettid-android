@@ -1,5 +1,6 @@
 package com.vettid.app.features.enrollment
 
+import com.vettid.app.core.network.EnrollmentQRData
 import com.vettid.app.core.network.TransactionKeyPublic
 
 /**
@@ -24,7 +25,7 @@ sealed class EnrollmentState {
 
     /** Processing QR code, calling enroll/start */
     data class ProcessingInvite(
-        val inviteCode: String
+        val qrData: EnrollmentQRData
     ) : EnrollmentState()
 
     /** Performing hardware attestation */
@@ -142,11 +143,11 @@ sealed class EnrollmentEvent {
     /** Manual invite code changed */
     data class InviteCodeChanged(val inviteCode: String) : EnrollmentEvent()
 
-    /** Submit manually entered invite code */
+    /** Submit manually entered invite code (JSON data) */
     object SubmitInviteCode : EnrollmentEvent()
 
-    /** QR code scanned with invite code */
-    data class InviteCodeScanned(val inviteCode: String) : EnrollmentEvent()
+    /** QR code scanned - contains raw JSON data */
+    data class QRCodeScanned(val qrData: String) : EnrollmentEvent()
 
     /** Attestation completed */
     data class AttestationComplete(val success: Boolean) : EnrollmentEvent()

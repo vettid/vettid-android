@@ -19,6 +19,8 @@ import javax.inject.Singleton
  * - Enrollment: start → attestation → password → finalize
  * - Authentication: request → execute
  * - Transaction keys management
+ *
+ * Supports dynamic API URLs parsed from QR codes for enrollment.
  */
 @Singleton
 class VaultServiceClient @Inject constructor() {
@@ -38,26 +40,62 @@ class VaultServiceClient @Inject constructor() {
         })
         .build()
 
-    private val retrofit = Retrofit.Builder()
-        .baseUrl(BASE_URL_DEV) // Use dev URL for testing
-        .client(okHttpClient)
-        .addConverterFactory(GsonConverterFactory.create())
-        .build()
+    // Cache for Retrofit instances by base URL
+    private val apiCache = mutableMapOf<String, VaultServiceApi>()
 
-    private val api = retrofit.create(VaultServiceApi::class.java)
+    // Default API for non-enrollment operations
+    private val defaultApi: VaultServiceApi by lazy {
+        createApi(BASE_URL_DEV)
+    }
+
+    // Current enrollment API URL (set when processing QR code)
+    private var enrollmentApiUrl: String? = null
+    private var enrollmentApi: VaultServiceApi? = null
+
+    /**
+     * Set the API URL for enrollment operations (from QR code)
+     */
+    fun setEnrollmentApiUrl(apiUrl: String) {
+        val normalizedUrl = if (apiUrl.endsWith("/")) apiUrl else "$apiUrl/"
+        enrollmentApiUrl = normalizedUrl
+        enrollmentApi = createApi(normalizedUrl)
+    }
+
+    /**
+     * Get the current enrollment API, or default if not set
+     */
+    private fun getEnrollmentApi(): VaultServiceApi {
+        return enrollmentApi ?: defaultApi
+    }
+
+    private fun createApi(baseUrl: String): VaultServiceApi {
+        return apiCache.getOrPut(baseUrl) {
+            Retrofit.Builder()
+                .baseUrl(baseUrl)
+                .client(okHttpClient)
+                .addConverterFactory(GsonConverterFactory.create())
+                .build()
+                .create(VaultServiceApi::class.java)
+        }
+    }
+
+    // Legacy reference for backward compatibility
+    private val api: VaultServiceApi get() = defaultApi
 
     // MARK: - Enrollment Flow
 
     /**
-     * Step 1: Start enrollment after scanning QR code
+     * Step 1: Start enrollment using session token from QR code
      * Returns attestation challenge and initial transaction keys
+     *
+     * Note: The API URL must be set via setEnrollmentApiUrl() before calling this
      */
-    suspend fun enrollStart(inviteCode: String, deviceInfo: DeviceInfo): Result<EnrollStartResponse> {
+    suspend fun enrollStart(sessionToken: String, deviceInfo: DeviceInfo): Result<EnrollStartResponse> {
         val request = VaultEnrollStartRequest(
-            inviteCode = inviteCode,
+            sessionToken = sessionToken,
             deviceInfo = deviceInfo
         )
-        return safeApiCall { api.enrollStart(request) }
+        return safeApiCall { getEnrollmentApi().enrollStart(request) }
     }
 
     /**
@@ -74,7 +112,7 @@ class VaultServiceClient @Inject constructor() {
                 android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP)
             }
         )
-        return safeApiCall { api.submitAttestation(request) }
+        return safeApiCall { getEnrollmentApi().submitAttestation(request) }
     }
 
     /**
@@ -90,7 +128,7 @@ class VaultServiceClient @Inject constructor() {
             encryptedPassword = encryptedPassword,
             transactionKeyId = transactionKeyId
         )
-        return safeApiCall { api.setPassword(request) }
+        return safeApiCall { getEnrollmentApi().setPassword(request) }
     }
 
     /**
@@ -99,7 +137,7 @@ class VaultServiceClient @Inject constructor() {
      */
     suspend fun finalize(sessionId: String): Result<FinalizeResponse> {
         val request = VaultFinalizeRequest(sessionId = sessionId)
-        return safeApiCall { api.finalize(request) }
+        return safeApiCall { getEnrollmentApi().finalize(request) }
     }
 
     // MARK: - Authentication Flow
@@ -335,8 +373,8 @@ interface VaultServiceApi {
 // MARK: - Request Types
 
 data class VaultEnrollStartRequest(
-    @SerializedName("inviteCode") val inviteCode: String,
-    @SerializedName("deviceInfo") val deviceInfo: DeviceInfo
+    @SerializedName("session_token") val sessionToken: String,
+    @SerializedName("device_info") val deviceInfo: DeviceInfo
 )
 
 data class DeviceInfo(
@@ -540,6 +578,42 @@ data class BackupInfo(
     @SerializedName("sizeBytes") val sizeBytes: Long? = null,
     val type: String? = null // automatic, manual, pre_stop
 )
+
+// MARK: - QR Code Data
+
+/**
+ * Parsed data from VettID enrollment QR code
+ */
+data class EnrollmentQRData(
+    val type: String,
+    val version: Int,
+    @SerializedName("api_url") val apiUrl: String,
+    @SerializedName("session_token") val sessionToken: String,
+    @SerializedName("user_guid") val userGuid: String
+) {
+    companion object {
+        /**
+         * Parse QR code JSON data
+         * Returns null if parsing fails or data is invalid
+         */
+        fun parse(qrData: String): EnrollmentQRData? {
+            return try {
+                val gson = com.google.gson.Gson()
+                val parsed = gson.fromJson(qrData, EnrollmentQRData::class.java)
+                // Validate required fields
+                if (parsed.type == "vettid_enrollment" &&
+                    parsed.apiUrl.isNotBlank() &&
+                    parsed.sessionToken.isNotBlank()) {
+                    parsed
+                } else {
+                    null
+                }
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+}
 
 // MARK: - Exceptions
 

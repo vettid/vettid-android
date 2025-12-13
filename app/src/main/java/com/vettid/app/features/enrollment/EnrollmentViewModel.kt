@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.attestation.HardwareAttestationManager
 import com.vettid.app.core.crypto.CryptoManager
 import com.vettid.app.core.network.DeviceInfo
+import com.vettid.app.core.network.EnrollmentQRData
 import com.vettid.app.core.network.TransactionKeyPublic
 import com.vettid.app.core.network.VaultServiceClient
 import com.vettid.app.core.storage.CredentialStore
@@ -59,7 +60,7 @@ class EnrollmentViewModel @Inject constructor(
                 is EnrollmentEvent.SwitchToScanning -> startScanning()
                 is EnrollmentEvent.InviteCodeChanged -> updateInviteCode(event.inviteCode)
                 is EnrollmentEvent.SubmitInviteCode -> submitManualInviteCode()
-                is EnrollmentEvent.InviteCodeScanned -> processInviteCode(event.inviteCode)
+                is EnrollmentEvent.QRCodeScanned -> processQRCode(event.qrData)
                 is EnrollmentEvent.AttestationComplete -> handleAttestationResult(event.success)
                 is EnrollmentEvent.PasswordChanged -> updatePassword(event.password)
                 is EnrollmentEvent.ConfirmPasswordChanged -> updateConfirmPassword(event.confirmPassword)
@@ -95,25 +96,35 @@ class EnrollmentViewModel @Inject constructor(
             return
         }
 
-        // Extract code if user pasted a full URL
-        val inviteCode = extractInviteCode(code)
-        processInviteCode(inviteCode)
+        // Process the manually entered code (could be JSON or URL)
+        processQRCode(code)
     }
 
-    private fun extractInviteCode(input: String): String {
-        // Handle vettid://enroll?code=XXXX format
-        return if (input.startsWith("vettid://")) {
-            input.substringAfter("code=").takeIf { it.isNotEmpty() } ?: input
-        } else {
-            input
+    /**
+     * Process scanned or manually entered QR code data
+     * Parses JSON, extracts API URL, and starts enrollment
+     */
+    private suspend fun processQRCode(qrData: String) {
+        // Try to parse as JSON enrollment data
+        val enrollmentData = EnrollmentQRData.parse(qrData)
+
+        if (enrollmentData == null) {
+            _state.value = EnrollmentState.Error(
+                message = "Invalid QR code format. Please scan a valid VettID enrollment QR code.",
+                retryable = true,
+                previousState = EnrollmentState.ScanningQR()
+            )
+            return
         }
-    }
 
-    private suspend fun processInviteCode(inviteCode: String) {
-        _state.value = EnrollmentState.ProcessingInvite(inviteCode)
+        _state.value = EnrollmentState.ProcessingInvite(enrollmentData)
 
+        // Set the API URL from the QR code
+        vaultServiceClient.setEnrollmentApiUrl(enrollmentData.apiUrl)
+
+        // Call enroll/start with the session token
         val result = vaultServiceClient.enrollStart(
-            inviteCode = inviteCode,
+            sessionToken = enrollmentData.sessionToken,
             deviceInfo = DeviceInfo.current()
         )
 
