@@ -151,14 +151,23 @@ class VaultServiceClient @Inject constructor() {
 
     /**
      * Step 4: Set enrollment password (encrypted with transaction key)
+     *
+     * @param encryptedPasswordHash Base64-encoded encrypted password hash
+     * @param keyId The password_key_id from /enroll/start response
+     * @param nonce Base64-encoded nonce used for encryption
+     * @param ephemeralPublicKey Base64-encoded ephemeral X25519 public key
      */
     suspend fun setPassword(
-        encryptedPassword: String,
-        transactionKeyId: String
+        encryptedPasswordHash: String,
+        keyId: String,
+        nonce: String,
+        ephemeralPublicKey: String
     ): Result<SetPasswordResponse> {
         val request = VaultSetPasswordRequest(
-            encryptedPassword = encryptedPassword,
-            transactionKeyId = transactionKeyId
+            encryptedPasswordHash = encryptedPasswordHash,
+            keyId = keyId,
+            nonce = nonce,
+            ephemeralPublicKey = ephemeralPublicKey
         )
         return safeApiCall {
             getEnrollmentApi().setPassword(getEnrollmentAuthHeader(), request)
@@ -464,8 +473,10 @@ data class VaultAttestationRequest(
 )
 
 data class VaultSetPasswordRequest(
-    @SerializedName("encrypted_password") val encryptedPassword: String,
-    @SerializedName("transaction_key_id") val transactionKeyId: String
+    @SerializedName("encrypted_password_hash") val encryptedPasswordHash: String,
+    @SerializedName("key_id") val keyId: String,
+    @SerializedName("nonce") val nonce: String,
+    @SerializedName("ephemeral_public_key") val ephemeralPublicKey: String
 )
 
 data class VaultAuthRequest(

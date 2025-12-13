@@ -318,10 +318,12 @@ class EnrollmentViewModel @Inject constructor(
                 utkPublicKeyBase64 = transactionKey.publicKey
             )
 
-            // Submit to server using passwordKeyId (sessionId is in the JWT now)
+            // Submit to server with all encryption parameters
             val result = vaultServiceClient.setPassword(
-                encryptedPassword = encryptedResult.encryptedPasswordHash,
-                transactionKeyId = currentState.passwordKeyId
+                encryptedPasswordHash = encryptedResult.encryptedPasswordHash,
+                keyId = currentState.passwordKeyId,
+                nonce = encryptedResult.nonce,
+                ephemeralPublicKey = encryptedResult.ephemeralPublicKey
             )
 
             result.fold(
