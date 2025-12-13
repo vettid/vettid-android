@@ -328,12 +328,12 @@ class EnrollmentViewModel @Inject constructor(
 
             result.fold(
                 onSuccess = { response ->
-                    if (response.success) {
+                    if (response.isSuccess) {
                         finalizeEnrollment(currentState.sessionId, salt)
                     } else {
                         _state.value = currentState.copy(
                             isSubmitting = false,
-                            error = "Failed to set password"
+                            error = "Failed to set password: ${response.status}"
                         )
                     }
                 },

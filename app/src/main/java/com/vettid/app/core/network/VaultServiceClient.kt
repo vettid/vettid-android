@@ -542,8 +542,12 @@ data class AttestationResponse(
 )
 
 data class SetPasswordResponse(
-    val success: Boolean
-)
+    val status: String,
+    @SerializedName("next_step") val nextStep: String? = null
+) {
+    /** Check if password was set successfully */
+    val isSuccess: Boolean get() = status == "password_set"
+}
 
 data class FinalizeResponse(
     @SerializedName("credentialBlob") val credentialBlob: CredentialBlob,
