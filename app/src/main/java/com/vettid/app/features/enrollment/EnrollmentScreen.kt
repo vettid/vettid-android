@@ -67,6 +67,10 @@ fun EnrollmentScreen(
         AnimatedContent(
             targetState = state,
             transitionSpec = { fadeIn() togetherWith fadeOut() },
+            contentKey = { targetState ->
+                // Use class name as key so updates within the same state don't trigger animation
+                targetState::class.simpleName
+            },
             label = "enrollment_transition"
         ) { currentState ->
             when (currentState) {
