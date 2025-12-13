@@ -1,14 +1,19 @@
 package com.vettid.app
 
+import android.graphics.BitmapFactory
 import android.util.Log
 import android.widget.Toast
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -293,6 +298,13 @@ fun WelcomeScreen(
     onScanQR: () -> Unit,
     onEnterCode: () -> Unit
 ) {
+    val context = LocalContext.current
+    val iconBitmap = remember {
+        context.assets.open("vettid-icon-1024.png").use { inputStream ->
+            BitmapFactory.decodeStream(inputStream)
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -302,11 +314,12 @@ fun WelcomeScreen(
     ) {
         Spacer(modifier = Modifier.weight(1f))
 
-        Icon(
-            imageVector = Icons.Default.Security,
-            contentDescription = null,
-            modifier = Modifier.size(80.dp),
-            tint = MaterialTheme.colorScheme.primary
+        Image(
+            bitmap = iconBitmap.asImageBitmap(),
+            contentDescription = "VettID",
+            modifier = Modifier
+                .size(120.dp)
+                .clip(RoundedCornerShape(16.dp))
         )
 
         Spacer(modifier = Modifier.height(24.dp))
