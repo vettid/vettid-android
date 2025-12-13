@@ -1,5 +1,7 @@
 package com.vettid.app.features.enrollment
 
+import android.content.Context
+import android.provider.Settings
 import android.util.Base64
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -11,6 +13,7 @@ import com.vettid.app.core.network.TransactionKeyPublic
 import com.vettid.app.core.network.VaultServiceClient
 import com.vettid.app.core.storage.CredentialStore
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,6 +32,7 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class EnrollmentViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val vaultServiceClient: VaultServiceClient,
     private val cryptoManager: CryptoManager,
     private val attestationManager: HardwareAttestationManager,
@@ -37,6 +41,14 @@ class EnrollmentViewModel @Inject constructor(
 
     companion object {
         const val MIN_PASSWORD_LENGTH = 12
+    }
+
+    /**
+     * Get unique device identifier for enrollment
+     */
+    private fun getDeviceId(): String {
+        return Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+            ?: java.util.UUID.randomUUID().toString()
     }
 
     private val _state = MutableStateFlow<EnrollmentState>(EnrollmentState.Initial)
@@ -103,6 +115,12 @@ class EnrollmentViewModel @Inject constructor(
     /**
      * Process scanned or manually entered QR code data
      * Parses JSON, extracts API URL, and starts enrollment
+     *
+     * Flow:
+     * 1. Parse QR code JSON
+     * 2. Call /vault/enroll/authenticate to get JWT
+     * 3. Call /vault/enroll/start to get transaction keys
+     * 4. Move to password setup (skipping attestation for now)
      */
     private suspend fun processQRCode(qrData: String) {
         // Try to parse as JSON enrollment data
@@ -122,30 +140,47 @@ class EnrollmentViewModel @Inject constructor(
         // Set the API URL from the QR code
         vaultServiceClient.setEnrollmentApiUrl(enrollmentData.apiUrl)
 
-        // Call enroll/start with the session token
-        val result = vaultServiceClient.enrollStart(
+        // Step 1: Authenticate with session_token to get enrollment JWT
+        val authResult = vaultServiceClient.enrollAuthenticate(
             sessionToken = enrollmentData.sessionToken,
-            deviceInfo = DeviceInfo.current()
+            deviceId = getDeviceId()
         )
 
-        result.fold(
-            onSuccess = { response ->
-                currentTransactionKeys = response.transactionKeys
-                val challenge = Base64.decode(response.attestationChallenge, Base64.NO_WRAP)
+        authResult.fold(
+            onSuccess = { authResponse ->
+                // Step 2: Call enroll/start to get transaction keys
+                val startResult = vaultServiceClient.enrollStart(skipAttestation = true)
 
-                _state.value = EnrollmentState.Attesting(
-                    sessionId = response.sessionId,
-                    challenge = challenge,
-                    transactionKeys = response.transactionKeys,
-                    progress = 0f
+                startResult.fold(
+                    onSuccess = { startResponse ->
+                        currentTransactionKeys = startResponse.transactionKeys
+
+                        // Generate password salt for later use
+                        passwordSalt = cryptoManager.generateSalt()
+
+                        // Move directly to password setup (skipping attestation)
+                        _state.value = EnrollmentState.SettingPassword(
+                            sessionId = authResponse.enrollmentSessionId,
+                            transactionKeys = startResponse.transactionKeys
+                        )
+                    },
+                    onFailure = { error ->
+                        _state.value = EnrollmentState.Error(
+                            message = error.message ?: "Failed to start enrollment",
+                            retryable = true,
+                            previousState = EnrollmentState.ScanningQR()
+                        )
+                    }
                 )
-
-                // Start attestation process
-                performAttestation(response.sessionId, challenge)
             },
             onFailure = { error ->
+                val errorMessage = if (error.message?.contains("401") == true) {
+                    "Enrollment QR code has expired. Please request a new one."
+                } else {
+                    error.message ?: "Failed to authenticate enrollment"
+                }
                 _state.value = EnrollmentState.Error(
-                    message = error.message ?: "Failed to start enrollment",
+                    message = errorMessage,
                     retryable = true,
                     previousState = EnrollmentState.ScanningQR()
                 )
@@ -153,6 +188,10 @@ class EnrollmentViewModel @Inject constructor(
         )
     }
 
+    /**
+     * Perform hardware attestation (optional - can be skipped with skip_attestation=true)
+     * Note: Currently not used as we skip attestation during enrollment
+     */
     private suspend fun performAttestation(sessionId: String, challenge: ByteArray) {
         try {
             // Update progress
@@ -166,8 +205,8 @@ class EnrollmentViewModel @Inject constructor(
             val certChain = attestationResult.certificateChain.map { it.encoded }
             updateAttestationProgress(0.7f)
 
+            // Submit attestation (uses JWT token from authenticate step)
             val result = vaultServiceClient.submitAttestation(
-                sessionId = sessionId,
                 certificateChain = certChain
             )
 
@@ -273,9 +312,8 @@ class EnrollmentViewModel @Inject constructor(
                 utkPublicKeyBase64 = transactionKey.publicKey
             )
 
-            // Submit to server
+            // Submit to server (sessionId is in the JWT now)
             val result = vaultServiceClient.setPassword(
-                sessionId = currentState.sessionId,
                 encryptedPassword = encryptedResult.encryptedPasswordHash,
                 transactionKeyId = transactionKey.keyId
             )
@@ -312,7 +350,8 @@ class EnrollmentViewModel @Inject constructor(
         try {
             updateFinalizingProgress(0.3f)
 
-            val result = vaultServiceClient.finalize(sessionId)
+            // finalize() uses the JWT token, sessionId not needed in request
+            val result = vaultServiceClient.finalize()
 
             updateFinalizingProgress(0.7f)
 

@@ -52,6 +52,9 @@ class VaultServiceClient @Inject constructor() {
     private var enrollmentApiUrl: String? = null
     private var enrollmentApi: VaultServiceApi? = null
 
+    // Current enrollment JWT token (obtained from authenticate endpoint)
+    private var enrollmentToken: String? = null
+
     /**
      * Set the API URL for enrollment operations (from QR code)
      */
@@ -59,6 +62,8 @@ class VaultServiceClient @Inject constructor() {
         val normalizedUrl = if (apiUrl.endsWith("/")) apiUrl else "$apiUrl/"
         enrollmentApiUrl = normalizedUrl
         enrollmentApi = createApi(normalizedUrl)
+        // Clear any previous enrollment token when switching APIs
+        enrollmentToken = null
     }
 
     /**
@@ -66,6 +71,13 @@ class VaultServiceClient @Inject constructor() {
      */
     private fun getEnrollmentApi(): VaultServiceApi {
         return enrollmentApi ?: defaultApi
+    }
+
+    /**
+     * Get the Bearer token header for enrollment requests
+     */
+    private fun getEnrollmentAuthHeader(): String {
+        return "Bearer ${enrollmentToken ?: throw IllegalStateException("Enrollment token not set. Call authenticate() first.")}"
     }
 
     private fun createApi(baseUrl: String): VaultServiceApi {
@@ -85,59 +97,82 @@ class VaultServiceClient @Inject constructor() {
     // MARK: - Enrollment Flow
 
     /**
-     * Step 1: Start enrollment using session token from QR code
-     * Returns attestation challenge and initial transaction keys
+     * Step 1: Authenticate with session_token to get enrollment JWT
+     * This is a PUBLIC endpoint - no Authorization header needed
      *
      * Note: The API URL must be set via setEnrollmentApiUrl() before calling this
      */
-    suspend fun enrollStart(sessionToken: String, deviceInfo: DeviceInfo): Result<EnrollStartResponse> {
-        val request = VaultEnrollStartRequest(
+    suspend fun enrollAuthenticate(
+        sessionToken: String,
+        deviceId: String
+    ): Result<EnrollAuthenticateResponse> {
+        val request = EnrollAuthenticateRequest(
             sessionToken = sessionToken,
-            deviceInfo = deviceInfo
+            deviceId = deviceId,
+            deviceType = "android"
         )
-        return safeApiCall { getEnrollmentApi().enrollStart(request) }
+        val result = safeApiCall { getEnrollmentApi().enrollAuthenticate(request) }
+
+        // Store the enrollment token on success
+        result.onSuccess { response ->
+            enrollmentToken = response.enrollmentToken
+        }
+
+        return result
     }
 
     /**
-     * Step 2: Submit device attestation
+     * Step 2: Start enrollment (requires enrollment JWT from authenticate)
+     * Returns transaction keys for password encryption
+     */
+    suspend fun enrollStart(skipAttestation: Boolean = true): Result<EnrollStartResponse> {
+        val request = VaultEnrollStartRequest(skipAttestation = skipAttestation)
+        return safeApiCall {
+            getEnrollmentApi().enrollStart(getEnrollmentAuthHeader(), request)
+        }
+    }
+
+    /**
+     * Step 3: Submit device attestation (optional if skip_attestation=true)
      */
     suspend fun submitAttestation(
-        sessionId: String,
         certificateChain: List<ByteArray>
     ): Result<AttestationResponse> {
         val request = VaultAttestationRequest(
-            sessionId = sessionId,
             platform = "android",
             attestationCertChain = certificateChain.map {
                 android.util.Base64.encodeToString(it, android.util.Base64.NO_WRAP)
             }
         )
-        return safeApiCall { getEnrollmentApi().submitAttestation(request) }
+        return safeApiCall {
+            getEnrollmentApi().submitAttestation(getEnrollmentAuthHeader(), request)
+        }
     }
 
     /**
-     * Step 3: Set enrollment password (encrypted with transaction key)
+     * Step 4: Set enrollment password (encrypted with transaction key)
      */
     suspend fun setPassword(
-        sessionId: String,
         encryptedPassword: String,
         transactionKeyId: String
     ): Result<SetPasswordResponse> {
         val request = VaultSetPasswordRequest(
-            sessionId = sessionId,
             encryptedPassword = encryptedPassword,
             transactionKeyId = transactionKeyId
         )
-        return safeApiCall { getEnrollmentApi().setPassword(request) }
+        return safeApiCall {
+            getEnrollmentApi().setPassword(getEnrollmentAuthHeader(), request)
+        }
     }
 
     /**
-     * Step 4: Finalize enrollment
+     * Step 5: Finalize enrollment
      * Returns credential blob, LAT, and user GUID
      */
-    suspend fun finalize(sessionId: String): Result<FinalizeResponse> {
-        val request = VaultFinalizeRequest(sessionId = sessionId)
-        return safeApiCall { getEnrollmentApi().finalize(request) }
+    suspend fun finalize(): Result<FinalizeResponse> {
+        return safeApiCall {
+            getEnrollmentApi().finalize(getEnrollmentAuthHeader())
+        }
     }
 
     // MARK: - Authentication Flow
@@ -291,17 +326,36 @@ class VaultServiceClient @Inject constructor() {
 // MARK: - Retrofit Interface
 
 interface VaultServiceApi {
+    // Enrollment - Step 1: Authenticate (public endpoint, no auth header)
+    @POST("vault/enroll/authenticate")
+    suspend fun enrollAuthenticate(@Body request: EnrollAuthenticateRequest): Response<EnrollAuthenticateResponse>
+
+    // Enrollment - Step 2: Start (requires Bearer token)
     @POST("vault/enroll/start")
-    suspend fun enrollStart(@Body request: VaultEnrollStartRequest): Response<EnrollStartResponse>
+    suspend fun enrollStart(
+        @Header("Authorization") authToken: String,
+        @Body request: VaultEnrollStartRequest
+    ): Response<EnrollStartResponse>
 
+    // Enrollment - Step 3: Attestation (optional, requires Bearer token)
     @POST("vault/enroll/attestation")
-    suspend fun submitAttestation(@Body request: VaultAttestationRequest): Response<AttestationResponse>
+    suspend fun submitAttestation(
+        @Header("Authorization") authToken: String,
+        @Body request: VaultAttestationRequest
+    ): Response<AttestationResponse>
 
-    @POST("vault/enroll/password")
-    suspend fun setPassword(@Body request: VaultSetPasswordRequest): Response<SetPasswordResponse>
+    // Enrollment - Step 4: Set password (requires Bearer token)
+    @POST("vault/enroll/set-password")
+    suspend fun setPassword(
+        @Header("Authorization") authToken: String,
+        @Body request: VaultSetPasswordRequest
+    ): Response<SetPasswordResponse>
 
+    // Enrollment - Step 5: Finalize (requires Bearer token)
     @POST("vault/enroll/finalize")
-    suspend fun finalize(@Body request: VaultFinalizeRequest): Response<FinalizeResponse>
+    suspend fun finalize(
+        @Header("Authorization") authToken: String
+    ): Response<FinalizeResponse>
 
     @POST("vault/auth/request")
     suspend fun authRequest(@Body request: VaultAuthRequest): Response<AuthRequestResponse>
@@ -372,9 +426,20 @@ interface VaultServiceApi {
 
 // MARK: - Request Types
 
-data class VaultEnrollStartRequest(
+/**
+ * Request to authenticate with session_token and get enrollment JWT
+ */
+data class EnrollAuthenticateRequest(
     @SerializedName("session_token") val sessionToken: String,
-    @SerializedName("device_info") val deviceInfo: DeviceInfo
+    @SerializedName("device_id") val deviceId: String,
+    @SerializedName("device_type") val deviceType: String = "android"
+)
+
+/**
+ * Request to start enrollment (after authentication)
+ */
+data class VaultEnrollStartRequest(
+    @SerializedName("skip_attestation") val skipAttestation: Boolean = true
 )
 
 data class DeviceInfo(
@@ -394,19 +459,13 @@ data class DeviceInfo(
 }
 
 data class VaultAttestationRequest(
-    @SerializedName("sessionId") val sessionId: String,
     val platform: String,
-    @SerializedName("attestationCertChain") val attestationCertChain: List<String>
+    @SerializedName("attestation_cert_chain") val attestationCertChain: List<String>
 )
 
 data class VaultSetPasswordRequest(
-    @SerializedName("sessionId") val sessionId: String,
-    @SerializedName("encryptedPassword") val encryptedPassword: String,
-    @SerializedName("transactionKeyId") val transactionKeyId: String
-)
-
-data class VaultFinalizeRequest(
-    @SerializedName("sessionId") val sessionId: String
+    @SerializedName("encrypted_password") val encryptedPassword: String,
+    @SerializedName("transaction_key_id") val transactionKeyId: String
 )
 
 data class VaultAuthRequest(
@@ -433,15 +492,29 @@ data class ReplenishKeysRequest(
 
 // MARK: - Response Types
 
+/**
+ * Response from /vault/enroll/authenticate
+ */
+data class EnrollAuthenticateResponse(
+    @SerializedName("enrollment_token") val enrollmentToken: String,
+    @SerializedName("token_type") val tokenType: String,
+    @SerializedName("expires_in") val expiresIn: Int,
+    @SerializedName("expires_at") val expiresAt: String,
+    @SerializedName("enrollment_session_id") val enrollmentSessionId: String,
+    @SerializedName("user_guid") val userGuid: String
+)
+
+/**
+ * Response from /vault/enroll/start
+ */
 data class EnrollStartResponse(
-    @SerializedName("sessionId") val sessionId: String,
-    @SerializedName("attestationChallenge") val attestationChallenge: String, // Base64
-    @SerializedName("transactionKeys") val transactionKeys: List<TransactionKeyPublic>
+    @SerializedName("transaction_keys") val transactionKeys: List<TransactionKeyPublic>,
+    @SerializedName("attestation_challenge") val attestationChallenge: String? = null // Only if attestation required
 )
 
 data class TransactionKeyPublic(
-    @SerializedName("keyId") val keyId: String,
-    @SerializedName("publicKey") val publicKey: String, // Base64 X25519 public key
+    @SerializedName("key_id") val keyId: String,
+    @SerializedName("public_key") val publicKey: String, // Base64 X25519 public key
     val algorithm: String = "X25519"
 )
 
