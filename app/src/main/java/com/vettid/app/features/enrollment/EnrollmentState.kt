@@ -33,6 +33,7 @@ sealed class EnrollmentState {
         val sessionId: String,
         val challenge: ByteArray,
         val transactionKeys: List<TransactionKeyPublic>,
+        val passwordKeyId: String,
         val progress: Float = 0f
     ) : EnrollmentState() {
         override fun equals(other: Any?): Boolean {
@@ -41,6 +42,7 @@ sealed class EnrollmentState {
             return sessionId == other.sessionId &&
                     challenge.contentEquals(other.challenge) &&
                     transactionKeys == other.transactionKeys &&
+                    passwordKeyId == other.passwordKeyId &&
                     progress == other.progress
         }
 
@@ -48,6 +50,7 @@ sealed class EnrollmentState {
             var result = sessionId.hashCode()
             result = 31 * result + challenge.contentHashCode()
             result = 31 * result + transactionKeys.hashCode()
+            result = 31 * result + passwordKeyId.hashCode()
             result = 31 * result + progress.hashCode()
             return result
         }
@@ -57,6 +60,7 @@ sealed class EnrollmentState {
     data class SettingPassword(
         val sessionId: String,
         val transactionKeys: List<TransactionKeyPublic>,
+        val passwordKeyId: String, // Key ID to use for password encryption
         val password: String = "",
         val confirmPassword: String = "",
         val strength: PasswordStrength = PasswordStrength.WEAK,

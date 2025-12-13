@@ -508,7 +508,12 @@ data class EnrollAuthenticateResponse(
  * Response from /vault/enroll/start
  */
 data class EnrollStartResponse(
+    @SerializedName("enrollment_session_id") val enrollmentSessionId: String? = null,
+    @SerializedName("user_guid") val userGuid: String? = null,
     @SerializedName("transaction_keys") val transactionKeys: List<TransactionKeyPublic>,
+    @SerializedName("password_key_id") val passwordKeyId: String, // Key ID to use for password encryption
+    @SerializedName("next_step") val nextStep: String? = null,
+    @SerializedName("attestation_required") val attestationRequired: Boolean = false,
     @SerializedName("attestation_challenge") val attestationChallenge: String? = null // Only if attestation required
 )
 

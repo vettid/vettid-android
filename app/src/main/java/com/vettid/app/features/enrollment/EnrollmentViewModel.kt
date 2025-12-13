@@ -161,7 +161,8 @@ class EnrollmentViewModel @Inject constructor(
                         // Move directly to password setup (skipping attestation)
                         _state.value = EnrollmentState.SettingPassword(
                             sessionId = authResponse.enrollmentSessionId,
-                            transactionKeys = startResponse.transactionKeys
+                            transactionKeys = startResponse.transactionKeys,
+                            passwordKeyId = startResponse.passwordKeyId
                         )
                     },
                     onFailure = { error ->
@@ -219,10 +220,14 @@ class EnrollmentViewModel @Inject constructor(
                         // Generate password salt for later use
                         passwordSalt = cryptoManager.generateSalt()
 
+                        // Get passwordKeyId from Attesting state
+                        val attestingState = _state.value as? EnrollmentState.Attesting
+
                         // Move to password setup
                         _state.value = EnrollmentState.SettingPassword(
                             sessionId = sessionId,
-                            transactionKeys = currentTransactionKeys
+                            transactionKeys = currentTransactionKeys,
+                            passwordKeyId = attestingState?.passwordKeyId ?: ""
                         )
                     } else {
                         _state.value = EnrollmentState.Error(
@@ -260,7 +265,8 @@ class EnrollmentViewModel @Inject constructor(
             passwordSalt = cryptoManager.generateSalt()
             _state.value = EnrollmentState.SettingPassword(
                 sessionId = currentState.sessionId,
-                transactionKeys = currentState.transactionKeys
+                transactionKeys = currentState.transactionKeys,
+                passwordKeyId = currentState.passwordKeyId
             )
         }
     }
@@ -300,11 +306,11 @@ class EnrollmentViewModel @Inject constructor(
         _state.value = currentState.copy(isSubmitting = true, error = null)
 
         try {
-            // Get first available transaction key
-            val transactionKey = currentState.transactionKeys.firstOrNull()
-                ?: throw IllegalStateException("No transaction keys available")
+            // Find the transaction key specified by passwordKeyId
+            val transactionKey = currentState.transactionKeys.find { it.keyId == currentState.passwordKeyId }
+                ?: throw IllegalStateException("Password key not found: ${currentState.passwordKeyId}")
 
-            // Encrypt password with transaction key
+            // Encrypt password with the designated transaction key
             val salt = passwordSalt ?: cryptoManager.generateSalt().also { passwordSalt = it }
             val encryptedResult = cryptoManager.encryptPasswordForServer(
                 password = currentState.password,
@@ -312,10 +318,10 @@ class EnrollmentViewModel @Inject constructor(
                 utkPublicKeyBase64 = transactionKey.publicKey
             )
 
-            // Submit to server (sessionId is in the JWT now)
+            // Submit to server using passwordKeyId (sessionId is in the JWT now)
             val result = vaultServiceClient.setPassword(
                 encryptedPassword = encryptedResult.encryptedPasswordHash,
-                transactionKeyId = transactionKey.keyId
+                transactionKeyId = currentState.passwordKeyId
             )
 
             result.fold(
