@@ -137,15 +137,15 @@ class ProfileApiClient @Inject constructor(
 // MARK: - Retrofit Interface
 
 interface ProfileApi {
-    @GET("profile")
+    @GET("member/profile")
     suspend fun getProfile(): Response<Profile>
 
-    @PUT("profile")
+    @PUT("member/profile")
     suspend fun updateProfile(
         @Body request: ProfileUpdateRequest
     ): Response<Profile>
 
-    @POST("profile/publish")
+    @POST("member/profile/publish")
     suspend fun publishProfile(): Response<Unit>
 }
 

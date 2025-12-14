@@ -633,8 +633,8 @@ fun MainScreen(
         userName = "VettID User",
         userEmail = "",
         vaultStatus = com.vettid.app.ui.navigation.VaultStatus.ACTIVE,
-        onSignOutThisDevice = onSignOut,
-        onSignOutAllDevices = onSignOut,
+        onSignOutVaultOnly = { /* Lock vault only */ },
+        onSignOutVaultServices = onSignOut,
         onHeaderAction = {
             // Handle header action based on current screen
             when (navigationState.currentSection) {

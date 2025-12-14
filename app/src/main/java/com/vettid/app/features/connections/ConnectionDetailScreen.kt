@@ -178,23 +178,54 @@ private fun LoadedContent(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Action buttons
+        // Action buttons row: Message | Call | Video
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // Message button
             Button(
                 onClick = onMessageClick,
                 modifier = Modifier.weight(1f),
                 enabled = connection.status == ConnectionStatus.ACTIVE
             ) {
                 Icon(
-                    imageVector = Icons.Default.Email,
+                    imageVector = Icons.Default.Chat,
                     contentDescription = null,
                     modifier = Modifier.size(18.dp)
                 )
-                Spacer(modifier = Modifier.width(8.dp))
+                Spacer(modifier = Modifier.width(4.dp))
                 Text("Message")
+            }
+
+            // Call button (voice)
+            OutlinedButton(
+                onClick = { /* TODO: Initiate voice call */ },
+                modifier = Modifier.weight(1f),
+                enabled = connection.status == ConnectionStatus.ACTIVE
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Call,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Call")
+            }
+
+            // Video button
+            OutlinedButton(
+                onClick = { /* TODO: Initiate video call */ },
+                modifier = Modifier.weight(1f),
+                enabled = connection.status == ConnectionStatus.ACTIVE
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Videocam,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Video")
             }
         }
 

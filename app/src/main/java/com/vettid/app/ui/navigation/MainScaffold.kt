@@ -25,8 +25,8 @@ fun MainScaffold(
     userName: String = "VettID User",
     userEmail: String = "",
     vaultStatus: VaultStatus = VaultStatus.ACTIVE,
-    onSignOutThisDevice: () -> Unit,
-    onSignOutAllDevices: () -> Unit,
+    onSignOutVaultOnly: () -> Unit,
+    onSignOutVaultServices: () -> Unit,
     onHeaderAction: () -> Unit,
     onSearchClick: () -> Unit,
     // Navigation callbacks for more sheet
@@ -188,8 +188,9 @@ fun MainScaffold(
         SignOutBottomSheet(
             isOpen = showSignOutSheet,
             onDismiss = { showSignOutSheet = false },
-            onSignOutThisDevice = onSignOutThisDevice,
-            onSignOutAllDevices = onSignOutAllDevices
+            onSignOutVaultOnly = onSignOutVaultOnly,
+            onSignOutVaultServices = onSignOutVaultServices,
+            isVaultActive = vaultStatus == VaultStatus.ACTIVE
         )
     }
 }

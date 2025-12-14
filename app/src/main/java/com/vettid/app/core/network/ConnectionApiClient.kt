@@ -163,33 +163,33 @@ class ConnectionApiClient @Inject constructor(
 // MARK: - Retrofit Interface
 
 interface ConnectionApi {
-    @POST("connections/invite")
+    @POST("member/connections/invitations")
     suspend fun createInvitation(
         @Body request: CreateInvitationRequest
     ): Response<ConnectionInvitation>
 
-    @POST("connections/accept")
+    @POST("member/connections/accept")
     suspend fun acceptInvitation(
         @Body request: AcceptInvitationRequest
     ): Response<AcceptInvitationResponse>
 
-    @POST("connections/revoke")
+    @POST("member/connections/revoke")
     suspend fun revokeConnection(
         @Body request: RevokeConnectionRequest
     ): Response<Unit>
 
-    @GET("connections")
+    @GET("member/connections")
     suspend fun listConnections(
         @Query("page") page: Int = 1,
         @Query("limit") limit: Int = 50
     ): Response<ConnectionListResponse>
 
-    @GET("connections/{id}")
+    @GET("member/connections/{id}")
     suspend fun getConnection(
         @Path("id") connectionId: String
     ): Response<Connection>
 
-    @GET("connections/{id}/profile")
+    @GET("member/connections/{id}/profile")
     suspend fun getConnectionProfile(
         @Path("id") connectionId: String
     ): Response<Profile>

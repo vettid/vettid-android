@@ -78,8 +78,9 @@ private fun MoreSheetItem(
 fun SignOutBottomSheet(
     isOpen: Boolean,
     onDismiss: () -> Unit,
-    onSignOutThisDevice: () -> Unit,
-    onSignOutAllDevices: () -> Unit,
+    onSignOutVaultOnly: () -> Unit,
+    onSignOutVaultServices: () -> Unit,
+    isVaultActive: Boolean = true,
     sheetState: SheetState = rememberModalBottomSheetState()
 ) {
     if (isOpen) {
@@ -98,40 +99,46 @@ fun SignOutBottomSheet(
                     modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp)
                 )
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(onClick = {
-                            onSignOutThisDevice()
-                            onDismiss()
-                        })
-                        .padding(horizontal = 24.dp, vertical = 16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Output,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.width(16.dp))
-                    Column {
-                        Text(
-                            text = "Sign out of this device",
-                            style = MaterialTheme.typography.bodyLarge
+                // Sign out of Vault only (if vault is active)
+                if (isVaultActive) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(onClick = {
+                                onSignOutVaultOnly()
+                                onDismiss()
+                            })
+                            .padding(horizontal = 24.dp, vertical = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Text(
-                            text = "Keep your account active on other devices",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column {
+                            Text(
+                                text = "Lock Vault",
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                            Text(
+                                text = "Require vault password to access again",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
+
+                    Divider(modifier = Modifier.padding(horizontal = 24.dp))
                 }
 
+                // Sign out of Vault Services (full sign out)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable(onClick = {
-                            onSignOutAllDevices()
+                            onSignOutVaultServices()
                             onDismiss()
                         })
                         .padding(horizontal = 24.dp, vertical = 16.dp),
@@ -145,14 +152,42 @@ fun SignOutBottomSheet(
                     Spacer(modifier = Modifier.width(16.dp))
                     Column {
                         Text(
-                            text = "Sign out of all devices",
+                            text = "Sign Out Completely",
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.error
                         )
                         Text(
-                            text = "Sign out everywhere and revoke all sessions",
+                            text = "Sign out of vault services on this device",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                // Warning card
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp, vertical = 8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Signing out completely will require re-authentication with your password.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
                     }
                 }

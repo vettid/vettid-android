@@ -62,6 +62,9 @@ class CredentialStore @Inject constructor(
         private const val KEY_LAST_USED_AT = "last_used_at"
         private const val KEY_AUTH_TOKEN = "auth_token"
         private const val KEY_CONNECTION_KEYS = "connection_keys"
+        // Vault credential keys (separate from vault services)
+        private const val KEY_VAULT_CREDENTIAL_SALT = "vault_credential_salt"
+        private const val KEY_VAULT_ACTIVE = "vault_active"
     }
 
     // MARK: - Credential Storage
@@ -474,6 +477,53 @@ class CredentialStore @Inject constructor(
             .putString(KEY_ENCRYPTED_BLOB, blobBase64)
             .putLong(KEY_LAST_USED_AT, System.currentTimeMillis())
             .apply()
+    }
+
+    // MARK: - Vault Credential Storage (separate from vault services credential)
+
+    /**
+     * Store vault credential salt (for vault-level authentication)
+     * This is separate from the vault services password salt.
+     */
+    fun setVaultCredentialSalt(salt: ByteArray) {
+        encryptedPrefs.edit()
+            .putString(KEY_VAULT_CREDENTIAL_SALT, Base64.encodeToString(salt, Base64.NO_WRAP))
+            .apply()
+    }
+
+    /**
+     * Get vault credential salt
+     */
+    fun getVaultCredentialSalt(): ByteArray? {
+        val saltBase64 = encryptedPrefs.getString(KEY_VAULT_CREDENTIAL_SALT, null) ?: return null
+        return try {
+            Base64.decode(saltBase64, Base64.NO_WRAP)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Check if vault credential is configured
+     */
+    fun hasVaultCredential(): Boolean {
+        return encryptedPrefs.contains(KEY_VAULT_CREDENTIAL_SALT)
+    }
+
+    /**
+     * Set vault active state (after successful authentication)
+     */
+    fun setVaultActive(active: Boolean) {
+        encryptedPrefs.edit()
+            .putBoolean(KEY_VAULT_ACTIVE, active)
+            .apply()
+    }
+
+    /**
+     * Check if vault is active
+     */
+    fun isVaultActive(): Boolean {
+        return encryptedPrefs.getBoolean(KEY_VAULT_ACTIVE, false)
     }
 
     // MARK: - Cleanup

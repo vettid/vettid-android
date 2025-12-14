@@ -294,9 +294,33 @@ sealed class HandlerDiscoveryState {
         val hasMore: Boolean,
         val total: Int = 0,
         val isSearchResult: Boolean = false
-    ) : HandlerDiscoveryState()
+    ) : HandlerDiscoveryState() {
+        /**
+         * Get handlers split by installation status.
+         */
+        val installedHandlers: List<HandlerSummary>
+            get() = handlers.filter { it.installed }
+
+        val availableHandlers: List<HandlerSummary>
+            get() = handlers.filter { !it.installed }
+
+        val installedCount: Int
+            get() = handlers.count { it.installed }
+
+        val availableCount: Int
+            get() = handlers.count { !it.installed }
+    }
 
     data class Error(val message: String) : HandlerDiscoveryState()
+}
+
+/**
+ * Tab filter for handler list.
+ */
+enum class HandlerTab(val displayName: String) {
+    ALL("All"),
+    INSTALLED("Installed"),
+    AVAILABLE("Available")
 }
 
 // MARK: - Effects

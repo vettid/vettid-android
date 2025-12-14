@@ -30,11 +30,14 @@ sealed class VaultStatusState {
 
     /**
      * Vault is being provisioned (EC2 instance starting)
+     * Per mobile-ui-plan.md Section 3.4.5
      */
     data class Provisioning(
         val vaultId: String,
         val estimatedReadyTime: String? = null,
-        val progress: Float = 0f
+        val progress: Float = 0f,
+        val currentStep: ProvisioningStep = ProvisioningStep.CREATING_ACCOUNTS,
+        val stepMessage: String? = null
     ) : VaultStatusState()
 
     /**
@@ -96,6 +99,19 @@ enum class HealthLevel {
     DEGRADED,
     UNHEALTHY,
     UNKNOWN
+}
+
+/**
+ * Provisioning steps for deploy vault flow.
+ * Per mobile-ui-plan.md Section 3.4.5
+ */
+enum class ProvisioningStep(val displayName: String, val progressValue: Float) {
+    CREATING_ACCOUNTS("Creating accounts", 0.1f),
+    LAUNCHING_VAULT("Launching vault instance", 0.3f),
+    INITIALIZING("Initializing vault", 0.5f),
+    CONFIGURING("Configuring settings", 0.7f),
+    FINALIZING("Finalizing setup", 0.9f),
+    COMPLETE("Complete", 1.0f)
 }
 
 /**
