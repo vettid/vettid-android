@@ -28,12 +28,16 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.vettid.app.features.applock.AppLockScreen
+import com.vettid.app.features.applock.PinSetupScreen
 import com.vettid.app.features.connections.*
 import com.vettid.app.features.auth.BiometricAuthManager
 import com.vettid.app.features.enrollment.EnrollmentScreen
 import com.vettid.app.features.feed.FeedContent
 import com.vettid.app.features.archive.ArchiveScreenFull
 import com.vettid.app.features.secrets.SecretsScreenFull
+import com.vettid.app.features.setup.FirstTimeSetupScreen
+import com.vettid.app.features.vault.DeployVaultScreen
 import com.vettid.app.features.vault.VaultPreferencesScreenFull
 import kotlinx.coroutines.launch
 import com.vettid.app.features.handlers.HandlerDetailScreen
@@ -91,6 +95,11 @@ sealed class Screen(val route: String) {
     }
     object CredentialBackup : Screen("backup/credential")
     object CredentialRecovery : Screen("recovery/credential")
+    // App Lock & Setup
+    object AppLock : Screen("app-lock")
+    object PinSetup : Screen("pin-setup")
+    object FirstTimeSetup : Screen("first-time-setup")
+    object DeployVault : Screen("deploy-vault")
 }
 
 @Composable
@@ -214,6 +223,12 @@ fun VettIDApp(
                 },
                 onNavigateToPreferences = {
                     navController.navigate(Screen.VaultPreferences.route)
+                },
+                onNavigateToDeployVault = {
+                    navController.navigate(Screen.DeployVault.route)
+                },
+                onNavigateToPinSetup = {
+                    navController.navigate(Screen.PinSetup.route)
                 },
                 onSignOut = {
                     appViewModel.signOut()
@@ -381,6 +396,46 @@ fun VettIDApp(
         }
         composable(Screen.VaultPreferences.route) {
             VaultPreferencesScreenFull(
+                onBack = { navController.popBackStack() }
+            )
+        }
+        // App Lock & Setup routes
+        composable(Screen.AppLock.route) {
+            AppLockScreen(
+                onUnlock = { navController.popBackStack() },
+                onBiometricAuth = { /* Trigger biometric prompt */ }
+            )
+        }
+        composable(Screen.PinSetup.route) {
+            PinSetupScreen(
+                onPinCreated = { pin ->
+                    // In production, save PIN securely
+                    navController.popBackStack()
+                },
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(Screen.FirstTimeSetup.route) {
+            FirstTimeSetupScreen(
+                onSetupComplete = {
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(Screen.FirstTimeSetup.route) { inclusive = true }
+                    }
+                },
+                onEnableBiometrics = { /* Trigger biometric enrollment */ },
+                onEnableNotifications = { /* Request notification permission */ },
+                onSetupPin = {
+                    navController.navigate(Screen.PinSetup.route)
+                }
+            )
+        }
+        composable(Screen.DeployVault.route) {
+            DeployVaultScreen(
+                onDeploymentComplete = {
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(Screen.DeployVault.route) { inclusive = true }
+                    }
+                },
                 onBack = { navController.popBackStack() }
             )
         }
@@ -643,6 +698,8 @@ fun MainScreen(
     onNavigateToSecrets: () -> Unit = {},
     onNavigateToArchive: () -> Unit = {},
     onNavigateToPreferences: () -> Unit = {},
+    onNavigateToDeployVault: () -> Unit = {},
+    onNavigateToPinSetup: () -> Unit = {},
     onSignOut: () -> Unit = {},
     appViewModel: AppViewModel = hiltViewModel()
 ) {
@@ -680,6 +737,9 @@ fun MainScreen(
         onNavigateToSecrets = onNavigateToSecrets,
         onNavigateToArchive = onNavigateToArchive,
         onNavigateToPreferences = onNavigateToPreferences,
+        // Badge counts - in production these would come from ViewModel/state
+        pendingConnectionsCount = 2, // Demo: 2 pending connection requests
+        unreadFeedCount = 5, // Demo: 5 unread feed items
         // Vault section content
         vaultConnectionsContent = {
             ConnectionsContentEmbedded(

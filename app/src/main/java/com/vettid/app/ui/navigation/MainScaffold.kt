@@ -34,6 +34,9 @@ fun MainScaffold(
     onNavigateToSecrets: () -> Unit,
     onNavigateToArchive: () -> Unit,
     onNavigateToPreferences: () -> Unit,
+    // Badge counts
+    pendingConnectionsCount: Int = 0,
+    unreadFeedCount: Int = 0,
     // Content slots for each tab
     vaultConnectionsContent: @Composable () -> Unit,
     vaultFeedContent: @Composable () -> Unit,
@@ -104,7 +107,9 @@ fun MainScaffold(
                     },
                     onMoreClick = {
                         onNavigationStateChange(navigationState.copy(isMoreSheetOpen = true))
-                    }
+                    },
+                    pendingConnectionsCount = pendingConnectionsCount,
+                    unreadFeedCount = unreadFeedCount
                 )
             },
             snackbarHost = { SnackbarHost(snackbarHostState) }
