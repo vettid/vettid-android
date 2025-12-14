@@ -47,4 +47,13 @@ class AppViewModel @Inject constructor(
     fun setAuthenticated(authenticated: Boolean) {
         _appState.update { it.copy(isAuthenticated = authenticated) }
     }
+
+    fun signOut() {
+        viewModelScope.launch {
+            // Clear authentication state
+            _appState.update { it.copy(isAuthenticated = false) }
+            // Note: This just signs out of this session.
+            // To clear credentials entirely, we would call credentialStore.clearAll()
+        }
+    }
 }

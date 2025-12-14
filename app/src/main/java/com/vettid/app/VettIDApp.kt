@@ -25,17 +25,23 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.vettid.app.features.connections.*
+import com.vettid.app.features.auth.BiometricAuthManager
 import com.vettid.app.features.enrollment.EnrollmentScreen
+import com.vettid.app.features.feed.FeedContent
+import com.vettid.app.features.secrets.SecretsScreenFull
+import kotlinx.coroutines.launch
 import com.vettid.app.features.handlers.HandlerDetailScreen
 import com.vettid.app.features.handlers.HandlerDiscoveryScreen
 import com.vettid.app.features.handlers.HandlerExecutionScreen
 import com.vettid.app.features.messaging.ConversationScreen
 import com.vettid.app.features.profile.ProfileScreen
+import com.vettid.app.features.vault.VaultStatusScreen
 import com.vettid.app.ui.backup.BackupDetailScreen
 import com.vettid.app.ui.backup.BackupListScreen
 import com.vettid.app.ui.backup.BackupSettingsScreen
 import com.vettid.app.ui.backup.CredentialBackupScreen
 import com.vettid.app.ui.components.QrCodeScanner
+import com.vettid.app.ui.navigation.*
 import com.vettid.app.ui.recovery.CredentialRecoveryScreen
 
 private const val TAG = "VettIDApp"
@@ -66,6 +72,11 @@ sealed class Screen(val route: String) {
     }
     // Profile
     object Profile : Screen("profile")
+    // Vault More items
+    object PersonalData : Screen("personal-data")
+    object Secrets : Screen("secrets")
+    object Documents : Screen("documents")
+    object VaultCredentials : Screen("vault-credentials")
     // Backup
     object Backups : Screen("backups")
     object BackupSettings : Screen("backups/settings")
@@ -144,6 +155,36 @@ fun VettIDApp(
                 },
                 onNavigateToCredentialBackup = {
                     navController.navigate(Screen.CredentialBackup.route)
+                },
+                onNavigateToConnectionDetail = { connectionId ->
+                    navController.navigate(Screen.ConnectionDetail.createRoute(connectionId))
+                },
+                onNavigateToCreateInvitation = {
+                    navController.navigate(Screen.CreateInvitation.route)
+                },
+                onNavigateToScanInvitation = {
+                    navController.navigate(Screen.ScanInvitation.route)
+                },
+                onNavigateToConversation = { connectionId ->
+                    navController.navigate(Screen.Conversation.createRoute(connectionId))
+                },
+                onNavigateToHandlerDetail = { handlerId ->
+                    navController.navigate(Screen.HandlerDetail.createRoute(handlerId))
+                },
+                onNavigateToPersonalData = {
+                    navController.navigate(Screen.PersonalData.route)
+                },
+                onNavigateToSecrets = {
+                    navController.navigate(Screen.Secrets.route)
+                },
+                onNavigateToDocuments = {
+                    navController.navigate(Screen.Documents.route)
+                },
+                onNavigateToVaultCredentials = {
+                    navController.navigate(Screen.VaultCredentials.route)
+                },
+                onSignOut = {
+                    appViewModel.signOut()
                 }
             )
         }
@@ -290,6 +331,27 @@ fun VettIDApp(
                 onBack = { navController.popBackStack() }
             )
         }
+        // More menu screens
+        composable(Screen.PersonalData.route) {
+            PersonalDataScreen(
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(Screen.Secrets.route) {
+            SecretsScreenFull(
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(Screen.Documents.route) {
+            DocumentsScreen(
+                onBack = { navController.popBackStack() }
+            )
+        }
+        composable(Screen.VaultCredentials.route) {
+            VaultCredentialsScreen(
+                onBack = { navController.popBackStack() }
+            )
+        }
     }
 }
 
@@ -364,10 +426,43 @@ fun WelcomeScreen(
 }
 
 
+/**
+ * App unlock authentication screen with biometric support.
+ * Uses BiometricAuthManager for fingerprint/face authentication with device credential fallback.
+ */
 @Composable
 fun AuthenticationScreen(
-    onAuthenticated: () -> Unit
+    onAuthenticated: () -> Unit,
+    biometricAuthManager: BiometricAuthManager = hiltViewModel<UnlockViewModel>().biometricAuthManager
 ) {
+    val context = LocalContext.current
+    val activity = context as? androidx.fragment.app.FragmentActivity
+
+    var authState by remember { mutableStateOf<UnlockAuthState>(UnlockAuthState.Idle) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    // Attempt biometric auth on screen load
+    LaunchedEffect(Unit) {
+        if (activity != null && biometricAuthManager.isBiometricAvailable()) {
+            authState = UnlockAuthState.Authenticating
+            val result = biometricAuthManager.authenticateWithFallback(
+                activity = activity,
+                title = "Unlock VettID",
+                subtitle = "Use biometric or device credential"
+            )
+            when (result) {
+                is com.vettid.app.features.auth.BiometricAuthResult.Success -> {
+                    authState = UnlockAuthState.Success
+                    onAuthenticated()
+                }
+                is com.vettid.app.features.auth.BiometricAuthResult.Error -> {
+                    authState = UnlockAuthState.Failed
+                    errorMessage = result.message
+                }
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -375,28 +470,140 @@ fun AuthenticationScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
+        // Icon based on state
         Icon(
-            imageVector = Icons.Default.Fingerprint,
+            imageVector = when (authState) {
+                is UnlockAuthState.Success -> Icons.Default.CheckCircle
+                is UnlockAuthState.Failed -> Icons.Default.Error
+                else -> Icons.Default.Fingerprint
+            },
             contentDescription = null,
-            modifier = Modifier.size(60.dp),
-            tint = MaterialTheme.colorScheme.primary
+            modifier = Modifier.size(80.dp),
+            tint = when (authState) {
+                is UnlockAuthState.Success -> MaterialTheme.colorScheme.primary
+                is UnlockAuthState.Failed -> MaterialTheme.colorScheme.error
+                else -> MaterialTheme.colorScheme.primary
+            }
         )
 
         Spacer(modifier = Modifier.height(24.dp))
 
         Text(
-            text = "Authenticate",
+            text = when (authState) {
+                is UnlockAuthState.Authenticating -> "Authenticating..."
+                is UnlockAuthState.Success -> "Authenticated"
+                is UnlockAuthState.Failed -> "Authentication Failed"
+                else -> "Unlock VettID"
+            },
             style = MaterialTheme.typography.headlineMedium
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
+        // Error message
+        errorMessage?.let { msg ->
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = msg,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+                textAlign = TextAlign.Center
+            )
+        }
 
-        Button(onClick = onAuthenticated) {
-            Text("Unlock with Biometrics")
+        Spacer(modifier = Modifier.height(32.dp))
+
+        // Loading indicator when authenticating
+        if (authState is UnlockAuthState.Authenticating) {
+            CircularProgressIndicator()
+        } else {
+            // Retry button
+            Button(
+                onClick = {
+                    errorMessage = null
+                    if (activity != null) {
+                        authState = UnlockAuthState.Authenticating
+                        kotlinx.coroutines.MainScope().launch {
+                            val result = biometricAuthManager.authenticateWithFallback(
+                                activity = activity,
+                                title = "Unlock VettID",
+                                subtitle = "Use biometric or device credential"
+                            )
+                            when (result) {
+                                is com.vettid.app.features.auth.BiometricAuthResult.Success -> {
+                                    authState = UnlockAuthState.Success
+                                    onAuthenticated()
+                                }
+                                is com.vettid.app.features.auth.BiometricAuthResult.Error -> {
+                                    authState = UnlockAuthState.Failed
+                                    errorMessage = result.message
+                                }
+                            }
+                        }
+                    } else {
+                        // Fallback for non-FragmentActivity contexts (shouldn't happen)
+                        onAuthenticated()
+                    }
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp)
+            ) {
+                Icon(Icons.Default.Fingerprint, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(if (authState is UnlockAuthState.Failed) "Try Again" else "Unlock with Biometrics")
+            }
+        }
+
+        // Biometric availability warning
+        if (!biometricAuthManager.isBiometricAvailable()) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.errorContainer
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = "Biometric authentication not available. Please set up fingerprint or face unlock in device settings.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
+            }
         }
     }
 }
 
+/**
+ * State for the unlock screen.
+ */
+sealed class UnlockAuthState {
+    object Idle : UnlockAuthState()
+    object Authenticating : UnlockAuthState()
+    object Success : UnlockAuthState()
+    object Failed : UnlockAuthState()
+}
+
+/**
+ * Simple ViewModel to provide BiometricAuthManager via Hilt.
+ */
+@dagger.hilt.android.lifecycle.HiltViewModel
+class UnlockViewModel @javax.inject.Inject constructor(
+    val biometricAuthManager: BiometricAuthManager
+) : androidx.lifecycle.ViewModel()
+
+/**
+ * Main screen with drawer + contextual bottom navigation pattern.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
@@ -404,246 +611,266 @@ fun MainScreen(
     onNavigateToConnections: () -> Unit = {},
     onNavigateToProfile: () -> Unit = {},
     onNavigateToBackups: () -> Unit = {},
-    onNavigateToCredentialBackup: () -> Unit = {}
+    onNavigateToCredentialBackup: () -> Unit = {},
+    onNavigateToConnectionDetail: (String) -> Unit = {},
+    onNavigateToCreateInvitation: () -> Unit = {},
+    onNavigateToScanInvitation: () -> Unit = {},
+    onNavigateToConversation: (String) -> Unit = {},
+    onNavigateToHandlerDetail: (String) -> Unit = {},
+    onNavigateToPersonalData: () -> Unit = {},
+    onNavigateToSecrets: () -> Unit = {},
+    onNavigateToDocuments: () -> Unit = {},
+    onNavigateToVaultCredentials: () -> Unit = {},
+    onSignOut: () -> Unit = {},
+    appViewModel: AppViewModel = hiltViewModel()
 ) {
-    var selectedTab by remember { mutableIntStateOf(0) }
+    var navigationState by remember { mutableStateOf(NavigationState()) }
+    val snackbarHostState = remember { SnackbarHostState() }
 
-    Scaffold(
-        bottomBar = {
-            NavigationBar {
-                NavigationBarItem(
-                    icon = { Icon(Icons.Default.AccountBalance, contentDescription = null) },
-                    label = { Text("Vault") },
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 }
-                )
-                NavigationBarItem(
-                    icon = { Icon(Icons.Default.People, contentDescription = null) },
-                    label = { Text("Connections") },
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 }
-                )
-                NavigationBarItem(
-                    icon = { Icon(Icons.Default.Extension, contentDescription = null) },
-                    label = { Text("Handlers") },
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 }
-                )
-                NavigationBarItem(
-                    icon = { Icon(Icons.Default.Person, contentDescription = null) },
-                    label = { Text("Profile") },
-                    selected = selectedTab == 3,
-                    onClick = { selectedTab = 3 }
-                )
+    MainScaffold(
+        navigationState = navigationState,
+        onNavigationStateChange = { navigationState = it },
+        userName = "VettID User",
+        userEmail = "",
+        vaultStatus = com.vettid.app.ui.navigation.VaultStatus.ACTIVE,
+        onSignOutThisDevice = onSignOut,
+        onSignOutAllDevices = onSignOut,
+        onHeaderAction = {
+            // Handle header action based on current screen
+            when (navigationState.currentSection) {
+                AppSection.VAULT -> when (navigationState.vaultTab) {
+                    VaultTab.CONNECTIONS -> onNavigateToCreateInvitation()
+                    VaultTab.FEED -> { /* No action for feed */ }
+                    VaultTab.MORE -> { }
+                }
+                AppSection.VAULT_SERVICES -> when (navigationState.vaultServicesTab) {
+                    VaultServicesTab.STATUS -> { /* Refresh vault status */ }
+                    VaultServicesTab.HANDLERS -> onNavigateToHandlers()
+                    VaultServicesTab.LOGS -> { /* Filter logs */ }
+                }
+                AppSection.APP_SETTINGS -> { /* No header actions for settings */ }
             }
+        },
+        onSearchClick = {
+            // Handle search based on current screen
+        },
+        onNavigateToPersonalData = onNavigateToPersonalData,
+        onNavigateToSecrets = onNavigateToSecrets,
+        onNavigateToDocuments = onNavigateToDocuments,
+        onNavigateToCredentials = onNavigateToVaultCredentials,
+        // Vault section content
+        vaultConnectionsContent = {
+            ConnectionsContentEmbedded(
+                onConnectionClick = onNavigateToConnectionDetail,
+                onCreateInvitation = onNavigateToCreateInvitation,
+                onScanInvitation = onNavigateToScanInvitation
+            )
+        },
+        vaultFeedContent = {
+            FeedContent(
+                onNavigateToConversation = onNavigateToConversation,
+                onNavigateToHandler = onNavigateToHandlerDetail,
+                onNavigateToBackup = { onNavigateToBackups() }
+            )
+        },
+        // Vault Services section content
+        vaultServicesStatusContent = {
+            VaultStatusContentEmbedded()
+        },
+        vaultServicesHandlersContent = {
+            HandlersContentEmbedded(
+                onHandlerSelected = onNavigateToHandlerDetail
+            )
+        },
+        vaultServicesLogsContent = {
+            VaultServicesLogsContent()
+        },
+        // App Settings section content
+        appSettingsGeneralContent = {
+            AppSettingsGeneralContent()
+        },
+        appSettingsSecurityContent = {
+            AppSettingsSecurityContent()
+        },
+        appSettingsBackupContent = {
+            AppSettingsBackupContent()
+        },
+        snackbarHostState = snackbarHostState
+    )
+}
+
+/**
+ * Embedded vault status content without Scaffold.
+ */
+@Composable
+private fun VaultStatusContentEmbedded() {
+    // For now, a placeholder that links to the full vault status screen
+    PlaceholderSection(
+        icon = Icons.Default.Dashboard,
+        title = "Vault Status",
+        description = "View and manage your vault instance status, health metrics, and quick actions."
+    )
+}
+
+/**
+ * Embedded handlers content without Scaffold.
+ */
+@Composable
+private fun HandlersContentEmbedded(
+    onHandlerSelected: (String) -> Unit = {}
+) {
+    PlaceholderSection(
+        icon = Icons.Default.Extension,
+        title = "Handlers",
+        description = "Browse and manage installed handlers that extend your vault capabilities."
+    )
+}
+
+@Composable
+private fun PlaceholderSection(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    description: String
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(32.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(64.dp),
+                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Text(
+                text = title,
+                style = MaterialTheme.typography.headlineSmall
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+// Placeholder screens for "More" menu items
+
+@Composable
+fun PersonalDataScreen(onBack: () -> Unit) {
+    PlaceholderScreenWithBack(
+        title = "Personal Data",
+        icon = Icons.Default.Person,
+        description = "Manage your personal data including public info, private details, and keys.",
+        onBack = onBack
+    )
+}
+
+@Composable
+fun SecretsScreen(onBack: () -> Unit) {
+    PlaceholderScreenWithBack(
+        title = "Secrets",
+        icon = Icons.Default.Lock,
+        description = "Store and manage sensitive secrets with password-only access.",
+        onBack = onBack
+    )
+}
+
+@Composable
+fun DocumentsScreen(onBack: () -> Unit) {
+    PlaceholderScreenWithBack(
+        title = "Documents",
+        icon = Icons.Default.Description,
+        description = "Store and manage encrypted documents in your vault.",
+        onBack = onBack
+    )
+}
+
+@Composable
+fun VaultCredentialsScreen(onBack: () -> Unit) {
+    PlaceholderScreenWithBack(
+        title = "Credentials",
+        icon = Icons.Default.Key,
+        description = "Manage your stored credentials and authentication data.",
+        onBack = onBack
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PlaceholderScreenWithBack(
+    title: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    description: String,
+    onBack: () -> Unit
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text(title) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
         }
     ) { padding ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding),
+                .padding(padding)
+                .padding(32.dp),
             contentAlignment = Alignment.Center
         ) {
-            when (selectedTab) {
-                0 -> VaultTab(
-                    onNavigateToBackups = onNavigateToBackups,
-                    onNavigateToCredentialBackup = onNavigateToCredentialBackup
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(64.dp),
+                    tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
                 )
-                1 -> ConnectionsTab(onNavigateToConnections = onNavigateToConnections)
-                2 -> HandlersTab(onNavigateToHandlers = onNavigateToHandlers)
-                3 -> ProfileTab(onNavigateToProfile = onNavigateToProfile)
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.headlineSmall
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Text(
+                    text = "Coming soon",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.tertiary
+                )
             }
         }
     }
 }
 
-@Composable
-private fun VaultTab(
-    onNavigateToBackups: () -> Unit,
-    onNavigateToCredentialBackup: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Icon(
-            imageVector = Icons.Default.AccountBalance,
-            contentDescription = null,
-            modifier = Modifier.size(64.dp),
-            tint = MaterialTheme.colorScheme.primary
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = "Your Vault",
-            style = MaterialTheme.typography.headlineSmall
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Text(
-            text = "Manage your vault backups\nand credential security",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        Button(
-            onClick = onNavigateToBackups,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Icon(Icons.Default.Backup, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Manage Backups")
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        OutlinedButton(
-            onClick = onNavigateToCredentialBackup,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Icon(Icons.Default.Key, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Backup Credentials")
-        }
-    }
-}
-
-@Composable
-private fun ConnectionsTab(
-    onNavigateToConnections: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Icon(
-            imageVector = Icons.Default.People,
-            contentDescription = null,
-            modifier = Modifier.size(64.dp),
-            tint = MaterialTheme.colorScheme.primary
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = "Connections",
-            style = MaterialTheme.typography.headlineSmall
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Text(
-            text = "Connect with others and send\nend-to-end encrypted messages",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Button(onClick = onNavigateToConnections) {
-            Icon(Icons.Default.PersonAdd, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("View Connections")
-        }
-    }
-}
-
-@Composable
-private fun HandlersTab(
-    onNavigateToHandlers: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Icon(
-            imageVector = Icons.Default.Extension,
-            contentDescription = null,
-            modifier = Modifier.size(64.dp),
-            tint = MaterialTheme.colorScheme.primary
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = "Handler Marketplace",
-            style = MaterialTheme.typography.headlineSmall
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Text(
-            text = "Browse, install, and run handlers\nto extend your vault capabilities",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Button(onClick = onNavigateToHandlers) {
-            Icon(Icons.Default.Search, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Browse Handlers")
-        }
-    }
-}
-
-@Composable
-private fun ProfileTab(
-    onNavigateToProfile: () -> Unit
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        Icon(
-            imageVector = Icons.Default.Person,
-            contentDescription = null,
-            modifier = Modifier.size(64.dp),
-            tint = MaterialTheme.colorScheme.primary
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = "Your Profile",
-            style = MaterialTheme.typography.headlineSmall
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Text(
-            text = "Manage your profile and\naccount settings",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Button(onClick = onNavigateToProfile) {
-            Icon(Icons.Default.Edit, contentDescription = null)
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Edit Profile")
-        }
-    }
-}

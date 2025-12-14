@@ -26,8 +26,8 @@ local.properties
 *.jks
 *.keystore
 
-# Secrets - NEVER commit
-secrets/
+# Secrets - NEVER commit (root secrets directory, not code)
+/secrets/
 *.pem
 *.p12
 *.key
