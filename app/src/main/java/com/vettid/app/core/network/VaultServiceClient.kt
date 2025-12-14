@@ -26,8 +26,7 @@ import javax.inject.Singleton
 class VaultServiceClient @Inject constructor() {
 
     companion object {
-        private const val BASE_URL_PROD = "https://api.vettid.dev/"
-        private const val BASE_URL_DEV = "https://api-dev.vettid.dev/"
+        private const val BASE_URL = "https://tiqpij5mue.execute-api.us-east-1.amazonaws.com/"
         private const val TIMEOUT_SECONDS = 30L
     }
 
@@ -45,7 +44,7 @@ class VaultServiceClient @Inject constructor() {
 
     // Default API for non-enrollment operations
     private val defaultApi: VaultServiceApi by lazy {
-        createApi(BASE_URL_DEV)
+        createApi(BASE_URL)
     }
 
     // Current enrollment API URL (set when processing QR code)

@@ -24,8 +24,7 @@ class ConnectionApiClient @Inject constructor(
 ) {
 
     companion object {
-        private const val BASE_URL_PROD = "https://api.vettid.dev/"
-        private const val BASE_URL_DEV = "https://api-dev.vettid.dev/"
+        private const val BASE_URL = "https://tiqpij5mue.execute-api.us-east-1.amazonaws.com/"
         private const val TIMEOUT_SECONDS = 30L
     }
 
@@ -50,7 +49,7 @@ class ConnectionApiClient @Inject constructor(
         .build()
 
     private val retrofit = Retrofit.Builder()
-        .baseUrl(BASE_URL_DEV)
+        .baseUrl(BASE_URL)
         .client(okHttpClient)
         .addConverterFactory(GsonConverterFactory.create())
         .build()

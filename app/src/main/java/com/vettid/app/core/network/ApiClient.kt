@@ -22,7 +22,7 @@ import javax.inject.Singleton
 class ApiClient @Inject constructor() {
 
     private val retrofit = Retrofit.Builder()
-        .baseUrl("https://api.vettid.com/")
+        .baseUrl("https://tiqpij5mue.execute-api.us-east-1.amazonaws.com/")
         .addConverterFactory(GsonConverterFactory.create())
         .build()
 

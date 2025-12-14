@@ -26,7 +26,7 @@ class CredentialBackupApiClient @Inject constructor(
 
     companion object {
         private const val TAG = "CredentialBackupApi"
-        private const val BASE_URL = "https://api.vettid.com"
+        private const val BASE_URL = "https://tiqpij5mue.execute-api.us-east-1.amazonaws.com"
     }
 
     private fun getAuthToken(): String? = credentialStore.getAuthToken()
