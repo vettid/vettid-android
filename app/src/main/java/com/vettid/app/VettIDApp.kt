@@ -114,8 +114,7 @@ fun VettIDApp(
     ) {
         composable(Screen.Welcome.route) {
             WelcomeScreen(
-                onScanQR = { navController.navigate(Screen.Enrollment.createRoute(startWithManualEntry = false)) },
-                onEnterCode = { navController.navigate(Screen.Enrollment.createRoute(startWithManualEntry = true)) }
+                onScanQR = { navController.navigate(Screen.Enrollment.createRoute(startWithManualEntry = false)) }
             )
         }
         composable(
@@ -357,8 +356,7 @@ fun VettIDApp(
 
 @Composable
 fun WelcomeScreen(
-    onScanQR: () -> Unit,
-    onEnterCode: () -> Unit
+    onScanQR: () -> Unit
 ) {
     val context = LocalContext.current
     val iconBitmap = remember {
@@ -410,15 +408,6 @@ fun WelcomeScreen(
             Icon(Icons.Default.QrCodeScanner, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
             Text("Scan QR Code")
-        }
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        OutlinedButton(
-            onClick = onEnterCode,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("I have an enrollment link")
         }
 
         Spacer(modifier = Modifier.height(40.dp))
