@@ -109,14 +109,13 @@ fun getHeaderConfig(
                 title = "Vault Status",
                 actionIcon = Icons.Default.Refresh
             )
-            VaultServicesTab.HANDLERS -> HeaderConfig(
-                title = "Handlers",
-                actionIcon = Icons.Default.Add,
-                showSearch = true
+            VaultServicesTab.BACKUPS -> HeaderConfig(
+                title = "Backups",
+                actionIcon = null
             )
-            VaultServicesTab.LOGS -> HeaderConfig(
-                title = "Activity Logs",
-                actionIcon = Icons.Default.FilterList
+            VaultServicesTab.MANAGE -> HeaderConfig(
+                title = "Manage Vault",
+                actionIcon = null
             )
         }
         AppSection.APP_SETTINGS -> when (appSettingsTab) {

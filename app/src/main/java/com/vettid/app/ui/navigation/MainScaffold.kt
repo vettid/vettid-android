@@ -32,14 +32,14 @@ fun MainScaffold(
     // Navigation callbacks for more sheet
     onNavigateToPersonalData: () -> Unit,
     onNavigateToSecrets: () -> Unit,
-    onNavigateToDocuments: () -> Unit,
-    onNavigateToCredentials: () -> Unit,
+    onNavigateToArchive: () -> Unit,
+    onNavigateToPreferences: () -> Unit,
     // Content slots for each tab
     vaultConnectionsContent: @Composable () -> Unit,
     vaultFeedContent: @Composable () -> Unit,
     vaultServicesStatusContent: @Composable () -> Unit,
-    vaultServicesHandlersContent: @Composable () -> Unit,
-    vaultServicesLogsContent: @Composable () -> Unit,
+    vaultServicesBackupsContent: @Composable () -> Unit,
+    vaultServicesManageContent: @Composable () -> Unit,
     appSettingsGeneralContent: @Composable () -> Unit,
     appSettingsSecurityContent: @Composable () -> Unit,
     appSettingsBackupContent: @Composable () -> Unit,
@@ -129,8 +129,8 @@ fun MainScaffold(
                     AppSection.VAULT_SERVICES -> {
                         when (navigationState.vaultServicesTab) {
                             VaultServicesTab.STATUS -> vaultServicesStatusContent()
-                            VaultServicesTab.HANDLERS -> vaultServicesHandlersContent()
-                            VaultServicesTab.LOGS -> vaultServicesLogsContent()
+                            VaultServicesTab.BACKUPS -> vaultServicesBackupsContent()
+                            VaultServicesTab.MANAGE -> vaultServicesManageContent()
                         }
                     }
                     AppSection.APP_SETTINGS -> {
@@ -178,8 +178,8 @@ fun MainScaffold(
                 when (item) {
                     VaultMoreItem.PERSONAL_DATA -> onNavigateToPersonalData()
                     VaultMoreItem.SECRETS -> onNavigateToSecrets()
-                    VaultMoreItem.DOCUMENTS -> onNavigateToDocuments()
-                    VaultMoreItem.CREDENTIALS -> onNavigateToCredentials()
+                    VaultMoreItem.ARCHIVE -> onNavigateToArchive()
+                    VaultMoreItem.PREFERENCES -> onNavigateToPreferences()
                 }
             }
         )

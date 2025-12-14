@@ -4,8 +4,12 @@ import android.graphics.BitmapFactory
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -28,7 +32,9 @@ import com.vettid.app.features.connections.*
 import com.vettid.app.features.auth.BiometricAuthManager
 import com.vettid.app.features.enrollment.EnrollmentScreen
 import com.vettid.app.features.feed.FeedContent
+import com.vettid.app.features.archive.ArchiveScreenFull
 import com.vettid.app.features.secrets.SecretsScreenFull
+import com.vettid.app.features.vault.VaultPreferencesScreenFull
 import kotlinx.coroutines.launch
 import com.vettid.app.features.handlers.HandlerDetailScreen
 import com.vettid.app.features.handlers.HandlerDiscoveryScreen
@@ -75,8 +81,8 @@ sealed class Screen(val route: String) {
     // Vault More items
     object PersonalData : Screen("personal-data")
     object Secrets : Screen("secrets")
-    object Documents : Screen("documents")
-    object VaultCredentials : Screen("vault-credentials")
+    object Archive : Screen("archive")
+    object VaultPreferences : Screen("vault-preferences")
     // Backup
     object Backups : Screen("backups")
     object BackupSettings : Screen("backups/settings")
@@ -90,9 +96,36 @@ sealed class Screen(val route: String) {
 @Composable
 fun VettIDApp(
     navController: NavHostController = rememberNavController(),
-    appViewModel: AppViewModel = hiltViewModel()
+    appViewModel: AppViewModel = hiltViewModel(),
+    deepLinkData: DeepLinkData = DeepLinkData(DeepLinkType.NONE),
+    onDeepLinkConsumed: () -> Unit = {}
 ) {
     val appState by appViewModel.appState.collectAsState()
+
+    // Handle deep links
+    LaunchedEffect(deepLinkData) {
+        when (deepLinkData.type) {
+            DeepLinkType.ENROLL -> {
+                // Navigate to enrollment with the code
+                val code = deepLinkData.code
+                if (code != null) {
+                    navController.navigate(Screen.Enrollment.createRoute(startWithManualEntry = true)) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
+                onDeepLinkConsumed()
+            }
+            DeepLinkType.CONNECT -> {
+                // Navigate to scan invitation to process the connection code
+                val code = deepLinkData.code
+                if (code != null && appState.hasCredential && appState.isAuthenticated) {
+                    navController.navigate(Screen.ScanInvitation.route)
+                }
+                onDeepLinkConsumed()
+            }
+            DeepLinkType.NONE -> { /* No deep link */ }
+        }
+    }
 
     LaunchedEffect(appState) {
         when {
@@ -176,11 +209,11 @@ fun VettIDApp(
                 onNavigateToSecrets = {
                     navController.navigate(Screen.Secrets.route)
                 },
-                onNavigateToDocuments = {
-                    navController.navigate(Screen.Documents.route)
+                onNavigateToArchive = {
+                    navController.navigate(Screen.Archive.route)
                 },
-                onNavigateToVaultCredentials = {
-                    navController.navigate(Screen.VaultCredentials.route)
+                onNavigateToPreferences = {
+                    navController.navigate(Screen.VaultPreferences.route)
                 },
                 onSignOut = {
                     appViewModel.signOut()
@@ -341,13 +374,13 @@ fun VettIDApp(
                 onBack = { navController.popBackStack() }
             )
         }
-        composable(Screen.Documents.route) {
-            DocumentsScreen(
+        composable(Screen.Archive.route) {
+            ArchiveScreenFull(
                 onBack = { navController.popBackStack() }
             )
         }
-        composable(Screen.VaultCredentials.route) {
-            VaultCredentialsScreen(
+        composable(Screen.VaultPreferences.route) {
+            VaultPreferencesScreenFull(
                 onBack = { navController.popBackStack() }
             )
         }
@@ -608,8 +641,8 @@ fun MainScreen(
     onNavigateToHandlerDetail: (String) -> Unit = {},
     onNavigateToPersonalData: () -> Unit = {},
     onNavigateToSecrets: () -> Unit = {},
-    onNavigateToDocuments: () -> Unit = {},
-    onNavigateToVaultCredentials: () -> Unit = {},
+    onNavigateToArchive: () -> Unit = {},
+    onNavigateToPreferences: () -> Unit = {},
     onSignOut: () -> Unit = {},
     appViewModel: AppViewModel = hiltViewModel()
 ) {
@@ -634,8 +667,8 @@ fun MainScreen(
                 }
                 AppSection.VAULT_SERVICES -> when (navigationState.vaultServicesTab) {
                     VaultServicesTab.STATUS -> { /* Refresh vault status */ }
-                    VaultServicesTab.HANDLERS -> onNavigateToHandlers()
-                    VaultServicesTab.LOGS -> { /* Filter logs */ }
+                    VaultServicesTab.BACKUPS -> { /* Backup actions */ }
+                    VaultServicesTab.MANAGE -> { /* Manage vault actions */ }
                 }
                 AppSection.APP_SETTINGS -> { /* No header actions for settings */ }
             }
@@ -645,8 +678,8 @@ fun MainScreen(
         },
         onNavigateToPersonalData = onNavigateToPersonalData,
         onNavigateToSecrets = onNavigateToSecrets,
-        onNavigateToDocuments = onNavigateToDocuments,
-        onNavigateToCredentials = onNavigateToVaultCredentials,
+        onNavigateToArchive = onNavigateToArchive,
+        onNavigateToPreferences = onNavigateToPreferences,
         // Vault section content
         vaultConnectionsContent = {
             ConnectionsContentEmbedded(
@@ -666,13 +699,11 @@ fun MainScreen(
         vaultServicesStatusContent = {
             VaultStatusContentEmbedded()
         },
-        vaultServicesHandlersContent = {
-            HandlersContentEmbedded(
-                onHandlerSelected = onNavigateToHandlerDetail
-            )
+        vaultServicesBackupsContent = {
+            VaultServicesBackupsContent()
         },
-        vaultServicesLogsContent = {
-            VaultServicesLogsContent()
+        vaultServicesManageContent = {
+            VaultServicesManageContent()
         },
         // App Settings section content
         appSettingsGeneralContent = {
@@ -702,17 +733,339 @@ private fun VaultStatusContentEmbedded() {
 }
 
 /**
- * Embedded handlers content without Scaffold.
+ * Vault Services Backups content.
+ * Per mobile-ui-plan.md Section 3.4.4
  */
 @Composable
-private fun HandlersContentEmbedded(
-    onHandlerSelected: (String) -> Unit = {}
+private fun VaultServicesBackupsContent() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        // Credential Backup Section
+        BackupSection(
+            title = "CREDENTIAL BACKUP",
+            icon = Icons.Default.Key,
+            description = "Back up your vault credential to restore access if you lose your device.",
+            actionLabel = "Backup Credential",
+            onAction = { /* TODO: Navigate to credential backup */ }
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Vault Backup Section
+        BackupSection(
+            title = "VAULT DATA",
+            icon = Icons.Default.Storage,
+            description = "Export encrypted vault data for safekeeping. Last backup: Never",
+            actionLabel = "Create Backup",
+            onAction = { /* TODO: Create vault backup */ }
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Restore Section
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.secondaryContainer
+            )
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Restore,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+                Spacer(modifier = Modifier.width(16.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Restore from Backup",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        text = "Import from a backup file",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+                    )
+                }
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BackupSection(
+    title: String,
+    icon: ImageVector,
+    description: String,
+    actionLabel: String,
+    onAction: () -> Unit
 ) {
-    PlaceholderSection(
-        icon = Icons.Default.Extension,
-        title = "Handlers",
-        description = "Browse and manage installed handlers that extend your vault capabilities."
-    )
+    Column {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Card {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        modifier = Modifier.size(32.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(16.dp))
+                    Text(
+                        text = description,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    onClick = onAction,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(actionLabel)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Vault Services Manage content.
+ * Per mobile-ui-plan.md Section 3.4.3
+ */
+@Composable
+private fun VaultServicesManageContent() {
+    var showStopDialog by remember { mutableStateOf(false) }
+    var showTerminateDialog by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        // Status indicator
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer
+            )
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(12.dp)
+                        .clip(CircleShape)
+                        .background(Color(0xFF4CAF50))
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
+                    Text(
+                        text = "Vault Running",
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        text = "Instance: i-abc123def456",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Text(
+            text = "ACTIONS",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Stop/Start button
+        ManageActionCard(
+            icon = Icons.Default.Pause,
+            title = "Stop Vault",
+            description = "Stop the vault instance to reduce costs. Data is preserved.",
+            buttonText = "Stop",
+            onClick = { showStopDialog = true }
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Restart button
+        ManageActionCard(
+            icon = Icons.Default.Refresh,
+            title = "Restart Vault",
+            description = "Restart the vault instance. Brief downtime expected.",
+            buttonText = "Restart",
+            onClick = { /* TODO: Restart vault */ }
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Danger zone
+        Text(
+            text = "DANGER ZONE",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.error
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
+            )
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Terminate Vault",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Text(
+                            text = "Permanently delete vault instance and all data",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = { showTerminateDialog = true },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Terminate")
+                }
+            }
+        }
+    }
+
+    // Stop confirmation dialog
+    if (showStopDialog) {
+        AlertDialog(
+            onDismissRequest = { showStopDialog = false },
+            icon = { Icon(Icons.Default.Pause, null) },
+            title = { Text("Stop Vault?") },
+            text = { Text("Your vault will be stopped. You won't be able to sync data until you start it again.") },
+            confirmButton = {
+                Button(onClick = { showStopDialog = false }) {
+                    Text("Stop")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showStopDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Terminate confirmation dialog
+    if (showTerminateDialog) {
+        AlertDialog(
+            onDismissRequest = { showTerminateDialog = false },
+            icon = { Icon(Icons.Default.Warning, null, tint = MaterialTheme.colorScheme.error) },
+            title = { Text("Terminate Vault?") },
+            text = { Text("This action cannot be undone. All vault data will be permanently deleted. Make sure you have a backup.") },
+            confirmButton = {
+                Button(
+                    onClick = { showTerminateDialog = false },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Terminate")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTerminateDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun ManageActionCard(
+    icon: ImageVector,
+    title: String,
+    description: String,
+    buttonText: String,
+    onClick: () -> Unit
+) {
+    Card {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                    Text(
+                        text = description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                OutlinedButton(onClick = onClick) {
+                    Text(buttonText)
+                }
+            }
+        }
+    }
 }
 
 @Composable

@@ -30,6 +30,11 @@ fun DrawerView(
     userName: String = "VettID User",
     userEmail: String = "",
     vaultStatus: VaultStatus = VaultStatus.ACTIVE,
+    isDarkTheme: Boolean = false,
+    notificationsEnabled: Boolean = true,
+    onThemeToggle: () -> Unit = {},
+    onNotificationsToggle: () -> Unit = {},
+    onHelpClick: () -> Unit = {},
     onSignOut: () -> Unit
 ) {
     AnimatedVisibility(
@@ -72,6 +77,42 @@ fun DrawerView(
                             }
                         )
                     }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Divider()
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Quick Settings section per mobile-ui-plan.md Section 2.2
+                    Text(
+                        text = "Quick Settings",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+                    )
+
+                    // Theme toggle
+                    QuickSettingToggle(
+                        icon = if (isDarkTheme) Icons.Default.DarkMode else Icons.Default.LightMode,
+                        title = "Dark Theme",
+                        checked = isDarkTheme,
+                        onCheckedChange = { onThemeToggle() }
+                    )
+
+                    // Notifications toggle
+                    QuickSettingToggle(
+                        icon = if (notificationsEnabled) Icons.Default.Notifications else Icons.Default.NotificationsOff,
+                        title = "Notifications",
+                        checked = notificationsEnabled,
+                        onCheckedChange = { onNotificationsToggle() }
+                    )
+
+                    // Help & Support
+                    DrawerSectionItem(
+                        icon = Icons.Default.Help,
+                        title = "Help & Support",
+                        selected = false,
+                        onClick = onHelpClick
+                    )
 
                     Spacer(modifier = Modifier.weight(1f))
 
@@ -224,6 +265,45 @@ private fun DrawerSectionItem(
                 } else {
                     MaterialTheme.colorScheme.onSurface
                 }
+            )
+        }
+    }
+}
+
+@Composable
+private fun QuickSettingToggle(
+    icon: ImageVector,
+    title: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp),
+        shape = MaterialTheme.shapes.medium,
+        color = Color.Transparent
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.width(16.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.weight(1f)
+            )
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange
             )
         }
     }

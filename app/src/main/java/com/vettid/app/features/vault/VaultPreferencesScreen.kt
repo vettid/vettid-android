@@ -297,3 +297,31 @@ private fun ArchiveDropdownItem(
         }
     )
 }
+
+/**
+ * Full-screen Vault Preferences with Scaffold and back navigation.
+ * Used when navigating from More menu.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun VaultPreferencesScreenFull(
+    viewModel: VaultPreferencesViewModel = hiltViewModel(),
+    onBack: () -> Unit
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Preferences") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Box(modifier = Modifier.padding(padding)) {
+            VaultPreferencesContent(viewModel = viewModel)
+        }
+    }
+}

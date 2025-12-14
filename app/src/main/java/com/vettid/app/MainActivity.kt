@@ -1,5 +1,7 @@
 package com.vettid.app
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
@@ -7,12 +9,27 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import com.vettid.app.core.security.RuntimeProtection
 import com.vettid.app.core.security.SecureClipboard
 import com.vettid.app.ui.theme.VettIDTheme
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
+
+/**
+ * Deep link data extracted from intent.
+ */
+data class DeepLinkData(
+    val type: DeepLinkType,
+    val code: String? = null
+)
+
+enum class DeepLinkType {
+    ENROLL,
+    CONNECT,
+    NONE
+}
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -35,15 +52,73 @@ class MainActivity : ComponentActivity() {
         // Perform runtime security check
         performSecurityCheck()
 
+        // Extract deep link data
+        val deepLinkData = extractDeepLinkData(intent)
+
         setContent {
+            var currentDeepLink by remember { mutableStateOf(deepLinkData) }
+
             VettIDTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    VettIDApp()
+                    VettIDApp(
+                        deepLinkData = currentDeepLink,
+                        onDeepLinkConsumed = { currentDeepLink = DeepLinkData(DeepLinkType.NONE) }
+                    )
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        // Deep link will be re-processed on next composition
+    }
+
+    /**
+     * Extract deep link data from the intent.
+     * Supports:
+     * - vettid://enroll?code=xxx
+     * - https://vettid.dev/enroll/xxx
+     * - vettid://connect?code=xxx
+     * - https://vettid.dev/connect/xxx
+     */
+    private fun extractDeepLinkData(intent: Intent?): DeepLinkData {
+        val uri = intent?.data ?: return DeepLinkData(DeepLinkType.NONE)
+
+        return when {
+            // Custom scheme: vettid://enroll?code=xxx
+            uri.scheme == "vettid" && uri.host == "enroll" -> {
+                DeepLinkData(
+                    type = DeepLinkType.ENROLL,
+                    code = uri.getQueryParameter("code")
+                )
+            }
+            // Custom scheme: vettid://connect?code=xxx
+            uri.scheme == "vettid" && uri.host == "connect" -> {
+                DeepLinkData(
+                    type = DeepLinkType.CONNECT,
+                    code = uri.getQueryParameter("code")
+                )
+            }
+            // HTTPS: https://vettid.dev/enroll/xxx
+            uri.host == "vettid.dev" && uri.pathSegments.firstOrNull() == "enroll" -> {
+                DeepLinkData(
+                    type = DeepLinkType.ENROLL,
+                    code = uri.pathSegments.getOrNull(1)
+                )
+            }
+            // HTTPS: https://vettid.dev/connect/xxx
+            uri.host == "vettid.dev" && uri.pathSegments.firstOrNull() == "connect" -> {
+                DeepLinkData(
+                    type = DeepLinkType.CONNECT,
+                    code = uri.pathSegments.getOrNull(1)
+                )
+            }
+            else -> DeepLinkData(DeepLinkType.NONE)
         }
     }
 

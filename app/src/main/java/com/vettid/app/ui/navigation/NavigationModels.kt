@@ -30,14 +30,15 @@ enum class VaultTab(
 
 /**
  * Bottom nav items for Vault Services section
+ * Per mobile-ui-plan.md Section 3.4: Status | Backups | Manage
  */
 enum class VaultServicesTab(
     val title: String,
     val icon: ImageVector
 ) {
     STATUS("Status", Icons.Default.Dashboard),
-    HANDLERS("Handlers", Icons.Default.Extension),
-    LOGS("Logs", Icons.Default.Article)
+    BACKUPS("Backups", Icons.Default.Backup),
+    MANAGE("Manage", Icons.Default.Settings)
 }
 
 /**
@@ -54,6 +55,7 @@ enum class AppSettingsTab(
 
 /**
  * Items shown in "More" bottom sheet for Vault section
+ * Per mobile-ui-plan.md Section 2.3: Personal Data, Secrets, Archive, Preferences
  */
 enum class VaultMoreItem(
     val title: String,
@@ -61,8 +63,8 @@ enum class VaultMoreItem(
 ) {
     PERSONAL_DATA("Personal Data", Icons.Default.Person),
     SECRETS("Secrets", Icons.Default.Lock),
-    DOCUMENTS("Documents", Icons.Default.Description),
-    CREDENTIALS("Credentials", Icons.Default.Key)
+    ARCHIVE("Archive", Icons.Default.Archive),
+    PREFERENCES("Preferences", Icons.Default.Tune)
 }
 
 /**

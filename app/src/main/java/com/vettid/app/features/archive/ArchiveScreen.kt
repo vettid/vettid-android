@@ -389,3 +389,31 @@ private fun formatArchivedDate(instant: java.time.Instant): String {
     val formatter = DateTimeFormatter.ofPattern("MMM d, yyyy")
     return formatter.format(instant.atZone(java.time.ZoneId.systemDefault()))
 }
+
+/**
+ * Full-screen Archive with Scaffold and back navigation.
+ * Used when navigating from More menu.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ArchiveScreenFull(
+    viewModel: ArchiveViewModel = hiltViewModel(),
+    onBack: () -> Unit
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Archive") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Box(modifier = Modifier.padding(padding)) {
+            ArchiveContent(viewModel = viewModel)
+        }
+    }
+}
