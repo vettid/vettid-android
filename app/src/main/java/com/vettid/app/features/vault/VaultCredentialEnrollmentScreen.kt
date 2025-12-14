@@ -415,18 +415,6 @@ fun VaultAuthenticationScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Biometrics option (for subsequent logins)
-            TextButton(onClick = { /* TODO: biometric auth */ }) {
-                Icon(
-                    Icons.Default.Fingerprint,
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Use Biometrics")
-            }
         }
     }
 }
