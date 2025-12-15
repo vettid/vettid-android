@@ -24,11 +24,31 @@ android {
 
     signingConfigs {
         create("release") {
-            // Read from environment variables (for CI) or fallback to local keystore
-            storeFile = file(System.getenv("VETTID_KEYSTORE_PATH") ?: "../release.keystore")
-            storePassword = System.getenv("VETTID_KEYSTORE_PASSWORD") ?: "vettid-release-2024"
-            keyAlias = System.getenv("VETTID_KEY_ALIAS") ?: "vettid"
-            keyPassword = System.getenv("VETTID_KEY_PASSWORD") ?: "vettid-release-2024"
+            // SECURITY: Signing credentials MUST be provided via environment variables
+            // Do not commit signing keys or passwords to version control
+            // Required environment variables:
+            //   VETTID_KEYSTORE_PATH - Path to the release keystore file
+            //   VETTID_KEYSTORE_PASSWORD - Password for the keystore
+            //   VETTID_KEY_ALIAS - Alias of the signing key
+            //   VETTID_KEY_PASSWORD - Password for the signing key
+            val keystorePath = System.getenv("VETTID_KEYSTORE_PATH")
+            val keystorePassword = System.getenv("VETTID_KEYSTORE_PASSWORD")
+            val keyAliasValue = System.getenv("VETTID_KEY_ALIAS")
+            val keyPasswordValue = System.getenv("VETTID_KEY_PASSWORD")
+
+            if (keystorePath != null && keystorePassword != null &&
+                keyAliasValue != null && keyPasswordValue != null) {
+                storeFile = file(keystorePath)
+                storePassword = keystorePassword
+                keyAlias = keyAliasValue
+                keyPassword = keyPasswordValue
+            } else {
+                // For debug/development builds, skip release signing configuration
+                // Release builds will fail if environment variables are not set
+                println("WARNING: Release signing credentials not configured. " +
+                        "Set VETTID_KEYSTORE_PATH, VETTID_KEYSTORE_PASSWORD, " +
+                        "VETTID_KEY_ALIAS, and VETTID_KEY_PASSWORD environment variables.")
+            }
         }
     }
 

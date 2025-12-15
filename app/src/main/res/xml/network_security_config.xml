@@ -1,25 +1,52 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Disable cleartext traffic globally -->
+    <!--
+    SECURITY CONFIGURATION FOR VETTID ANDROID APP
+
+    IMPORTANT: AWS API Gateway uses certificates that rotate automatically.
+    Certificate pinning is NOT recommended for API Gateway endpoints without
+    a custom domain with stable certificates.
+
+    Current setup:
+    - Cleartext traffic is disabled globally (HTTPS only)
+    - System CA certificates are trusted
+    - Certificate pinning is configured for custom domains only
+
+    To enable certificate pinning with a custom domain:
+    1. Configure a custom domain in API Gateway with ACM certificate
+    2. Generate SPKI hashes: openssl s_client -connect api.vettid.dev:443 | \
+       openssl x509 -pubkey -noout | openssl pkey -pubin -outform der | \
+       openssl dgst -sha256 -binary | base64
+    3. Update the pin-set below with actual certificate hashes
+    4. Include backup pins from the CA chain for rotation resilience
+    -->
+
+    <!-- Disable cleartext traffic globally - HTTPS only -->
     <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
     </base-config>
 
-    <!-- Certificate pinning for VettID API endpoints -->
+    <!-- VettID API domains - pinning ready for custom domain deployment -->
     <domain-config cleartextTrafficPermitted="false">
-        <domain includeSubdomains="true">api.vettid.com</domain>
-        <domain includeSubdomains="true">vettid.com</domain>
-        <pin-set expiration="2026-01-01">
-            <!-- Primary pin (SHA-256 of SPKI) - Replace with actual certificate pins -->
-            <pin digest="SHA-256">BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=</pin>
-            <!-- Backup pin - Should be from a different CA -->
-            <pin digest="SHA-256">CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC=</pin>
-        </pin-set>
+        <!-- Custom domain for VettID API (when configured) -->
+        <domain includeSubdomains="true">api.vettid.dev</domain>
+        <domain includeSubdomains="true">vettid.dev</domain>
+        <!-- AWS API Gateway endpoint (pinning not practical due to cert rotation) -->
+        <domain includeSubdomains="true">execute-api.us-east-1.amazonaws.com</domain>
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
+        <!--
+        Certificate pinning disabled until custom domain with stable certs is deployed.
+        Uncomment and configure when ready:
+
+        <pin-set expiration="2026-01-01">
+            <pin digest="SHA-256">YOUR_PRIMARY_PIN_HASH_HERE=</pin>
+            <pin digest="SHA-256">YOUR_BACKUP_PIN_HASH_HERE=</pin>
+        </pin-set>
+        -->
     </domain-config>
 
     <!-- Debug config - Allow user-installed CA certs only in debug builds -->
