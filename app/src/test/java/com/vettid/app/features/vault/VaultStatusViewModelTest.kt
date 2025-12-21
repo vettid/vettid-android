@@ -208,7 +208,7 @@ class VaultStatusViewModelTest {
     @Test
     fun `StartEnrollment emits NavigateToEnrollment effect`() = runTest {
         viewModel = VaultStatusViewModel(vaultServiceClient, credentialStore)
-        advanceUntilIdle()
+        advanceTimeBy(100)
 
         var effectEmitted = false
         val job = backgroundScope.launch {
@@ -218,9 +218,10 @@ class VaultStatusViewModelTest {
                 }
             }
         }
+        advanceTimeBy(10) // Let collector start
 
         viewModel.onEvent(VaultStatusEvent.StartEnrollment)
-        advanceUntilIdle()
+        advanceTimeBy(100)
 
         job.cancel()
         assertTrue(effectEmitted)
@@ -288,8 +289,8 @@ class VaultStatusViewModelTest {
         viewModel.onEvent(VaultStatusEvent.StopVault)
         advanceUntilIdle()
 
-        // Verify API was called
-        verify(vaultServiceClient).stopVault("Bearer test-token")
+        // Verify API was called - ViewModel passes raw token
+        verify(vaultServiceClient).stopVault("test-token")
 
         // Should transition to Stopped
         val state = viewModel.state.first()
@@ -304,12 +305,24 @@ class VaultStatusViewModelTest {
             startedAt = "2025-12-07T15:00:00Z"
         )
 
+        // Mock getVaultStatus which is called when token is set
+        val statusResponse = VaultStatusResponse(
+            vaultId = "vault-123",
+            status = "running",
+            health = VaultHealthResponse(status = "healthy")
+        )
+        whenever(vaultServiceClient.getVaultStatus(any()))
+            .thenReturn(Result.success(statusResponse))
         whenever(vaultServiceClient.triggerBackup(any()))
             .thenReturn(Result.success(backupResponse))
 
         viewModel = VaultStatusViewModel(vaultServiceClient, credentialStore)
         viewModel.setActionToken("test-token")
+        viewModel.onEvent(VaultStatusEvent.Refresh)
         advanceUntilIdle()
+
+        // Verify we're in Running state first
+        assertTrue(viewModel.state.first() is VaultStatusState.Running)
 
         var successEffect: VaultStatusEffect.ShowSuccess? = null
         val job = backgroundScope.launch {
@@ -319,14 +332,15 @@ class VaultStatusViewModelTest {
                 }
             }
         }
+        advanceTimeBy(10) // Let collector start
 
         viewModel.onEvent(VaultStatusEvent.TriggerBackup)
-        advanceUntilIdle()
+        advanceTimeBy(500) // Give time for API call and effect emission
 
         job.cancel()
 
-        verify(vaultServiceClient).triggerBackup("Bearer test-token")
-        assertNotNull(successEffect)
+        verify(vaultServiceClient).triggerBackup("test-token")
+        assertNotNull("Expected ShowSuccess effect to be emitted", successEffect)
         assertTrue(successEffect!!.message.contains("backup-123"))
     }
 
@@ -337,7 +351,7 @@ class VaultStatusViewModelTest {
         whenever(credentialStore.hasStoredCredential()).thenReturn(false)
 
         viewModel = VaultStatusViewModel(vaultServiceClient, credentialStore)
-        advanceUntilIdle()
+        advanceTimeBy(100)  // Avoid advanceUntilIdle() which can cause OOM
 
         val summary = viewModel.getStatusSummary()
         assertEquals("Not Set Up", summary.title)

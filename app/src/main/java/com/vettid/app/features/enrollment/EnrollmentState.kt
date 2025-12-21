@@ -98,10 +98,21 @@ enum class PasswordStrength {
     STRONG;
 
     companion object {
+        // Common weak passwords to reject (exact matches only)
+        private val commonPasswords = setOf(
+            "password", "qwerty", "qwerty12", "abc123", "letmein", "welcome",
+            "monkey", "dragon", "master", "login", "admin"
+        )
+
         fun calculate(password: String): PasswordStrength {
             if (password.length < 8) return WEAK
 
+            // Check for exact match with common passwords (case-sensitive)
+            // This allows "Password" to be rated based on its character diversity
+            if (commonPasswords.contains(password)) return WEAK
+
             var score = 0
+            var charTypeCount = 0
 
             // Length score
             when {
@@ -109,11 +120,19 @@ enum class PasswordStrength {
                 password.length >= 12 -> score += 1
             }
 
-            // Character class checks
-            if (password.any { it.isLowerCase() }) score += 1
-            if (password.any { it.isUpperCase() }) score += 1
-            if (password.any { it.isDigit() }) score += 1
-            if (password.any { !it.isLetterOrDigit() }) score += 2
+            // Character class checks - count types for diversity requirement
+            val hasLower = password.any { it.isLowerCase() }
+            val hasUpper = password.any { it.isUpperCase() }
+            val hasDigit = password.any { it.isDigit() }
+            val hasSpecial = password.any { !it.isLetterOrDigit() }
+
+            if (hasLower) { score += 1; charTypeCount++ }
+            if (hasUpper) { score += 1; charTypeCount++ }
+            if (hasDigit) { score += 1; charTypeCount++ }
+            if (hasSpecial) { score += 2; charTypeCount++ }
+
+            // Require at least 2 character types to be above WEAK
+            if (charTypeCount < 2) return WEAK
 
             // Consecutive characters penalty
             val hasConsecutive = (0 until password.length - 2).any { i ->

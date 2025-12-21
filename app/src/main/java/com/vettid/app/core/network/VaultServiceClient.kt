@@ -23,7 +23,7 @@ import javax.inject.Singleton
  * Supports dynamic API URLs parsed from QR codes for enrollment.
  */
 @Singleton
-class VaultServiceClient @Inject constructor() {
+open class VaultServiceClient @Inject constructor() {
 
     companion object {
         private const val BASE_URL = "https://tiqpij5mue.execute-api.us-east-1.amazonaws.com/"

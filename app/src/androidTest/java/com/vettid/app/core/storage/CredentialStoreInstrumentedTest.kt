@@ -2,6 +2,7 @@ package com.vettid.app.core.storage
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.vettid.app.core.network.LegacyCredentialPackage
 import com.vettid.app.core.network.LegacyLedgerAuthToken
 import com.vettid.app.core.network.TransactionKeyInfo
@@ -9,22 +10,15 @@ import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import org.robolectric.RobolectricTestRunner
-import org.robolectric.annotation.Config
 
 /**
- * Unit tests for CredentialStore
+ * Instrumented tests for CredentialStore
  *
- * Tests cover:
- * - Storing and retrieving credential packages
- * - LAT storage and verification
- * - UTK pool management
- * - Password salt storage
- * - Clearing all data
+ * These tests require EncryptedSharedPreferences which needs Android KeyStore.
+ * Run with: ./gradlew connectedAndroidTest
  */
-@RunWith(RobolectricTestRunner::class)
-@Config(sdk = [28], manifest = Config.NONE)
-class CredentialStoreTest {
+@RunWith(AndroidJUnit4::class)
+class CredentialStoreInstrumentedTest {
 
     private lateinit var context: Context
     private lateinit var credentialStore: CredentialStore
@@ -67,7 +61,7 @@ class CredentialStoreTest {
     // MARK: - Credential Storage Tests
 
     @Test
-    fun `storeCredentialPackage stores all fields`() {
+    fun storeCredentialPackage_storesAllFields() {
         credentialStore.storeCredentialPackage(testCredentialPackage, "test-salt-base64")
 
         val stored = credentialStore.getStoredCredential()
@@ -79,33 +73,33 @@ class CredentialStoreTest {
     }
 
     @Test
-    fun `hasStoredCredential returns false when empty`() {
+    fun hasStoredCredential_returnsFalseWhenEmpty() {
         assertFalse("Should return false when no credential stored", credentialStore.hasStoredCredential())
     }
 
     @Test
-    fun `hasStoredCredential returns true after storing`() {
+    fun hasStoredCredential_returnsTrueAfterStoring() {
         credentialStore.storeCredentialPackage(testCredentialPackage)
 
         assertTrue("Should return true after storing credential", credentialStore.hasStoredCredential())
     }
 
     @Test
-    fun `getUserGuid returns correct GUID`() {
+    fun getUserGuid_returnsCorrectGUID() {
         credentialStore.storeCredentialPackage(testCredentialPackage)
 
         assertEquals(testCredentialPackage.userGuid, credentialStore.getUserGuid())
     }
 
     @Test
-    fun `getEncryptedBlob returns correct blob`() {
+    fun getEncryptedBlob_returnsCorrectBlob() {
         credentialStore.storeCredentialPackage(testCredentialPackage)
 
         assertEquals(testCredentialPackage.encryptedBlob, credentialStore.getEncryptedBlob())
     }
 
     @Test
-    fun `getCekVersion returns correct version`() {
+    fun getCekVersion_returnsCorrectVersion() {
         credentialStore.storeCredentialPackage(testCredentialPackage)
 
         assertEquals(testCredentialPackage.cekVersion, credentialStore.getCekVersion())
@@ -114,7 +108,7 @@ class CredentialStoreTest {
     // MARK: - LAT Storage Tests
 
     @Test
-    fun `LAT is stored correctly`() {
+    fun lat_isStoredCorrectly() {
         credentialStore.storeCredentialPackage(testCredentialPackage)
 
         val storedToken = credentialStore.getStoredLatToken()
@@ -123,7 +117,7 @@ class CredentialStoreTest {
     }
 
     @Test
-    fun `verifyLat returns true for matching LAT`() {
+    fun verifyLat_returnsTrueForMatchingLAT() {
         credentialStore.storeCredentialPackage(testCredentialPackage)
 
         val matchingLat = LegacyLedgerAuthToken(
@@ -132,11 +126,11 @@ class CredentialStoreTest {
             version = 1
         )
 
-        assertTrue("Should verify matching LAT", credentialStore.verifyLat(matchingLat as LegacyLedgerAuthToken))
+        assertTrue("Should verify matching LAT", credentialStore.verifyLat(matchingLat))
     }
 
     @Test
-    fun `verifyLat returns false for different token`() {
+    fun verifyLat_returnsFalseForDifferentToken() {
         credentialStore.storeCredentialPackage(testCredentialPackage)
 
         val differentLat = LegacyLedgerAuthToken(
@@ -145,11 +139,11 @@ class CredentialStoreTest {
             version = 1
         )
 
-        assertFalse("Should reject different token", credentialStore.verifyLat(differentLat as LegacyLedgerAuthToken))
+        assertFalse("Should reject different token", credentialStore.verifyLat(differentLat))
     }
 
     @Test
-    fun `verifyLat returns false for different latId`() {
+    fun verifyLat_returnsFalseForDifferentLatId() {
         credentialStore.storeCredentialPackage(testCredentialPackage)
 
         val differentLat = LegacyLedgerAuthToken(
@@ -158,11 +152,11 @@ class CredentialStoreTest {
             version = 1
         )
 
-        assertFalse("Should reject different LAT ID", credentialStore.verifyLat(differentLat as LegacyLedgerAuthToken))
+        assertFalse("Should reject different LAT ID", credentialStore.verifyLat(differentLat))
     }
 
     @Test
-    fun `updateLat updates token correctly`() {
+    fun updateLat_updatesTokenCorrectly() {
         credentialStore.storeCredentialPackage(testCredentialPackage)
 
         val newLat = LegacyLedgerAuthToken(
@@ -171,15 +165,15 @@ class CredentialStoreTest {
             version = 2
         )
 
-        credentialStore.updateLat(newLat as LegacyLedgerAuthToken)
+        credentialStore.updateLat(newLat)
 
-        assertTrue("Should verify new LAT after update", credentialStore.verifyLat(newLat as LegacyLedgerAuthToken))
+        assertTrue("Should verify new LAT after update", credentialStore.verifyLat(newLat))
     }
 
     // MARK: - UTK Pool Tests
 
     @Test
-    fun `UTK pool is stored correctly`() {
+    fun utkPool_isStoredCorrectly() {
         credentialStore.storeCredentialPackage(testCredentialPackage)
 
         val pool = credentialStore.getUtkPool()
@@ -188,7 +182,7 @@ class CredentialStoreTest {
     }
 
     @Test
-    fun `getUtk returns correct key by ID`() {
+    fun getUtk_returnsCorrectKeyById() {
         credentialStore.storeCredentialPackage(testCredentialPackage)
 
         val key = credentialStore.getUtk("tk-2")
@@ -199,7 +193,7 @@ class CredentialStoreTest {
     }
 
     @Test
-    fun `getUtk returns null for non-existent key`() {
+    fun getUtk_returnsNullForNonExistentKey() {
         credentialStore.storeCredentialPackage(testCredentialPackage)
 
         val key = credentialStore.getUtk("non-existent-key")
@@ -208,7 +202,7 @@ class CredentialStoreTest {
     }
 
     @Test
-    fun `removeUtk removes key from pool`() {
+    fun removeUtk_removesKeyFromPool() {
         credentialStore.storeCredentialPackage(testCredentialPackage)
 
         credentialStore.removeUtk("tk-1")
@@ -219,7 +213,7 @@ class CredentialStoreTest {
     }
 
     @Test
-    fun `addUtks adds new keys to pool`() {
+    fun addUtks_addsNewKeysToPool() {
         credentialStore.storeCredentialPackage(testCredentialPackage)
 
         val newKeys = listOf(
@@ -244,7 +238,7 @@ class CredentialStoreTest {
     }
 
     @Test
-    fun `getUtkCount returns correct count`() {
+    fun getUtkCount_returnsCorrectCount() {
         credentialStore.storeCredentialPackage(testCredentialPackage)
 
         assertEquals(3, credentialStore.getUtkCount())
@@ -257,14 +251,14 @@ class CredentialStoreTest {
     // MARK: - Password Salt Tests
 
     @Test
-    fun `password salt is stored during enrollment`() {
+    fun passwordSalt_isStoredDuringEnrollment() {
         credentialStore.storeCredentialPackage(testCredentialPackage, "test-salt-base64")
 
         assertEquals("test-salt-base64", credentialStore.getPasswordSalt())
     }
 
     @Test
-    fun `setPasswordSalt updates salt`() {
+    fun setPasswordSalt_updatesSalt() {
         credentialStore.setPasswordSalt("new-salt-value")
 
         assertEquals("new-salt-value", credentialStore.getPasswordSalt())
@@ -273,7 +267,7 @@ class CredentialStoreTest {
     // MARK: - Clear Tests
 
     @Test
-    fun `clearAll removes all data`() {
+    fun clearAll_removesAllData() {
         credentialStore.storeCredentialPackage(testCredentialPackage, "test-salt")
 
         credentialStore.clearAll()
@@ -288,7 +282,7 @@ class CredentialStoreTest {
     // MARK: - Timestamp Tests
 
     @Test
-    fun `createdAt is set on first store`() {
+    fun createdAt_isSetOnFirstStore() {
         credentialStore.storeCredentialPackage(testCredentialPackage)
 
         val stored = credentialStore.getStoredCredential()
@@ -297,7 +291,7 @@ class CredentialStoreTest {
     }
 
     @Test
-    fun `lastUsedAt is updated on store`() {
+    fun lastUsedAt_isUpdatedOnStore() {
         credentialStore.storeCredentialPackage(testCredentialPackage)
 
         val stored = credentialStore.getStoredCredential()
