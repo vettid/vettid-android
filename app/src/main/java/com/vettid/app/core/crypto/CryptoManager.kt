@@ -52,8 +52,11 @@ import javax.inject.Singleton
 @Singleton
 class CryptoManager @Inject constructor() {
 
-    private val keyStore: KeyStore = KeyStore.getInstance("AndroidKeyStore").apply {
-        load(null)
+    // Lazy initialization allows unit tests to run without AndroidKeyStore
+    private val keyStore: KeyStore by lazy {
+        KeyStore.getInstance("AndroidKeyStore").apply {
+            load(null)
+        }
     }
 
     // Thread-safe SecureRandom instance

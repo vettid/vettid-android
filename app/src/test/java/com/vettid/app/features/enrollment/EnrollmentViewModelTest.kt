@@ -1,5 +1,6 @@
 package com.vettid.app.features.enrollment
 
+import android.content.Context
 import com.vettid.app.core.attestation.AttestationResult
 import com.vettid.app.core.attestation.HardwareAttestationManager
 import com.vettid.app.core.crypto.CryptoManager
@@ -21,6 +22,7 @@ import java.security.cert.X509Certificate
 class EnrollmentViewModelTest {
 
     private lateinit var viewModel: EnrollmentViewModel
+    private lateinit var context: Context
     private lateinit var vaultServiceClient: VaultServiceClient
     private lateinit var cryptoManager: CryptoManager
     private lateinit var attestationManager: HardwareAttestationManager
@@ -32,12 +34,14 @@ class EnrollmentViewModelTest {
     fun setup() {
         Dispatchers.setMain(testDispatcher)
 
+        context = mock()
         vaultServiceClient = mock()
         cryptoManager = mock()
         attestationManager = mock()
         credentialStore = mock()
 
         viewModel = EnrollmentViewModel(
+            context = context,
             vaultServiceClient = vaultServiceClient,
             cryptoManager = cryptoManager,
             attestationManager = attestationManager,
@@ -69,20 +73,23 @@ class EnrollmentViewModelTest {
     // MARK: - Invite Code Processing Tests
 
     @Test
-    fun `InviteCodeScanned transitions to ProcessingInvite then Attesting on success`() = runTest {
-        val inviteCode = "TEST-INVITE-123"
+    fun `QRCodeScanned transitions to ProcessingInvite then Attesting on success`() = runTest {
+        val qrData = """{"invite_code":"TEST-INVITE-123"}"""
         val sessionId = "session-uuid"
         val challenge = ByteArray(32) { it.toByte() }
 
         val enrollStartResponse = EnrollStartResponse(
-            sessionId = sessionId,
-            attestationChallenge = android.util.Base64.encodeToString(challenge, android.util.Base64.NO_WRAP),
+            enrollmentSessionId = sessionId,
+            userGuid = "user-guid",
             transactionKeys = listOf(
                 TransactionKeyPublic(keyId = "key1", publicKey = "base64pubkey", algorithm = "X25519")
-            )
+            ),
+            passwordKeyId = "key1",
+            attestationRequired = true,
+            attestationChallenge = android.util.Base64.encodeToString(challenge, android.util.Base64.NO_WRAP)
         )
 
-        whenever(vaultServiceClient.enrollStart(eq(inviteCode), any()))
+        whenever(vaultServiceClient.enrollStart(any()))
             .thenReturn(Result.success(enrollStartResponse))
 
         // Mock attestation
@@ -100,7 +107,7 @@ class EnrollmentViewModelTest {
             platform = "android",
             osVersion = "14"
         )
-        whenever(vaultServiceClient.submitAttestation(eq(sessionId), any()))
+        whenever(vaultServiceClient.submitAttestation(any()))
             .thenReturn(Result.success(attestationResponse))
 
         whenever(cryptoManager.generateSalt()).thenReturn(ByteArray(16))
@@ -109,8 +116,8 @@ class EnrollmentViewModelTest {
         viewModel.onEvent(EnrollmentEvent.StartScanning)
         advanceUntilIdle()
 
-        // Scan invite code
-        viewModel.onEvent(EnrollmentEvent.InviteCodeScanned(inviteCode))
+        // Scan QR code
+        viewModel.onEvent(EnrollmentEvent.QRCodeScanned(qrData))
         advanceUntilIdle()
 
         val state = viewModel.state.first()
@@ -119,16 +126,16 @@ class EnrollmentViewModelTest {
     }
 
     @Test
-    fun `InviteCodeScanned transitions to Error on API failure`() = runTest {
-        val inviteCode = "INVALID-CODE"
+    fun `QRCodeScanned transitions to Error on API failure`() = runTest {
+        val qrData = """{"invite_code":"INVALID-CODE"}"""
 
-        whenever(vaultServiceClient.enrollStart(eq(inviteCode), any()))
+        whenever(vaultServiceClient.enrollStart(any()))
             .thenReturn(Result.failure(VaultServiceException("Invalid invite code", code = 400)))
 
         viewModel.onEvent(EnrollmentEvent.StartScanning)
         advanceUntilIdle()
 
-        viewModel.onEvent(EnrollmentEvent.InviteCodeScanned(inviteCode))
+        viewModel.onEvent(EnrollmentEvent.QRCodeScanned(qrData))
         advanceUntilIdle()
 
         val state = viewModel.state.first()
@@ -206,14 +213,14 @@ class EnrollmentViewModelTest {
     @Test
     fun `Retry from Error returns to previous state`() = runTest {
         // Force an error state with retryable = true
-        val inviteCode = "INVALID-CODE"
-        whenever(vaultServiceClient.enrollStart(eq(inviteCode), any()))
+        val qrData = """{"invite_code":"INVALID-CODE"}"""
+        whenever(vaultServiceClient.enrollStart(any()))
             .thenReturn(Result.failure(VaultServiceException("Network error")))
 
         viewModel.onEvent(EnrollmentEvent.StartScanning)
         advanceUntilIdle()
 
-        viewModel.onEvent(EnrollmentEvent.InviteCodeScanned(inviteCode))
+        viewModel.onEvent(EnrollmentEvent.QRCodeScanned(qrData))
         advanceUntilIdle()
 
         // Should be in Error state
@@ -261,7 +268,8 @@ class EnrollmentViewModelTest {
             sessionId = "test-session",
             transactionKeys = listOf(
                 TransactionKeyPublic(keyId = "key1", publicKey = "base64key", algorithm = "X25519")
-            )
+            ),
+            passwordKeyId = "key1"
         )
     }
 }
