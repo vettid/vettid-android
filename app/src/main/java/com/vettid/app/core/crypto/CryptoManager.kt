@@ -146,12 +146,15 @@ class CryptoManager @Inject constructor() {
 
     /**
      * Derive encryption key from shared secret using HKDF-SHA256
+     *
+     * Uses a consistent salt across all platforms (iOS, Android, Lambda)
+     * for defense-in-depth encryption.
      */
     fun deriveEncryptionKey(sharedSecret: ByteArray, info: String = "password-encryption"): ByteArray {
         return Hkdf.computeHkdf(
             "HMACSHA256",
             sharedSecret,
-            ByteArray(0),  // empty salt
+            "VettID-HKDF-Salt-v1".toByteArray(Charsets.UTF_8),  // Cross-platform salt
             info.toByteArray(Charsets.UTF_8),
             32  // 256-bit key
         )
