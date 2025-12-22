@@ -44,7 +44,7 @@ class VaultEventClientTest {
         // Assert
         assertTrue(result.isSuccess)
         verify(ownerSpaceClient).sendToVault(
-            eq("events.messaging.send"),
+            eq("messaging.send"),  // No events. prefix per vault-manager format
             any()
         )
     }
@@ -65,7 +65,7 @@ class VaultEventClientTest {
         // Assert
         assertTrue(result.isSuccess)
         verify(ownerSpaceClient).sendToVault(
-            eq("events.profile.update"),
+            eq("profile.update"),  // No events. prefix per vault-manager format
             any()
         )
     }
@@ -84,7 +84,7 @@ class VaultEventClientTest {
         // Assert
         assertTrue(result.isSuccess)
         verify(ownerSpaceClient).sendToVault(
-            eq("events.connection.create"),
+            eq("connection.create"),  // No events. prefix per vault-manager format
             any()
         )
     }
@@ -188,7 +188,7 @@ class VaultEventClientTest {
         // Assert
         assertTrue(result.isSuccess)
         verify(ownerSpaceClient).sendToVault(
-            eq("events.custom.event"),
+            eq("custom.event"),  // No events. prefix per vault-manager format
             any()
         )
     }

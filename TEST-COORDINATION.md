@@ -420,6 +420,12 @@ Backend Claude updated `/test/create-invitation` to provide **both flows**:
 | 2025-12-22 | Backend Claude | Analyzed vault/secrets architecture - secrets flow requires NATS infrastructure |
 | 2025-12-22 | Backend Claude | Documented NATS-based secrets flow (app ↔ vault via NATS messaging) |
 | 2025-12-22 | Human Owner | Clarified: secrets via NATS, need vault deployment + handlers |
+| 2025-12-22 | Backend Claude | Documented NATS message format in API-STATUS.md |
+| 2025-12-22 | Backend Claude | Identified Android NATS message format issues: `requestId` → `id`, timestamp Long → ISO 8601, `events.` prefix |
+| 2025-12-22 | Android Claude | ✅ **FIXED** NATS message format in OwnerSpaceClient.kt and VaultEventClient.kt |
+| 2025-12-22 | Android Claude | VaultMessage: `id` field (not requestId), `timestamp` ISO 8601 string (not Long) |
+| 2025-12-22 | Android Claude | Removed `events.` prefix from NATS subject construction |
+| 2025-12-22 | Android Claude | Updated unit tests, all 236 tests passing |
 
 ---
 

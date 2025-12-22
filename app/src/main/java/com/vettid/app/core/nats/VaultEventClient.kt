@@ -28,25 +28,25 @@ class VaultEventClient @Inject constructor(
      * @return Result containing the request ID for correlation
      */
     suspend fun submitEvent(event: VaultSubmitEvent): Result<String> {
-        val requestId = UUID.randomUUID().toString()
+        val messageId = UUID.randomUUID().toString()
         val message = VaultEventMessage(
-            requestId = requestId,
+            id = messageId,
             eventType = event.type,
             payload = event.payload,
             timestamp = Instant.now().toString()
         )
 
         val payloadJson = JsonObject().apply {
-            addProperty("request_id", message.requestId)
+            addProperty("id", message.id)
             addProperty("event_type", message.eventType)
             add("payload", message.payload)
             addProperty("timestamp", message.timestamp)
         }
 
         return ownerSpaceClient.sendToVault(
-            messageType = "events.${event.type}",
+            messageType = event.type,  // No events. prefix
             payload = payloadJson
-        ).map { requestId }
+        ).map { messageId }
     }
 
     /**
@@ -107,10 +107,10 @@ class VaultEventClient @Inject constructor(
  * Message sent to the vault.
  */
 data class VaultEventMessage(
-    val requestId: String,
+    val id: String,  // Changed from requestId to match vault-manager format
     val eventType: String,
     val payload: JsonObject,
-    val timestamp: String
+    val timestamp: String  // ISO 8601 format
 )
 
 /**

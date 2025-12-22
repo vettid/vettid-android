@@ -101,10 +101,10 @@ class OwnerSpaceClient @Inject constructor(
         val subject = "$ownerSpaceId.forVault.$messageType"
 
         val message = VaultMessage(
-            requestId = requestId,
+            id = requestId,
             type = messageType,
             payload = payload,
-            timestamp = System.currentTimeMillis()
+            timestamp = java.time.Instant.now().toString()  // ISO 8601
         )
 
         val json = gson.toJson(message)
@@ -162,26 +162,26 @@ class OwnerSpaceClient @Inject constructor(
 
             val vaultResponse = when (response.type) {
                 "handlerResult" -> VaultResponse.HandlerResult(
-                    requestId = response.requestId,
+                    requestId = response.id,
                     handlerId = response.handlerId,
                     success = response.success ?: false,
                     result = response.result,
                     error = response.error
                 )
                 "status" -> VaultResponse.StatusResponse(
-                    requestId = response.requestId,
+                    requestId = response.id,
                     status = parseVaultStatus(response.result)
                 )
                 "eventTypes" -> VaultResponse.EventTypesResponse(
-                    requestId = response.requestId,
+                    requestId = response.id,
                     eventTypes = parseEventTypes(response.result)
                 )
                 "pong" -> VaultResponse.Pong(
-                    requestId = response.requestId,
-                    timestamp = response.timestamp ?: System.currentTimeMillis()
+                    requestId = response.id,
+                    timestamp = response.timestamp ?: java.time.Instant.now().toString()
                 )
                 "error" -> VaultResponse.Error(
-                    requestId = response.requestId,
+                    requestId = response.id,
                     code = response.errorCode ?: "UNKNOWN",
                     message = response.error ?: "Unknown error"
                 )
@@ -248,10 +248,10 @@ class OwnerSpaceClient @Inject constructor(
  * Message sent TO the vault.
  */
 data class VaultMessage(
-    val requestId: String,
+    val id: String,
     val type: String,
     val payload: JsonObject,
-    val timestamp: Long
+    val timestamp: String  // ISO 8601 format
 )
 
 /**
@@ -280,7 +280,7 @@ sealed class VaultResponse {
 
     data class Pong(
         override val requestId: String,
-        val timestamp: Long
+        val timestamp: String  // ISO 8601 format
     ) : VaultResponse()
 
     data class Error(
@@ -320,14 +320,14 @@ data class EventType(
 // MARK: - JSON Models
 
 private data class VaultResponseJson(
-    val requestId: String,
+    val id: String,  // Changed from requestId to match vault-manager format
     val type: String,
     val handlerId: String? = null,
     val success: Boolean? = null,
     val result: JsonObject? = null,
     val error: String? = null,
     val errorCode: String? = null,
-    val timestamp: Long? = null
+    val timestamp: String? = null  // ISO 8601 format
 )
 
 private data class EventTypesJson(
