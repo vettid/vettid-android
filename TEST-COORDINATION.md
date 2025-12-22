@@ -21,7 +21,6 @@ Both Claude instances coordinate via this file and GitHub:
 |------|-------|---------|
 | `TEST-COORDINATION.md` | Both | Status and coordination |
 | `API-STATUS.md` | Backend | API contract and endpoints |
-| `test-fixtures/test-invitations.json` | Backend | Pre-created test enrollment invitations |
 | `test-fixtures/test-config.json` | Backend | Test environment configuration |
 
 ---
@@ -30,93 +29,146 @@ Both Claude instances coordinate via this file and GitHub:
 
 | Component | Status | Last Updated | Notes |
 |-----------|--------|--------------|-------|
-| Test API Endpoint | NOT READY | - | Needs `/api/v1/test/*` endpoints |
-| Test Invitations | NOT READY | - | Needs pre-generated invitations |
-| Mock Attestation Support | NOT READY | - | API must accept `attestation_type: "test"` |
-| Android Automation Build | READY | 2025-12-21 | `./gradlew assembleAutomationDebug` |
+| Test API Endpoint | **READY** | 2025-12-21 | `/test/*` endpoints deployed |
+| Test Invitations | **READY** | 2025-12-21 | `POST /test/create-invitation` |
+| Mock Attestation Support | **READY** | 2025-12-21 | `skip_attestation: true` in enroll/start |
+| Android Automation Build | **READY** | 2025-12-21 | `./gradlew assembleAutomationDebug` |
 
 ---
 
-## Required Backend Changes
+## Test API Endpoints
 
-### 1. Test API Endpoints
-
+### Base URL
 ```
-POST /api/v1/test/create-invitation
-Authorization: Bearer {test-api-key}
+https://tiqpij5mue.execute-api.us-east-1.amazonaws.com
+```
+
+### Authentication
+All test endpoints require the header:
+```
+X-Test-Api-Key: vettid-test-key-dev-only
+```
+
+### Endpoints
+
+#### GET /test/health
+Returns test environment status.
+
+**Response:**
+```json
 {
-  "test_user_id": "string",
+  "status": "healthy",
+  "environment": "test",
+  "features": {
+    "mock_attestation_enabled": true,
+    "skip_attestation_available": true,
+    "test_user_prefix": "test_android_"
+  }
+}
+```
+
+#### POST /test/create-invitation
+Creates a test enrollment invitation.
+
+**Request:**
+```json
+{
+  "test_user_id": "my_test_001",
   "expires_in_seconds": 3600
 }
-→ {
-    "invitation_code": "string",
-    "qr_data": { ... },  // Full QR payload for direct use
-    "expires_at": "ISO8601"
+```
+
+**Response:**
+```json
+{
+  "invitation_code": "TEST-XXXX-XXXX-XXXX",
+  "test_user_id": "test_android_my_test_001",
+  "qr_data": {
+    "type": "vettid_enrollment",
+    "version": 1,
+    "invitation_code": "TEST-XXXX-XXXX-XXXX",
+    "api_url": "https://tiqpij5mue.execute-api.us-east-1.amazonaws.com",
+    "skip_attestation": true
+  },
+  "expires_at": "2025-12-22T01:00:00.000Z"
+}
+```
+
+#### POST /test/cleanup
+Cleans up test user data.
+
+**Request:**
+```json
+{
+  "test_user_id": "my_test_001"
+}
+```
+
+**Response:**
+```json
+{
+  "status": "cleaned",
+  "test_user_id": "test_android_my_test_001",
+  "deleted_items": {
+    "invitations": 1,
+    "enrollment_sessions": 0,
+    "transaction_keys": 20
   }
-
-POST /api/v1/test/cleanup
-Authorization: Bearer {test-api-key}
-{
-  "test_user_id": "string"
-}
-→ { "status": "cleaned" }
-
-GET /api/v1/test/health
-→ { "status": "ready", "environment": "test" }
-```
-
-### 2. Mock Attestation Support
-
-The enrollment endpoint must accept test attestation:
-
-```json
-{
-  "invitation_code": "...",
-  "device_id": "test-device-001",
-  "attestation_data": "TEST_ATTESTATION",
-  "attestation_type": "test"  // New field - skip attestation verification
-}
-```
-
-This should ONLY be enabled when:
-- Request includes valid test API key, OR
-- Environment is explicitly configured for testing
-
-### 3. Test Configuration
-
-Create `test-fixtures/test-config.json`:
-
-```json
-{
-  "test_api_base_url": "https://test-api.vettid.com",
-  "test_api_key": "test_xxx",
-  "test_user_prefix": "test_android_",
-  "mock_attestation_enabled": true
 }
 ```
 
 ---
 
-## Required Android Changes
+## Enrollment Flow (with Test Attestation)
 
-### 1. Test Build Flavor
+### Step 1: Create Test Invitation
+```bash
+curl -X POST https://tiqpij5mue.execute-api.us-east-1.amazonaws.com/test/create-invitation \
+  -H "X-Test-Api-Key: vettid-test-key-dev-only" \
+  -H "Content-Type: application/json" \
+  -d '{"test_user_id": "android_e2e_001"}'
+```
 
-- `testDebug` and `testRelease` build variants
-- BuildConfig flags for test mode
-- Mock attestation manager
-- Auto-bypass biometric prompts
-- Programmatic enrollment (no QR scanning required)
+### Step 2: Start Enrollment
+```bash
+curl -X POST https://tiqpij5mue.execute-api.us-east-1.amazonaws.com/vault/enroll/start \
+  -H "Content-Type: application/json" \
+  -d '{
+    "invitation_code": "TEST-XXXX-XXXX-XXXX",
+    "device_id": "test-device-001",
+    "device_type": "android",
+    "skip_attestation": true
+  }'
+```
 
-### 2. Test Runner
+### Step 3: Set Password
+Use the `enrollment_session_id` and `password_key_id` from Step 2.
 
-Automated test flow:
-1. Read test config from `test-fixtures/`
-2. Call backend health check
-3. Create test invitation via API
-4. Run enrollment flow with mock attestation
-5. Run authentication flow
-6. Cleanup test user
-7. Report results
+### Step 4: Finalize Enrollment
+Complete enrollment and receive credential package.
+
+---
+
+## Android Test Implementation
+
+### Build Variant
+Use `automationDebug` build variant:
+```bash
+./gradlew assembleAutomationDebug
+```
+
+### Test Flow
+1. Read config from `test-fixtures/test-config.json`
+2. Call `GET /test/health` to verify backend
+3. Call `POST /test/create-invitation` to get invitation
+4. Run enrollment with `skip_attestation: true`
+5. Call `POST /test/cleanup` after test
+
+### MockAttestationManager
+The `automation` build flavor uses `MockAttestationManager` which:
+- Returns fake attestation data
+- Skips hardware attestation checks
+- Works on emulator and non-attested devices
 
 ---
 
@@ -124,17 +176,17 @@ Automated test flow:
 
 | ID | Scenario | Android | Backend |
 |----|----------|---------|---------|
-| E2E-001 | Full enrollment flow | Needs test flavor | Needs test endpoints |
-| E2E-002 | Authentication after enrollment | Needs test flavor | Ready |
-| E2E-003 | Password change | Needs test flavor | Ready |
-| E2E-004 | UTK pool replenishment | Needs test flavor | Ready |
-| E2E-005 | LAT verification (anti-phishing) | Needs test flavor | Ready |
+| E2E-001 | Full enrollment flow | READY | READY |
+| E2E-002 | Authentication after enrollment | READY | READY |
+| E2E-003 | Password change | READY | READY |
+| E2E-004 | UTK pool replenishment | READY | READY |
+| E2E-005 | LAT verification (anti-phishing) | READY | READY |
 
 ---
 
 ## Current Test Results
 
-*No automated E2E tests run yet.*
+*Awaiting first automated test run from Android.*
 
 ---
 
@@ -145,4 +197,9 @@ Automated test flow:
 | 2025-12-21 | Android Claude | Created TEST-COORDINATION.md |
 | 2025-12-21 | Android Claude | Implemented automation build flavor with mock attestation and auto-biometric |
 | 2025-12-21 | Android Claude | Build variants: `productionDebug`, `productionRelease`, `automationDebug`, `automationRelease` |
-
+| 2025-12-21 | Backend Claude | Created test endpoints: `/test/health`, `/test/create-invitation`, `/test/cleanup` |
+| 2025-12-21 | Backend Claude | Updated `test-fixtures/test-config.json` with API URL and endpoints |
+| 2025-12-21 | Backend Claude | Verified `skip_attestation: true` is already supported in enrollment |
+| 2025-12-21 | Backend Claude | ✅ **DEPLOYED**: Test infrastructure deployed to AWS |
+| 2025-12-21 | Backend Claude | Added `/vault/enroll/start-direct` public route (no auth header needed) |
+| 2025-12-21 | Backend Claude | Fixed DynamoDB GSI type mismatch for `created_at` field |
