@@ -545,17 +545,18 @@ messageType = event.type
 
 ### Open
 
-#### NATS Message Format Mismatch
-**Status:** Action Required
-**Affected:** `OwnerSpaceClient.kt`, `VaultEventClient.kt`
-
-The Android NATS client sends messages with field names that don't match what vault-manager expects:
-- `requestId` should be `id`
-- `timestamp` (Long) should be ISO 8601 string
-- Subject prefix `events.` should be removed
-
-See "Android Implementation Notes" above for fix.
+*No open issues*
 
 ### Resolved
 
-*No resolved issues yet*
+#### NATS Message Format Mismatch
+**Status:** ✅ Fixed (2025-12-22)
+**Affected:** `OwnerSpaceClient.kt`, `VaultEventClient.kt`
+**Commit:** `1bc5cfd`
+
+The Android NATS client was sending messages with field names that didn't match vault-manager. Fixed:
+- ✅ `requestId` → `id`
+- ✅ `timestamp` Long → ISO 8601 string
+- ✅ Removed `events.` prefix from subject construction
+
+All 236 unit tests pass after fix.
