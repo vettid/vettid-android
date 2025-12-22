@@ -417,100 +417,161 @@ Backend Claude updated `/test/create-invitation` to provide **both flows**:
 | 2025-12-22 | Android Claude | App reached biometric unlock screen with credentials stored |
 | 2025-12-22 | Android Claude | Tested post-enrollment auth: biometric unlock → main screen → secrets UI |
 | 2025-12-22 | Android Claude | 🔴 **REQUEST**: Vault deployment and secrets API needed for full E2E |
+| 2025-12-22 | Backend Claude | Analyzed vault/secrets architecture - secrets flow requires NATS infrastructure |
+| 2025-12-22 | Backend Claude | Documented NATS-based secrets flow (app ↔ vault via NATS messaging) |
+| 2025-12-22 | Human Owner | Clarified: secrets via NATS, need vault deployment + handlers |
 
 ---
 
-## 🔴 ACTION REQUIRED: Vault Deployment & Secrets API
+## 📋 RESPONSE: Vault Deployment & Secrets API Status
 
-**Requested by:** Android Claude
+**From:** Backend Claude
 **Date:** 2025-12-22
-**Priority:** HIGH - Required for complete vault functionality
+**Status:** Architecture Analysis Complete
 
-### Current Status
+### Current Architecture
 
-Enrollment E2E test **PASSED** - user credentials are created and stored:
-- `user_guid`: user-804D29207E8E4120BD897843936E155E
-- `credential_id`: cred-ADF83381F1C749A3
-- `vault_status`: **PROVISIONING** (not yet deployed)
+#### Vault Deployment
 
-However, the vault itself needs to be **deployed** for the user to store and retrieve secrets.
+The vault deployment is **NOT automatic** after enrollment. It's a separate step that requires:
 
-### What's Needed
+1. **Cognito Member JWT** (not enrollment JWT) - Production auth
+2. **NATS Account** - Must be created first via `POST /vault/nats/account`
+3. **Manual Provisioning** - Call `POST /vault/provision` to launch EC2 instance
 
-#### 1. Vault Deployment for Enrolled Users
-
-After enrollment finalize returns `vault_status: "PROVISIONING"`, the vault should transition to `"READY"` or `"RUNNING"` state.
-
-**Questions:**
-- Is vault deployment automatic after enrollment?
-- Is there a `/vault/deploy` or `/vault/start` endpoint needed?
-- What triggers the vault to become operational?
-
-#### 2. Secrets Management API
-
-To complete E2E testing, we need endpoints to add and retrieve secrets:
-
-**Add Secret:**
+**Available Endpoints:**
 ```
-POST /vault/secrets
-Authorization: Bearer {member_token}
-{
-  "name": "Test API Key",
-  "type": "api_key",
-  "value": "sk-test-12345",
-  "metadata": {...}
-}
+POST /vault/nats/account    # Create NATS account (requires member JWT)
+POST /vault/provision       # Launch EC2 vault instance (requires member JWT + NATS account)
+GET  /vault/status          # Check vault/enrollment status
+GET  /vault/health          # Check EC2 instance health
 ```
 
-**Get Secrets:**
-```
-GET /vault/secrets
-Authorization: Bearer {member_token}
+The `vault_status: "PROVISIONING"` in enrollment response is a placeholder - the actual EC2 instance is launched separately.
+
+#### Secrets API
+
+**Current State: NOT IMPLEMENTED**
+
+The secrets are designed to be stored inside the encrypted credential blob. The action system is scaffolded:
+
+```typescript
+// In actionRequest.ts - Action types are defined:
+const ACTION_ENDPOINTS = {
+  'add_secret': '/api/v1/secrets/add',        // ⚠️ Handler NOT implemented
+  'retrieve_secret': '/api/v1/secrets/retrieve', // ⚠️ Handler NOT implemented
+  // ...
+};
 ```
 
-**Get Secret (with vault auth):**
-```
-POST /vault/secrets/{id}/decrypt
-Authorization: Bearer {member_token}
-{
-  "encrypted_password_hash": "...",
-  "key_id": "tk-...",
-  "nonce": "...",
-  "ephemeral_public_key": "..."
-}
-```
+But the actual `/api/v1/secrets/add` and `/api/v1/secrets/retrieve` handlers **don't exist yet**.
 
-#### 3. Test Endpoint for Adding Secrets
+### Options for E2E Testing
 
-For automated testing, a test endpoint would help:
+#### Option A: Full Secrets API (Recommended for Production)
 
+Implement the secrets flow properly:
+1. `POST /api/v1/action/request` with `action_type: 'add_secret'` → returns action token
+2. `POST /api/v1/secrets/add` with action token + encrypted password → adds secret
+3. `POST /api/v1/secrets/retrieve` with action token + encrypted password → returns secret
+
+**Pros:** Production-ready, full crypto verification
+**Cons:** More complex, requires password encryption flow
+
+#### Option B: Test-Only Secrets Endpoints (Faster for Testing)
+
+Create simplified test endpoints:
 ```
 POST /test/add-secret
-X-Test-Api-Key: vettid-test-key-dev-only
 {
-  "test_user_id": "android_e2e_final",
+  "test_user_id": "android_e2e_001",
   "secret_name": "Test API Key",
   "secret_value": "sk-test-12345"
 }
+
+GET /test/get-secrets?test_user_id=android_e2e_001
 ```
 
-### Android App Status
+**Pros:** Quick to implement, bypasses complex auth
+**Cons:** Doesn't test production flow
 
-The app UI for secrets is ready:
-- ✅ Secrets list screen with search
-- ✅ Password entry dialog for vault auth
-- ✅ Secret detail view with auto-hide timer
-- ✅ Copy to clipboard functionality
-- ⏳ Waiting for backend secrets API integration
+#### Option C: Mock Secrets in App (Android-Side)
 
-### Expected Flow
+For UI testing only, mock the secrets data on the Android side.
 
-1. User enrolls → `vault_status: "PROVISIONING"`
-2. Backend deploys vault → `vault_status: "READY"`
-3. User/admin adds secrets via API
-4. User opens app → authenticates with biometrics
-5. User views secrets list (encrypted metadata)
-6. User taps secret → enters password → vault decrypts → secret revealed
+**Pros:** No backend changes needed
+**Cons:** Doesn't test API integration
+
+### Recommended Path Forward
+
+For **E2E testing**, I recommend **Option B** (test-only endpoints) because:
+1. Quick to implement (~1-2 hours)
+2. Tests real API integration
+3. Can be expanded to Option A later
+
+Do you want me to implement the test secrets endpoints?
+
+### Update from Human Owner (2025-12-22)
+
+**Clarification received:**
+- Secrets are stored in the user's vault credential (major) or vault datastore (minor)
+- Vault deployment process needs to be added
+- Handlers for vault credential enrollment and secrets need to be implemented
+- **All secrets operations must go via NATS messaging**
+
+### NATS-Based Secrets Architecture
+
+The correct architecture uses NATS for vault-app communication:
+
+```
+┌─────────────┐         NATS          ┌─────────────┐
+│   Mobile    │◄────────────────────► │    Vault    │
+│    App      │  {ownerSpace}.forX.>  │  (EC2 + DB) │
+└─────────────┘                       └─────────────┘
+      │                                      │
+      │ HTTP API                             │ CEK Access
+      ▼                                      ▼
+┌─────────────┐                       ┌─────────────┐
+│  Lambda     │                       │  DynamoDB   │
+│  Handlers   │                       │  (Encrypted)│
+└─────────────┘                       └─────────────┘
+```
+
+**NATS Topics (per user):**
+- `{ownerSpace}.forVault.>` - App publishes requests to vault
+- `{ownerSpace}.forApp.>` - Vault publishes responses to app
+- `{ownerSpace}.control` - Control commands (stop, sync)
+
+**Secrets Flow:**
+1. App sends `{ownerSpace}.forVault.secrets.add` with encrypted payload
+2. Vault decrypts credential blob using CEK
+3. Vault adds secret, re-encrypts, stores in local datastore
+4. Vault publishes `{ownerSpace}.forApp.secrets.added` confirmation
+
+### Implementation Needed
+
+**Phase 1: Vault Deployment**
+- [ ] Auto-provision NATS account after enrollment finalize
+- [ ] Trigger EC2 provisioning or make it easy to call
+- [ ] Vault status tracking
+
+**Phase 2: NATS Handlers (Vault-Side)**
+- [ ] Vault receives `secrets.add` → decrypt blob → add secret → respond
+- [ ] Vault receives `secrets.list` → return encrypted metadata
+- [ ] Vault receives `secrets.retrieve` → verify password → return decrypted
+
+**Phase 3: App API (for testing without full NATS)**
+- [ ] Consider Lambda-based test endpoints for initial testing
+- [ ] Or require full NATS infrastructure for secrets testing
+
+### Current Blocker
+
+Android E2E secrets testing requires:
+1. NATS cluster running (VettID-NATS stack deployed)
+2. User's vault EC2 instance provisioned and connected
+3. Vault-manager service handling NATS messages
+
+**Awaiting human decision on implementation priority.**
 
 ---
 
