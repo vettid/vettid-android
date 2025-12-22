@@ -277,11 +277,284 @@ Authorization: Bearer {action_token}     // NOT Cognito token!
 
 ---
 
+## NATS Communication (Vault Operations)
+
+**Important:** All secrets and profile operations go through NATS to the vault EC2 instance. These endpoints are **only accessible when the vault is online**.
+
+### NATS Topics
+
+| Topic | Direction | Purpose |
+|-------|-----------|---------|
+| `OwnerSpace.{user_guid}.forVault.>` | App → Vault | Send commands to vault |
+| `OwnerSpace.{user_guid}.forApp.>` | Vault → App | Receive responses from vault |
+| `OwnerSpace.{user_guid}.control.>` | System | System control messages |
+
+### Message Format (App → Vault)
+
+**IMPORTANT:** The vault-manager expects this exact JSON structure:
+
+```json
+{
+  "id": "unique-request-id",
+  "type": "secrets.datastore.add",
+  "timestamp": "2025-12-22T15:30:00Z",
+  "payload": { ... },
+  "reply_to": "optional-reply-subject"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | Yes | Unique request ID for correlation (UUID recommended) |
+| `type` | string | Yes | Handler/event type (see Event Types below) |
+| `timestamp` | string | Yes | ISO 8601 timestamp |
+| `payload` | object | Yes | Handler-specific payload |
+| `reply_to` | string | No | Optional custom reply subject |
+
+**⚠️ Common Mistakes:**
+- Using `requestId` instead of `id`
+- Using epoch milliseconds instead of ISO 8601 string
+- Prefixing type with `events.` (e.g., `events.profile.update` instead of `profile.update`)
+
+### Response Format (Vault → App)
+
+```json
+{
+  "event_id": "the-request-id-from-message",
+  "success": true,
+  "timestamp": "2025-12-22T15:30:01Z",
+  "result": { ... },
+  "error": null
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `event_id` | string | Matches the `id` from the request |
+| `success` | boolean | Whether the operation succeeded |
+| `timestamp` | string | When the response was generated |
+| `result` | object | Handler result (if success=true) |
+| `error` | string | Error message (if success=false) |
+
+### Event Types (Built-in Handlers)
+
+#### Secrets - Datastore (Minor Secrets)
+
+These are stored in local JetStream KV on the vault EC2.
+
+**`secrets.datastore.add`** - Add a new secret
+```json
+{
+  "key": "github_pat",
+  "value": "encrypted_base64...",
+  "metadata": {
+    "label": "GitHub Personal Access Token",
+    "category": "api_key",
+    "tags": ["github", "development"]
+  }
+}
+→ { "success": true, "key": "github_pat" }
+```
+
+**`secrets.datastore.update`** - Update existing secret
+```json
+{
+  "key": "github_pat",
+  "value": "new_encrypted_base64...",
+  "metadata": { "label": "Updated GitHub PAT" }
+}
+→ { "success": true, "key": "github_pat" }
+```
+
+**`secrets.datastore.retrieve`** - Get a secret by key
+```json
+{
+  "key": "github_pat"
+}
+→ {
+    "key": "github_pat",
+    "value": "encrypted_base64...",
+    "metadata": { "label": "...", "category": "...", "tags": [...] }
+  }
+```
+
+**`secrets.datastore.delete`** - Delete a secret
+```json
+{
+  "key": "github_pat"
+}
+→ { "success": true, "key": "github_pat" }
+```
+
+**`secrets.datastore.list`** - List secrets (metadata only)
+```json
+{
+  "category": "password",
+  "tag": "work",
+  "limit": 50,
+  "cursor": "optional_pagination_cursor"
+}
+→ {
+    "items": [
+      { "key": "gmail", "metadata": {...}, "created_at": "..." },
+      ...
+    ],
+    "next_cursor": "..."
+  }
+```
+
+#### Profile
+
+Profile fields are encrypted values stored in the vault.
+
+**`profile.get`** - Get profile fields
+```json
+{
+  "fields": ["email", "display_name"]
+}
+→ {
+    "fields": {
+      "email": { "value": "encrypted...", "updated_at": "..." },
+      "display_name": { "value": "encrypted...", "updated_at": "..." }
+    }
+  }
+```
+*Note: Empty `fields` array returns all fields.*
+
+**`profile.update`** - Update profile fields
+```json
+{
+  "fields": {
+    "display_name": "encrypted_new_value...",
+    "bio": "encrypted_bio..."
+  }
+}
+→ { "success": true, "fields_updated": 2 }
+```
+
+**`profile.delete`** - Delete profile fields
+```json
+{
+  "fields": ["bio", "phone"]
+}
+→ { "success": true, "fields_deleted": 2 }
+```
+
+#### Credential
+
+Credential blob management (CEK-encrypted, synced from mobile).
+
+**`credential.store`** - Store initial credential (enrollment)
+```json
+{
+  "encrypted_blob": "base64...",
+  "ephemeral_public_key": "base64...",
+  "nonce": "base64...",
+  "version": 1
+}
+→ { "success": true, "version": 1 }
+```
+
+**`credential.sync`** - Sync credential after auth rotation
+```json
+{
+  "encrypted_blob": "base64...",
+  "ephemeral_public_key": "base64...",
+  "nonce": "base64...",
+  "version": 2
+}
+→ { "success": true, "version": 2 }
+```
+
+**`credential.get`** - Get current credential
+```json
+{}
+→ {
+    "encrypted_blob": "base64...",
+    "ephemeral_public_key": "base64...",
+    "nonce": "base64...",
+    "version": 2,
+    "synced_at": "2025-12-22T15:30:00Z"
+  }
+```
+
+**`credential.version`** - Check credential version
+```json
+{}
+→ { "version": 2, "exists": true }
+```
+
+### Android Implementation Notes
+
+**Current VaultMessage (needs fix):**
+```kotlin
+// WRONG - field names don't match vault-manager
+data class VaultMessage(
+    val requestId: String,  // Should be "id"
+    val type: String,
+    val payload: JsonObject,
+    val timestamp: Long     // Should be ISO 8601 string
+)
+```
+
+**Corrected VaultMessage:**
+```kotlin
+data class VaultMessage(
+    val id: String,
+    val type: String,
+    val payload: JsonObject,
+    val timestamp: String  // ISO 8601 format
+) {
+    companion object {
+        fun create(type: String, payload: JsonObject): VaultMessage {
+            return VaultMessage(
+                id = UUID.randomUUID().toString(),
+                type = type,
+                payload = payload,
+                timestamp = Instant.now().toString()  // ISO 8601
+            )
+        }
+    }
+}
+```
+
+**Current subject construction (needs fix):**
+```kotlin
+// WRONG - adds "events." prefix
+messageType = "events.${event.type}"
+```
+
+**Corrected subject:**
+```kotlin
+// CORRECT - use the event type directly
+messageType = event.type
+```
+
+### Testing NATS Communication
+
+1. **Ensure vault is online** - Check `/member/vault/status` returns `running`
+2. **Get NATS credentials** - Call `/vault/nats/token` to get fresh credentials
+3. **Connect to NATS** - Use credentials to connect to `nats.vettid.dev:4222`
+4. **Subscribe to responses** - `OwnerSpace.{user_guid}.forApp.>`
+5. **Send test event** - Publish to `OwnerSpace.{user_guid}.forVault.profile.get`
+6. **Verify response** - Check `event_id` matches your request `id`
+
+---
+
 ## Issues
 
 ### Open
 
-*No open issues*
+#### NATS Message Format Mismatch
+**Status:** Action Required
+**Affected:** `OwnerSpaceClient.kt`, `VaultEventClient.kt`
+
+The Android NATS client sends messages with field names that don't match what vault-manager expects:
+- `requestId` should be `id`
+- `timestamp` (Long) should be ISO 8601 string
+- Subject prefix `events.` should be removed
+
+See "Android Implementation Notes" above for fix.
 
 ### Resolved
 
