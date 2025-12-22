@@ -74,6 +74,29 @@ android {
         }
     }
 
+    flavorDimensions += "environment"
+    productFlavors {
+        create("production") {
+            dimension = "environment"
+            // Production settings - real attestation, real biometrics
+            buildConfigField("Boolean", "SKIP_ATTESTATION", "false")
+            buildConfigField("Boolean", "AUTO_BIOMETRIC", "false")
+            buildConfigField("Boolean", "TEST_MODE", "false")
+            buildConfigField("String", "API_BASE_URL", "\"https://api.vettid.com\"")
+        }
+        create("automation") {
+            dimension = "environment"
+            applicationIdSuffix = ".automation"
+            versionNameSuffix = "-automation"
+            // Automation settings - mock attestation, auto-bypass biometrics
+            buildConfigField("Boolean", "SKIP_ATTESTATION", "true")
+            buildConfigField("Boolean", "AUTO_BIOMETRIC", "true")
+            buildConfigField("Boolean", "TEST_MODE", "true")
+            buildConfigField("String", "API_BASE_URL", "\"https://test-api.vettid.com\"")
+            buildConfigField("String", "TEST_API_KEY", "\"\"")  // Set via environment or test-config.json
+        }
+    }
+
     // Enable build config fields
     buildFeatures {
         buildConfig = true
@@ -106,8 +129,9 @@ android {
         val variant = this
         variant.outputs.all {
             val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+            val flavor = variant.flavorName
             val buildType = variant.buildType.name
-            output.outputFileName = "vettid-app-${buildType}.apk"
+            output.outputFileName = "vettid-app-${flavor}-${buildType}.apk"
         }
     }
 }

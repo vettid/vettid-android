@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import com.vettid.app.BuildConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.security.KeyPairGenerator
 import java.security.KeyStore
@@ -39,8 +40,13 @@ class HardwareAttestationManager @Inject constructor(
 
     /**
      * Generate an attestation key with hardware-backed attestation
+     * In test mode (BuildConfig.SKIP_ATTESTATION), returns mock attestation data
      */
     fun generateAttestationKey(challenge: ByteArray): AttestationResult {
+        // Test mode: return mock attestation without hardware
+        if (BuildConfig.SKIP_ATTESTATION) {
+            return generateMockAttestation(challenge)
+        }
         // Delete existing attestation key
         if (keyStore.containsAlias(ATTESTATION_KEY_ALIAS)) {
             keyStore.deleteEntry(ATTESTATION_KEY_ALIAS)
@@ -135,6 +141,10 @@ class HardwareAttestationManager @Inject constructor(
      * Check if hardware attestation is available
      */
     fun isAttestationAvailable(): Boolean {
+        // Test mode: always available
+        if (BuildConfig.SKIP_ATTESTATION) {
+            return true
+        }
         return try {
             // Generate a test key with attestation challenge
             val testChallenge = ByteArray(32) { it.toByte() }
@@ -146,10 +156,53 @@ class HardwareAttestationManager @Inject constructor(
         }
     }
 
+    // MARK: - Mock Attestation (Test Mode Only)
+
+    /**
+     * Generate mock attestation data for automated testing
+     * This is only used when BuildConfig.SKIP_ATTESTATION is true
+     * The server must be configured to accept attestation_type: "test"
+     */
+    private fun generateMockAttestation(challenge: ByteArray): AttestationResult {
+        // For test mode, we generate a real key but without attestation challenge
+        // This creates a software-backed key that works on emulators
+        val testAlias = "vettid_test_attestation"
+
+        if (keyStore.containsAlias(testAlias)) {
+            keyStore.deleteEntry(testAlias)
+        }
+
+        val keyPairGenerator = KeyPairGenerator.getInstance(
+            KeyProperties.KEY_ALGORITHM_EC,
+            ANDROID_KEYSTORE
+        )
+
+        // Generate key WITHOUT attestation challenge (works on emulator)
+        keyPairGenerator.initialize(
+            KeyGenParameterSpec.Builder(testAlias, KeyProperties.PURPOSE_SIGN)
+                .setAlgorithmParameterSpec(java.security.spec.ECGenParameterSpec("secp256r1"))
+                .setDigests(KeyProperties.DIGEST_SHA256)
+                .setUserAuthenticationRequired(false)
+                .build()
+        )
+        keyPairGenerator.generateKeyPair()
+
+        // Get the certificate chain (will be self-signed, no attestation extension)
+        val certificateChain = keyStore.getCertificateChain(testAlias)
+            ?.map { it as X509Certificate }
+            ?: throw AttestationException("Failed to get test certificate chain")
+
+        return AttestationResult(
+            certificateChain = certificateChain,
+            attestationExtension = "TEST_ATTESTATION:${challenge.toHexString()}".toByteArray()
+        )
+    }
+
     // MARK: - Prepare Enrollment Attestation
 
     /**
      * Prepare attestation data for enrollment
+     * In test mode, returns mock attestation with SOFTWARE security level
      */
     fun prepareEnrollmentAttestation(
         credentialPublicKey: ByteArray,
@@ -162,10 +215,17 @@ class HardwareAttestationManager @Inject constructor(
 
         val result = generateAttestationKey(challenge)
 
+        // In test mode, always return SOFTWARE security level
+        val securityLevel = if (BuildConfig.SKIP_ATTESTATION) {
+            SecurityLevel.SOFTWARE
+        } else {
+            getSecurityLevel()
+        }
+
         return EnrollmentAttestationData(
             challenge = challenge,
             certificateChain = result.certificateChain.map { it.encoded },
-            securityLevel = getSecurityLevel()
+            securityLevel = securityLevel
         )
     }
 

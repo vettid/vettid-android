@@ -1,0 +1,7 @@
+{
+  "test_api_base_url": "https://test-api.vettid.com",
+  "test_api_key": "",
+  "test_user_prefix": "test_android_",
+  "mock_attestation_enabled": true,
+  "notes": "This file is populated by the backend Claude instance. Do not commit API keys."
+}

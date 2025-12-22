@@ -12,6 +12,7 @@ import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.vettid.app.BuildConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.security.KeyStore
@@ -221,8 +222,14 @@ class BiometricAuthManager @Inject constructor(
 
     /**
      * Check what biometric capabilities are available
+     * In test mode (AUTO_BIOMETRIC), always returns AVAILABLE
      */
     fun getBiometricCapability(): BiometricCapability {
+        // Test mode: always available
+        if (BuildConfig.AUTO_BIOMETRIC) {
+            return BiometricCapability.AVAILABLE
+        }
+
         // First check lockout
         if (isLockedOut()) {
             return BiometricCapability.LOCKED_OUT
@@ -240,8 +247,12 @@ class BiometricAuthManager @Inject constructor(
 
     /**
      * Check if biometric authentication is available
+     * In test mode (AUTO_BIOMETRIC), always returns true
      */
     fun isBiometricAvailable(): Boolean {
+        if (BuildConfig.AUTO_BIOMETRIC) {
+            return true
+        }
         return getBiometricCapability() == BiometricCapability.AVAILABLE
     }
 
@@ -249,12 +260,31 @@ class BiometricAuthManager @Inject constructor(
 
     /**
      * Authenticate the user with biometrics
+     * In test mode (AUTO_BIOMETRIC), immediately returns Success
      */
     suspend fun authenticate(
         activity: FragmentActivity,
         title: String = "Unlock VettID",
         subtitle: String = "Use your biometric credential",
         negativeButtonText: String = "Cancel"
+    ): BiometricAuthResult {
+        // Test mode: auto-succeed without showing prompt
+        if (BuildConfig.AUTO_BIOMETRIC) {
+            recordSuccessfulAuth()
+            return BiometricAuthResult.Success
+        }
+
+        return authenticateWithPrompt(activity, title, subtitle, negativeButtonText)
+    }
+
+    /**
+     * Internal method that shows the actual biometric prompt
+     */
+    private suspend fun authenticateWithPrompt(
+        activity: FragmentActivity,
+        title: String,
+        subtitle: String,
+        negativeButtonText: String
     ): BiometricAuthResult = suspendCancellableCoroutine { continuation ->
 
         val executor = ContextCompat.getMainExecutor(context)
@@ -308,11 +338,29 @@ class BiometricAuthManager @Inject constructor(
 
     /**
      * Authenticate with fallback to device credential (PIN/Pattern/Password)
+     * In test mode (AUTO_BIOMETRIC), immediately returns Success
      */
     suspend fun authenticateWithFallback(
         activity: FragmentActivity,
         title: String = "Unlock VettID",
         subtitle: String = "Use biometric or device credential"
+    ): BiometricAuthResult {
+        // Test mode: auto-succeed without showing prompt
+        if (BuildConfig.AUTO_BIOMETRIC) {
+            recordSuccessfulAuth()
+            return BiometricAuthResult.Success
+        }
+
+        return authenticateWithFallbackPrompt(activity, title, subtitle)
+    }
+
+    /**
+     * Internal method that shows the actual fallback prompt
+     */
+    private suspend fun authenticateWithFallbackPrompt(
+        activity: FragmentActivity,
+        title: String,
+        subtitle: String
     ): BiometricAuthResult = suspendCancellableCoroutine { continuation ->
 
         val executor = ContextCompat.getMainExecutor(context)
