@@ -519,59 +519,67 @@ Do you want me to implement the test secrets endpoints?
 - Handlers for vault credential enrollment and secrets need to be implemented
 - **All secrets operations must go via NATS messaging**
 
-### NATS-Based Secrets Architecture
+### ⚠️ CORRECTION: NATS Architecture (from Human Owner)
 
-The correct architecture uses NATS for vault-app communication:
+**The previous diagram was incorrect.** Here is the correct architecture:
 
 ```
-┌─────────────┐         NATS          ┌─────────────┐
-│   Mobile    │◄────────────────────► │    Vault    │
-│    App      │  {ownerSpace}.forX.>  │  (EC2 + DB) │
-└─────────────┘                       └─────────────┘
-      │                                      │
-      │ HTTP API                             │ CEK Access
-      ▼                                      ▼
-┌─────────────┐                       ┌─────────────┐
-│  Lambda     │                       │  DynamoDB   │
-│  Handlers   │                       │  (Encrypted)│
-└─────────────┘                       └─────────────┘
+┌─────────────┐                              ┌─────────────┐
+│   Mobile    │◄─────── NATS ───────────────►│    Vault    │
+│    App      │      (ownerspace)            │  (EC2 + DB) │
+└─────────────┘                              └─────────────┘
+      │                                            │
+      │ Stores NATS                                │ Controls NKEY
+      │ credentials                                │ for ownerspace
+      │ securely                                   │ & messagespace
+      ▼                                            ▼
+┌─────────────┐                              ┌─────────────┐
+│  Encrypted  │                              │    NATS     │
+│  Storage    │                              │  Cluster    │
+└─────────────┘                              └─────────────┘
 ```
 
-**NATS Topics (per user):**
-- `{ownerSpace}.forVault.>` - App publishes requests to vault
-- `{ownerSpace}.forApp.>` - Vault publishes responses to app
-- `{ownerSpace}.control` - Control commands (stop, sync)
+**Key Points:**
+1. **Vault comes online** → connects to NATS using its credentials (messagespace + ownerspace)
+2. **During vault credential enrollment** → vault provides mobile app with NATS tokens/credentials to connect to ownerspace
+3. **Mobile app** → securely stores its NATS connection details locally
+4. **Vault controls** → the NKEY used to manage both ownerspace and messagespace
+5. **Periodic rotation** → NATS credentials are rotated periodically by the vault
 
-**Secrets Flow:**
-1. App sends `{ownerSpace}.forVault.secrets.add` with encrypted payload
-2. Vault decrypts credential blob using CEK
-3. Vault adds secret, re-encrypts, stores in local datastore
-4. Vault publishes `{ownerSpace}.forApp.secrets.added` confirmation
+**Credential Flow:**
+1. Vault launches and connects to NATS cluster
+2. During enrollment, vault generates NATS credentials for mobile app
+3. Vault credential enrollment returns NATS connection details to app
+4. App stores NATS credentials securely (alongside other vault credentials)
+5. App connects directly to NATS ownerspace for vault communication
+6. Vault periodically rotates NATS credentials, app receives new ones
 
 ### Implementation Needed
 
-**Phase 1: Vault Deployment**
-- [ ] Auto-provision NATS account after enrollment finalize
-- [ ] Trigger EC2 provisioning or make it easy to call
-- [ ] Vault status tracking
+**Phase 1: Vault Deployment & NATS Connection**
+- [ ] Vault connects to NATS on startup (messagespace + ownerspace)
+- [ ] Vault manages NKEY for access control
+- [ ] EC2 provisioning after enrollment
 
-**Phase 2: NATS Handlers (Vault-Side)**
-- [ ] Vault receives `secrets.add` → decrypt blob → add secret → respond
-- [ ] Vault receives `secrets.list` → return encrypted metadata
-- [ ] Vault receives `secrets.retrieve` → verify password → return decrypted
+**Phase 2: Vault Credential Enrollment (NATS Credentials)**
+- [ ] Vault generates NATS tokens for mobile app during enrollment
+- [ ] Return NATS connection details in enrollment response
+- [ ] Mobile app stores NATS credentials securely
 
-**Phase 3: App API (for testing without full NATS)**
-- [ ] Consider Lambda-based test endpoints for initial testing
-- [ ] Or require full NATS infrastructure for secrets testing
+**Phase 3: App-Vault Communication**
+- [ ] Mobile app connects to NATS ownerspace
+- [ ] Secrets operations via NATS messaging
+- [ ] Credential rotation handling
 
 ### Current Blocker
 
 Android E2E secrets testing requires:
-1. NATS cluster running (VettID-NATS stack deployed)
-2. User's vault EC2 instance provisioned and connected
-3. Vault-manager service handling NATS messages
+1. NATS cluster deployed
+2. Vault EC2 provisioned and connected to NATS
+3. Vault credential enrollment returns NATS credentials to app
+4. App implements NATS client connection
 
-**Awaiting human decision on implementation priority.**
+**Backend: Please implement vault credential enrollment to include NATS connection details.**
 
 ---
 
