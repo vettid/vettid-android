@@ -116,11 +116,9 @@ class EnrollmentViewModel @Inject constructor(
      * Process scanned or manually entered QR code data
      * Parses JSON, extracts API URL, and starts enrollment
      *
-     * Flow:
-     * 1. Parse QR code JSON
-     * 2. Call /vault/enroll/authenticate to get JWT
-     * 3. Call /vault/enroll/start to get transaction keys
-     * 4. Move to password setup (skipping attestation for now)
+     * Supports two flows:
+     * 1. Production flow (session_token): authenticate → start → set-password → finalize
+     * 2. Direct/test flow (invitation_code): start-direct → set-password → finalize
      */
     private suspend fun processQRCode(qrData: String) {
         // Try to parse as JSON enrollment data
@@ -140,9 +138,71 @@ class EnrollmentViewModel @Inject constructor(
         // Set the API URL from the QR code
         vaultServiceClient.setEnrollmentApiUrl(enrollmentData.apiUrl)
 
+        // Use the appropriate flow based on QR data
+        if (enrollmentData.isDirectEnrollment) {
+            processDirectEnrollment(enrollmentData)
+        } else {
+            processSessionTokenEnrollment(enrollmentData)
+        }
+    }
+
+    /**
+     * Process enrollment using invitation_code (direct/test flow)
+     * Uses /vault/enroll/start-direct endpoint
+     */
+    private suspend fun processDirectEnrollment(enrollmentData: EnrollmentQRData) {
+        val invitationCode = enrollmentData.invitationCode
+            ?: throw IllegalStateException("invitation_code required for direct enrollment")
+
+        val result = vaultServiceClient.enrollStartDirect(
+            invitationCode = invitationCode,
+            deviceId = getDeviceId(),
+            skipAttestation = enrollmentData.skipAttestation
+        )
+
+        result.fold(
+            onSuccess = { startResponse ->
+                currentTransactionKeys = startResponse.transactionKeys
+
+                // Generate password salt for later use
+                passwordSalt = cryptoManager.generateSalt()
+
+                // Move directly to password setup
+                _state.value = EnrollmentState.SettingPassword(
+                    sessionId = startResponse.enrollmentSessionId,
+                    transactionKeys = startResponse.transactionKeys,
+                    passwordKeyId = startResponse.passwordKeyId
+                )
+            },
+            onFailure = { error ->
+                val errorMessage = when {
+                    error.message?.contains("401") == true ->
+                        "Enrollment invitation has expired. Please request a new one."
+                    error.message?.contains("404") == true ->
+                        "Invalid invitation code. Please check and try again."
+                    else ->
+                        error.message ?: "Failed to start enrollment"
+                }
+                _state.value = EnrollmentState.Error(
+                    message = errorMessage,
+                    retryable = true,
+                    previousState = EnrollmentState.ScanningQR()
+                )
+            }
+        )
+    }
+
+    /**
+     * Process enrollment using session_token (production flow)
+     * Uses /vault/enroll/authenticate then /vault/enroll/start
+     */
+    private suspend fun processSessionTokenEnrollment(enrollmentData: EnrollmentQRData) {
+        val sessionToken = enrollmentData.sessionToken
+            ?: throw IllegalStateException("session_token required for session enrollment")
+
         // Step 1: Authenticate with session_token to get enrollment JWT
         val authResult = vaultServiceClient.enrollAuthenticate(
-            sessionToken = enrollmentData.sessionToken,
+            sessionToken = sessionToken,
             deviceId = getDeviceId()
         )
 

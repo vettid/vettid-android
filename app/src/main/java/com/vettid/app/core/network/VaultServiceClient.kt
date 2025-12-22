@@ -96,7 +96,7 @@ open class VaultServiceClient @Inject constructor() {
     // MARK: - Enrollment Flow
 
     /**
-     * Step 1: Authenticate with session_token to get enrollment JWT
+     * Step 1a: Authenticate with session_token to get enrollment JWT (production flow)
      * This is a PUBLIC endpoint - no Authorization header needed
      *
      * Note: The API URL must be set via setEnrollmentApiUrl() before calling this
@@ -115,6 +115,36 @@ open class VaultServiceClient @Inject constructor() {
         // Store the enrollment token on success
         result.onSuccess { response ->
             enrollmentToken = response.enrollmentToken
+        }
+
+        return result
+    }
+
+    /**
+     * Step 1b: Start enrollment directly with invitation_code (test/invitation flow)
+     * This is a PUBLIC endpoint - no Authorization header needed
+     *
+     * This bypasses the authenticate step and uses the invitation_code directly.
+     * Use this flow when the QR code contains invitation_code instead of session_token.
+     *
+     * Note: The API URL must be set via setEnrollmentApiUrl() before calling this
+     */
+    suspend fun enrollStartDirect(
+        invitationCode: String,
+        deviceId: String,
+        skipAttestation: Boolean = true
+    ): Result<EnrollStartDirectResponse> {
+        val request = EnrollStartDirectRequest(
+            invitationCode = invitationCode,
+            deviceId = deviceId,
+            deviceType = "android",
+            skipAttestation = skipAttestation
+        )
+        val result = safeApiCall { getEnrollmentApi().enrollStartDirect(request) }
+
+        // Store the enrollment token on success (if provided)
+        result.onSuccess { response ->
+            response.enrollmentToken?.let { enrollmentToken = it }
         }
 
         return result
@@ -334,9 +364,13 @@ open class VaultServiceClient @Inject constructor() {
 // MARK: - Retrofit Interface
 
 interface VaultServiceApi {
-    // Enrollment - Step 1: Authenticate (public endpoint, no auth header)
+    // Enrollment - Step 1a: Authenticate (public endpoint, no auth header) - production flow
     @POST("vault/enroll/authenticate")
     suspend fun enrollAuthenticate(@Body request: EnrollAuthenticateRequest): Response<EnrollAuthenticateResponse>
+
+    // Enrollment - Step 1b: Start Direct (public endpoint, no auth header) - invitation/test flow
+    @POST("vault/enroll/start-direct")
+    suspend fun enrollStartDirect(@Body request: EnrollStartDirectRequest): Response<EnrollStartDirectResponse>
 
     // Enrollment - Step 2: Start (requires Bearer token)
     @POST("vault/enroll/start")
@@ -450,6 +484,17 @@ data class VaultEnrollStartRequest(
     @SerializedName("skip_attestation") val skipAttestation: Boolean = true
 )
 
+/**
+ * Request to start enrollment directly with invitation_code (test/invitation flow)
+ * This bypasses the authenticate step
+ */
+data class EnrollStartDirectRequest(
+    @SerializedName("invitation_code") val invitationCode: String,
+    @SerializedName("device_id") val deviceId: String,
+    @SerializedName("device_type") val deviceType: String = "android",
+    @SerializedName("skip_attestation") val skipAttestation: Boolean = true
+)
+
 data class DeviceInfo(
     val platform: String,
     val osVersion: String,
@@ -525,6 +570,21 @@ data class EnrollStartResponse(
     @SerializedName("next_step") val nextStep: String? = null,
     @SerializedName("attestation_required") val attestationRequired: Boolean = false,
     @SerializedName("attestation_challenge") val attestationChallenge: String? = null // Only if attestation required
+)
+
+/**
+ * Response from /vault/enroll/start-direct
+ * Similar to EnrollStartResponse but includes enrollment_token for subsequent calls
+ */
+data class EnrollStartDirectResponse(
+    @SerializedName("enrollment_session_id") val enrollmentSessionId: String,
+    @SerializedName("user_guid") val userGuid: String,
+    @SerializedName("enrollment_token") val enrollmentToken: String? = null, // JWT for subsequent calls
+    @SerializedName("transaction_keys") val transactionKeys: List<TransactionKeyPublic>,
+    @SerializedName("password_key_id") val passwordKeyId: String,
+    @SerializedName("next_step") val nextStep: String? = null,
+    @SerializedName("attestation_required") val attestationRequired: Boolean = false,
+    @SerializedName("attestation_challenge") val attestationChallenge: String? = null
 )
 
 data class TransactionKeyPublic(
@@ -709,14 +769,32 @@ data class BackupInfo(
 
 /**
  * Parsed data from VettID enrollment QR code
+ *
+ * Supports two flows:
+ * 1. Production flow: Uses session_token → /vault/enroll/authenticate → JWT → /vault/enroll/start
+ * 2. Test/invitation flow: Uses invitation_code → /vault/enroll/start-direct (no auth header)
  */
 data class EnrollmentQRData(
     val type: String,
     val version: Int,
     @SerializedName("api_url") val apiUrl: String,
-    @SerializedName("session_token") val sessionToken: String,
-    @SerializedName("user_guid") val userGuid: String
+    @SerializedName("session_token") val sessionToken: String? = null,
+    @SerializedName("user_guid") val userGuid: String? = null,
+    @SerializedName("invitation_code") val invitationCode: String? = null,
+    @SerializedName("skip_attestation") val skipAttestation: Boolean = false
 ) {
+    /**
+     * Returns true if this QR data uses the invitation_code flow (test/direct enrollment)
+     */
+    val isDirectEnrollment: Boolean
+        get() = invitationCode != null && sessionToken == null
+
+    /**
+     * Returns true if this QR data uses the session_token flow (production enrollment)
+     */
+    val isSessionTokenEnrollment: Boolean
+        get() = sessionToken != null
+
     companion object {
         /**
          * Parse QR code JSON data
@@ -726,10 +804,10 @@ data class EnrollmentQRData(
             return try {
                 val gson = com.google.gson.Gson()
                 val parsed = gson.fromJson(qrData, EnrollmentQRData::class.java)
-                // Validate required fields
+                // Validate required fields - need either session_token or invitation_code
                 if (parsed.type == "vettid_enrollment" &&
                     parsed.apiUrl.isNotBlank() &&
-                    parsed.sessionToken.isNotBlank()) {
+                    (parsed.sessionToken?.isNotBlank() == true || parsed.invitationCode?.isNotBlank() == true)) {
                     parsed
                 } else {
                     null
