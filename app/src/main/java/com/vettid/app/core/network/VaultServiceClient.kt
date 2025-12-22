@@ -796,25 +796,49 @@ data class EnrollmentQRData(
         get() = sessionToken != null
 
     companion object {
+        // Invitation code pattern: TEST-XXXX-XXXX-XXXX or similar
+        private val INVITATION_CODE_PATTERN = Regex("^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$")
+
+        // Default test API URL for invitation code flow
+        private const val DEFAULT_TEST_API_URL = "https://tiqpij5mue.execute-api.us-east-1.amazonaws.com"
+
         /**
-         * Parse QR code JSON data
+         * Parse QR code data (JSON or plain invitation code)
          * Returns null if parsing fails or data is invalid
+         *
+         * Supports:
+         * - JSON format: {"type":"vettid_enrollment","api_url":"...","session_token":"..."}
+         * - Plain invitation code: TEST-XXXX-XXXX-XXXX
          */
         fun parse(qrData: String): EnrollmentQRData? {
-            return try {
+            val trimmed = qrData.trim()
+
+            // First try JSON parsing
+            try {
                 val gson = com.google.gson.Gson()
-                val parsed = gson.fromJson(qrData, EnrollmentQRData::class.java)
+                val parsed = gson.fromJson(trimmed, EnrollmentQRData::class.java)
                 // Validate required fields - need either session_token or invitation_code
                 if (parsed.type == "vettid_enrollment" &&
                     parsed.apiUrl.isNotBlank() &&
                     (parsed.sessionToken?.isNotBlank() == true || parsed.invitationCode?.isNotBlank() == true)) {
-                    parsed
-                } else {
-                    null
+                    return parsed
                 }
             } catch (e: Exception) {
-                null
+                // JSON parsing failed, try other formats
             }
+
+            // Try plain invitation code format (TEST-XXXX-XXXX-XXXX)
+            if (INVITATION_CODE_PATTERN.matches(trimmed)) {
+                return EnrollmentQRData(
+                    type = "vettid_enrollment",
+                    version = 1,
+                    apiUrl = DEFAULT_TEST_API_URL,
+                    invitationCode = trimmed,
+                    skipAttestation = true
+                )
+            }
+
+            return null
         }
     }
 }
