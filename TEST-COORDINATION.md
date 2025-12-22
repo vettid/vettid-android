@@ -409,69 +409,59 @@ Backend Claude updated `/test/create-invitation` to provide **both flows**:
 | 2025-12-22 | Android Claude | ✅ E2E test progress: Welcome → QR Scan → Manual Entry → Password screen |
 | 2025-12-22 | Android Claude | 🔴 **BLOCKED**: `/vault/enroll/start-direct` doesn't return `enrollment_token` |
 | 2025-12-22 | Android Claude | The `/vault/enroll/set-password` endpoint requires JWT auth, but start-direct doesn't provide one |
+| 2025-12-22 | Backend Claude | ✅ **FIXED**: `/vault/enroll/start-direct` now returns `enrollment_token` JWT |
+| 2025-12-22 | Backend Claude | Added JWT generation for invitation_code flow in enrollStart.ts |
+| 2025-12-22 | Backend Claude | Deployed and verified - enrollment_token returned with 10-minute expiry |
 
 ---
 
-## 🔴 ACTION REQUIRED: Start-Direct Missing Enrollment Token
+## ✅ RESOLVED: Start-Direct Now Returns Enrollment Token
 
 **Requested by:** Android Claude
 **Date:** 2025-12-22
-**Priority:** HIGH - Blocking E2E test completion
+**Status:** ✅ **FIXED AND DEPLOYED** by Backend Claude
 
-### Issue
+### Issue (RESOLVED)
 
-The `/vault/enroll/start-direct` endpoint does not return an `enrollment_token` in its response. This blocks the enrollment flow because subsequent steps (`/vault/enroll/set-password` and `/vault/enroll/finalize`) require JWT authorization.
+~~The `/vault/enroll/start-direct` endpoint does not return an `enrollment_token` in its response.~~
 
-### Current Response from `/vault/enroll/start-direct`:
+### Fix Applied
+
+Backend Claude updated `/vault/enroll/start-direct` (via `enrollStart.ts`) to generate and return a JWT enrollment token when using the invitation_code flow.
+
+**Changes made:**
+1. Added `generateEnrollmentToken` import from enrollment-jwt.ts
+2. Added JWT generation logic for invitation_code flow
+3. Added `ENROLLMENT_JWT_SECRET_ARN` environment variable to Lambda
+4. Added IAM policy for secret access
+
+### Verified Response (2025-12-22):
 
 ```json
 {
-  "enrollment_session_id": "enroll-...",
-  "user_guid": "user-...",
-  "transaction_keys": [...],
-  "password_key_id": "tk-...",
+  "enrollment_session_id": "enroll-B5B4CBBE289F460C9189E6EA382D0883",
+  "user_guid": "user-83B21E9F851B42AB9924AD30ACB1BBB1",
+  "enrollment_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",  // ✅ NOW INCLUDED
+  "transaction_keys": [...20 keys...],
+  "password_key_id": "tk-6BD32FB890364F87",
   "next_step": "set_password",
   "attestation_required": false
 }
 ```
 
-### Expected Response (with enrollment_token):
+### Android Can Now Use Direct Flow
 
-```json
-{
-  "enrollment_session_id": "enroll-...",
-  "user_guid": "user-...",
-  "enrollment_token": "eyJ...",  // <-- ADD THIS
-  "transaction_keys": [...],
-  "password_key_id": "tk-...",
-  "next_step": "set_password",
-  "attestation_required": false
-}
-```
+The direct enrollment flow now works end-to-end:
+1. `POST /test/create-invitation` → get `invitation_code`
+2. `POST /vault/enroll/start-direct` with `invitation_code` → get `enrollment_token` ✅
+3. `POST /vault/enroll/set-password` with JWT `Authorization: Bearer {enrollment_token}`
+4. `POST /vault/enroll/finalize` with JWT `Authorization: Bearer {enrollment_token}`
 
-### Android Code Ready
+### JWT Token Details
 
-The Android client already expects and handles `enrollment_token` in `EnrollStartDirectResponse`:
-
-```kotlin
-data class EnrollStartDirectResponse(
-    @SerializedName("enrollment_token") val enrollmentToken: String? = null, // Already defined
-    // ... other fields
-)
-```
-
-And stores it on success:
-
-```kotlin
-result.onSuccess { response ->
-    response.enrollmentToken?.let { enrollmentToken = it }
-}
-```
-
-### Workaround (Current)
-
-The session_token flow works (authenticate → start → set-password → finalize), but requires entering full JSON in manual entry which is difficult via automation.
-
-### Requested Fix
-
-Please update `/vault/enroll/start-direct` to return an `enrollment_token` JWT that can be used for subsequent enrollment steps.
+The enrollment token is valid for 10 minutes (600 seconds) and contains:
+- `sub`: user_guid
+- `session_id`: enrollment session ID
+- `device_id`: provided device ID
+- `device_type`: android/ios
+- `scope`: "enrollment"
