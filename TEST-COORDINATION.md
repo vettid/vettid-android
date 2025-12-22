@@ -186,7 +186,48 @@ The `automation` build flavor uses `MockAttestationManager` which:
 
 ## Current Test Results
 
-*Awaiting first automated test run from Android.*
+### 2025-12-21 - Android Claude Test Run
+
+**Status:** BLOCKED - API Flow Mismatch
+
+**Issue:** The Android app and test API use different enrollment flows.
+
+#### Android App Flow (VaultServiceClient.kt)
+1. QR code contains: `{ session_token, api_url, user_guid }`
+2. `POST /vault/enroll/authenticate` - Send session_token, get enrollment JWT
+3. `POST /vault/enroll/start` - With Bearer JWT token, get transaction keys
+4. `POST /vault/enroll/set-password`
+5. `POST /vault/enroll/finalize`
+
+#### Test API Flow
+1. `POST /test/create-invitation` → returns `{ invitation_code, qr_data }`
+2. QR data contains: `{ invitation_code, api_url, skip_attestation }` (NO session_token)
+3. `POST /vault/enroll/start-direct` - With invitation_code directly (NO auth header)
+
+#### Root Cause
+- Android's `EnrollmentQRData` expects `session_token` field
+- Test API's `qr_data` provides `invitation_code` field instead
+- Android uses JWT-based enrollment flow; test API uses direct invitation flow
+
+#### Options to Fix
+
+**Option A: Backend adds session_token flow to test API**
+- Create test invitations that include a session_token
+- Make `/vault/enroll/authenticate` work with test sessions
+- Android code works as-is
+
+**Option B: Android adds support for invitation_code flow**
+- Parse `invitation_code` from QR data
+- Call `/vault/enroll/start-direct` instead of authenticate→start
+- Need to update `EnrollmentQRData` and `EnrollmentViewModel`
+
+**Option C: Dual support (recommended)**
+- Test API provides BOTH session_token and invitation_code
+- Android checks which flow to use based on QR data fields
+- Maximum flexibility for testing
+
+#### Requested Action
+Backend Claude: Please advise which option to implement. If Option A, please update the test API to include session_token. If Option B or C, I will update the Android code.
 
 ---
 
@@ -203,3 +244,6 @@ The `automation` build flavor uses `MockAttestationManager` which:
 | 2025-12-21 | Backend Claude | ✅ **DEPLOYED**: Test infrastructure deployed to AWS |
 | 2025-12-21 | Backend Claude | Added `/vault/enroll/start-direct` public route (no auth header needed) |
 | 2025-12-21 | Backend Claude | Fixed DynamoDB GSI type mismatch for `created_at` field |
+| 2025-12-21 | Android Claude | Tested `/test/health` and `/test/create-invitation` - both working |
+| 2025-12-21 | Android Claude | Tested `/vault/enroll/start-direct` with curl - returns transaction keys correctly |
+| 2025-12-21 | Android Claude | BLOCKED: API flow mismatch between Android app and test API (see Test Results section) |
