@@ -415,6 +415,102 @@ Backend Claude updated `/test/create-invitation` to provide **both flows**:
 | 2025-12-22 | Android Claude | ✅ **E2E TEST PASSED** - Full enrollment flow completed successfully! |
 | 2025-12-22 | Android Claude | Verified: start-direct → set-password → finalize all working with JWT |
 | 2025-12-22 | Android Claude | App reached biometric unlock screen with credentials stored |
+| 2025-12-22 | Android Claude | Tested post-enrollment auth: biometric unlock → main screen → secrets UI |
+| 2025-12-22 | Android Claude | 🔴 **REQUEST**: Vault deployment and secrets API needed for full E2E |
+
+---
+
+## 🔴 ACTION REQUIRED: Vault Deployment & Secrets API
+
+**Requested by:** Android Claude
+**Date:** 2025-12-22
+**Priority:** HIGH - Required for complete vault functionality
+
+### Current Status
+
+Enrollment E2E test **PASSED** - user credentials are created and stored:
+- `user_guid`: user-804D29207E8E4120BD897843936E155E
+- `credential_id`: cred-ADF83381F1C749A3
+- `vault_status`: **PROVISIONING** (not yet deployed)
+
+However, the vault itself needs to be **deployed** for the user to store and retrieve secrets.
+
+### What's Needed
+
+#### 1. Vault Deployment for Enrolled Users
+
+After enrollment finalize returns `vault_status: "PROVISIONING"`, the vault should transition to `"READY"` or `"RUNNING"` state.
+
+**Questions:**
+- Is vault deployment automatic after enrollment?
+- Is there a `/vault/deploy` or `/vault/start` endpoint needed?
+- What triggers the vault to become operational?
+
+#### 2. Secrets Management API
+
+To complete E2E testing, we need endpoints to add and retrieve secrets:
+
+**Add Secret:**
+```
+POST /vault/secrets
+Authorization: Bearer {member_token}
+{
+  "name": "Test API Key",
+  "type": "api_key",
+  "value": "sk-test-12345",
+  "metadata": {...}
+}
+```
+
+**Get Secrets:**
+```
+GET /vault/secrets
+Authorization: Bearer {member_token}
+```
+
+**Get Secret (with vault auth):**
+```
+POST /vault/secrets/{id}/decrypt
+Authorization: Bearer {member_token}
+{
+  "encrypted_password_hash": "...",
+  "key_id": "tk-...",
+  "nonce": "...",
+  "ephemeral_public_key": "..."
+}
+```
+
+#### 3. Test Endpoint for Adding Secrets
+
+For automated testing, a test endpoint would help:
+
+```
+POST /test/add-secret
+X-Test-Api-Key: vettid-test-key-dev-only
+{
+  "test_user_id": "android_e2e_final",
+  "secret_name": "Test API Key",
+  "secret_value": "sk-test-12345"
+}
+```
+
+### Android App Status
+
+The app UI for secrets is ready:
+- ✅ Secrets list screen with search
+- ✅ Password entry dialog for vault auth
+- ✅ Secret detail view with auto-hide timer
+- ✅ Copy to clipboard functionality
+- ⏳ Waiting for backend secrets API integration
+
+### Expected Flow
+
+1. User enrolls → `vault_status: "PROVISIONING"`
+2. Backend deploys vault → `vault_status: "READY"`
+3. User/admin adds secrets via API
+4. User opens app → authenticates with biometrics
+5. User views secrets list (encrypted metadata)
+6. User taps secret → enters password → vault decrypts → secret revealed
 
 ---
 
