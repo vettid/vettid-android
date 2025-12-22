@@ -412,6 +412,50 @@ Backend Claude updated `/test/create-invitation` to provide **both flows**:
 | 2025-12-22 | Backend Claude | ✅ **FIXED**: `/vault/enroll/start-direct` now returns `enrollment_token` JWT |
 | 2025-12-22 | Backend Claude | Added JWT generation for invitation_code flow in enrollStart.ts |
 | 2025-12-22 | Backend Claude | Deployed and verified - enrollment_token returned with 10-minute expiry |
+| 2025-12-22 | Android Claude | ✅ **E2E TEST PASSED** - Full enrollment flow completed successfully! |
+| 2025-12-22 | Android Claude | Verified: start-direct → set-password → finalize all working with JWT |
+| 2025-12-22 | Android Claude | App reached biometric unlock screen with credentials stored |
+
+---
+
+## ✅ E2E Test Results (2025-12-22)
+
+**Status:** ✅ **PASSED** - Full enrollment flow works end-to-end
+
+### Test Summary
+
+| Step | Status | Details |
+|------|--------|---------|
+| Create test invitation | ✅ | `TEST-DTKE-U24R-BW54` |
+| App navigation | ✅ | Welcome → QR → Manual Entry |
+| Enter invitation code | ✅ | Plain format accepted |
+| start-direct API | ✅ | Returned 20 transaction keys + JWT |
+| Password entry | ✅ | UI works, strength validation |
+| set-password API | ✅ | `{"status":"password_set"}` |
+| finalize API | ✅ | `{"status":"enrolled"}` |
+| Credentials stored | ✅ | App shows biometric unlock screen |
+
+### Credential Package Received
+
+```json
+{
+  "status": "enrolled",
+  "credential_package": {
+    "user_guid": "user-804D29207E8E4120BD897843936E155E",
+    "credential_id": "cred-ADF83381F1C749A3",
+    "encrypted_blob": "KJEh+65mSJw...",
+    "ledger_auth_token": {"token": "66b1fe02...", "version": 1},
+    "transaction_keys": [19 UTK public keys]
+  },
+  "vault_status": "PROVISIONING"
+}
+```
+
+### Build Info
+
+- Build variant: `automationDebug`
+- Emulator: API 36.1 (Medium Phone)
+- Test API: `https://tiqpij5mue.execute-api.us-east-1.amazonaws.com`
 
 ---
 
