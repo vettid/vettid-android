@@ -1,6 +1,6 @@
 # VettID API Status
 
-**Last Updated:** 2025-11-27 by Backend
+**Last Updated:** 2025-12-22 by Backend
 
 This file is the master coordination point between backend development and mobile app development (iOS and Android). Mobile developers should reference this file to understand API availability and required actions.
 
@@ -484,26 +484,113 @@ Credential blob management (CEK-encrypted, synced from mobile).
 → { "version": 2, "exists": true }
 ```
 
-### Android Implementation Notes
+#### Connections (Peer-to-Peer Messaging)
 
-**Current VaultMessage (needs fix):**
-```kotlin
-// WRONG - field names don't match vault-manager
-data class VaultMessage(
-    val requestId: String,  // Should be "id"
-    val type: String,
-    val payload: JsonObject,
-    val timestamp: Long     // Should be ISO 8601 string
-)
+Connection handlers enable secure peer-to-peer messaging between vaults.
+Each connection creates scoped NATS credentials allowing peers to communicate.
+
+**`connection.create-invite`** - Create invitation for a peer
+```json
+{
+  "peer_guid": "user-ABC123...",
+  "label": "Alice's Vault",
+  "expires_in_hours": 24
+}
+→ {
+    "connection_id": "conn-xyz...",
+    "nats_credentials": "-----BEGIN NATS USER JWT-----\n...",
+    "owner_space_id": "OwnerSpace.abc123",
+    "message_space_id": "MessageSpace.abc123",
+    "expires_at": "2025-12-23T15:30:00Z"
+  }
 ```
 
-**Corrected VaultMessage:**
+**`connection.store-credentials`** - Store credentials from a peer's invitation
+```json
+{
+  "connection_id": "conn-xyz...",
+  "peer_guid": "user-DEF456...",
+  "label": "Bob's Vault",
+  "nats_credentials": "-----BEGIN NATS USER JWT-----\n...",
+  "peer_owner_space_id": "OwnerSpace.def456",
+  "peer_message_space_id": "MessageSpace.def456"
+}
+→ {
+    "connection_id": "conn-xyz...",
+    "peer_guid": "user-DEF456...",
+    "label": "Bob's Vault",
+    "status": "active",
+    "direction": "inbound",
+    "created_at": "2025-12-22T15:30:00Z"
+  }
+```
+
+**`connection.rotate`** - Rotate credentials for a connection
+```json
+{
+  "connection_id": "conn-xyz..."
+}
+→ {
+    "connection_id": "conn-xyz...",
+    "status": "active",
+    "last_rotated_at": "2025-12-22T16:00:00Z",
+    "nats_credentials": "-----BEGIN NATS USER JWT-----\n..."
+  }
+```
+
+**`connection.revoke`** - Revoke a connection
+```json
+{
+  "connection_id": "conn-xyz..."
+}
+→ { "success": true, "connection_id": "conn-xyz..." }
+```
+
+**`connection.list`** - List all connections
+```json
+{
+  "status": "active",
+  "limit": 50,
+  "cursor": "optional_pagination_cursor"
+}
+→ {
+    "items": [
+      {
+        "connection_id": "conn-xyz...",
+        "peer_guid": "user-DEF456...",
+        "label": "Bob's Vault",
+        "status": "active",
+        "direction": "inbound",
+        "created_at": "2025-12-22T15:30:00Z",
+        "expires_at": "2025-12-23T15:30:00Z"
+      }
+    ],
+    "next_cursor": "..."
+  }
+```
+
+**`connection.get-credentials`** - Get credentials for a connection
+```json
+{
+  "connection_id": "conn-xyz..."
+}
+→ {
+    "nats_credentials": "-----BEGIN NATS USER JWT-----\n...",
+    "peer_message_space_id": "MessageSpace.def456",
+    "expires_at": "2025-12-23T15:30:00Z"
+  }
+```
+
+### Android Implementation Notes
+
+**VaultMessage format (FIXED in OwnerSpaceClient.kt):**
 ```kotlin
+// Correct format - matches vault-manager expectations
 data class VaultMessage(
-    val id: String,
-    val type: String,
+    val id: String,           // Unique request ID for correlation
+    val type: String,         // Handler type (e.g., "profile.get")
     val payload: JsonObject,
-    val timestamp: String  // ISO 8601 format
+    val timestamp: String     // ISO 8601 format
 ) {
     companion object {
         fun create(type: String, payload: JsonObject): VaultMessage {
@@ -511,23 +598,41 @@ data class VaultMessage(
                 id = UUID.randomUUID().toString(),
                 type = type,
                 payload = payload,
-                timestamp = Instant.now().toString()  // ISO 8601
+                timestamp = Instant.now().toString()
             )
         }
     }
 }
 ```
 
-**Current subject construction (needs fix):**
-```kotlin
-// WRONG - adds "events." prefix
-messageType = "events.${event.type}"
-```
+**Response parsing (FIXED):**
+- Vault-manager returns `event_id` (not `requestId`)
+- `VaultResponseJson` now handles both for backwards compatibility
+- Timestamps are ISO 8601 strings, parsed to epoch when needed
 
-**Corrected subject:**
+**ConnectionsClient (NEW):**
 ```kotlin
-// CORRECT - use the event type directly
-messageType = event.type
+// Type-safe client for peer-to-peer connections
+val connectionsClient = ConnectionsClient(ownerSpaceClient)
+
+// Create invitation for a peer
+val invite = connectionsClient.createInvite(
+    peerGuid = "user-ABC123",
+    label = "Alice's Vault"
+).getOrThrow()
+
+// Store credentials from peer invitation
+val connection = connectionsClient.storeCredentials(
+    connectionId = invite.connectionId,
+    peerGuid = "user-DEF456",
+    label = "Bob's Vault",
+    natsCredentials = receivedCredentials,
+    peerOwnerSpaceId = "OwnerSpace.def456",
+    peerMessageSpaceId = "MessageSpace.def456"
+).getOrThrow()
+
+// List active connections
+val connections = connectionsClient.list(status = "active").getOrThrow()
 ```
 
 ### Testing NATS Communication
@@ -552,11 +657,10 @@ messageType = event.type
 #### NATS Message Format Mismatch
 **Status:** ✅ Fixed (2025-12-22)
 **Affected:** `OwnerSpaceClient.kt`, `VaultEventClient.kt`
-**Commit:** `1bc5cfd`
 
 The Android NATS client was sending messages with field names that didn't match vault-manager. Fixed:
-- ✅ `requestId` → `id`
+- ✅ `requestId` → `id` in VaultMessage
 - ✅ `timestamp` Long → ISO 8601 string
 - ✅ Removed `events.` prefix from subject construction
-
-All 236 unit tests pass after fix.
+- ✅ Response parsing uses `event_id` with fallback to `id` and legacy `requestId`
+- ✅ Added backwards-compatible handling for all field name variations

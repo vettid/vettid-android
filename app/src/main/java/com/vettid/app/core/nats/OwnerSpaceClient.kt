@@ -5,6 +5,7 @@ import com.google.gson.JsonObject
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import java.time.Instant
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -86,7 +87,7 @@ class OwnerSpaceClient @Inject constructor(
     /**
      * Send a message to the vault.
      *
-     * @param messageType The message type/action
+     * @param messageType The message type/action (e.g., "profile.get", "secrets.datastore.add")
      * @param payload The message payload
      * @return Request ID for correlating response
      */
@@ -98,13 +99,14 @@ class OwnerSpaceClient @Inject constructor(
             ?: return Result.failure(NatsException("No OwnerSpace ID available"))
 
         val requestId = UUID.randomUUID().toString()
+        // Subject includes the message type for routing
         val subject = "$ownerSpaceId.forVault.$messageType"
 
         val message = VaultMessage(
             id = requestId,
             type = messageType,
             payload = payload,
-            timestamp = java.time.Instant.now().toString()  // ISO 8601
+            timestamp = Instant.now().toString()  // ISO 8601 format
         )
 
         val json = gson.toJson(message)
@@ -159,41 +161,78 @@ class OwnerSpaceClient @Inject constructor(
     private fun handleVaultResponse(message: NatsMessage) {
         try {
             val response = gson.fromJson(message.dataString, VaultResponseJson::class.java)
+            val correlationId = response.getCorrelationId()
 
+            // Handle standard vault-manager response format (success/error with result)
+            if (response.success != null) {
+                val vaultResponse = if (response.success) {
+                    VaultResponse.HandlerResult(
+                        requestId = correlationId,
+                        handlerId = response.handlerId,
+                        success = true,
+                        result = response.result,
+                        error = null
+                    )
+                } else {
+                    VaultResponse.Error(
+                        requestId = correlationId,
+                        code = response.errorCode ?: "HANDLER_ERROR",
+                        message = response.error ?: "Unknown error"
+                    )
+                }
+                _vaultResponses.tryEmit(vaultResponse)
+                return
+            }
+
+            // Handle legacy typed responses
             val vaultResponse = when (response.type) {
                 "handlerResult" -> VaultResponse.HandlerResult(
-                    requestId = response.id,
+                    requestId = correlationId,
                     handlerId = response.handlerId,
                     success = response.success ?: false,
                     result = response.result,
                     error = response.error
                 )
                 "status" -> VaultResponse.StatusResponse(
-                    requestId = response.id,
+                    requestId = correlationId,
                     status = parseVaultStatus(response.result)
                 )
                 "eventTypes" -> VaultResponse.EventTypesResponse(
-                    requestId = response.id,
+                    requestId = correlationId,
                     eventTypes = parseEventTypes(response.result)
                 )
                 "pong" -> VaultResponse.Pong(
-                    requestId = response.id,
-                    timestamp = response.timestamp ?: java.time.Instant.now().toString()
+                    requestId = correlationId,
+                    timestamp = parseTimestamp(response.timestamp)
                 )
                 "error" -> VaultResponse.Error(
-                    requestId = response.id,
+                    requestId = correlationId,
                     code = response.errorCode ?: "UNKNOWN",
                     message = response.error ?: "Unknown error"
                 )
                 else -> {
-                    android.util.Log.w(TAG, "Unknown response type: ${response.type}")
-                    return
+                    // Treat as generic handler result
+                    VaultResponse.HandlerResult(
+                        requestId = correlationId,
+                        handlerId = null,
+                        success = response.error == null,
+                        result = response.result,
+                        error = response.error
+                    )
                 }
             }
 
             _vaultResponses.tryEmit(vaultResponse)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to parse vault response", e)
+        }
+    }
+
+    private fun parseTimestamp(timestamp: String?): Long {
+        return try {
+            timestamp?.let { Instant.parse(it).toEpochMilli() } ?: System.currentTimeMillis()
+        } catch (e: Exception) {
+            System.currentTimeMillis()
         }
     }
 
@@ -246,13 +285,30 @@ class OwnerSpaceClient @Inject constructor(
 
 /**
  * Message sent TO the vault.
+ *
+ * Field names must match vault-manager expectations:
+ * - id: Unique request ID for correlation (not "requestId")
+ * - type: Handler/event type (e.g., "profile.get", "secrets.datastore.add")
+ * - timestamp: ISO 8601 string (not epoch milliseconds)
+ * - payload: Handler-specific data
  */
 data class VaultMessage(
     val id: String,
     val type: String,
     val payload: JsonObject,
     val timestamp: String  // ISO 8601 format
-)
+) {
+    companion object {
+        fun create(type: String, payload: JsonObject = JsonObject()): VaultMessage {
+            return VaultMessage(
+                id = UUID.randomUUID().toString(),
+                type = type,
+                payload = payload,
+                timestamp = Instant.now().toString()
+            )
+        }
+    }
+}
 
 /**
  * Response FROM the vault.
@@ -280,7 +336,7 @@ sealed class VaultResponse {
 
     data class Pong(
         override val requestId: String,
-        val timestamp: String  // ISO 8601 format
+        val timestamp: Long
     ) : VaultResponse()
 
     data class Error(
@@ -319,16 +375,31 @@ data class EventType(
 
 // MARK: - JSON Models
 
+/**
+ * JSON model for vault responses.
+ *
+ * Vault-manager returns:
+ * - event_id: Matches the 'id' from the request
+ * - success: Whether the operation succeeded
+ * - timestamp: ISO 8601 when response was generated
+ * - result: Handler result (if success=true)
+ * - error: Error message (if success=false)
+ */
 private data class VaultResponseJson(
-    val id: String,  // Changed from requestId to match vault-manager format
-    val type: String,
+    val event_id: String? = null,      // Matches request 'id'
+    val id: String? = null,            // Alternative field name
+    val requestId: String? = null,     // Legacy fallback
+    val type: String? = null,
     val handlerId: String? = null,
     val success: Boolean? = null,
     val result: JsonObject? = null,
     val error: String? = null,
     val errorCode: String? = null,
-    val timestamp: String? = null  // ISO 8601 format
-)
+    val timestamp: String? = null      // ISO 8601 format
+) {
+    /** Get the correlation ID, preferring event_id over id over legacy requestId */
+    fun getCorrelationId(): String = event_id ?: id ?: requestId ?: ""
+}
 
 private data class EventTypesJson(
     val types: List<EventTypeJson>
