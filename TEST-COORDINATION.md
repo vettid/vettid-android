@@ -564,32 +564,32 @@ Do you want me to implement the test secrets endpoints?
 5. App connects directly to NATS ownerspace for vault communication
 6. Vault periodically rotates NATS credentials, app receives new ones
 
-### Implementation Needed
+### Implementation Status
 
-**Phase 1: Vault Deployment & NATS Connection**
-- [ ] Vault connects to NATS on startup (messagespace + ownerspace)
-- [ ] Vault manages NKEY for access control
-- [ ] EC2 provisioning after enrollment
+**Backend (COMPLETED):**
+- ✅ NATS cluster deployed at `nats.vettid.dev:4222`
+- ✅ `/vault/nats/token` endpoint for getting NATS credentials
+- ✅ `/member/vault/status` endpoint for checking vault status
+- ✅ All NATS handlers documented (secrets, profile, credential, connection)
+- ✅ `ConnectionsClient.kt` added with full handler support
+- ✅ `OwnerSpaceClient.kt` updated with proper message format
 
-**Phase 2: Vault Credential Enrollment (NATS Credentials)**
-- [ ] Vault generates NATS tokens for mobile app during enrollment
-- [ ] Return NATS connection details in enrollment response
-- [ ] Mobile app stores NATS credentials securely
+**Android (IN PROGRESS):**
+- ✅ NATS message format fixed (id, ISO 8601 timestamp, no events. prefix)
+- ✅ ConnectionsClient implemented and tested (10 new tests)
+- ✅ VaultEventClient implemented and tested
+- [ ] Add NATS Java client dependency
+- [ ] Implement NatsConnectionManager to connect to `nats.vettid.dev:4222`
+- [ ] Wire up vault status checking
+- [ ] Store NATS credentials from `/vault/nats/token`
+- [ ] E2E test with live NATS connection
 
-**Phase 3: App-Vault Communication**
-- [ ] Mobile app connects to NATS ownerspace
-- [ ] Secrets operations via NATS messaging
-- [ ] Credential rotation handling
+### Next Steps for Android
 
-### Current Blocker
-
-Android E2E secrets testing requires:
-1. NATS cluster deployed
-2. Vault EC2 provisioned and connected to NATS
-3. Vault credential enrollment returns NATS credentials to app
-4. App implements NATS client connection
-
-**Backend: Please implement vault credential enrollment to include NATS connection details.**
+1. Add NATS Java client to build.gradle: `io.nats:jnats:2.x`
+2. Implement NatsConnectionManager to handle connection lifecycle
+3. Get NATS credentials via `/vault/nats/token` after enrollment
+4. Connect to NATS and verify vault communication works
 
 ---
 
