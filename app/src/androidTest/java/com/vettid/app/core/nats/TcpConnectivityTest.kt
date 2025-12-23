@@ -252,6 +252,8 @@ class TcpConnectivityTest {
                 .server(connection.endpoint)
                 .authHandler(Nats.staticCredentials(credentialFile.toByteArray(Charsets.UTF_8)))
                 .connectionTimeout(Duration.ofSeconds(30))
+                .noRandomize()  // Don't randomize server list
+                .ignoreDiscoveredServers()  // Don't try to connect to cluster URLs
                 .traceConnection()
                 .connectionListener { conn, type ->
                     Log.i(TAG, "Connection event: $type, status=${conn?.status}")

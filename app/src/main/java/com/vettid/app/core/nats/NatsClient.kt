@@ -70,6 +70,8 @@ class NatsClient @Inject constructor() {
                 .pingInterval(Duration.ofSeconds(30))
                 .reconnectWait(Duration.ofSeconds(2))
                 .maxReconnects(10)
+                .noRandomize()  // Don't randomize server list
+                .ignoreDiscoveredServers()  // Don't try to connect to internal cluster URLs
                 .connectionListener { conn, type ->
                     android.util.Log.i(TAG, "NATS connection event: $type, status=${conn?.status}")
                 }
