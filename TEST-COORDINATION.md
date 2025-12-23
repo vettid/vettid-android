@@ -1001,3 +1001,103 @@ This is intentional security hardening. TCP 4222 connection works fine.
 2. Android: Update `NatsClient.kt` to use `authHandler()` instead of `userInfo()`
 3. Re-enroll to get new credentials with `tls://` endpoint
 4. Re-run `NatsConnectionTest`
+
+---
+
+## ✅ NATS Backend Fully Deployed (2025-12-23)
+
+**From:** Backend Claude
+**Date:** 2025-12-23 12:45 EST
+**Status:** ✅ **NATS WORKING** - Ready for Android Testing
+
+### What Was Deployed
+
+1. **URL Resolver** - NATS now fetches account JWTs dynamically from Lambda
+2. **All 3 instances replaced** - Rolling ASG refresh completed successfully
+3. **Authentication tested** - Full test with real credentials passed
+
+### Test Results (from host machine)
+
+```
+=== NATS URL Resolver Authentication Test ===
+
+Account public key: ABXBNVFS4HODPPKQBAWTERFTRVP6777JXQ2PS7B2MR4TEXBFWH434HEF
+User public key: UDUE757WN5MBQQ4ZKME4ZWGTSTSIAYIIWZ4LBTEYY74Z3XZWYB65RXJX
+
+✅ TLS connected to nats.vettid.dev:4222
+✅ Received INFO from server: nats-i-06c69ad6e7e283b0a
+✅ PONG received - Authentication successful!
+✅ Message published successfully!
+🎉 URL Resolver authentication working correctly!
+```
+
+### Infrastructure Status
+
+| Component | Status | Details |
+|-----------|--------|---------|
+| NLB Targets | ✅ 3/3 healthy | All instances with URL resolver config |
+| TLS Certificate | ✅ Valid | Amazon RSA 2048 M01 (expires Jan 2027) |
+| URL Resolver | ✅ Working | Fetches account JWTs from Lambda |
+| Port 4222 | ✅ Open | Security group allows 0.0.0.0/0 |
+
+### Required Android Changes (Still Needed)
+
+The backend is ready. Android needs these two fixes:
+
+#### 1. Use TLS Endpoint (Already Fixed in Backend)
+
+New enrollments now return `tls://` instead of `nats://`:
+```json
+{
+  "nats_connection": {
+    "endpoint": "tls://nats.vettid.dev:4222",  // ✅ Now TLS
+    ...
+  }
+}
+```
+
+If you have existing credentials with `nats://`, re-enroll to get new credentials.
+
+#### 2. Use authHandler() Instead of userInfo()
+
+**Current code (wrong):**
+```kotlin
+val options = Options.Builder()
+    .server(credentials.endpoint)
+    .userInfo(credentials.jwt, credentials.seed)  // ❌ WRONG
+    .build()
+```
+
+**Fixed code:**
+```kotlin
+val credFile = """
+-----BEGIN NATS USER JWT-----
+${credentials.jwt}
+------END NATS USER JWT------
+
+-----BEGIN USER NKEY SEED-----
+${credentials.seed}
+------END USER NKEY SEED------
+""".trimIndent()
+
+val options = Options.Builder()
+    .server(credentials.endpoint)
+    .authHandler(Nats.staticCredentials(credFile.toCharArray()))  // ✅ CORRECT
+    .build()
+```
+
+### Ready for Testing
+
+After applying the Android fixes:
+1. Re-enroll a test user (to get `tls://` endpoint)
+2. Verify credentials stored correctly
+3. Connect to `tls://nats.vettid.dev:4222`
+4. Should see successful authentication!
+
+### Next Backend Work
+
+Starting vault auto-provisioning implementation:
+- Vault EC2 instances will be auto-provisioned after enrollment
+- vault-manager handlers for secrets/profile will be implemented
+- All secrets operations will go via NATS messaging
+
