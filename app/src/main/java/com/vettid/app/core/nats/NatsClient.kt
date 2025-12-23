@@ -55,10 +55,13 @@ class NatsClient @Inject constructor() {
             // Close existing connection if any
             disconnect()
 
+            // Build NATS credential file from JWT and seed
+            val credentialFile = formatCredentialFile(credentials.jwt, credentials.seed)
+
             // Build connection options
             val options = Options.Builder()
                 .server(credentials.endpoint)
-                .userInfo(credentials.jwt, credentials.seed)
+                .authHandler(Nats.staticCredentials(credentialFile.toByteArray()))
                 .connectionTimeout(Duration.ofSeconds(10))
                 .pingInterval(Duration.ofSeconds(30))
                 .reconnectWait(Duration.ofSeconds(2))
@@ -229,6 +232,25 @@ class NatsClient @Inject constructor() {
 
     companion object {
         private const val TAG = "NatsClient"
+
+        /**
+         * Format JWT and seed into NATS credential file format.
+         * Required for authHandler authentication.
+         */
+        fun formatCredentialFile(jwt: String, seed: String): String {
+            return """-----BEGIN NATS USER JWT-----
+$jwt
+------END NATS USER JWT------
+
+************************* IMPORTANT *************************
+NKEY Seed printed below can be used to sign and prove identity.
+NKEYs are sensitive and should be treated as secrets.
+
+-----BEGIN USER NKEY SEED-----
+$seed
+------END USER NKEY SEED------
+"""
+        }
     }
 }
 

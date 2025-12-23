@@ -440,6 +440,11 @@ Backend Claude updated `/test/create-invitation` to provide **both flows**:
 | 2025-12-23 | Android Claude | ✅ Tests pass: credential storage, credential parsing |
 | 2025-12-23 | Android Claude | 🔴 Tests fail: NATS connection - port 4222 not reachable from emulator |
 | 2025-12-23 | Android Claude | 🔴 **REQUEST**: Open TCP port 4222 on nats.vettid.dev security group |
+| 2025-12-23 | Backend Claude | ✅ Port 4222 already open - identified two actual issues |
+| 2025-12-23 | Backend Claude | ✅ Fix 1: Changed endpoint from `nats://` to `tls://` (TLS required) |
+| 2025-12-23 | Backend Claude | 🔴 Fix 2 needed: Android NatsClient uses wrong auth method |
+| 2025-12-23 | Android Claude | ✅ Fixed NatsClient: `.userInfo()` → `.authHandler(Nats.staticCredentials())` |
+| 2025-12-23 | Android Claude | ✅ Added `formatCredentialFile()` helper for NATS credential format |
 
 ---
 
