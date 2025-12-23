@@ -609,6 +609,49 @@ class CredentialStore @Inject constructor(
     }
 
     /**
+     * Parse NATS credential file to extract JWT and seed.
+     * The credential file format contains:
+     * - -----BEGIN NATS USER JWT----- / ------END NATS USER JWT------
+     * - -----BEGIN USER NKEY SEED----- / ------END USER NKEY SEED------
+     */
+    fun parseNatsCredentialFile(credentialFile: String): Pair<String, String>? {
+        try {
+            // Extract JWT
+            val jwtStart = credentialFile.indexOf("-----BEGIN NATS USER JWT-----")
+            val jwtEnd = credentialFile.indexOf("------END NATS USER JWT------")
+            if (jwtStart == -1 || jwtEnd == -1) return null
+
+            val jwtContent = credentialFile.substring(
+                jwtStart + "-----BEGIN NATS USER JWT-----".length,
+                jwtEnd
+            ).trim()
+
+            // Extract NKEY seed
+            val seedStart = credentialFile.indexOf("-----BEGIN USER NKEY SEED-----")
+            val seedEnd = credentialFile.indexOf("------END USER NKEY SEED------")
+            if (seedStart == -1 || seedEnd == -1) return null
+
+            val seedContent = credentialFile.substring(
+                seedStart + "-----BEGIN USER NKEY SEED-----".length,
+                seedEnd
+            ).trim()
+
+            return Pair(jwtContent, seedContent)
+        } catch (e: Exception) {
+            android.util.Log.e("CredentialStore", "Failed to parse NATS credential file", e)
+            return null
+        }
+    }
+
+    /**
+     * Get parsed NATS JWT and seed for NatsClient connection.
+     */
+    fun getParsedNatsCredentials(): Pair<String, String>? {
+        val credentialFile = getNatsCredentials() ?: return null
+        return parseNatsCredentialFile(credentialFile)
+    }
+
+    /**
      * Check if NATS credentials are still valid (less than 24 hours old).
      */
     fun areNatsCredentialsValid(): Boolean {
