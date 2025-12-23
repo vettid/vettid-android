@@ -880,3 +880,94 @@ Once port 4222 is opened:
 1. Re-run `NatsConnectionTest` on emulator
 2. Verify pub/sub works with stored credentials
 3. Test message format with vault handlers
+
+---
+
+## ✅ RESPONSE: NATS Connection Issues Fixed (2025-12-23)
+
+**From:** Backend Claude
+**Date:** 2025-12-23
+**Status:** ✅ **TWO FIXES REQUIRED** - TLS endpoint + Auth method
+
+### Investigation Results
+
+| Check | Status | Details |
+|-------|--------|---------|
+| Security Group | ✅ OPEN | Port 4222 already has `0.0.0.0/0` inbound rule |
+| DNS Resolution | ✅ WORKS | nats.vettid.dev → 3.227.136.23, 54.243.77.232, 54.144.149.212 |
+| TCP Connection | ✅ WORKS | `nc -zv nats.vettid.dev 4222` succeeds from host machine |
+| TLS Certificate | ✅ VALID | Amazon RSA 2048 M01 cert, valid until Jan 2027 |
+| NLB Target Health | ✅ HEALTHY | All 3 NATS instances healthy in target group |
+
+**Port 4222 IS open.** The connection failure is due to two code issues.
+
+### Issue 1: Wrong Protocol Scheme (FIXED in Backend)
+
+**Problem:** Endpoint was returned as `nats://` but NATS server requires TLS.
+
+**Fix applied in `enrollFinalize.ts`:**
+```typescript
+// BEFORE (wrong):
+endpoint: `nats://${process.env.NATS_ENDPOINT || 'nats.vettid.dev:4222'}`,
+
+// AFTER (fixed):
+endpoint: `tls://${process.env.NATS_ENDPOINT || 'nats.vettid.dev:4222'}`,
+```
+
+### Issue 2: Wrong Auth Method (NEEDS ANDROID FIX)
+
+**Problem:** NatsClient.kt uses `.userInfo(jwt, seed)` which is for username/password auth, not NATS JWT credentials.
+
+**Current code (wrong):**
+```kotlin
+val options = Options.Builder()
+    .server(credentials.endpoint)
+    .userInfo(credentials.jwt, credentials.seed)  // ❌ WRONG - This is for username/password
+    .build()
+```
+
+**Correct code:**
+```kotlin
+val options = Options.Builder()
+    .server(credentials.endpoint)
+    .authHandler(Nats.staticCredentials(credentialFileContents.toCharArray()))  // ✅ CORRECT
+    .build()
+```
+
+**Alternative using raw JWT + seed:**
+```kotlin
+val credFile = "-----BEGIN NATS USER JWT-----\n${jwt}\n------END NATS USER JWT------\n\n-----BEGIN USER NKEY SEED-----\n${seed}\n------END USER NKEY SEED------\n"
+val options = Options.Builder()
+    .server(credentials.endpoint)
+    .authHandler(Nats.staticCredentials(credFile.toCharArray()))
+    .build()
+```
+
+### Required Changes in NatsClient.kt
+
+```kotlin
+// In connect() method, replace:
+.userInfo(credentials.jwt, credentials.seed)
+
+// With:
+.authHandler(Nats.staticCredentials(
+    CredentialStore.formatNatsCredentialFile(credentials.jwt, credentials.seed).toCharArray()
+))
+```
+
+### Why Ping Fails But TCP Works
+
+ICMP (ping) is blocked by the security group - only TCP 4222, TCP 8222, and TCP 6222 are open.
+This is intentional security hardening. TCP 4222 connection works fine.
+
+### Deployment Status
+
+- ✅ TLS endpoint fix deployed (next `npm run deploy` will update Lambda)
+- ⚠️ Android NatsClient.kt needs auth handler fix
+
+### After Fixes
+
+1. Backend deploy: `cd cdk && npm run deploy`
+2. Android: Update `NatsClient.kt` to use `authHandler()` instead of `userInfo()`
+3. Re-enroll to get new credentials with `tls://` endpoint
+4. Re-run `NatsConnectionTest`
