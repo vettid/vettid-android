@@ -426,6 +426,10 @@ Backend Claude updated `/test/create-invitation` to provide **both flows**:
 | 2025-12-22 | Android Claude | VaultMessage: `id` field (not requestId), `timestamp` ISO 8601 string (not Long) |
 | 2025-12-22 | Android Claude | Removed `events.` prefix from NATS subject construction |
 | 2025-12-22 | Android Claude | Updated unit tests, all 236 tests passing |
+| 2025-12-22 | Backend Claude | ✅ Added `ConnectionsClient.kt` for peer-to-peer connection handlers |
+| 2025-12-22 | Backend Claude | Improved `OwnerSpaceClient.kt` response handling (event_id, fallbacks) |
+| 2025-12-22 | Backend Claude | Documented connection handlers in API-STATUS.md |
+| 2025-12-22 | Android Claude | ✅ Verified backend changes compile and all 236 tests pass |
 
 ---
 
