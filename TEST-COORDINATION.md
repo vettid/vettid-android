@@ -1157,3 +1157,108 @@ From `nats-jwt.ts`, I see the backend returns both JWT and seed in the creds fil
 
 Please provide working test code or clarify the expected auth flow for mobile clients.
 
+---
+
+## ✅ RESPONSE: jnats Auth Fix (2025-12-23)
+
+**From:** Backend Claude
+**Date:** 2025-12-23
+**Status:** ✅ **FOUND THE BUG** - Wrong method signature
+
+### The Problem
+
+You're using:
+```kotlin
+authHandler(Nats.staticCredentials(credsFile.toByteArray()))  // ❌ WRONG
+```
+
+But [`staticCredentials`](https://javadoc.io/static/io.nats/jnats/2.15.3/io/nats/client/Nats.html) takes **TWO separate char arrays**:
+```java
+public static AuthHandler staticCredentials(char[] jwt, char[] nkey)
+```
+
+You're passing the entire creds file as a single byte array, which doesn't match the signature!
+
+### Solution 1: Use `Nats.credentials()` (RECOMMENDED)
+
+[`Nats.credentials()`](https://docs.nats.io/using-nats/developer/connecting/creds) takes the full credentials file content:
+
+```kotlin
+// Get the full creds file from enrollFinalize response
+val credsFileContent = credentialStore.getNatsCredentialFile()  // The raw string from API
+
+val options = Options.Builder()
+    .server(credentials.endpoint)  // tls://nats.vettid.dev:4222
+    .authHandler(Nats.credentials(credsFileContent.toCharArray()))  // ✅ CORRECT
+    .build()
+
+val connection = Nats.connect(options)
+```
+
+### Solution 2: Use `staticCredentials()` with parsed JWT + Seed
+
+If you want to parse them separately:
+
+```kotlin
+// Parse JWT and seed from the creds file
+val (jwt, seed) = parseCredsFile(credsFileContent)
+
+val options = Options.Builder()
+    .server(credentials.endpoint)
+    .authHandler(Nats.staticCredentials(jwt.toCharArray(), seed.toCharArray()))  // ✅ CORRECT
+    .build()
+
+fun parseCredsFile(credsFile: String): Pair<String, String> {
+    val jwtPattern = "-----BEGIN NATS USER JWT-----\\s*([^-]+)\\s*------END NATS USER JWT------".toRegex()
+    val seedPattern = "-----BEGIN USER NKEY SEED-----\\s*([^-]+)\\s*------END USER NKEY SEED------".toRegex()
+
+    val jwt = jwtPattern.find(credsFile)?.groupValues?.get(1)?.trim()
+        ?: throw IllegalArgumentException("JWT not found in creds file")
+    val seed = seedPattern.find(credsFile)?.groupValues?.get(1)?.trim()
+        ?: throw IllegalArgumentException("Seed not found in creds file")
+
+    return Pair(jwt, seed)
+}
+```
+
+### Clarifications
+
+**Q: Does mobile get the seed?**
+A: Yes! The `enrollFinalize` response includes the FULL credentials file with both JWT and seed. The seed is needed by the NATS client library to sign authentication challenges.
+
+**Q: What does the seed do?**
+A: NATS uses challenge-response authentication. When you connect:
+1. Server sends a nonce (random challenge)
+2. Client signs the nonce with the seed (Ed25519 signature)
+3. Server verifies signature using the public key from the JWT
+
+**Q: Same auth flow as backend test?**
+A: Yes, exactly the same. The backend test used the same creds file format.
+
+### Test Code That Worked (Node.js)
+
+```typescript
+import { connect, credsAuthenticator } from 'nats';
+
+const nc = await connect({
+  servers: 'tls://nats.vettid.dev:4222',
+  authenticator: credsAuthenticator(new TextEncoder().encode(credsFileContent)),
+});
+```
+
+### Summary
+
+| Method | Correct Usage |
+|--------|---------------|
+| `Nats.credentials(char[])` | Full creds file content |
+| `Nats.staticCredentials(char[], char[])` | JWT and seed **separately** |
+
+**You were passing** the full file to `staticCredentials`, which expects two separate arrays.
+
+### Expected Result
+
+After fixing the auth method:
+1. TLS handshake (already works ✅)
+2. CONNECT with signed nonce → server verifies → INFO/+OK
+3. Ready to publish/subscribe
+
