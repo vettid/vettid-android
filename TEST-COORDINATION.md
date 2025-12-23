@@ -574,22 +574,24 @@ Do you want me to implement the test secrets endpoints?
 - ✅ `ConnectionsClient.kt` added with full handler support
 - ✅ `OwnerSpaceClient.kt` updated with proper message format
 
-**Android (IN PROGRESS):**
+**Android (COMPLETED):**
 - ✅ NATS message format fixed (id, ISO 8601 timestamp, no events. prefix)
 - ✅ ConnectionsClient implemented and tested (10 new tests)
 - ✅ VaultEventClient implemented and tested
-- [ ] Add NATS Java client dependency
-- [ ] Implement NatsConnectionManager to connect to `nats.vettid.dev:4222`
-- [ ] Wire up vault status checking
-- [ ] Store NATS credentials from `/vault/nats/token`
-- [ ] E2E test with live NATS connection
+- ✅ NATS Java client dependency added (`io.nats:jnats:2.17.6`)
+- ✅ NatsClient implemented (connect, disconnect, publish, subscribe)
+- ✅ NatsConnectionManager implemented (account creation, token refresh, credential caching)
+- ✅ NatsApiClient implemented (`/vault/nats/*` endpoints)
+- ✅ Hilt DI wiring complete
+- ✅ All 246 tests passing
 
-### Next Steps for Android
+### Ready for E2E Testing
 
-1. Add NATS Java client to build.gradle: `io.nats:jnats:2.x`
-2. Implement NatsConnectionManager to handle connection lifecycle
-3. Get NATS credentials via `/vault/nats/token` after enrollment
-4. Connect to NATS and verify vault communication works
+The NATS client infrastructure is complete. To test:
+1. Enroll a user via `/test/create-invitation`
+2. Get NATS credentials via `/vault/nats/token`
+3. Connect to `nats.vettid.dev:4222`
+4. Use OwnerSpaceClient to send/receive messages
 
 ---
 
