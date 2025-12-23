@@ -62,9 +62,10 @@ class NatsClient @Inject constructor() {
             android.util.Log.d(TAG, "Credential file length: ${credentialFile.length}")
 
             // Build connection options with verbose logging
+            // Use Nats.staticCredentials(byte[]) which takes the full creds file content as bytes
             val options = Options.Builder()
                 .server(credentials.endpoint)
-                .authHandler(Nats.staticCredentials(credentialFile.toByteArray()))
+                .authHandler(Nats.staticCredentials(credentialFile.toByteArray(Charsets.UTF_8)))
                 .connectionTimeout(Duration.ofSeconds(30))  // Increased for debugging
                 .pingInterval(Duration.ofSeconds(30))
                 .reconnectWait(Duration.ofSeconds(2))

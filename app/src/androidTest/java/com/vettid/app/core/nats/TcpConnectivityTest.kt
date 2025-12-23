@@ -250,7 +250,7 @@ class TcpConnectivityTest {
         try {
             val options = Options.Builder()
                 .server(connection.endpoint)
-                .authHandler(Nats.staticCredentials(credentialFile.toByteArray()))
+                .authHandler(Nats.staticCredentials(credentialFile.toByteArray(Charsets.UTF_8)))
                 .connectionTimeout(Duration.ofSeconds(30))
                 .traceConnection()
                 .connectionListener { conn, type ->
