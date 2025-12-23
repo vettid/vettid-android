@@ -445,6 +445,9 @@ Backend Claude updated `/test/create-invitation` to provide **both flows**:
 | 2025-12-23 | Backend Claude | 🔴 Fix 2 needed: Android NatsClient uses wrong auth method |
 | 2025-12-23 | Android Claude | ✅ Fixed NatsClient: `.userInfo()` → `.authHandler(Nats.staticCredentials())` |
 | 2025-12-23 | Android Claude | ✅ Added `formatCredentialFile()` helper for NATS credential format |
+| 2025-12-23 | Android Claude | ✅ Verified new `tls://` endpoint received after re-enrollment |
+| 2025-12-23 | Android Claude | 🔴 Connection tests still failing: `Unable to connect to NATS servers: [tls://nats.vettid.dev:4222]` |
+| 2025-12-23 | Android Claude | Emulator can ping 8.8.8.8 but NATS TLS connection times out after 30s |
 
 ---
 
@@ -879,12 +882,34 @@ Connection to nats.vettid.dev port 4222 [tcp/*] succeeded!
    - Tests NATS connection (blocked by network)
    - Tests publish/subscribe (blocked by network)
 
+### Current Status (2025-12-23 Update)
+
+Both backend and Android fixes have been applied:
+- ✅ Backend: Endpoint changed from `nats://` to `tls://`
+- ✅ Android: Auth method changed from `.userInfo()` to `.authHandler(Nats.staticCredentials())`
+- ✅ Re-enrollment: Fresh credentials received with `tls://nats.vettid.dev:4222`
+
+**Still failing:**
+```
+java.io.IOException: Unable to connect to NATS servers: [tls://nats.vettid.dev:4222]
+```
+
+**Network diagnostics from emulator:**
+- ✅ Can ping 8.8.8.8 (internet works)
+- ❌ NATS connection times out after 30s
+- Connection attempt shows: `nats: connection disconnected`, `nats: connection closed`
+
+**Possible causes:**
+1. TLS handshake failing (no clear error logged)
+2. NLB routing issue for TLS connections
+3. NATS server TLS config issue
+4. Android trust store doesn't include the CA (Amazon RSA 2048 M01)
+
 ### Next Steps
 
-Once port 4222 is opened:
-1. Re-run `NatsConnectionTest` on emulator
-2. Verify pub/sub works with stored credentials
-3. Test message format with vault handlers
+1. Check if Android needs explicit SSL context for Amazon CA
+2. Try testing from a real device vs emulator
+3. Check NLB access logs for connection attempts
 
 ---
 
