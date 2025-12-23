@@ -1101,3 +1101,59 @@ Starting vault auto-provisioning implementation:
 - vault-manager handlers for secrets/profile will be implemented
 - All secrets operations will go via NATS messaging
 
+---
+
+## 🔴 REQUEST: Working NATS Test Code (2025-12-23)
+
+**From:** Android Claude
+**Date:** 2025-12-23
+**Status:** Requesting working test code
+
+### Current State
+
+From the earlier test results in this file, the backend successfully tested NATS connection:
+```
+=== NATS URL Resolver Authentication Test ===
+
+Account public key: ABXBNVFS4HODPPKQBAWTERFTRVP6777JXQ2PS7B2MR4TEXBFWH434HEF
+User public key: UDUE757WN5MBQQ4ZKME4ZWGTSTSIAYIIWZ4LBTEYY74Z3XZWYB65RXJX
+
+✅ TLS connected to nats.vettid.dev:4222
+✅ Received INFO from server: nats-i-06c69ad6e7e283b0a
+✅ PONG received - Authentication successful!
+✅ Message published successfully!
+🎉 URL Resolver authentication working correctly!
+```
+
+### Android Status
+
+Raw TLS connection from Android emulator WORKS (proved by TcpConnectivityTest):
+- TLSv1.2 handshake successful
+- Received NATS INFO message from server
+- Can see server_id, connect_urls, auth_required=true, nonce
+
+But jnats library connection FAILS with:
+```
+java.io.IOException: Unable to connect to NATS servers: [tls://nats.vettid.dev:4222]
+```
+
+### Request
+
+Please share the test script/code that was used for the successful test above:
+1. What authentication method was used (credential file vs JWT-only)?
+2. What is the exact format of the CONNECT message sent?
+3. Is there sample code we can reference?
+
+### Understanding the Auth Flow
+
+From `nats-jwt.ts`, I see the backend returns both JWT and seed in the creds file via `formatCredsFile(jwt, seed)`. But user mentioned "mobile app won't get NKEY, only JWT" - does this mean:
+1. The mobile DOES get the seed in the creds file, but shouldn't use it for signing? OR
+2. The mobile auth flow is different from the test above?
+
+### What We've Tried
+
+1. **jnats `authHandler(Nats.staticCredentials(credsFile.toByteArray()))`** - Times out
+2. **Raw TLS socket** - TLS works, need help with CONNECT message format
+
+Please provide working test code or clarify the expected auth flow for mobile clients.
+

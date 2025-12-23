@@ -58,16 +58,19 @@ class NatsClient @Inject constructor() {
             // Build NATS credential file from JWT and seed
             val credentialFile = formatCredentialFile(credentials.jwt, credentials.seed)
 
-            // Build connection options
+            android.util.Log.i(TAG, "Attempting NATS connection to: ${credentials.endpoint}")
+            android.util.Log.d(TAG, "Credential file length: ${credentialFile.length}")
+
+            // Build connection options with verbose logging
             val options = Options.Builder()
                 .server(credentials.endpoint)
                 .authHandler(Nats.staticCredentials(credentialFile.toByteArray()))
-                .connectionTimeout(Duration.ofSeconds(10))
+                .connectionTimeout(Duration.ofSeconds(30))  // Increased for debugging
                 .pingInterval(Duration.ofSeconds(30))
                 .reconnectWait(Duration.ofSeconds(2))
                 .maxReconnects(10)
                 .connectionListener { conn, type ->
-                    android.util.Log.d(TAG, "NATS connection event: $type")
+                    android.util.Log.i(TAG, "NATS connection event: $type, status=${conn?.status}")
                 }
                 .errorListener(object : io.nats.client.ErrorListener {
                     override fun errorOccurred(conn: Connection, error: String) {
@@ -75,8 +78,12 @@ class NatsClient @Inject constructor() {
                     }
                     override fun exceptionOccurred(conn: Connection, exp: Exception) {
                         android.util.Log.e(TAG, "NATS exception: ${exp.message}", exp)
+                        exp.cause?.let { cause ->
+                            android.util.Log.e(TAG, "NATS exception cause: ${cause.javaClass.name}: ${cause.message}")
+                        }
                     }
                 })
+                .traceConnection()  // Enable connection tracing
                 .build()
 
             // Connect to NATS
