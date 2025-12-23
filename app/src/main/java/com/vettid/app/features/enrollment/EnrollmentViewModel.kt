@@ -431,6 +431,12 @@ class EnrollmentViewModel @Inject constructor(
                         passwordSalt = passwordSalt
                     )
 
+                    // Store NATS connection credentials if present
+                    response.natsConnection?.let { natsConnection ->
+                        credentialStore.storeNatsConnection(natsConnection)
+                        android.util.Log.i("EnrollmentViewModel", "NATS credentials stored for ${natsConnection.ownerSpace}")
+                    }
+
                     updateFinalizingProgress(1.0f)
                     delay(300)
 

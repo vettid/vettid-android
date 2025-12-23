@@ -10,6 +10,8 @@ import com.vettid.app.core.network.LedgerAuthToken
 import com.vettid.app.core.network.LegacyCredentialPackage
 import com.vettid.app.core.network.LAT
 import com.vettid.app.core.network.LegacyLedgerAuthToken
+import com.vettid.app.core.network.NatsConnectionInfo
+import com.vettid.app.core.network.NatsTopics
 import com.vettid.app.core.network.TransactionKey
 import com.vettid.app.core.network.TransactionKeyInfo
 import com.vettid.app.core.network.TransactionKeyPublic
@@ -65,6 +67,14 @@ class CredentialStore @Inject constructor(
         // Vault credential keys (separate from vault services)
         private const val KEY_VAULT_CREDENTIAL_SALT = "vault_credential_salt"
         private const val KEY_VAULT_ACTIVE = "vault_active"
+        // NATS connection keys
+        private const val KEY_NATS_ENDPOINT = "nats_endpoint"
+        private const val KEY_NATS_CREDENTIALS = "nats_credentials"
+        private const val KEY_NATS_OWNER_SPACE = "nats_owner_space"
+        private const val KEY_NATS_MESSAGE_SPACE = "nats_message_space"
+        private const val KEY_NATS_TOPIC_SEND = "nats_topic_send"
+        private const val KEY_NATS_TOPIC_RECEIVE = "nats_topic_receive"
+        private const val KEY_NATS_STORED_AT = "nats_stored_at"
     }
 
     // MARK: - Credential Storage
@@ -524,6 +534,104 @@ class CredentialStore @Inject constructor(
      */
     fun isVaultActive(): Boolean {
         return encryptedPrefs.getBoolean(KEY_VAULT_ACTIVE, false)
+    }
+
+    // MARK: - NATS Connection Storage
+
+    /**
+     * Store NATS connection info from enrollment finalize.
+     * These credentials are valid for 24 hours.
+     */
+    fun storeNatsConnection(natsConnection: NatsConnectionInfo) {
+        encryptedPrefs.edit().apply {
+            putString(KEY_NATS_ENDPOINT, natsConnection.endpoint)
+            putString(KEY_NATS_CREDENTIALS, natsConnection.credentials)
+            putString(KEY_NATS_OWNER_SPACE, natsConnection.ownerSpace)
+            putString(KEY_NATS_MESSAGE_SPACE, natsConnection.messageSpace)
+            natsConnection.topics?.let { topics ->
+                putString(KEY_NATS_TOPIC_SEND, topics.sendToVault)
+                putString(KEY_NATS_TOPIC_RECEIVE, topics.receiveFromVault)
+            }
+            putLong(KEY_NATS_STORED_AT, System.currentTimeMillis())
+        }.apply()
+    }
+
+    /**
+     * Get stored NATS connection info.
+     */
+    fun getNatsConnection(): NatsConnectionInfo? {
+        val endpoint = encryptedPrefs.getString(KEY_NATS_ENDPOINT, null) ?: return null
+        val credentials = encryptedPrefs.getString(KEY_NATS_CREDENTIALS, null) ?: return null
+        val ownerSpace = encryptedPrefs.getString(KEY_NATS_OWNER_SPACE, null) ?: return null
+        val messageSpace = encryptedPrefs.getString(KEY_NATS_MESSAGE_SPACE, null) ?: return null
+
+        val sendTopic = encryptedPrefs.getString(KEY_NATS_TOPIC_SEND, null)
+        val receiveTopic = encryptedPrefs.getString(KEY_NATS_TOPIC_RECEIVE, null)
+        val topics = if (sendTopic != null && receiveTopic != null) {
+            NatsTopics(sendToVault = sendTopic, receiveFromVault = receiveTopic)
+        } else null
+
+        return NatsConnectionInfo(
+            endpoint = endpoint,
+            credentials = credentials,
+            ownerSpace = ownerSpace,
+            messageSpace = messageSpace,
+            topics = topics
+        )
+    }
+
+    /**
+     * Check if NATS credentials are stored.
+     */
+    fun hasNatsConnection(): Boolean {
+        return encryptedPrefs.contains(KEY_NATS_CREDENTIALS)
+    }
+
+    /**
+     * Get NATS credentials (the credential file content).
+     */
+    fun getNatsCredentials(): String? {
+        return encryptedPrefs.getString(KEY_NATS_CREDENTIALS, null)
+    }
+
+    /**
+     * Get NATS endpoint URL.
+     */
+    fun getNatsEndpoint(): String? {
+        return encryptedPrefs.getString(KEY_NATS_ENDPOINT, null)
+    }
+
+    /**
+     * Get NATS owner space ID.
+     */
+    fun getNatsOwnerSpace(): String? {
+        return encryptedPrefs.getString(KEY_NATS_OWNER_SPACE, null)
+    }
+
+    /**
+     * Check if NATS credentials are still valid (less than 24 hours old).
+     */
+    fun areNatsCredentialsValid(): Boolean {
+        val storedAt = encryptedPrefs.getLong(KEY_NATS_STORED_AT, 0)
+        if (storedAt == 0L) return false
+
+        val twentyFourHoursMs = 24 * 60 * 60 * 1000L
+        return System.currentTimeMillis() - storedAt < twentyFourHoursMs
+    }
+
+    /**
+     * Clear stored NATS connection info.
+     */
+    fun clearNatsConnection() {
+        encryptedPrefs.edit().apply {
+            remove(KEY_NATS_ENDPOINT)
+            remove(KEY_NATS_CREDENTIALS)
+            remove(KEY_NATS_OWNER_SPACE)
+            remove(KEY_NATS_MESSAGE_SPACE)
+            remove(KEY_NATS_TOPIC_SEND)
+            remove(KEY_NATS_TOPIC_RECEIVE)
+            remove(KEY_NATS_STORED_AT)
+        }.apply()
     }
 
     // MARK: - Cleanup

@@ -614,7 +614,28 @@ data class SetPasswordResponse(
 data class FinalizeResponse(
     val status: String,
     @SerializedName("credential_package") val credentialPackage: CredentialPackage,
-    @SerializedName("vault_status") val vaultStatus: String
+    @SerializedName("vault_status") val vaultStatus: String,
+    @SerializedName("nats_connection") val natsConnection: NatsConnectionInfo? = null
+)
+
+/**
+ * NATS connection info from enrollment finalize.
+ * Valid for 24 hours from enrollment.
+ */
+data class NatsConnectionInfo(
+    val endpoint: String,
+    val credentials: String,  // NATS credential file content (JWT + seed)
+    @SerializedName("owner_space") val ownerSpace: String,
+    @SerializedName("message_space") val messageSpace: String,
+    val topics: NatsTopics? = null
+)
+
+/**
+ * NATS pub/sub topics for vault communication.
+ */
+data class NatsTopics(
+    @SerializedName("send_to_vault") val sendToVault: String,
+    @SerializedName("receive_from_vault") val receiveFromVault: String
 )
 
 /**
