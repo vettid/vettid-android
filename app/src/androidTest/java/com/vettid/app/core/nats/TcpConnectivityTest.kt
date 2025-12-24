@@ -34,6 +34,8 @@ class TcpConnectivityTest {
         private const val NATS_HOST = "nats.vettid.dev"
         private const val NATS_PORT = 4222
         private const val TIMEOUT_MS = 10000
+        private const val TEST_API_BASE = "https://tiqpij5mue.execute-api.us-east-1.amazonaws.com"
+        private const val TEST_API_KEY = "vettid-test-key-dev-only"
     }
 
     @Test
@@ -247,15 +249,16 @@ class TcpConnectivityTest {
         }
 
         val (jwt, seed) = parsed
-        val credentialFile = NatsClient.formatCredentialFile(jwt, seed)
 
         Log.i(TAG, "Connecting to: ${connection.endpoint}")
-        Log.i(TAG, "Credential file:\n${credentialFile.take(200)}...")
+        Log.i(TAG, "JWT (first 100 chars): ${jwt.take(100)}...")
+        Log.i(TAG, "Seed (first 10 chars): ${seed.take(10)}...")
 
         try {
+            // Use two-parameter version with separate JWT and seed (as recommended by backend)
             val options = Options.Builder()
                 .server(connection.endpoint)
-                .authHandler(Nats.staticCredentials(credentialFile.toByteArray(Charsets.UTF_8)))
+                .authHandler(Nats.staticCredentials(jwt.toCharArray(), seed.toCharArray()))
                 .connectionTimeout(Duration.ofSeconds(30))
                 .noRandomize()  // Don't randomize server list
                 .ignoreDiscoveredServers()  // Don't try to connect to cluster URLs
@@ -310,31 +313,41 @@ class TcpConnectivityTest {
             // Step 2: Start enrollment
             Log.i(TAG, "Starting enrollment...")
             val enrollSession = startEnrollment(invitationCode)
-            val sessionId = enrollSession.getString("session_id")
-            val enrollmentId = enrollSession.getString("enrollment_id")
-            Log.i(TAG, "Session: $sessionId, Enrollment: $enrollmentId")
+            Log.i(TAG, "Start enrollment response: $enrollSession")
+            val enrollmentSessionId = enrollSession.getString("enrollment_session_id")
+            val enrollmentToken = enrollSession.getString("enrollment_token")
+            val passwordKeyId = enrollSession.getString("password_key_id")
+            Log.i(TAG, "Enrollment session: $enrollmentSessionId, PasswordKeyId: $passwordKeyId")
 
             // Step 3: Set password (simplified - no encryption for test)
             Log.i(TAG, "Setting password...")
-            setPassword(sessionId, enrollmentId)
+            setPassword(enrollmentSessionId, enrollmentToken, passwordKeyId)
 
             // Step 4: Finalize enrollment
             Log.i(TAG, "Finalizing enrollment...")
-            val credentials = finalizeEnrollment(sessionId, enrollmentId)
+            val credentials = finalizeEnrollment(enrollmentSessionId, enrollmentToken)
+            Log.i(TAG, "Finalize response keys: ${credentials.keys().asSequence().toList()}")
+            Log.i(TAG, "Finalize response: $credentials")
 
-            val natsConnection = credentials.getJSONObject("nats_connection")
-            val endpoint = natsConnection.getString("endpoint")
-            val credsFile = natsConnection.getString("credentials")
+            // NATS credentials are in vault_bootstrap
+            val vaultBootstrap = credentials.getJSONObject("vault_bootstrap")
+            val endpoint = vaultBootstrap.optString("nats_endpoint", "tls://nats.vettid.dev:4222")
+            val credsFile = vaultBootstrap.getString("credentials")
 
             Log.i(TAG, "NATS endpoint: $endpoint")
             Log.i(TAG, "Credentials length: ${credsFile.length}")
             Log.i(TAG, "Credentials preview: ${credsFile.take(100)}...")
 
-            // Step 5: Connect to NATS with jnats
-            Log.i(TAG, "Connecting to NATS with jnats...")
+            // Parse JWT and seed from credentials file
+            val (jwt, seed) = parseCredsFile(credsFile)
+            Log.i(TAG, "Parsed JWT (${jwt.length} chars): ${jwt.take(50)}...")
+            Log.i(TAG, "Parsed seed (${seed.length} chars): ${seed.take(10)}...")
+
+            // Step 5: Connect to NATS with jnats using two-parameter auth
+            Log.i(TAG, "Connecting to NATS with jnats (two-param auth)...")
             val options = Options.Builder()
                 .server(endpoint)
-                .authHandler(Nats.staticCredentials(credsFile.toByteArray(Charsets.UTF_8)))
+                .authHandler(Nats.staticCredentials(jwt.toCharArray(), seed.toCharArray()))
                 .connectionTimeout(Duration.ofSeconds(30))
                 .noRandomize()
                 .ignoreDiscoveredServers()
@@ -362,6 +375,29 @@ class TcpConnectivityTest {
         }
     }
 
+    // Helper function to parse JWT and seed from creds file
+    private fun parseCredsFile(credsFile: String): Pair<String, String> {
+        // Use dotall mode (s flag) and non-greedy match for multiline content
+        val jwtPattern = "-----BEGIN NATS USER JWT-----\\s*([A-Za-z0-9._-]+)\\s*-----END NATS USER JWT-----".toRegex()
+        val seedPattern = "-----BEGIN USER NKEY SEED-----\\s*([A-Za-z0-9]+)\\s*-----END USER NKEY SEED-----".toRegex()
+
+        Log.i(TAG, "Parsing creds file (${credsFile.length} chars)")
+
+        val jwt = jwtPattern.find(credsFile)?.groupValues?.get(1)?.trim()
+        if (jwt == null) {
+            Log.e(TAG, "JWT pattern not found. Creds preview: ${credsFile.take(500)}")
+            throw IllegalArgumentException("JWT not found in creds file")
+        }
+
+        val seed = seedPattern.find(credsFile)?.groupValues?.get(1)?.trim()
+        if (seed == null) {
+            Log.e(TAG, "Seed pattern not found")
+            throw IllegalArgumentException("Seed not found in creds file")
+        }
+
+        return Pair(jwt, seed)
+    }
+
     // Helper functions for test API
     private fun createTestInvitation(testUserId: String): String {
         val url = URL("https://tiqpij5mue.execute-api.us-east-1.amazonaws.com/test/create-invitation")
@@ -381,25 +417,34 @@ class TcpConnectivityTest {
     }
 
     private fun startEnrollment(invitationCode: String): JSONObject {
-        val url = URL("https://api.vettid.com/api/v1/enroll/start")
+        // Use test API endpoint with direct flow (no auth needed)
+        val url = URL("$TEST_API_BASE/vault/enroll/start-direct")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.setRequestProperty("Content-Type", "application/json")
+        conn.setRequestProperty("X-Test-Api-Key", TEST_API_KEY)
         conn.doOutput = true
 
         OutputStreamWriter(conn.outputStream).use {
-            it.write("""{"invitation_code": "$invitationCode"}""")
+            it.write("""{"invitation_code": "$invitationCode", "device_id": "test_device_${System.currentTimeMillis()}", "device_type": "android", "skip_attestation": true}""")
+        }
+
+        if (conn.responseCode != 200) {
+            val error = try { BufferedReader(InputStreamReader(conn.errorStream)).readText() } catch (e: Exception) { "unknown" }
+            throw Exception("start-direct failed: ${conn.responseCode} - $error")
         }
 
         val response = BufferedReader(InputStreamReader(conn.inputStream)).readText()
         return JSONObject(response)
     }
 
-    private fun setPassword(sessionId: String, enrollmentId: String) {
-        val url = URL("https://api.vettid.com/api/v1/enroll/set-password")
+    private fun setPassword(enrollmentSessionId: String, enrollmentToken: String, passwordKeyId: String) {
+        val url = URL("$TEST_API_BASE/vault/enroll/set-password")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.setRequestProperty("Content-Type", "application/json")
+        conn.setRequestProperty("Authorization", "Bearer $enrollmentToken")
+        conn.setRequestProperty("X-Test-Api-Key", TEST_API_KEY)
         conn.doOutput = true
 
         // For test, we use a simple hash (in production, this would be properly encrypted)
@@ -407,37 +452,37 @@ class TcpConnectivityTest {
 
         OutputStreamWriter(conn.outputStream).use {
             it.write("""{
-                "session_id": "$sessionId",
-                "enrollment_id": "$enrollmentId",
+                "enrollment_session_id": "$enrollmentSessionId",
                 "encrypted_password_hash": "$testPasswordHash",
-                "ephemeral_public_key": "test_key",
-                "nonce": "test_nonce",
-                "key_id": "test_key_id"
+                "ephemeral_public_key": "test_key_eph",
+                "nonce": "test_nonce_12345",
+                "key_id": "$passwordKeyId"
             }""".trimIndent())
         }
 
         if (conn.responseCode != 200) {
-            val error = BufferedReader(InputStreamReader(conn.errorStream)).readText()
+            val error = try { BufferedReader(InputStreamReader(conn.errorStream)).readText() } catch (e: Exception) { "unknown" }
             throw Exception("set-password failed: ${conn.responseCode} - $error")
         }
     }
 
-    private fun finalizeEnrollment(sessionId: String, enrollmentId: String): JSONObject {
-        val url = URL("https://api.vettid.com/api/v1/enroll/finalize")
+    private fun finalizeEnrollment(enrollmentSessionId: String, enrollmentToken: String): JSONObject {
+        val url = URL("$TEST_API_BASE/vault/enroll/finalize")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
         conn.setRequestProperty("Content-Type", "application/json")
+        conn.setRequestProperty("Authorization", "Bearer $enrollmentToken")
+        conn.setRequestProperty("X-Test-Api-Key", TEST_API_KEY)
         conn.doOutput = true
 
         OutputStreamWriter(conn.outputStream).use {
             it.write("""{
-                "session_id": "$sessionId",
-                "enrollment_id": "$enrollmentId"
+                "enrollment_session_id": "$enrollmentSessionId"
             }""".trimIndent())
         }
 
         if (conn.responseCode != 200) {
-            val error = BufferedReader(InputStreamReader(conn.errorStream)).readText()
+            val error = try { BufferedReader(InputStreamReader(conn.errorStream)).readText() } catch (e: Exception) { "unknown" }
             throw Exception("finalize failed: ${conn.responseCode} - $error")
         }
 
@@ -447,11 +492,11 @@ class TcpConnectivityTest {
 
     private fun cleanupTestUser(testUserId: String) {
         try {
-            val url = URL("https://tiqpij5mue.execute-api.us-east-1.amazonaws.com/test/cleanup")
+            val url = URL("$TEST_API_BASE/test/cleanup")
             val conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
             conn.setRequestProperty("Content-Type", "application/json")
-            conn.setRequestProperty("X-Test-Api-Key", "vettid-test-key-dev-only")
+            conn.setRequestProperty("X-Test-Api-Key", TEST_API_KEY)
             conn.doOutput = true
 
             OutputStreamWriter(conn.outputStream).use {

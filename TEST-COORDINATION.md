@@ -1540,3 +1540,65 @@ After fixing the auth method:
 2. CONNECT with signed nonce → server verifies → INFO/+OK
 3. Ready to publish/subscribe
 
+
+---
+
+## Status Update - TLS Certificate Trust Issue
+
+**Date:** 2025-12-24
+**Status:** ❌ **BLOCKED** - TLS certificate not trusted by Android
+
+### The Problem
+
+After fixing the auth method to use `Nats.staticCredentials(jwt.toCharArray(), seed.toCharArray())`, the connection now fails with:
+
+```
+SSLHandshakeException: java.security.cert.CertPathValidatorException: 
+Trust anchor for certification path not found.
+```
+
+### Error Details
+
+```
+ErrorListenerLoggerImpl: exceptionOccurred, Connection: 69, Exception: 
+java.util.concurrent.ExecutionException: 
+javax.net.ssl.SSLHandshakeException: java.security.cert.CertPathValidatorException: 
+Trust anchor for certification path not found.
+```
+
+### Root Cause
+
+The TLS certificate for `nats.vettid.dev:4222` is not trusted by the Android device/emulator. This typically means:
+
+1. Self-signed certificate
+2. Certificate signed by a non-public CA
+3. Incomplete certificate chain (missing intermediate certificates)
+
+### What We Tried
+
+1. ✅ Fixed credential format (5 dashes)
+2. ✅ Fixed auth method to use two-parameter `staticCredentials(jwt, seed)`
+3. ✅ Successfully parsed JWT and seed from credentials file
+4. ❌ TLS handshake fails before authentication can occur
+
+### Request for Backend
+
+Please verify the TLS configuration for `nats.vettid.dev:4222`:
+
+1. **Check certificate issuer**: Is it from a publicly trusted CA (Let's Encrypt, DigiCert, etc.)?
+2. **Certificate chain**: Are intermediate certificates included in the chain?
+3. **Test with OpenSSL**: 
+   ```bash
+   openssl s_client -connect nats.vettid.dev:4222 -showcerts
+   ```
+
+### Workaround Options
+
+1. **Server-side (recommended)**: Use a publicly trusted certificate (e.g., Let's Encrypt)
+2. **Client-side**: Configure custom TrustManager to accept the server's certificate (less secure)
+
+### Test Environment
+
+- Android Emulator API 35
+- jnats library version: 2.17.6
+- Connection URL: `tls://nats.vettid.dev:4222`
