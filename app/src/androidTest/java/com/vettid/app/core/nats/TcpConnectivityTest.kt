@@ -9,8 +9,6 @@ import org.junit.runner.RunWith
 import androidx.test.platform.app.InstrumentationRegistry
 import com.vettid.app.core.storage.CredentialStore
 import io.nats.client.NKey
-import io.nats.client.Nats
-import io.nats.client.Options
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -19,15 +17,9 @@ import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URL
-import java.io.ByteArrayInputStream
-import java.security.KeyStore
-import java.security.cert.CertificateFactory
-import java.time.Duration
 import java.util.Base64
-import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
-import javax.net.ssl.TrustManagerFactory
 
 /**
  * Simple TCP/TLS connectivity test to diagnose NATS connection issues.
@@ -232,11 +224,11 @@ class TcpConnectivityTest {
     }
 
     /**
-     * Test jnats library connection with stored credentials.
+     * Test AndroidNatsClient with stored credentials.
      */
     @Test
-    fun testJnatsConnection() {
-        Log.i(TAG, "Testing jnats library connection")
+    fun testAndroidNatsClientWithStoredCredentials() {
+        Log.i(TAG, "Testing AndroidNatsClient with stored credentials")
 
         // Get stored credentials
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -262,43 +254,140 @@ class TcpConnectivityTest {
         Log.i(TAG, "Seed (first 10 chars): ${seed.take(10)}...")
 
         try {
-            // Use two-parameter version with separate JWT and seed (as recommended by backend)
-            val options = Options.Builder()
-                .server(connection.endpoint)
-                .authHandler(Nats.staticCredentials(jwt.toCharArray(), seed.toCharArray()))
-                .connectionTimeout(Duration.ofSeconds(30))
-                .noRandomize()  // Don't randomize server list
-                .ignoreDiscoveredServers()  // Don't try to connect to cluster URLs
-                .traceConnection()
-                .connectionListener { conn, type ->
-                    Log.i(TAG, "Connection event: $type, status=${conn?.status}")
-                }
-                .errorListener(object : io.nats.client.ErrorListener {
-                    override fun errorOccurred(conn: io.nats.client.Connection, error: String) {
-                        Log.e(TAG, "NATS error: $error")
-                    }
-                    override fun exceptionOccurred(conn: io.nats.client.Connection, exp: Exception) {
-                        Log.e(TAG, "NATS exception: ${exp.javaClass.name}: ${exp.message}", exp)
-                        exp.cause?.let { cause ->
-                            Log.e(TAG, "  Cause: ${cause.javaClass.name}: ${cause.message}")
-                        }
-                    }
-                })
-                .build()
+            val androidClient = AndroidNatsClient()
 
-            Log.i(TAG, "Calling Nats.connect()...")
-            val natsConnection = Nats.connect(options)
-            Log.i(TAG, "Connected! Status: ${natsConnection.status}")
+            // Run connection in blocking way for test
+            val result = kotlinx.coroutines.runBlocking {
+                androidClient.connect(connection.endpoint, jwt, seed)
+            }
 
-            natsConnection.close()
-            Log.i(TAG, "jnats test PASSED!")
+            if (result.isFailure) {
+                throw result.exceptionOrNull() ?: Exception("Connection failed")
+            }
+
+            Log.i(TAG, "Connected! Status: ${androidClient.isConnected}")
+
+            kotlinx.coroutines.runBlocking {
+                androidClient.disconnect()
+            }
+            Log.i(TAG, "AndroidNatsClient test with stored credentials PASSED!")
 
         } catch (e: Exception) {
-            Log.e(TAG, "jnats connection failed: ${e.javaClass.name}: ${e.message}", e)
+            Log.e(TAG, "AndroidNatsClient connection failed: ${e.javaClass.name}: ${e.message}", e)
             e.cause?.let { cause ->
                 Log.e(TAG, "  Cause: ${cause.javaClass.name}: ${cause.message}")
             }
-            fail("jnats connection failed: ${e.message}")
+            fail("AndroidNatsClient connection failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Test manual protocol with fresh credentials from test API.
+     * This verifies that credentials work before trying jnats.
+     */
+    @Test
+    fun testManualProtocolWithFreshCredentials() {
+        Log.i(TAG, "Testing manual protocol with fresh credentials from test API")
+
+        try {
+            // Step 1: Create fresh test invitation
+            Log.i(TAG, "Creating test invitation...")
+            val testUserId = "android_manual_test_${System.currentTimeMillis()}"
+            val invitationCode = createTestInvitation(testUserId)
+            Log.i(TAG, "Got invitation code: $invitationCode")
+
+            // Step 2: Start enrollment
+            Log.i(TAG, "Starting enrollment...")
+            val enrollSession = startEnrollment(invitationCode)
+            val enrollmentToken = enrollSession.getString("enrollment_token")
+            val passwordKeyId = enrollSession.getString("password_key_id")
+
+            // Step 3: Set password
+            Log.i(TAG, "Setting password...")
+            setPassword(enrollSession.getString("enrollment_session_id"), enrollmentToken, passwordKeyId)
+
+            // Step 4: Finalize enrollment
+            Log.i(TAG, "Finalizing enrollment...")
+            val credentials = finalizeEnrollment(enrollSession.getString("enrollment_session_id"), enrollmentToken)
+
+            // Get NATS credentials
+            val vaultBootstrap = credentials.getJSONObject("vault_bootstrap")
+            val credsFile = vaultBootstrap.getString("credentials")
+            val (jwt, seed) = parseCredsFile(credsFile)
+
+            Log.i(TAG, "Testing manual protocol with fresh JWT (${jwt.length} chars)")
+
+            // Connect via TLS and test manually
+            val sslFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
+            val socket = sslFactory.createSocket() as SSLSocket
+            socket.connect(InetSocketAddress(NATS_HOST, NATS_PORT), TIMEOUT_MS)
+            socket.soTimeout = TIMEOUT_MS
+            socket.startHandshake()
+
+            Log.i(TAG, "TLS connected (ACM), reading INFO...")
+
+            val reader = socket.inputStream.bufferedReader()
+            val writer = socket.outputStream.bufferedWriter()
+
+            val infoLine = reader.readLine()
+            Log.i(TAG, "INFO received: ${infoLine.take(100)}...")
+
+            if (!infoLine.startsWith("INFO ")) {
+                fail("Expected INFO, got: $infoLine")
+                return
+            }
+
+            val infoJson = JSONObject(infoLine.substring(5))
+            val nonce = infoJson.optString("nonce", "")
+            Log.i(TAG, "Server nonce: $nonce")
+
+            // Sign nonce with fresh credentials
+            val nkey = NKey.fromSeed(seed.toCharArray())
+            val signature = if (nonce.isNotEmpty()) {
+                val signedBytes = nkey.sign(nonce.toByteArray())
+                Base64.getUrlEncoder().withoutPadding().encodeToString(signedBytes)
+            } else ""
+
+            // Build CONNECT
+            val connectJson = JSONObject().apply {
+                put("verbose", true)
+                put("pedantic", false)
+                put("tls_required", true)
+                put("name", "android-fresh-test")
+                put("lang", "kotlin")
+                put("version", "1.0.0")
+                put("protocol", 1)
+                put("jwt", jwt)
+                put("nkey", String(nkey.publicKey))
+                if (signature.isNotEmpty()) put("sig", signature)
+            }
+
+            writer.write("CONNECT ${connectJson}\r\n")
+            writer.write("PING\r\n")
+            writer.flush()
+
+            val response = reader.readLine()
+            Log.i(TAG, "Response: $response")
+
+            if (response == "+OK") {
+                val pong = reader.readLine()
+                if (pong == "PONG") {
+                    Log.i(TAG, "✅ Manual protocol with fresh credentials PASSED!")
+                } else {
+                    fail("Expected PONG, got: $pong")
+                }
+            } else if (response == "PONG") {
+                Log.i(TAG, "✅ Manual protocol with fresh credentials PASSED!")
+            } else {
+                fail("NATS auth failed: $response")
+            }
+
+            socket.close()
+            cleanupTestUser(testUserId)
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Manual fresh credentials test failed: ${e.message}", e)
+            fail("Manual fresh credentials test failed: ${e.message}")
         }
     }
 
@@ -340,48 +429,42 @@ class TcpConnectivityTest {
             val vaultBootstrap = credentials.getJSONObject("vault_bootstrap")
             val endpoint = vaultBootstrap.optString("nats_endpoint", "tls://nats.vettid.dev:4222")
             val credsFile = vaultBootstrap.getString("credentials")
-            val caCertificate = vaultBootstrap.optString("ca_certificate", null)
 
             Log.i(TAG, "NATS endpoint: $endpoint")
             Log.i(TAG, "Credentials length: ${credsFile.length}")
             Log.i(TAG, "Credentials preview: ${credsFile.take(100)}...")
-            Log.i(TAG, "CA certificate provided: ${caCertificate != null}")
 
             // Parse JWT and seed from credentials file
             val (jwt, seed) = parseCredsFile(credsFile)
             Log.i(TAG, "Parsed JWT (${jwt.length} chars): ${jwt.take(50)}...")
             Log.i(TAG, "Parsed seed (${seed.length} chars): ${seed.take(10)}...")
 
-            // Step 5: Connect to NATS with jnats using two-parameter auth
-            Log.i(TAG, "Connecting to NATS with jnats (two-param auth)...")
-            val optionsBuilder = Options.Builder()
-                .server(endpoint)
-                .authHandler(Nats.staticCredentials(jwt.toCharArray(), seed.toCharArray()))
-                .connectionTimeout(Duration.ofSeconds(30))
-                .noRandomize()
-                .ignoreDiscoveredServers()
-                .traceConnection()
+            // Step 5: Connect to NATS with custom AndroidNatsClient
+            Log.i(TAG, "Connecting to NATS with AndroidNatsClient...")
 
-            // Add custom SSLContext if CA certificate is provided
-            if (caCertificate != null && caCertificate.isNotEmpty()) {
-                Log.i(TAG, "Building SSLContext with dynamic CA trust...")
-                val sslContext = buildSslContext(caCertificate)
-                optionsBuilder.sslContext(sslContext)
-                Log.i(TAG, "SSLContext configured with custom CA")
+            val androidClient = AndroidNatsClient()
+            val connectResult = kotlinx.coroutines.runBlocking {
+                androidClient.connect(endpoint, jwt, seed)
             }
 
-            val options = optionsBuilder.build()
+            if (connectResult.isFailure) {
+                throw connectResult.exceptionOrNull() ?: Exception("Connection failed")
+            }
 
-            val nats = Nats.connect(options)
-            Log.i(TAG, "Connected! Status: ${nats.status}")
+            Log.i(TAG, "Connected! Status: ${androidClient.isConnected}")
 
             // Step 6: Test publish
-            nats.publish("test.ping", "Hello from Android!".toByteArray())
-            nats.flush(Duration.ofSeconds(5))
+            val publishResult = kotlinx.coroutines.runBlocking {
+                androidClient.publish("test.ping", "Hello from Android!".toByteArray())
+            }
+            if (publishResult.isFailure) {
+                throw publishResult.exceptionOrNull() ?: Exception("Publish failed")
+            }
+            kotlinx.coroutines.runBlocking { androidClient.flush() }
             Log.i(TAG, "Published test message")
 
-            nats.close()
-            Log.i(TAG, "✅ jnats test with fresh credentials PASSED!")
+            kotlinx.coroutines.runBlocking { androidClient.disconnect() }
+            Log.i(TAG, "✅ AndroidNatsClient test with fresh credentials PASSED!")
 
             // Cleanup
             cleanupTestUser(testUserId)
@@ -414,32 +497,6 @@ class TcpConnectivityTest {
         }
 
         return Pair(jwt, seed)
-    }
-
-    // Helper function to build SSLContext with custom CA certificate
-    private fun buildSslContext(caCertPem: String): SSLContext {
-        // Parse PEM certificate
-        val certFactory = CertificateFactory.getInstance("X.509")
-        val caCertBytes = caCertPem
-            .replace("-----BEGIN CERTIFICATE-----", "")
-            .replace("-----END CERTIFICATE-----", "")
-            .replace("\\s".toRegex(), "")
-        val caInput = ByteArrayInputStream(android.util.Base64.decode(caCertBytes, android.util.Base64.DEFAULT))
-        val caCert = certFactory.generateCertificate(caInput)
-
-        Log.i(TAG, "Loaded CA certificate: ${caCert.type}")
-
-        // Build trust manager with dynamic CA
-        val keyStore = KeyStore.getInstance(KeyStore.getDefaultType())
-        keyStore.load(null, null)
-        keyStore.setCertificateEntry("vettid-nats-ca", caCert)
-
-        val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
-        tmf.init(keyStore)
-
-        val ctx = SSLContext.getInstance("TLS")
-        ctx.init(null, tmf.trustManagers, null)
-        return ctx
     }
 
     // Helper functions for test API

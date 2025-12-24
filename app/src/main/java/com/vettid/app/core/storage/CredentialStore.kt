@@ -12,6 +12,7 @@ import com.vettid.app.core.network.LAT
 import com.vettid.app.core.network.LegacyLedgerAuthToken
 import com.vettid.app.core.network.NatsConnectionInfo
 import com.vettid.app.core.network.NatsTopics
+import com.vettid.app.core.network.VaultBootstrap
 import com.vettid.app.core.network.TransactionKey
 import com.vettid.app.core.network.TransactionKeyInfo
 import com.vettid.app.core.network.TransactionKeyPublic
@@ -553,8 +554,27 @@ class CredentialStore @Inject constructor(
                 putString(KEY_NATS_TOPIC_SEND, topics.sendToVault)
                 putString(KEY_NATS_TOPIC_RECEIVE, topics.receiveFromVault)
             }
+            natsConnection.caCertificate?.let { caCert ->
+                putString(KEY_NATS_CA_CERT, caCert)
+            }
             putLong(KEY_NATS_STORED_AT, System.currentTimeMillis())
         }.apply()
+    }
+
+    /**
+     * Store NATS vault bootstrap credentials from enrollment finalize.
+     * VaultBootstrap contains the minimal credentials needed for NATS connection.
+     */
+    fun storeNatsConnection(vaultBootstrap: VaultBootstrap) {
+        encryptedPrefs.edit().apply {
+            putString(KEY_NATS_ENDPOINT, vaultBootstrap.endpoint)
+            putString(KEY_NATS_CREDENTIALS, vaultBootstrap.credentials)
+            vaultBootstrap.caCertificate?.let { caCert ->
+                putString(KEY_NATS_CA_CERT, caCert)
+            }
+            putLong(KEY_NATS_STORED_AT, System.currentTimeMillis())
+        }.apply()
+        android.util.Log.i("CredentialStore", "Stored NATS bootstrap credentials for ${vaultBootstrap.endpoint}")
     }
 
     /**

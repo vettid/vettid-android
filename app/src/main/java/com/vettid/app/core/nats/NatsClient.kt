@@ -1,54 +1,38 @@
 package com.vettid.app.core.nats
 
-import android.util.Base64
-import io.nats.client.Connection
-import io.nats.client.Dispatcher
-import io.nats.client.Message
-import io.nats.client.Nats
-import io.nats.client.Options
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayInputStream
-import java.security.KeyStore
-import java.security.cert.CertificateFactory
-import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
-import javax.net.ssl.SSLContext
-import javax.net.ssl.TrustManagerFactory
 
 /**
- * Wrapper around the NATS Java client for Android.
+ * NATS client for Android using custom AndroidNatsClient implementation.
  *
- * Provides a coroutine-friendly interface for connecting to NATS,
+ * This wrapper provides a coroutine-friendly interface for connecting to NATS,
  * publishing messages, and subscribing to subjects.
+ *
+ * Uses AndroidNatsClient which works reliably with ACM TLS termination
+ * on Android, unlike the jnats library which has compatibility issues.
  */
 @Singleton
 class NatsClient @Inject constructor() {
 
-    private var connection: Connection? = null
-    private var dispatcher: Dispatcher? = null
-    private val subscriptions = ConcurrentHashMap<String, NatsSubscription>()
+    private val androidClient = AndroidNatsClient()
+    private val subscriptions = ConcurrentHashMap<String, String>() // subject -> sid
 
     /**
      * Current connection status.
      */
     val isConnected: Boolean
-        get() = connection?.status == Connection.Status.CONNECTED
+        get() = androidClient.isConnected
 
     /**
      * Connection status for detailed state information.
      */
     val connectionStatus: ConnectionStatus
-        get() = when (connection?.status) {
-            Connection.Status.CONNECTED -> ConnectionStatus.CONNECTED
-            Connection.Status.CONNECTING -> ConnectionStatus.CONNECTING
-            Connection.Status.RECONNECTING -> ConnectionStatus.RECONNECTING
-            Connection.Status.DISCONNECTED -> ConnectionStatus.DISCONNECTED
-            Connection.Status.CLOSED -> ConnectionStatus.CLOSED
-            null -> ConnectionStatus.CLOSED
-        }
+        get() = if (androidClient.isConnected) ConnectionStatus.CONNECTED else ConnectionStatus.DISCONNECTED
 
     /**
      * Connect to NATS cluster using the provided credentials.
@@ -58,57 +42,27 @@ class NatsClient @Inject constructor() {
      */
     suspend fun connect(credentials: NatsCredentials): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            // Close existing connection if any
-            disconnect()
+            Log.i(TAG, "Attempting NATS connection to: ${credentials.endpoint}")
+            Log.d(TAG, "JWT length: ${credentials.jwt.length}, Seed length: ${credentials.seed.length}")
 
-            android.util.Log.i(TAG, "Attempting NATS connection to: ${credentials.endpoint}")
-            android.util.Log.d(TAG, "JWT length: ${credentials.jwt.length}, Seed length: ${credentials.seed.length}")
-            android.util.Log.d(TAG, "CA certificate provided: ${credentials.caCertificate != null}")
+            val result = androidClient.connect(
+                endpoint = credentials.endpoint,
+                jwt = credentials.jwt,
+                seed = credentials.seed
+            )
 
-            // Build connection options with verbose logging
-            // Use Nats.staticCredentials(jwt, seed) with separate JWT and nkey seed
-            val optionsBuilder = Options.Builder()
-                .server(credentials.endpoint)
-                .authHandler(Nats.staticCredentials(credentials.jwt.toCharArray(), credentials.seed.toCharArray()))
-                .connectionTimeout(Duration.ofSeconds(30))  // Increased for debugging
-                .pingInterval(Duration.ofSeconds(30))
-                .reconnectWait(Duration.ofSeconds(2))
-                .maxReconnects(10)
-                .noRandomize()  // Don't randomize server list
-                .ignoreDiscoveredServers()  // Don't try to connect to internal cluster URLs
-                .connectionListener { conn, type ->
-                    android.util.Log.i(TAG, "NATS connection event: $type, status=${conn?.status}")
+            result.fold(
+                onSuccess = {
+                    Log.i(TAG, "Connected to NATS at ${credentials.endpoint}")
+                    Result.success(Unit)
+                },
+                onFailure = { e ->
+                    Log.e(TAG, "Failed to connect to NATS", e)
+                    Result.failure(NatsException("Failed to connect: ${e.message}", e))
                 }
-                .errorListener(object : io.nats.client.ErrorListener {
-                    override fun errorOccurred(conn: Connection, error: String) {
-                        android.util.Log.e(TAG, "NATS error: $error")
-                    }
-                    override fun exceptionOccurred(conn: Connection, exp: Exception) {
-                        android.util.Log.e(TAG, "NATS exception: ${exp.message}", exp)
-                        exp.cause?.let { cause ->
-                            android.util.Log.e(TAG, "NATS exception cause: ${cause.javaClass.name}: ${cause.message}")
-                        }
-                    }
-                })
-                .traceConnection()  // Enable connection tracing
-
-            // Add custom SSLContext if CA certificate is provided
-            credentials.caCertificate?.let { caCert ->
-                val sslContext = buildSslContext(caCert)
-                optionsBuilder.sslContext(sslContext)
-                android.util.Log.i(TAG, "Using custom SSLContext with dynamic CA trust")
-            }
-
-            val options = optionsBuilder.build()
-
-            // Connect to NATS
-            connection = Nats.connect(options)
-            dispatcher = connection?.createDispatcher()
-
-            android.util.Log.i(TAG, "Connected to NATS at ${credentials.endpoint}")
-            Result.success(Unit)
+            )
         } catch (e: Exception) {
-            android.util.Log.e(TAG, "Failed to connect to NATS", e)
+            Log.e(TAG, "Failed to connect to NATS", e)
             Result.failure(NatsException("Failed to connect: ${e.message}", e))
         }
     }
@@ -118,23 +72,11 @@ class NatsClient @Inject constructor() {
      */
     suspend fun disconnect() = withContext(Dispatchers.IO) {
         try {
-            // Unsubscribe all
-            subscriptions.values.forEach { it.unsubscribe() }
             subscriptions.clear()
-
-            // Close dispatcher
-            dispatcher?.let {
-                connection?.closeDispatcher(it)
-            }
-            dispatcher = null
-
-            // Close connection
-            connection?.close()
-            connection = null
-
-            android.util.Log.i(TAG, "Disconnected from NATS")
+            androidClient.disconnect()
+            Log.i(TAG, "Disconnected from NATS")
         } catch (e: Exception) {
-            android.util.Log.e(TAG, "Error during disconnect", e)
+            Log.e(TAG, "Error during disconnect", e)
         }
     }
 
@@ -147,15 +89,19 @@ class NatsClient @Inject constructor() {
      */
     suspend fun publish(subject: String, data: ByteArray): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            val conn = connection ?: return@withContext Result.failure(
-                NatsException("Not connected to NATS")
+            val result = androidClient.publish(subject, data)
+            result.fold(
+                onSuccess = {
+                    Log.d(TAG, "Published message to $subject (${data.size} bytes)")
+                    Result.success(Unit)
+                },
+                onFailure = { e ->
+                    Log.e(TAG, "Failed to publish to $subject", e)
+                    Result.failure(NatsException("Failed to publish: ${e.message}", e))
+                }
             )
-
-            conn.publish(subject, data)
-            android.util.Log.d(TAG, "Published message to $subject (${data.size} bytes)")
-            Result.success(Unit)
         } catch (e: Exception) {
-            android.util.Log.e(TAG, "Failed to publish to $subject", e)
+            Log.e(TAG, "Failed to publish to $subject", e)
             Result.failure(NatsException("Failed to publish: ${e.message}", e))
         }
     }
@@ -172,27 +118,27 @@ class NatsClient @Inject constructor() {
      *
      * @param subject The subject to send the request to
      * @param data The request payload
-     * @param timeout Timeout duration
+     * @param timeoutMs Timeout in milliseconds
      * @return Result containing the reply message
      */
     suspend fun request(
         subject: String,
         data: ByteArray,
-        timeout: Duration = Duration.ofSeconds(5)
-    ): Result<Message> = withContext(Dispatchers.IO) {
+        timeoutMs: Long = 5000
+    ): Result<NatsMessage> = withContext(Dispatchers.IO) {
         try {
-            val conn = connection ?: return@withContext Result.failure(
-                NatsException("Not connected to NATS")
+            val result = androidClient.request(subject, data, timeoutMs)
+            result.fold(
+                onSuccess = { message ->
+                    Result.success(message)
+                },
+                onFailure = { e ->
+                    Log.e(TAG, "Request to $subject failed", e)
+                    Result.failure(NatsException("Request failed: ${e.message}", e))
+                }
             )
-
-            val reply = conn.request(subject, data, timeout)
-            if (reply != null) {
-                Result.success(reply)
-            } else {
-                Result.failure(NatsException("Request timed out"))
-            }
         } catch (e: Exception) {
-            android.util.Log.e(TAG, "Request to $subject failed", e)
+            Log.e(TAG, "Request to $subject failed", e)
             Result.failure(NatsException("Request failed: ${e.message}", e))
         }
     }
@@ -205,28 +151,31 @@ class NatsClient @Inject constructor() {
      * @return NatsSubscription for managing the subscription
      */
     fun subscribe(subject: String, callback: (NatsMessage) -> Unit): Result<NatsSubscription> {
-        try {
-            val disp = dispatcher ?: return Result.failure(
-                NatsException("Not connected to NATS")
-            )
-
-            val sub = disp.subscribe(subject) { msg ->
-                val natsMessage = NatsMessage(
-                    subject = msg.subject,
-                    data = msg.data,
-                    replyTo = msg.replyTo
-                )
-                callback(natsMessage)
+        return try {
+            val result = kotlinx.coroutines.runBlocking {
+                androidClient.subscribe(subject, callback)
             }
-
-            val subscription = NatsSubscription(subject, sub, disp)
-            subscriptions[subject] = subscription
-
-            android.util.Log.d(TAG, "Subscribed to $subject")
-            return Result.success(subscription)
+            result.fold(
+                onSuccess = { sid ->
+                    subscriptions[subject] = sid
+                    Log.d(TAG, "Subscribed to $subject")
+                    val subscription = NatsSubscription(subject, sid) {
+                        // Unsubscribe callback
+                        subscriptions.remove(subject)
+                        kotlinx.coroutines.runBlocking {
+                            androidClient.unsubscribe(sid)
+                        }
+                    }
+                    Result.success(subscription)
+                },
+                onFailure = { e ->
+                    Log.e(TAG, "Failed to subscribe to $subject", e)
+                    Result.failure(NatsException("Failed to subscribe: ${e.message}", e))
+                }
+            )
         } catch (e: Exception) {
-            android.util.Log.e(TAG, "Failed to subscribe to $subject", e)
-            return Result.failure(NatsException("Failed to subscribe: ${e.message}", e))
+            Log.e(TAG, "Failed to subscribe to $subject", e)
+            Result.failure(NatsException("Failed to subscribe: ${e.message}", e))
         }
     }
 
@@ -235,17 +184,20 @@ class NatsClient @Inject constructor() {
      *
      * @param subject The subject to unsubscribe from
      */
-    fun unsubscribe(subject: String) {
-        subscriptions.remove(subject)?.unsubscribe()
-        android.util.Log.d(TAG, "Unsubscribed from $subject")
+    suspend fun unsubscribe(subject: String) {
+        val sid = subscriptions.remove(subject)
+        if (sid != null) {
+            androidClient.unsubscribe(sid)
+            Log.d(TAG, "Unsubscribed from $subject")
+        }
     }
 
     /**
      * Flush any pending messages.
      */
-    suspend fun flush(timeout: Duration = Duration.ofSeconds(5)): Result<Unit> = withContext(Dispatchers.IO) {
+    suspend fun flush(): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            connection?.flush(timeout)
+            androidClient.flush()
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(NatsException("Flush failed: ${e.message}", e))
@@ -257,10 +209,8 @@ class NatsClient @Inject constructor() {
 
         /**
          * Format JWT and seed into NATS credential file format.
-         * Required for authHandler authentication.
          */
         fun formatCredentialFile(jwt: String, seed: String): String {
-            // IMPORTANT: END delimiters must have 5 dashes, not 6!
             return """-----BEGIN NATS USER JWT-----
 $jwt
 -----END NATS USER JWT-----
@@ -273,38 +223,6 @@ NKEYs are sensitive and should be treated as secrets.
 $seed
 -----END USER NKEY SEED-----
 """
-        }
-
-        /**
-         * Build an SSLContext that trusts the provided CA certificate.
-         * Used for connecting to NATS servers with internal/private CA.
-         *
-         * @param caCertPem PEM-encoded CA certificate
-         * @return SSLContext configured to trust the CA
-         */
-        fun buildSslContext(caCertPem: String): SSLContext {
-            // Parse PEM certificate
-            val certFactory = CertificateFactory.getInstance("X.509")
-            val caCertBytes = caCertPem
-                .replace("-----BEGIN CERTIFICATE-----", "")
-                .replace("-----END CERTIFICATE-----", "")
-                .replace("\\s".toRegex(), "")
-            val caInput = ByteArrayInputStream(Base64.decode(caCertBytes, Base64.DEFAULT))
-            val caCert = certFactory.generateCertificate(caInput)
-
-            android.util.Log.d(TAG, "Loaded CA certificate: ${caCert.type}")
-
-            // Build trust manager with dynamic CA
-            val keyStore = KeyStore.getInstance(KeyStore.getDefaultType())
-            keyStore.load(null, null)
-            keyStore.setCertificateEntry("vettid-nats-ca", caCert)
-
-            val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
-            tmf.init(keyStore)
-
-            val ctx = SSLContext.getInstance("TLS")
-            ctx.init(null, tmf.trustManagers, null)
-            return ctx
         }
     }
 }
@@ -354,27 +272,27 @@ data class NatsMessage(
  */
 class NatsSubscription(
     val subject: String,
-    private val subscription: io.nats.client.Subscription,
-    private val dispatcher: Dispatcher
+    private val sid: String,
+    private val onUnsubscribe: () -> Unit
 ) {
-    private var isActive = true
+    private var active = true
 
     /**
      * Check if subscription is still active.
      */
-    fun isActive(): Boolean = isActive && subscription.isActive
+    fun isActive(): Boolean = active
 
     /**
      * Unsubscribe from the subject.
      */
     fun unsubscribe() {
-        if (isActive) {
+        if (active) {
             try {
-                dispatcher.unsubscribe(subscription)
+                onUnsubscribe()
             } catch (e: Exception) {
                 // Ignore errors during unsubscribe
             }
-            isActive = false
+            active = false
         }
     }
 }

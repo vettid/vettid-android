@@ -615,11 +615,22 @@ data class FinalizeResponse(
     val status: String,
     @SerializedName("credential_package") val credentialPackage: CredentialPackage,
     @SerializedName("vault_status") val vaultStatus: String,
-    @SerializedName("nats_connection") val natsConnection: NatsConnectionInfo? = null
+    @SerializedName("vault_bootstrap") val natsConnection: VaultBootstrap? = null,
+    @SerializedName("vault_instance_id") val vaultInstanceId: String? = null
 )
 
 /**
- * NATS connection info from enrollment finalize.
+ * Vault bootstrap info from enrollment finalize.
+ * Contains NATS credentials for vault communication.
+ */
+data class VaultBootstrap(
+    val credentials: String,  // NATS credential file content (JWT + seed)
+    @SerializedName("nats_endpoint") val endpoint: String,
+    @SerializedName("ca_certificate") val caCertificate: String? = null
+)
+
+/**
+ * NATS connection info for storage.
  * Valid for 24 hours from enrollment.
  */
 data class NatsConnectionInfo(
@@ -627,7 +638,8 @@ data class NatsConnectionInfo(
     val credentials: String,  // NATS credential file content (JWT + seed)
     @SerializedName("owner_space") val ownerSpace: String,
     @SerializedName("message_space") val messageSpace: String,
-    val topics: NatsTopics? = null
+    val topics: NatsTopics? = null,
+    @SerializedName("ca_certificate") val caCertificate: String? = null
 )
 
 /**
