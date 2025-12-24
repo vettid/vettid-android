@@ -11,8 +11,13 @@ import io.nats.client.NKey
 import io.nats.client.Nats
 import io.nats.client.Options
 import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.URL
 import java.time.Duration
 import java.util.Base64
 import javax.net.ssl.SSLSocket
@@ -284,6 +289,177 @@ class TcpConnectivityTest {
                 Log.e(TAG, "  Cause: ${cause.javaClass.name}: ${cause.message}")
             }
             fail("jnats connection failed: ${e.message}")
+        }
+    }
+
+    /**
+     * Test jnats connection with fresh credentials from test API.
+     * This bypasses the EncryptedSharedPreferences issue in instrumented tests.
+     */
+    @Test
+    fun testJnatsWithFreshCredentials() {
+        Log.i(TAG, "Testing jnats with fresh credentials from test API")
+
+        try {
+            // Step 1: Create fresh test invitation
+            Log.i(TAG, "Creating test invitation...")
+            val testUserId = "android_jnats_test_${System.currentTimeMillis()}"
+            val invitationCode = createTestInvitation(testUserId)
+            Log.i(TAG, "Got invitation code: $invitationCode")
+
+            // Step 2: Start enrollment
+            Log.i(TAG, "Starting enrollment...")
+            val enrollSession = startEnrollment(invitationCode)
+            val sessionId = enrollSession.getString("session_id")
+            val enrollmentId = enrollSession.getString("enrollment_id")
+            Log.i(TAG, "Session: $sessionId, Enrollment: $enrollmentId")
+
+            // Step 3: Set password (simplified - no encryption for test)
+            Log.i(TAG, "Setting password...")
+            setPassword(sessionId, enrollmentId)
+
+            // Step 4: Finalize enrollment
+            Log.i(TAG, "Finalizing enrollment...")
+            val credentials = finalizeEnrollment(sessionId, enrollmentId)
+
+            val natsConnection = credentials.getJSONObject("nats_connection")
+            val endpoint = natsConnection.getString("endpoint")
+            val credsFile = natsConnection.getString("credentials")
+
+            Log.i(TAG, "NATS endpoint: $endpoint")
+            Log.i(TAG, "Credentials length: ${credsFile.length}")
+            Log.i(TAG, "Credentials preview: ${credsFile.take(100)}...")
+
+            // Step 5: Connect to NATS with jnats
+            Log.i(TAG, "Connecting to NATS with jnats...")
+            val options = Options.Builder()
+                .server(endpoint)
+                .authHandler(Nats.staticCredentials(credsFile.toByteArray(Charsets.UTF_8)))
+                .connectionTimeout(Duration.ofSeconds(30))
+                .noRandomize()
+                .ignoreDiscoveredServers()
+                .traceConnection()
+                .build()
+
+            val nats = Nats.connect(options)
+            Log.i(TAG, "Connected! Status: ${nats.status}")
+
+            // Step 6: Test publish
+            nats.publish("test.ping", "Hello from Android!".toByteArray())
+            nats.flush(Duration.ofSeconds(5))
+            Log.i(TAG, "Published test message")
+
+            nats.close()
+            Log.i(TAG, "✅ jnats test with fresh credentials PASSED!")
+
+            // Cleanup
+            cleanupTestUser(testUserId)
+
+        } catch (e: Exception) {
+            Log.e(TAG, "jnats fresh credentials test failed: ${e.javaClass.name}: ${e.message}", e)
+            e.printStackTrace()
+            fail("jnats fresh credentials test failed: ${e.message}")
+        }
+    }
+
+    // Helper functions for test API
+    private fun createTestInvitation(testUserId: String): String {
+        val url = URL("https://tiqpij5mue.execute-api.us-east-1.amazonaws.com/test/create-invitation")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.setRequestProperty("X-Test-Api-Key", "vettid-test-key-dev-only")
+        conn.doOutput = true
+
+        OutputStreamWriter(conn.outputStream).use {
+            it.write("""{"test_user_id": "$testUserId"}""")
+        }
+
+        val response = BufferedReader(InputStreamReader(conn.inputStream)).readText()
+        val json = JSONObject(response)
+        return json.getString("invitation_code")
+    }
+
+    private fun startEnrollment(invitationCode: String): JSONObject {
+        val url = URL("https://api.vettid.com/api/v1/enroll/start")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.doOutput = true
+
+        OutputStreamWriter(conn.outputStream).use {
+            it.write("""{"invitation_code": "$invitationCode"}""")
+        }
+
+        val response = BufferedReader(InputStreamReader(conn.inputStream)).readText()
+        return JSONObject(response)
+    }
+
+    private fun setPassword(sessionId: String, enrollmentId: String) {
+        val url = URL("https://api.vettid.com/api/v1/enroll/set-password")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.doOutput = true
+
+        // For test, we use a simple hash (in production, this would be properly encrypted)
+        val testPasswordHash = "dGVzdHBhc3N3b3JkaGFzaA==" // base64 of "testpasswordhash"
+
+        OutputStreamWriter(conn.outputStream).use {
+            it.write("""{
+                "session_id": "$sessionId",
+                "enrollment_id": "$enrollmentId",
+                "encrypted_password_hash": "$testPasswordHash",
+                "ephemeral_public_key": "test_key",
+                "nonce": "test_nonce",
+                "key_id": "test_key_id"
+            }""".trimIndent())
+        }
+
+        if (conn.responseCode != 200) {
+            val error = BufferedReader(InputStreamReader(conn.errorStream)).readText()
+            throw Exception("set-password failed: ${conn.responseCode} - $error")
+        }
+    }
+
+    private fun finalizeEnrollment(sessionId: String, enrollmentId: String): JSONObject {
+        val url = URL("https://api.vettid.com/api/v1/enroll/finalize")
+        val conn = url.openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.doOutput = true
+
+        OutputStreamWriter(conn.outputStream).use {
+            it.write("""{
+                "session_id": "$sessionId",
+                "enrollment_id": "$enrollmentId"
+            }""".trimIndent())
+        }
+
+        if (conn.responseCode != 200) {
+            val error = BufferedReader(InputStreamReader(conn.errorStream)).readText()
+            throw Exception("finalize failed: ${conn.responseCode} - $error")
+        }
+
+        val response = BufferedReader(InputStreamReader(conn.inputStream)).readText()
+        return JSONObject(response)
+    }
+
+    private fun cleanupTestUser(testUserId: String) {
+        try {
+            val url = URL("https://tiqpij5mue.execute-api.us-east-1.amazonaws.com/test/cleanup")
+            val conn = url.openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.setRequestProperty("X-Test-Api-Key", "vettid-test-key-dev-only")
+            conn.doOutput = true
+
+            OutputStreamWriter(conn.outputStream).use {
+                it.write("""{"test_user_id": "$testUserId"}""")
+            }
+            conn.inputStream.close()
+        } catch (e: Exception) {
+            Log.w(TAG, "Cleanup failed: ${e.message}")
         }
     }
 }

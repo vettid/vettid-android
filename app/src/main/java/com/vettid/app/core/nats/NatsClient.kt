@@ -62,7 +62,7 @@ class NatsClient @Inject constructor() {
             android.util.Log.d(TAG, "Credential file length: ${credentialFile.length}")
 
             // Build connection options with verbose logging
-            // Use Nats.staticCredentials(byte[]) which takes the full creds file content as bytes
+            // Use Nats.staticCredentials(byte[]) which takes the full creds file content
             val options = Options.Builder()
                 .server(credentials.endpoint)
                 .authHandler(Nats.staticCredentials(credentialFile.toByteArray(Charsets.UTF_8)))
@@ -248,9 +248,10 @@ class NatsClient @Inject constructor() {
          * Required for authHandler authentication.
          */
         fun formatCredentialFile(jwt: String, seed: String): String {
+            // IMPORTANT: END delimiters must have 5 dashes, not 6!
             return """-----BEGIN NATS USER JWT-----
 $jwt
-------END NATS USER JWT------
+-----END NATS USER JWT-----
 
 ************************* IMPORTANT *************************
 NKEY Seed printed below can be used to sign and prove identity.
@@ -258,7 +259,7 @@ NKEYs are sensitive and should be treated as secrets.
 
 -----BEGIN USER NKEY SEED-----
 $seed
-------END USER NKEY SEED------
+-----END USER NKEY SEED-----
 """
         }
     }
