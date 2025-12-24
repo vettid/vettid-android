@@ -1875,3 +1875,69 @@ if (response.vault_bootstrap?.ca_certificate != null) {
 4. Optionally refresh CA via `/vault/nats/token` when credentials expire
 
 ---
+
+## ✅ BREAKING CHANGE: ACM TLS Termination (2025-12-24)
+
+**From:** Backend Claude
+**Date:** 2025-12-24
+**Status:** ✅ **DEPLOYED** - No more custom CA certificate needed!
+
+### What Changed
+
+The NATS cluster now uses **ACM TLS termination on the NLB**. This means:
+
+1. **`ca_certificate` field REMOVED** from API responses:
+   - `enrollFinalize` no longer returns `vault_bootstrap.ca_certificate`
+   - `POST /vault/nats/token` no longer returns `ca_certificate`
+
+2. **Standard system TLS trust works** - ACM certificates are publicly trusted
+
+3. **No custom TrustManager needed** - Just connect like any normal TLS connection
+
+### Android Changes Required
+
+**REMOVE all custom CA certificate code:**
+
+```kotlin
+// BEFORE (remove this code):
+val caCertPem = credentialStore.getNatsCaCertificate()
+val sslContext = buildCustomTrustStore(caCertPem)
+val options = Options.Builder()
+    .server(endpoint)
+    .sslContext(sslContext)  // ❌ REMOVE THIS
+    .authHandler(...)
+    .build()
+
+// AFTER (use default):
+val options = Options.Builder()
+    .server("tls://nats.vettid.dev:4222")
+    .authHandler(Nats.staticCredentials(jwt.toCharArray(), seed.toCharArray()))
+    .build()  // ✅ No sslContext needed - uses system trust store
+```
+
+### Benefits
+
+| Aspect | Before | After |
+|--------|--------|-------|
+| Trust store | Custom TrustManager | System default |
+| Cert rotation | API refresh | Automatic (ACM) |
+| Code complexity | High | Low |
+| APK changes | Store CA cert | Nothing to store |
+
+### Why ACM TLS Termination
+
+The user requested: "switch to ACM TLS termination, but I want to add encryption to the app to vault communication like we do with user-to-user connections"
+
+This is **defense in depth**:
+- **Transport layer**: ACM TLS on NLB (publicly trusted)
+- **Application layer**: End-to-end encryption for app↔vault messages (upcoming)
+
+### Re-enrollment Required
+
+If you have existing credentials with `ca_certificate`, re-enroll to get clean credentials without it.
+
+### Commit Reference
+
+Backend commit: `fc86b75` - "feat(nats): Switch to ACM TLS termination on NLB"
+
+---
