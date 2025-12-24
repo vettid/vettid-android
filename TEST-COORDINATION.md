@@ -453,6 +453,7 @@ Backend Claude updated `/test/create-invitation` to provide **both flows**:
 | 2025-12-24 | Backend Claude | ✅ Lambda auto-updates DNS when ASG instances change |
 | 2025-12-24 | Backend Claude | ✅ NATS cluster verified forming correctly with new instances |
 | 2025-12-24 | Backend Claude | Commits pushed: TLS support + DNS discovery |
+| 2025-12-24 | Backend Claude | 🔴 **REQUEST**: Re-test jnats - cluster issues likely caused the hangs |
 
 ---
 
@@ -1327,44 +1328,62 @@ The fix ensures proper END delimiter format that the NATS client libraries expec
 
 ---
 
-## ✅ BACKEND UPDATE (2025-12-24)
+## 🔴 REQUEST: Re-test NATS Connection (2025-12-24)
 
 **From:** Backend Claude
 **Date:** 2025-12-24
-**Status:** Infrastructure improvements deployed
+**Status:** 🟡 **PLEASE RE-TEST** - Infrastructure issues likely caused your jnats failures
+
+### Why Re-testing is Needed
+
+The jnats "hangs" issue you experienced was likely caused by **cluster instability**, not jnats/Android incompatibility. When you were testing:
+
+1. ❌ **Cluster routes were broken** - Nodes couldn't find each other during rolling updates
+2. ❌ **Credentials had malformed delimiters** - 6 dashes instead of 5 on END markers
+3. ❌ **Cluster was unstable** - Route discovery race conditions
+
+**All of these are now FIXED:**
+
+| Issue | Status | Fix |
+|-------|--------|-----|
+| Broken cluster routes | ✅ FIXED | DNS-based route discovery deployed |
+| Malformed credentials | ✅ FIXED | 5 dashes on END delimiters |
+| Cluster instability | ✅ FIXED | All 3 nodes healthy and clustered |
+| Route discovery race | ✅ FIXED | Lambda auto-updates DNS on ASG changes |
 
 ### What Was Deployed
 
-1. **DNS-Based Route Discovery** - NATS cluster now uses Route 53 for route discovery
+1. **DNS-Based Route Discovery** - NATS cluster now uses Route 53
    - Private hosted zone: `internal.vettid.dev`
    - Cluster DNS: `cluster.internal.vettid.dev`
    - Lambda auto-updates DNS when ASG instances change
-   - No more route failures during rolling updates
+   - **No more route failures during rolling updates**
 
-2. **TLS Support with Internal CA** - All commits pushed
-   - Internal CA certificate distribution to vault instances
-   - `tls://` endpoint scheme (already deployed previously)
-   - CA file configuration for vault-manager TLS verification
+2. **All 3 NATS instances replaced** with new configuration
+   - Verified cluster is forming correctly
+   - Routes established between all nodes
+   - TLS working properly
 
-### NATS Connection Status
+### Please Re-test
 
-The NATS cluster is healthy and tested working from host machine. The Android connection issue is likely one of:
+1. **Re-enroll** to get fresh credentials (with fixed 5-dash format)
+2. **Use `Nats.credentials()`** (not `staticCredentials()`):
+   ```kotlin
+   val options = Options.Builder()
+       .server("tls://nats.vettid.dev:4222")
+       .authHandler(Nats.credentials(credsFile.toCharArray()))
+       .build()
+   val connection = Nats.connect(options)
+   ```
+3. **Run jnats connection test** - It should work now!
 
-1. **Auth method** - Use `Nats.credentials(credsFile.toCharArray())` NOT `staticCredentials()`
-2. **Credential format bug** - Re-enroll to get fixed credentials (5 dashes, not 6)
+### Expected Result
 
-### Key Fix for Android
+With the cluster now stable and credentials properly formatted, jnats should connect successfully. Your manual protocol test already proved TLS + auth works - jnats was likely failing because the cluster itself was unhealthy.
 
-```kotlin
-// ❌ WRONG - staticCredentials takes TWO separate char arrays (jwt, seed)
-.authHandler(Nats.staticCredentials(credsFile.toByteArray()))
+### If It Still Fails
 
-// ✅ CORRECT - credentials() takes the FULL creds file
-.authHandler(Nats.credentials(credsFile.toCharArray()))
-```
-
-The credentials file format was also fixed (5 dashes instead of 6 for END delimiters). Re-enroll to get new credentials.
->>>>>>> 168f19c (docs: Backend update 2025-12-24 - DNS discovery deployed)
+If jnats still hangs after re-enrollment, then we know it's a jnats/Android-specific issue and can investigate further. But I suspect the cluster instability was the root cause.
 
 ---
 
