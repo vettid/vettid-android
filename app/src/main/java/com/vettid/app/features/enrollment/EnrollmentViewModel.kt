@@ -437,6 +437,12 @@ class EnrollmentViewModel @Inject constructor(
                         android.util.Log.i("EnrollmentViewModel", "NATS credentials stored for ${vaultBootstrap.endpoint}")
                     }
 
+                    // Store enrollment token for member API calls
+                    vaultServiceClient.getEnrollmentToken()?.let { token ->
+                        credentialStore.setAuthToken(token)
+                        android.util.Log.i("EnrollmentViewModel", "Auth token stored for member API calls")
+                    }
+
                     updateFinalizingProgress(1.0f)
                     delay(300)
 

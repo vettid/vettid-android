@@ -82,9 +82,16 @@ class ConnectionsViewModel @Inject constructor(
                     }
                 },
                 onFailure = { error ->
-                    _state.value = ConnectionsState.Error(
-                        message = error.message ?: "Failed to load connections"
-                    )
+                    // Treat 401 (unauthorized) as empty state - member API auth may not be available
+                    val is401 = error.message?.contains("401") == true ||
+                            (error as? ConnectionApiException)?.code == 401
+                    if (is401) {
+                        _state.value = ConnectionsState.Empty
+                    } else {
+                        _state.value = ConnectionsState.Error(
+                            message = error.message ?: "Failed to load connections"
+                        )
+                    }
                 }
             )
         }

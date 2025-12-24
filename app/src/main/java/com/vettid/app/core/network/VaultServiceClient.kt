@@ -55,6 +55,12 @@ open class VaultServiceClient @Inject constructor() {
     private var enrollmentToken: String? = null
 
     /**
+     * Get the current enrollment token for storing after finalize.
+     * This token can be used for member API calls.
+     */
+    fun getEnrollmentToken(): String? = enrollmentToken
+
+    /**
      * Set the API URL for enrollment operations (from QR code)
      */
     fun setEnrollmentApiUrl(apiUrl: String) {
