@@ -7,6 +7,7 @@ import com.vettid.app.core.storage.CredentialStore
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
+import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -47,7 +48,7 @@ class NatsConnectionTest {
 
     @Test
     fun testStoredCredentialsExist() {
-        assertTrue("NATS credentials should be stored", credentialStore.hasNatsConnection())
+        assumeTrue("NATS credentials not stored - enroll device first", credentialStore.hasNatsConnection())
 
         val connection = credentialStore.getNatsConnection()
         assertNotNull("NATS connection info should not be null", connection)
@@ -60,6 +61,8 @@ class NatsConnectionTest {
 
     @Test
     fun testCredentialFileParsing() {
+        assumeTrue("NATS credentials not stored - enroll device first", credentialStore.hasNatsConnection())
+
         val parsed = credentialStore.getParsedNatsCredentials()
         assertNotNull("Parsed credentials should not be null", parsed)
 
@@ -75,6 +78,8 @@ class NatsConnectionTest {
 
     @Test
     fun testNatsConnection() {
+        assumeTrue("NATS credentials not stored - enroll device first", credentialStore.hasNatsConnection())
+
         runBlocking {
         // Get stored credentials
         val connection = credentialStore.getNatsConnection()
@@ -113,6 +118,8 @@ class NatsConnectionTest {
 
     @Test
     fun testPublishToVault() {
+        assumeTrue("NATS credentials not stored - enroll device first", credentialStore.hasNatsConnection())
+
         runBlocking {
         // Get stored credentials
         val connection = credentialStore.getNatsConnection()
@@ -160,6 +167,8 @@ class NatsConnectionTest {
 
     @Test
     fun testSubscribeToAppTopic() {
+        assumeTrue("NATS credentials not stored - enroll device first", credentialStore.hasNatsConnection())
+
         runBlocking {
         // Get stored credentials
         val connection = credentialStore.getNatsConnection()
