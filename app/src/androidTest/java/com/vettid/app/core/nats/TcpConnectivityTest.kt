@@ -3,6 +3,7 @@ package com.vettid.app.core.nats
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.*
+import org.junit.Ignore
 import org.junit.Test
 import org.junit.runner.RunWith
 import androidx.test.platform.app.InstrumentationRegistry
@@ -73,6 +74,7 @@ class TcpConnectivityTest {
     }
 
     @Test
+    @Ignore("NATS uses STARTTLS-like protocol - connect via plain TCP first, then upgrade. Direct TLS handshake is not supported.")
     fun testTlsConnection() {
         Log.i(TAG, "Testing TLS connection to $NATS_HOST:$NATS_PORT")
 
