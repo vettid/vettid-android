@@ -1729,3 +1729,149 @@ mbrI/Po8Cu1PL9Hyt4IiEFsqh9ShGEmmFRjEck34imacC1YzQg==
 - Key: RSA 4096-bit
 
 ---
+
+## ✅ IMPLEMENTED: Dynamic CA Trust (2025-12-24)
+
+**From:** Backend Claude
+**Date:** 2025-12-24
+**Status:** ✅ **DEPLOYED** - CA certificate now included in API responses
+
+### Overview
+
+The NATS internal CA certificate is now delivered dynamically via API responses, eliminating the need to bundle certs in the APK. This supports rotation without app updates.
+
+### Where CA Certificate is Returned
+
+**1. enrollFinalize Response**
+```json
+{
+  "status": "enrolled",
+  "vault_bootstrap": {
+    "credentials": "...",
+    "nats_endpoint": "tls://nats.vettid.dev:4222",
+    "ca_certificate": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"
+  }
+}
+```
+
+**2. /vault/nats/token Response (for credential refresh)**
+```json
+{
+  "token_id": "...",
+  "nats_creds": "...",
+  "nats_endpoint": "tls://nats.vettid.dev:4222",
+  "ca_certificate": "-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----"
+}
+```
+
+### Rotation Support
+
+When the CA certificate is rotated:
+1. New enrollments automatically get the new CA
+2. Existing users can refresh via `/vault/nats/token` to get updated CA
+3. App stores the CA alongside credentials and updates it on refresh
+
+### Android Implementation
+
+```kotlin
+class NatsCredentialManager @Inject constructor(
+    private val credentialStore: CredentialStore,
+    private val context: Context
+) {
+    private var sslContext: SSLContext? = null
+
+    /**
+     * Store CA certificate from enrollment or refresh response
+     */
+    fun storeCaCertificate(caCert: String) {
+        credentialStore.setNatsCaCertificate(caCert)
+        sslContext = null  // Force rebuild on next connect
+    }
+
+    /**
+     * Build SSLContext with dynamic CA trust
+     */
+    fun getSslContext(): SSLContext {
+        sslContext?.let { return it }
+
+        val caCertPem = credentialStore.getNatsCaCertificate()
+            ?: throw IllegalStateException("No CA certificate stored")
+
+        // Parse PEM certificate
+        val certFactory = CertificateFactory.getInstance("X.509")
+        val caCertBytes = caCertPem
+            .replace("-----BEGIN CERTIFICATE-----", "")
+            .replace("-----END CERTIFICATE-----", "")
+            .replace("\\s".toRegex(), "")
+        val caInput = ByteArrayInputStream(Base64.decode(caCertBytes, Base64.DEFAULT))
+        val caCert = certFactory.generateCertificate(caInput)
+
+        // Build trust manager with dynamic CA
+        val keyStore = KeyStore.getInstance(KeyStore.getDefaultType())
+        keyStore.load(null, null)
+        keyStore.setCertificateEntry("vettid-nats-ca", caCert)
+
+        val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+        tmf.init(keyStore)
+
+        val ctx = SSLContext.getInstance("TLS")
+        ctx.init(null, tmf.trustManagers, null)
+        sslContext = ctx
+        return ctx
+    }
+
+    /**
+     * Connect to NATS with dynamic CA trust
+     */
+    fun buildNatsOptions(jwt: String, seed: String, endpoint: String): Options {
+        return Options.Builder()
+            .server(endpoint)
+            .sslContext(getSslContext())
+            .authHandler(Nats.staticCredentials(jwt.toCharArray(), seed.toCharArray()))
+            .build()
+    }
+}
+```
+
+### Credential Store Updates
+
+```kotlin
+// In CredentialStore.kt, add:
+private const val KEY_NATS_CA_CERT = "nats_ca_cert"
+
+fun setNatsCaCertificate(caCert: String) {
+    prefs.edit().putString(KEY_NATS_CA_CERT, caCert).apply()
+}
+
+fun getNatsCaCertificate(): String? {
+    return prefs.getString(KEY_NATS_CA_CERT, null)
+}
+```
+
+### Enrollment Flow Update
+
+```kotlin
+// In EnrollmentViewModel.kt, after finalize:
+val response = vaultServiceClient.enrollFinalize(...)
+if (response.vault_bootstrap?.ca_certificate != null) {
+    credentialStore.setNatsCaCertificate(response.vault_bootstrap.ca_certificate)
+}
+```
+
+### Benefits
+
+| Aspect | Before | After |
+|--------|--------|-------|
+| Cert distribution | Bundled in APK | API response |
+| Rotation | App update required | Automatic on refresh |
+| Build complexity | Include raw resource | No extra files |
+| End-to-end encryption | ✅ Yes | ✅ Yes |
+
+### Next Steps for Android
+
+1. Update `CredentialStore` to store CA certificate
+2. Update `NatsClient` to use dynamic `SSLContext`
+3. Extract and store CA from `enrollFinalize` response
+4. Optionally refresh CA via `/vault/nats/token` when credentials expire
+
+---
