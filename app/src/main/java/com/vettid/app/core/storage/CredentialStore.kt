@@ -75,6 +75,7 @@ class CredentialStore @Inject constructor(
         private const val KEY_NATS_TOPIC_SEND = "nats_topic_send"
         private const val KEY_NATS_TOPIC_RECEIVE = "nats_topic_receive"
         private const val KEY_NATS_STORED_AT = "nats_stored_at"
+        private const val KEY_NATS_CA_CERT = "nats_ca_cert"
     }
 
     // MARK: - Credential Storage
@@ -674,7 +675,32 @@ class CredentialStore @Inject constructor(
             remove(KEY_NATS_TOPIC_SEND)
             remove(KEY_NATS_TOPIC_RECEIVE)
             remove(KEY_NATS_STORED_AT)
+            remove(KEY_NATS_CA_CERT)
         }.apply()
+    }
+
+    /**
+     * Store NATS CA certificate (PEM format) for TLS trust.
+     * This certificate is returned by the enrollment finalize response.
+     */
+    fun setNatsCaCertificate(caCert: String) {
+        encryptedPrefs.edit()
+            .putString(KEY_NATS_CA_CERT, caCert)
+            .apply()
+    }
+
+    /**
+     * Get stored NATS CA certificate (PEM format).
+     */
+    fun getNatsCaCertificate(): String? {
+        return encryptedPrefs.getString(KEY_NATS_CA_CERT, null)
+    }
+
+    /**
+     * Check if NATS CA certificate is stored.
+     */
+    fun hasNatsCaCertificate(): Boolean {
+        return encryptedPrefs.contains(KEY_NATS_CA_CERT)
     }
 
     // MARK: - Cleanup

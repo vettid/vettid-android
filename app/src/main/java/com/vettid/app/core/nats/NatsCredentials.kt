@@ -14,7 +14,9 @@ data class NatsCredentials(
     val seed: String,
     val endpoint: String,
     val expiresAt: Instant,
-    val permissions: NatsPermissions
+    val permissions: NatsPermissions,
+    /** Optional CA certificate (PEM format) for TLS trust. If null, uses system trust store. */
+    val caCertificate: String? = null
 ) {
     /**
      * Check if credentials are expired or about to expire.

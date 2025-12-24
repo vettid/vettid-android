@@ -1,5 +1,6 @@
 package com.vettid.app.core.nats
 
+import android.util.Base64
 import io.nats.client.Connection
 import io.nats.client.Dispatcher
 import io.nats.client.Message
@@ -7,10 +8,15 @@ import io.nats.client.Nats
 import io.nats.client.Options
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayInputStream
+import java.security.KeyStore
+import java.security.cert.CertificateFactory
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManagerFactory
 
 /**
  * Wrapper around the NATS Java client for Android.
@@ -57,10 +63,11 @@ class NatsClient @Inject constructor() {
 
             android.util.Log.i(TAG, "Attempting NATS connection to: ${credentials.endpoint}")
             android.util.Log.d(TAG, "JWT length: ${credentials.jwt.length}, Seed length: ${credentials.seed.length}")
+            android.util.Log.d(TAG, "CA certificate provided: ${credentials.caCertificate != null}")
 
             // Build connection options with verbose logging
             // Use Nats.staticCredentials(jwt, seed) with separate JWT and nkey seed
-            val options = Options.Builder()
+            val optionsBuilder = Options.Builder()
                 .server(credentials.endpoint)
                 .authHandler(Nats.staticCredentials(credentials.jwt.toCharArray(), credentials.seed.toCharArray()))
                 .connectionTimeout(Duration.ofSeconds(30))  // Increased for debugging
@@ -84,7 +91,15 @@ class NatsClient @Inject constructor() {
                     }
                 })
                 .traceConnection()  // Enable connection tracing
-                .build()
+
+            // Add custom SSLContext if CA certificate is provided
+            credentials.caCertificate?.let { caCert ->
+                val sslContext = buildSslContext(caCert)
+                optionsBuilder.sslContext(sslContext)
+                android.util.Log.i(TAG, "Using custom SSLContext with dynamic CA trust")
+            }
+
+            val options = optionsBuilder.build()
 
             // Connect to NATS
             connection = Nats.connect(options)
@@ -258,6 +273,38 @@ NKEYs are sensitive and should be treated as secrets.
 $seed
 -----END USER NKEY SEED-----
 """
+        }
+
+        /**
+         * Build an SSLContext that trusts the provided CA certificate.
+         * Used for connecting to NATS servers with internal/private CA.
+         *
+         * @param caCertPem PEM-encoded CA certificate
+         * @return SSLContext configured to trust the CA
+         */
+        fun buildSslContext(caCertPem: String): SSLContext {
+            // Parse PEM certificate
+            val certFactory = CertificateFactory.getInstance("X.509")
+            val caCertBytes = caCertPem
+                .replace("-----BEGIN CERTIFICATE-----", "")
+                .replace("-----END CERTIFICATE-----", "")
+                .replace("\\s".toRegex(), "")
+            val caInput = ByteArrayInputStream(Base64.decode(caCertBytes, Base64.DEFAULT))
+            val caCert = certFactory.generateCertificate(caInput)
+
+            android.util.Log.d(TAG, "Loaded CA certificate: ${caCert.type}")
+
+            // Build trust manager with dynamic CA
+            val keyStore = KeyStore.getInstance(KeyStore.getDefaultType())
+            keyStore.load(null, null)
+            keyStore.setCertificateEntry("vettid-nats-ca", caCert)
+
+            val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+            tmf.init(keyStore)
+
+            val ctx = SSLContext.getInstance("TLS")
+            ctx.init(null, tmf.trustManagers, null)
+            return ctx
         }
     }
 }

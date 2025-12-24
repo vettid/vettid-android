@@ -18,10 +18,15 @@ import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.URL
+import java.io.ByteArrayInputStream
+import java.security.KeyStore
+import java.security.cert.CertificateFactory
 import java.time.Duration
 import java.util.Base64
+import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
+import javax.net.ssl.TrustManagerFactory
 
 /**
  * Simple TCP/TLS connectivity test to diagnose NATS connection issues.
@@ -333,10 +338,12 @@ class TcpConnectivityTest {
             val vaultBootstrap = credentials.getJSONObject("vault_bootstrap")
             val endpoint = vaultBootstrap.optString("nats_endpoint", "tls://nats.vettid.dev:4222")
             val credsFile = vaultBootstrap.getString("credentials")
+            val caCertificate = vaultBootstrap.optString("ca_certificate", null)
 
             Log.i(TAG, "NATS endpoint: $endpoint")
             Log.i(TAG, "Credentials length: ${credsFile.length}")
             Log.i(TAG, "Credentials preview: ${credsFile.take(100)}...")
+            Log.i(TAG, "CA certificate provided: ${caCertificate != null}")
 
             // Parse JWT and seed from credentials file
             val (jwt, seed) = parseCredsFile(credsFile)
@@ -345,14 +352,23 @@ class TcpConnectivityTest {
 
             // Step 5: Connect to NATS with jnats using two-parameter auth
             Log.i(TAG, "Connecting to NATS with jnats (two-param auth)...")
-            val options = Options.Builder()
+            val optionsBuilder = Options.Builder()
                 .server(endpoint)
                 .authHandler(Nats.staticCredentials(jwt.toCharArray(), seed.toCharArray()))
                 .connectionTimeout(Duration.ofSeconds(30))
                 .noRandomize()
                 .ignoreDiscoveredServers()
                 .traceConnection()
-                .build()
+
+            // Add custom SSLContext if CA certificate is provided
+            if (caCertificate != null && caCertificate.isNotEmpty()) {
+                Log.i(TAG, "Building SSLContext with dynamic CA trust...")
+                val sslContext = buildSslContext(caCertificate)
+                optionsBuilder.sslContext(sslContext)
+                Log.i(TAG, "SSLContext configured with custom CA")
+            }
+
+            val options = optionsBuilder.build()
 
             val nats = Nats.connect(options)
             Log.i(TAG, "Connected! Status: ${nats.status}")
@@ -396,6 +412,32 @@ class TcpConnectivityTest {
         }
 
         return Pair(jwt, seed)
+    }
+
+    // Helper function to build SSLContext with custom CA certificate
+    private fun buildSslContext(caCertPem: String): SSLContext {
+        // Parse PEM certificate
+        val certFactory = CertificateFactory.getInstance("X.509")
+        val caCertBytes = caCertPem
+            .replace("-----BEGIN CERTIFICATE-----", "")
+            .replace("-----END CERTIFICATE-----", "")
+            .replace("\\s".toRegex(), "")
+        val caInput = ByteArrayInputStream(android.util.Base64.decode(caCertBytes, android.util.Base64.DEFAULT))
+        val caCert = certFactory.generateCertificate(caInput)
+
+        Log.i(TAG, "Loaded CA certificate: ${caCert.type}")
+
+        // Build trust manager with dynamic CA
+        val keyStore = KeyStore.getInstance(KeyStore.getDefaultType())
+        keyStore.load(null, null)
+        keyStore.setCertificateEntry("vettid-nats-ca", caCert)
+
+        val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+        tmf.init(keyStore)
+
+        val ctx = SSLContext.getInstance("TLS")
+        ctx.init(null, tmf.trustManagers, null)
+        return ctx
     }
 
     // Helper functions for test API
