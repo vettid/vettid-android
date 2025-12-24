@@ -1941,3 +1941,84 @@ If you have existing credentials with `ca_certificate`, re-enroll to get clean c
 Backend commit: `fc86b75` - "feat(nats): Switch to ACM TLS termination on NLB"
 
 ---
+
+## 🔜 UPCOMING: App-Vault End-to-End Encryption (2025-12-24)
+
+**From:** Backend Claude
+**Date:** 2025-12-24
+**Status:** 📝 **DESIGN COMPLETE** - Implementation upcoming
+
+### Overview
+
+Adding application-layer E2E encryption for app-vault messages. This provides **defense in depth** beyond TLS:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Mobile App                                      Vault Instance │
+│  ┌─────────────────────────┐    ┌─────────────────────────────┐│
+│  │ Layer 2: App-Layer E2E  │◄──►│ Layer 2: App-Layer E2E      ││
+│  │ ChaCha20-Poly1305       │    │ ChaCha20-Poly1305           ││
+│  └─────────────────────────┘    └─────────────────────────────┘│
+│  ┌─────────────────────────┐    ┌─────────────────────────────┐│
+│  │ Layer 1: TLS (ACM)      │◄──►│ Layer 1: TLS (ACM)          ││
+│  └─────────────────────────┘    └─────────────────────────────┘│
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Key Points
+
+1. **Session key exchange during app.bootstrap**
+   - App generates X25519 key pair, sends public key to vault
+   - Vault generates X25519 key pair, returns public key
+   - Both derive shared session key via ECDH + HKDF
+
+2. **Encrypted message format**
+   ```typescript
+   interface EncryptedMessage {
+     version: 1;
+     session_id: string;
+     ciphertext: string;  // Base64 ChaCha20-Poly1305
+     nonce: string;       // Base64 12-byte nonce
+   }
+   ```
+
+3. **Automatic key rotation**
+   - Every 24 hours or 1000 messages
+   - Grace period for in-flight messages
+
+4. **What's protected**
+   - All `forVault.*` and `forApp.*` messages (except bootstrap)
+   - Even if NATS cluster is compromised, message contents are encrypted
+
+### Android Implementation Required
+
+New class needed: `SessionCrypto.kt`
+
+```kotlin
+class SessionCrypto(
+    private val sessionKey: ByteArray,
+    private val sessionId: String,
+    private val vaultPublicKey: ByteArray
+) {
+    fun encrypt(payload: JsonObject): EncryptedMessage
+    fun decrypt(message: EncryptedMessage): JsonObject
+    fun requestRotation(): RotationRequest
+    fun completeRotation(response: RotationResponse): SessionCrypto
+}
+```
+
+### Integration Points
+
+1. **During app.bootstrap** - Add `app_session_public_key` to request
+2. **NatsClient** - Wrap publish/subscribe with encryption layer
+3. **CredentialStore** - Store session key securely
+
+### Design Document
+
+Full specification: `cdk/coordination/specs/app-vault-encryption.md`
+
+### Timeline
+
+This is the next major feature after ACM TLS termination is verified working.
+
+---
