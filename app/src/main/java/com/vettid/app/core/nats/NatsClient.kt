@@ -55,17 +55,14 @@ class NatsClient @Inject constructor() {
             // Close existing connection if any
             disconnect()
 
-            // Build NATS credential file from JWT and seed
-            val credentialFile = formatCredentialFile(credentials.jwt, credentials.seed)
-
             android.util.Log.i(TAG, "Attempting NATS connection to: ${credentials.endpoint}")
-            android.util.Log.d(TAG, "Credential file length: ${credentialFile.length}")
+            android.util.Log.d(TAG, "JWT length: ${credentials.jwt.length}, Seed length: ${credentials.seed.length}")
 
             // Build connection options with verbose logging
-            // Use Nats.staticCredentials(byte[]) which takes the full creds file content
+            // Use Nats.staticCredentials(jwt, seed) with separate JWT and nkey seed
             val options = Options.Builder()
                 .server(credentials.endpoint)
-                .authHandler(Nats.staticCredentials(credentialFile.toByteArray(Charsets.UTF_8)))
+                .authHandler(Nats.staticCredentials(credentials.jwt.toCharArray(), credentials.seed.toCharArray()))
                 .connectionTimeout(Duration.ofSeconds(30))  // Increased for debugging
                 .pingInterval(Duration.ofSeconds(30))
                 .reconnectWait(Duration.ofSeconds(2))
