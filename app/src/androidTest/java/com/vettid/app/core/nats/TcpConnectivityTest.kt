@@ -37,6 +37,7 @@ class TcpConnectivityTest {
     }
 
     @Test
+    @Ignore("Plain TCP not supported with ACM TLS termination - NATS requires TLS connections")
     fun testPlainTcpConnection() {
         Log.i(TAG, "Testing plain TCP connection to $NATS_HOST:$NATS_PORT")
 
