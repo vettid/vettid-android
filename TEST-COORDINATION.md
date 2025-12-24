@@ -1942,15 +1942,15 @@ Backend commit: `fc86b75` - "feat(nats): Switch to ACM TLS termination on NLB"
 
 ---
 
-## 🔜 UPCOMING: App-Vault End-to-End Encryption (2025-12-24)
+## ✅ IMPLEMENTED: App-Vault End-to-End Encryption (2025-12-24)
 
 **From:** Backend Claude
 **Date:** 2025-12-24
-**Status:** 📝 **DESIGN COMPLETE** - Implementation upcoming
+**Status:** ✅ **VAULT-MANAGER IMPLEMENTED** - Ready for Android integration
 
 ### Overview
 
-Adding application-layer E2E encryption for app-vault messages. This provides **defense in depth** beyond TLS:
+Application-layer E2E encryption for app-vault messages. Provides **defense in depth** beyond TLS:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -1965,30 +1965,69 @@ Adding application-layer E2E encryption for app-vault messages. This provides **
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Key Points
+### Vault-Manager Implementation Complete
 
-1. **Session key exchange during app.bootstrap**
-   - App generates X25519 key pair, sends public key to vault
-   - Vault generates X25519 key pair, returns public key
-   - Both derive shared session key via ECDH + HKDF
+Commit: `1bb5262` - "feat(crypto): Add E2E encryption for app-vault communication"
 
-2. **Encrypted message format**
-   ```typescript
-   interface EncryptedMessage {
-     version: 1;
-     session_id: string;
-     ciphertext: string;  // Base64 ChaCha20-Poly1305
-     nonce: string;       // Base64 12-byte nonce
-   }
-   ```
+**Files added:**
+- `internal/crypto/session.go` - X25519 ECDH + ChaCha20-Poly1305
+- `internal/crypto/wrapper.go` - Message encryption wrapper
+- `internal/storage/session.go` - Session persistence in JetStream KV
+- Updated `bootstrap.go` with session key exchange
 
-3. **Automatic key rotation**
-   - Every 24 hours or 1000 messages
-   - Grace period for in-flight messages
+### Updated Bootstrap Request/Response
 
-4. **What's protected**
-   - All `forVault.*` and `forApp.*` messages (except bootstrap)
-   - Even if NATS cluster is compromised, message contents are encrypted
+**Request** (`app.bootstrap`):
+```json
+{
+  "device_id": "device-123",
+  "device_type": "android",
+  "app_version": "1.0.0",
+  "app_session_public_key": "BASE64_X25519_PUBLIC_KEY"  // NEW: Optional
+}
+```
+
+**Response** (with E2E enabled):
+```json
+{
+  "credentials": "...",
+  "nats_endpoint": "tls://nats.vettid.dev:4222",
+  "owner_space": "OwnerSpace.user...",
+  "message_space": "MessageSpace.user...",
+  "topics": {...},
+  "expires_at": "...",
+  "rotation_info": {...},
+  "session_info": {                              // NEW: Present if key exchange succeeded
+    "session_id": "sess_abc123...",
+    "vault_session_public_key": "BASE64_X25519_PUBLIC_KEY",
+    "session_expires_at": "2025-01-07T...",
+    "encryption_enabled": true
+  }
+}
+```
+
+### Session Rotation Handler
+
+New handler: `session.rotate`
+
+**Request:**
+```json
+{
+  "device_id": "device-123",
+  "new_app_public_key": "BASE64_NEW_X25519_PUBLIC_KEY",
+  "reason": "scheduled"  // or "message_count", "explicit"
+}
+```
+
+**Response:**
+```json
+{
+  "session_id": "sess_new123...",
+  "vault_session_public_key": "BASE64_NEW_VAULT_PUBLIC_KEY",
+  "session_expires_at": "2025-01-14T...",
+  "effective_at": "2025-01-07T..."  // 5-min grace period start
+}
+```
 
 ### Android Implementation Required
 
@@ -2000,25 +2039,107 @@ class SessionCrypto(
     private val sessionId: String,
     private val vaultPublicKey: ByteArray
 ) {
-    fun encrypt(payload: JsonObject): EncryptedMessage
-    fun decrypt(message: EncryptedMessage): JsonObject
-    fun requestRotation(): RotationRequest
-    fun completeRotation(response: RotationResponse): SessionCrypto
+    companion object {
+        private const val KEY_SIZE = 32
+        private const val NONCE_SIZE = 12
+        private const val HKDF_CONTEXT = "app-vault-session-v1"
+        private const val HKDF_SALT = "VettID-HKDF-Salt-v1"
+    }
+
+    /**
+     * Create session from key exchange
+     */
+    fun deriveFromKeyExchange(
+        appPrivateKey: ByteArray,
+        vaultPublicKey: ByteArray
+    ): SessionCrypto {
+        // 1. X25519 ECDH
+        val sharedSecret = X25519.computeSharedSecret(appPrivateKey, vaultPublicKey)
+
+        // 2. HKDF-SHA256
+        val sessionKey = Hkdf.extract(
+            HKDF_SALT.toByteArray(),
+            sharedSecret
+        ).expand(HKDF_CONTEXT.toByteArray(), KEY_SIZE)
+
+        return SessionCrypto(sessionKey, sessionId, vaultPublicKey)
+    }
+
+    fun encrypt(payload: JsonObject): EncryptedMessage {
+        val nonce = SecureRandom().nextBytes(NONCE_SIZE)
+        val cipher = ChaCha20Poly1305(sessionKey)
+        val ciphertext = cipher.encrypt(nonce, payload.toString().toByteArray())
+
+        return EncryptedMessage(
+            version = 1,
+            sessionId = sessionId,
+            ciphertext = Base64.encode(ciphertext),
+            nonce = Base64.encode(nonce)
+        )
+    }
+
+    fun decrypt(message: EncryptedMessage): JsonObject {
+        val cipher = ChaCha20Poly1305(sessionKey)
+        val plaintext = cipher.decrypt(
+            Base64.decode(message.nonce),
+            Base64.decode(message.ciphertext)
+        )
+        return Json.parseToJsonElement(String(plaintext)).jsonObject
+    }
 }
 ```
 
-### Integration Points
+### Integration Steps
 
-1. **During app.bootstrap** - Add `app_session_public_key` to request
-2. **NatsClient** - Wrap publish/subscribe with encryption layer
-3. **CredentialStore** - Store session key securely
+1. **Add `app_session_public_key` to bootstrap request:**
+   ```kotlin
+   // Generate X25519 key pair
+   val keyPair = X25519.generateKeyPair()
+
+   // Send in bootstrap request
+   val request = BootstrapRequest(
+       deviceId = deviceId,
+       deviceType = "android",
+       appSessionPublicKey = Base64.encode(keyPair.publicKey)  // NEW
+   )
+   ```
+
+2. **Store session after bootstrap:**
+   ```kotlin
+   // Parse response
+   val response = parseBootstrapResponse(responseData)
+
+   if (response.sessionInfo != null) {
+       // Derive session key
+       val session = SessionCrypto.deriveFromKeyExchange(
+           keyPair.privateKey,
+           Base64.decode(response.sessionInfo.vaultSessionPublicKey)
+       )
+
+       // Store in EncryptedSharedPreferences
+       credentialStore.saveSession(session)
+   }
+   ```
+
+3. **Wrap publish/subscribe:**
+   ```kotlin
+   // Encrypt outgoing
+   val encrypted = session.encrypt(payload)
+   nats.publish(topic, encrypted.toJson())
+
+   // Decrypt incoming
+   val decrypted = session.decrypt(parseMessage(data))
+   ```
+
+### Crypto Libraries for Android
+
+Recommended: **Tink** (already in project)
+- `com.google.crypto.tink.subtle.X25519` - Key exchange
+- `com.google.crypto.tink.subtle.ChaCha20Poly1305` - Encryption
+- `com.google.crypto.tink.subtle.Hkdf` - Key derivation
 
 ### Design Document
 
 Full specification: `cdk/coordination/specs/app-vault-encryption.md`
-
-### Timeline
-
-This is the next major feature after ACM TLS termination is verified working.
 
 ---
