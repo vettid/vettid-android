@@ -107,6 +107,8 @@ fun ConnectionDetailScreen(
                     profile = currentState.profile,
                     isRevoking = currentState.isRevoking,
                     onMessageClick = { viewModel.onMessageClick() },
+                    onVoiceCallClick = { viewModel.onVoiceCallClick() },
+                    onVideoCallClick = { viewModel.onVideoCallClick() },
                     onRevokeClick = { viewModel.onRevokeClick() },
                     modifier = Modifier.padding(padding)
                 )
@@ -139,6 +141,8 @@ private fun LoadedContent(
     profile: Profile?,
     isRevoking: Boolean,
     onMessageClick: () -> Unit,
+    onVoiceCallClick: () -> Unit,
+    onVideoCallClick: () -> Unit,
     onRevokeClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -200,7 +204,7 @@ private fun LoadedContent(
 
             // Call button (voice)
             OutlinedButton(
-                onClick = { /* TODO: Initiate voice call */ },
+                onClick = onVoiceCallClick,
                 modifier = Modifier.weight(1f),
                 enabled = connection.status == ConnectionStatus.ACTIVE
             ) {
@@ -215,7 +219,7 @@ private fun LoadedContent(
 
             // Video button
             OutlinedButton(
-                onClick = { /* TODO: Initiate video call */ },
+                onClick = onVideoCallClick,
                 modifier = Modifier.weight(1f),
                 enabled = connection.status == ConnectionStatus.ACTIVE
             ) {

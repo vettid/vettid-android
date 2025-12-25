@@ -16,9 +16,11 @@ import com.vettid.app.core.security.SecureClipboard
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import java.util.concurrent.TimeUnit
+import com.vettid.app.core.nats.CallSignalingClient
 import com.vettid.app.core.nats.NatsClient
 import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.OwnerSpaceClient
+import com.vettid.app.features.calling.CallManager
 import com.vettid.app.core.network.ApiClient
 import com.vettid.app.core.network.VaultServiceClient
 import com.vettid.app.core.storage.CredentialStore
@@ -119,6 +121,25 @@ object AppModule {
         credentialStore: CredentialStore
     ): OwnerSpaceClient {
         return OwnerSpaceClient(connectionManager, credentialStore)
+    }
+
+    // Calling Dependencies
+
+    @Provides
+    @Singleton
+    fun provideCallSignalingClient(
+        ownerSpaceClient: OwnerSpaceClient
+    ): CallSignalingClient {
+        return CallSignalingClient(ownerSpaceClient)
+    }
+
+    @Provides
+    @Singleton
+    fun provideCallManager(
+        @ApplicationContext context: Context,
+        signalingClient: CallSignalingClient
+    ): CallManager {
+        return CallManager(context, signalingClient)
     }
 
     // Backup Dependencies

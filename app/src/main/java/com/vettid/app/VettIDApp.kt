@@ -30,6 +30,11 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.vettid.app.features.applock.AppLockScreen
 import com.vettid.app.features.applock.PinSetupScreen
+import com.vettid.app.features.calling.ActiveCallScreen
+import com.vettid.app.features.calling.CallManager
+import com.vettid.app.features.calling.CallUIEvent
+import com.vettid.app.features.calling.IncomingCallScreen
+import com.vettid.app.features.calling.OutgoingCallScreen
 import com.vettid.app.features.connections.*
 import com.vettid.app.features.auth.BiometricAuthManager
 import com.vettid.app.features.enrollment.EnrollmentScreen
@@ -100,16 +105,48 @@ sealed class Screen(val route: String) {
     object PinSetup : Screen("pin-setup")
     object FirstTimeSetup : Screen("first-time-setup")
     object DeployVault : Screen("deploy-vault")
+    // Calling
+    object IncomingCall : Screen("call/incoming")
+    object OutgoingCall : Screen("call/outgoing")
+    object ActiveCall : Screen("call/active")
 }
 
 @Composable
 fun VettIDApp(
     navController: NavHostController = rememberNavController(),
     appViewModel: AppViewModel = hiltViewModel(),
+    callManager: CallManager? = null,
     deepLinkData: DeepLinkData = DeepLinkData(DeepLinkType.NONE),
     onDeepLinkConsumed: () -> Unit = {}
 ) {
     val appState by appViewModel.appState.collectAsState()
+
+    // Handle call UI events
+    LaunchedEffect(callManager) {
+        callManager?.showCallUI?.collect { event ->
+            when (event) {
+                is CallUIEvent.ShowIncoming -> {
+                    navController.navigate(Screen.IncomingCall.route)
+                }
+                is CallUIEvent.ShowOutgoing -> {
+                    navController.navigate(Screen.OutgoingCall.route)
+                }
+                is CallUIEvent.ShowActive -> {
+                    // Pop any existing call screens and navigate to active
+                    navController.navigate(Screen.ActiveCall.route) {
+                        popUpTo(Screen.IncomingCall.route) { inclusive = true }
+                        popUpTo(Screen.OutgoingCall.route) { inclusive = true }
+                    }
+                }
+                is CallUIEvent.DismissCall -> {
+                    // Pop back from call screens
+                    navController.popBackStack(Screen.IncomingCall.route, inclusive = true)
+                    navController.popBackStack(Screen.OutgoingCall.route, inclusive = true)
+                    navController.popBackStack(Screen.ActiveCall.route, inclusive = true)
+                }
+            }
+        }
+    }
 
     // Handle deep links
     LaunchedEffect(deepLinkData) {
@@ -437,6 +474,22 @@ fun VettIDApp(
                     }
                 },
                 onBack = { navController.popBackStack() }
+            )
+        }
+        // Call screens
+        composable(Screen.IncomingCall.route) {
+            IncomingCallScreen(
+                onDismiss = { navController.popBackStack() }
+            )
+        }
+        composable(Screen.OutgoingCall.route) {
+            OutgoingCallScreen(
+                onDismiss = { navController.popBackStack() }
+            )
+        }
+        composable(Screen.ActiveCall.route) {
+            ActiveCallScreen(
+                onDismiss = { navController.popBackStack() }
             )
         }
     }

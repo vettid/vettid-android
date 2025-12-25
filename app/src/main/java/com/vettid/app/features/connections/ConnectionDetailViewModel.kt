@@ -7,6 +7,8 @@ import com.vettid.app.core.crypto.ConnectionCryptoManager
 import com.vettid.app.core.network.Connection
 import com.vettid.app.core.network.ConnectionApiClient
 import com.vettid.app.core.network.Profile
+import com.vettid.app.features.calling.CallManager
+import com.vettid.app.features.calling.CallType
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -24,6 +26,7 @@ import javax.inject.Inject
 class ConnectionDetailViewModel @Inject constructor(
     private val connectionApiClient: ConnectionApiClient,
     private val connectionCryptoManager: ConnectionCryptoManager,
+    private val callManager: CallManager,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -141,6 +144,42 @@ class ConnectionDetailViewModel @Inject constructor(
     fun onViewProfileClick() {
         viewModelScope.launch {
             _effects.emit(ConnectionDetailEffect.NavigateToProfile(connectionId))
+        }
+    }
+
+    /**
+     * Start a voice call with the connection.
+     */
+    fun onVoiceCallClick() {
+        viewModelScope.launch {
+            callManager.startCall(connectionId, CallType.VOICE).fold(
+                onSuccess = {
+                    // CallManager will emit showCallUI event which navigates to call screen
+                },
+                onFailure = { error ->
+                    _effects.emit(ConnectionDetailEffect.ShowError(
+                        error.message ?: "Failed to start call"
+                    ))
+                }
+            )
+        }
+    }
+
+    /**
+     * Start a video call with the connection.
+     */
+    fun onVideoCallClick() {
+        viewModelScope.launch {
+            callManager.startCall(connectionId, CallType.VIDEO).fold(
+                onSuccess = {
+                    // CallManager will emit showCallUI event which navigates to call screen
+                },
+                onFailure = { error ->
+                    _effects.emit(ConnectionDetailEffect.ShowError(
+                        error.message ?: "Failed to start video call"
+                    ))
+                }
+            )
         }
     }
 }
