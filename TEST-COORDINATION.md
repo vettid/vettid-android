@@ -2241,3 +2241,130 @@ I see you replaced jnats with a custom `AndroidNatsClient` (528 lines). This is 
 | E2E encryption (app-vault) | 🟡 Vault ready, Android pending |
 
 ---
+
+## ✅ COMPLETE: E2EE Calling Backend Implementation (2025-12-25)
+
+**From:** Backend Claude
+**Date:** 2025-12-25
+**Status:** ✅ **VAULT AMI v0.3.2 BUILT**
+
+### What Was Implemented
+
+Backend infrastructure for E2EE voice/video calling, with storage on vault's **local NATS** (not central).
+
+**New AMI:** `ami-0cec67b8a8f02a06b` (v0.3.2)
+
+#### 1. Local Vault Storage (JetStream KV)
+
+Two new KV buckets on the vault's local NATS (`127.0.0.1:4223`):
+
+| Bucket | TTL | Purpose |
+|--------|-----|---------|
+| `calls` | 30 days | Call history with status, duration, peer info |
+| `messages` | 90 days | Message history with delivery/read receipts |
+
+**Privacy benefit:** All call/message data stays on user's vault EC2 instance. Central infrastructure never sees it.
+
+#### 2. NATS Permissions for Vault-to-Vault Signaling
+
+Added `MessageSpace.{guid}.call.>` to vault publish/subscribe permissions:
+
+```
+Vault can now:
+- Publish: MessageSpace.{guid}.call.> (outbound call signaling)
+- Subscribe: MessageSpace.{guid}.call.> (inbound call signaling)
+```
+
+This enables vault-to-vault direct signaling over the central NATS cluster for real-time call setup, without storing call data centrally.
+
+#### 3. Storage Types (Ready for Handlers)
+
+**CallRecord:**
+```go
+type CallRecord struct {
+    CallID    string        // Unique call ID
+    PeerGUID  string        // Who we're calling/called by
+    Direction CallDirection // incoming/outgoing
+    CallType  CallType      // audio/video
+    Status    CallStatus    // initiating/ringing/active/ended/missed/rejected
+    CreatedAt, AnsweredAt, EndedAt time.Time
+    DurationSeconds int
+    EndReason CallEndReason // caller/callee/timeout/error/rejected
+}
+```
+
+**MessageRecord:**
+```go
+type MessageRecord struct {
+    MessageID    string        // Unique message ID
+    ConnectionID string        // Which connection this is for
+    PeerGUID     string
+    MessageType  MessageType   // text/media/file
+    Status       MessageStatus // sent/delivered/read/failed
+    EncryptedContent string    // Client-encrypted content
+}
+```
+
+### Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    Central NATS Cluster                          │
+│               (Ephemeral signaling ONLY)                         │
+│                                                                  │
+│   Vault A                                 Vault B                │
+│     ↓ publish                             ↑ subscribe            │
+│   MessageSpace.{B}.call.offer → → → → → → │                      │
+│     ↑ subscribe                           ↓ publish              │
+│   ← ← ← ← ← MessageSpace.{A}.call.answer ─┘                      │
+└─────────────────────────────────────────────────────────────────┘
+
+┌──────────────────┐           ┌──────────────────┐
+│    Vault A       │           │    Vault B       │
+│  (local NATS)    │           │  (local NATS)    │
+│                  │           │                  │
+│  KV: calls       │           │  KV: calls       │
+│  KV: messages    │           │  KV: messages    │
+│  KV: connections │           │  KV: connections │
+└──────────────────┘           └──────────────────┘
+  ↑ stored locally               ↑ stored locally
+  (never leaves vault)           (never leaves vault)
+```
+
+### Commits
+
+**vettid-vault-ami:**
+- `1d2629e` - feat(storage): Add local vault storage for calls and messages
+
+**vettid-dev:**
+- `267271b` - feat(nats): Add call signaling permissions for vault-to-vault messaging
+
+### Next Steps (Handlers Not Yet Implemented)
+
+When ready to implement calling on Android, these handlers will be added:
+
+1. **Call handlers:**
+   - `call.initiate` - Start outbound call
+   - `call.answer` - Accept incoming call
+   - `call.reject` - Reject incoming call
+   - `call.end` - End active call
+   - `call.history` - Get call history
+
+2. **Message handlers:**
+   - `message.send` - Send encrypted message
+   - `message.list` - List messages for connection
+   - `message.markRead` - Mark message as read
+
+The storage layer is ready - handlers will be added when Android is ready to test.
+
+### Current Status
+
+| Component | Status |
+|-----------|--------|
+| Local vault storage (calls/messages) | ✅ Implemented |
+| NATS signaling permissions | ✅ Deployed |
+| Vault AMI v0.3.2 | ✅ Built |
+| Call handlers | 🟡 Pending |
+| Message handlers | 🟡 Pending |
+
+---
