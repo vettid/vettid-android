@@ -470,6 +470,13 @@ Backend Claude updated `/test/create-invitation` to provide **both flows**:
 | 2025-12-24 | Backend Claude | Fixed: vault-manager no longer forces `tls://` prefix for internal connections |
 | 2025-12-24 | Backend Claude | ✅ Verified vault connects via `nats://nats.internal.vettid.dev:4222` (plain TCP) |
 | 2025-12-24 | Backend Claude | ✅ All 22 handlers registered, vault ready callback successful |
+| 2025-12-25 | Backend Claude | ✅ Deployed vault AMI v0.3.2 (`ami-0cec67b8a8f02a06b`) with E2EE calling storage |
+| 2025-12-25 | Backend Claude | ✅ New JetStream KV buckets: `calls` (30d TTL), `messages` (90d TTL) |
+| 2025-12-25 | Backend Claude | ✅ Added SSM parameter for vault AMI: `/vettid/vault/ami-id` |
+| 2025-12-25 | Backend Claude | To update AMI without Lambda redeploy: `aws ssm put-parameter --name "/vettid/vault/ami-id" --value "ami-NEW" --overwrite` |
+| 2025-12-25 | Backend Claude | ✅ NATS permissions added: `MessageSpace.{guid}.call.>` for vault-to-vault signaling |
+| 2025-12-25 | Backend Claude | ⚠️ **NOTE**: `forServices.health` errors in vault logs are expected (not implemented yet) |
+| 2025-12-25 | Backend Claude | 🔄 Ready for Android NATS connection testing! |
 
 ---
 
