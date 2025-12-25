@@ -2375,3 +2375,112 @@ The storage layer is ready - handlers will be added when Android is ready to tes
 | Message handlers | 🟡 Pending |
 
 ---
+
+## 🆕 App Heartbeat - Vault Health for Mobile (2025-12-24)
+
+**From:** Backend Claude
+**Date:** 2025-12-24
+**Status:** ✅ **IMPLEMENTED** - Will be in next vault AMI build
+
+### Overview
+
+The vault-manager now sends periodic heartbeats to the mobile app via NATS,
+providing real-time vault health status. This allows the app to:
+
+1. Know when the vault is connected and healthy
+2. Display vault status in the UI
+3. Detect when the vault goes offline
+4. Monitor resource usage (memory, goroutines)
+
+### NATS Topic
+
+```
+{ownerSpace}.forApp.heartbeat
+```
+
+Example: `OwnerSpace.user8F9131AC054D408F8A3028082047B080.forApp.heartbeat`
+
+### Message Format
+
+```json
+{
+  "type": "heartbeat",       // "heartbeat" or "shutdown"
+  "timestamp": "2025-12-24T15:30:00Z",
+  "status": {
+    "status": "healthy",     // "healthy", "degraded", or "shutting_down"
+    "timestamp": "2025-12-24T15:30:00Z",
+    "uptime": "2h30m15s",
+    "version": "0.3.3",
+    "go_routines": 42,
+    "memory_mb": 28,
+    "nats_local": true,
+    "nats_central": true
+  }
+}
+```
+
+### Heartbeat Interval
+
+**30 seconds** - Vault sends a heartbeat every 30 seconds.
+
+### Shutdown Notification
+
+When the vault shuts down gracefully, it sends a final heartbeat with:
+- `type: "shutdown"`
+- `status.status: "shutting_down"`
+
+### Android Implementation
+
+Subscribe to the heartbeat topic after NATS connection:
+
+```kotlin
+// In your NATS client
+natsClient.subscribe("${ownerSpace}.forApp.heartbeat") { message ->
+    val heartbeat = Json.decodeFromString<VaultHeartbeat>(message.data.decodeToString())
+
+    when (heartbeat.type) {
+        "heartbeat" -> {
+            // Update vault status in UI
+            vaultStatus.value = heartbeat.status
+        }
+        "shutdown" -> {
+            // Vault is shutting down
+            vaultStatus.value = VaultStatus.OFFLINE
+        }
+    }
+}
+```
+
+### Data Classes (Kotlin)
+
+```kotlin
+@Serializable
+data class VaultHeartbeat(
+    val type: String,           // "heartbeat" or "shutdown"
+    val timestamp: String,      // ISO 8601
+    val status: VaultStatus
+)
+
+@Serializable
+data class VaultStatus(
+    val status: String,         // "healthy", "degraded", "shutting_down"
+    val timestamp: String,
+    val uptime: String,         // e.g., "2h30m15s"
+    val version: String,
+    @SerialName("go_routines") val goRoutines: Int,
+    @SerialName("memory_mb") val memoryMb: Int,
+    @SerialName("nats_local") val natsLocal: Boolean,
+    @SerialName("nats_central") val natsCentral: Boolean
+)
+```
+
+### Implementation Status
+
+| Component | Status |
+|-----------|--------|
+| HealthConfig updated | ✅ Complete |
+| sendHeartbeat updated | ✅ Complete |
+| vault-provisioner updated | ✅ Complete |
+| Vault AMI v0.3.3 | 🔄 Building |
+
+---
