@@ -1,10 +1,17 @@
 package com.vettid.app.core.nats
 
+import android.util.Base64
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import com.vettid.app.core.crypto.EncryptedSessionMessage
+import com.vettid.app.core.crypto.SessionCrypto
+import com.vettid.app.core.crypto.SessionInfo
+import com.vettid.app.core.crypto.SessionKeyPair
+import com.vettid.app.core.storage.CredentialStore
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import org.json.JSONObject
 import java.time.Instant
 import java.util.UUID
 import javax.inject.Inject
@@ -18,12 +25,19 @@ import javax.inject.Singleton
  * - Publish: OwnerSpace.{guid}.forVault.> (send commands to vault)
  * - Subscribe: OwnerSpace.{guid}.forApp.> (receive responses from vault)
  * - Subscribe: OwnerSpace.{guid}.eventTypes (read handler definitions)
+ *
+ * Supports E2E encryption via session key exchange with vault.
  */
 @Singleton
 class OwnerSpaceClient @Inject constructor(
-    private val connectionManager: NatsConnectionManager
+    private val connectionManager: NatsConnectionManager,
+    private val credentialStore: CredentialStore
 ) {
     private val gson = Gson()
+
+    // E2E session crypto (established via bootstrap)
+    private var sessionCrypto: SessionCrypto? = null
+    private var pendingKeyPair: SessionKeyPair? = null
     private val natsClient: NatsClient
         get() = connectionManager.getNatsClient()
 
@@ -158,9 +172,220 @@ class OwnerSpaceClient @Inject constructor(
         return sendToVault("ping")
     }
 
+    // MARK: - E2E Session Management
+
+    /**
+     * Bootstrap the vault connection with E2E session key exchange.
+     *
+     * This establishes an encrypted session for app-vault communication:
+     * 1. Generate X25519 keypair
+     * 2. Send public key to vault via app.bootstrap
+     * 3. Receive vault's public key in response
+     * 4. Derive shared session key via ECDH + HKDF
+     *
+     * @param deviceId Device identifier
+     * @param appVersion App version string
+     * @return Result with session info on success
+     */
+    suspend fun bootstrap(
+        deviceId: String,
+        appVersion: String = "1.0.0"
+    ): Result<BootstrapResponse> {
+        // Generate session keypair
+        val keyPair = SessionCrypto.generateKeyPair()
+        pendingKeyPair = keyPair
+
+        // Build bootstrap request
+        val payload = JsonObject().apply {
+            addProperty("device_id", deviceId)
+            addProperty("device_type", "android")
+            addProperty("app_version", appVersion)
+            addProperty("app_session_public_key", keyPair.publicKeyBase64())
+        }
+
+        android.util.Log.i(TAG, "Sending bootstrap with session public key")
+
+        // Send bootstrap request
+        val requestIdResult = sendToVault("app.bootstrap", payload)
+        if (requestIdResult.isFailure) {
+            pendingKeyPair?.clear()
+            pendingKeyPair = null
+            return Result.failure(requestIdResult.exceptionOrNull() ?: NatsException("Bootstrap failed"))
+        }
+
+        return Result.success(BootstrapResponse(
+            requestId = requestIdResult.getOrThrow(),
+            pendingKeyPair = keyPair
+        ))
+    }
+
+    /**
+     * Complete session establishment from bootstrap response.
+     * Call this when you receive the bootstrap response with session_info.
+     *
+     * @param sessionInfo Session info from vault response
+     * @return SessionCrypto instance for encrypting messages
+     */
+    fun establishSession(sessionInfo: SessionInfo): Result<SessionCrypto> {
+        val keyPair = pendingKeyPair
+            ?: return Result.failure(NatsException("No pending key exchange"))
+
+        return try {
+            val vaultPublicKey = Base64.decode(sessionInfo.vaultSessionPublicKey, Base64.NO_WRAP)
+            val expiresAt = sessionInfo.expiresAtMillis()
+
+            val session = SessionCrypto.fromKeyExchange(
+                sessionId = sessionInfo.sessionId,
+                appPrivateKey = keyPair.privateKey,
+                appPublicKey = keyPair.publicKey,
+                vaultPublicKey = vaultPublicKey,
+                expiresAt = expiresAt
+            )
+
+            // Store session
+            credentialStore.storeSession(
+                sessionId = session.sessionId,
+                sessionKey = session.getSessionKeyForStorage(),
+                publicKey = session.publicKey,
+                expiresAt = expiresAt
+            )
+
+            sessionCrypto = session
+            pendingKeyPair?.clear()
+            pendingKeyPair = null
+
+            android.util.Log.i(TAG, "E2E session established: ${session.sessionId}")
+            Result.success(session)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to establish session", e)
+            pendingKeyPair?.clear()
+            pendingKeyPair = null
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Restore session from storage if available.
+     *
+     * @return true if a valid session was restored
+     */
+    fun restoreSession(): Boolean {
+        if (!credentialStore.hasValidSession()) {
+            return false
+        }
+
+        val sessionId = credentialStore.getSessionId() ?: return false
+        val sessionKey = credentialStore.getSessionKey() ?: return false
+        val publicKey = credentialStore.getSessionPublicKey() ?: return false
+        val expiresAt = credentialStore.getSessionExpiresAt()
+
+        sessionCrypto = SessionCrypto.fromStored(
+            sessionId = sessionId,
+            sessionKey = sessionKey,
+            publicKey = publicKey,
+            expiresAt = expiresAt
+        )
+
+        android.util.Log.i(TAG, "E2E session restored: $sessionId")
+        return true
+    }
+
+    /**
+     * Check if E2E encryption is enabled.
+     */
+    val isE2EEnabled: Boolean
+        get() = sessionCrypto?.isValid == true
+
+    /**
+     * Get current session ID if E2E is enabled.
+     */
+    val currentSessionId: String?
+        get() = sessionCrypto?.sessionId
+
+    /**
+     * Rotate the session key.
+     * Call this periodically or after a certain message count.
+     *
+     * @param reason Reason for rotation (scheduled, message_count, explicit)
+     * @return Request ID
+     */
+    suspend fun rotateSession(reason: String = "scheduled"): Result<String> {
+        val keyPair = SessionCrypto.generateKeyPair()
+        pendingKeyPair = keyPair
+
+        val payload = JsonObject().apply {
+            addProperty("device_id", credentialStore.getUserGuid() ?: "")
+            addProperty("new_app_public_key", keyPair.publicKeyBase64())
+            addProperty("reason", reason)
+        }
+
+        return sendToVault("session.rotate", payload)
+    }
+
+    /**
+     * Clear the current session.
+     */
+    fun clearSession() {
+        sessionCrypto?.clear()
+        sessionCrypto = null
+        pendingKeyPair?.clear()
+        pendingKeyPair = null
+        credentialStore.clearSession()
+    }
+
+    /**
+     * Encrypt a message payload if E2E is enabled.
+     *
+     * @param payload The message payload
+     * @return Encrypted payload as JsonObject or original if E2E not enabled
+     */
+    fun encryptPayload(payload: JsonObject): JsonObject {
+        val session = sessionCrypto
+        if (session == null || !session.isValid) {
+            return payload
+        }
+
+        val plaintext = payload.toString().toByteArray(Charsets.UTF_8)
+        val encrypted = session.encrypt(plaintext)
+
+        // Convert to Gson JsonObject
+        return JsonObject().apply {
+            addProperty("session_id", encrypted.sessionId)
+            addProperty("ciphertext", Base64.encodeToString(encrypted.ciphertext, Base64.NO_WRAP))
+            addProperty("nonce", Base64.encodeToString(encrypted.nonce, Base64.NO_WRAP))
+        }
+    }
+
+    /**
+     * Decrypt a message if it's encrypted.
+     *
+     * @param data Raw message data
+     * @return Decrypted data or original if not encrypted
+     */
+    fun decryptPayload(data: ByteArray): ByteArray {
+        val session = sessionCrypto ?: return data
+
+        return try {
+            val json = JSONObject(String(data, Charsets.UTF_8))
+            if (json.has("session_id") && json.has("ciphertext") && json.has("nonce")) {
+                val encrypted = EncryptedSessionMessage.fromJson(json)
+                session.decrypt(encrypted)
+            } else {
+                data
+            }
+        } catch (e: Exception) {
+            // Not encrypted or decryption failed - return original
+            data
+        }
+    }
+
     private fun handleVaultResponse(message: NatsMessage) {
         try {
-            val response = gson.fromJson(message.dataString, VaultResponseJson::class.java)
+            // Decrypt if E2E is enabled
+            val data = decryptPayload(message.data)
+            val responseString = String(data, Charsets.UTF_8)
+
+            val response = gson.fromJson(responseString, VaultResponseJson::class.java)
             val correlationId = response.getCorrelationId()
 
             // Handle standard vault-manager response format (success/error with result)
@@ -410,4 +635,15 @@ private data class EventTypeJson(
     val name: String,
     val description: String? = null,
     val parameters: List<String>? = null
+)
+
+// MARK: - Bootstrap Response
+
+/**
+ * Response from bootstrap request.
+ * Contains the pending keypair for session establishment.
+ */
+data class BootstrapResponse(
+    val requestId: String,
+    val pendingKeyPair: SessionKeyPair
 )

@@ -114,8 +114,11 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideOwnerSpaceClient(connectionManager: NatsConnectionManager): OwnerSpaceClient {
-        return OwnerSpaceClient(connectionManager)
+    fun provideOwnerSpaceClient(
+        connectionManager: NatsConnectionManager,
+        credentialStore: CredentialStore
+    ): OwnerSpaceClient {
+        return OwnerSpaceClient(connectionManager, credentialStore)
     }
 
     // Backup Dependencies

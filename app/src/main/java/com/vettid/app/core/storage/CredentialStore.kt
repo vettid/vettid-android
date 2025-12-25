@@ -77,6 +77,11 @@ class CredentialStore @Inject constructor(
         private const val KEY_NATS_TOPIC_RECEIVE = "nats_topic_receive"
         private const val KEY_NATS_STORED_AT = "nats_stored_at"
         private const val KEY_NATS_CA_CERT = "nats_ca_cert"
+        // E2E session keys
+        private const val KEY_SESSION_ID = "session_id"
+        private const val KEY_SESSION_KEY = "session_key"
+        private const val KEY_SESSION_PUBLIC_KEY = "session_public_key"
+        private const val KEY_SESSION_EXPIRES_AT = "session_expires_at"
     }
 
     // MARK: - Credential Storage
@@ -721,6 +726,90 @@ class CredentialStore @Inject constructor(
      */
     fun hasNatsCaCertificate(): Boolean {
         return encryptedPrefs.contains(KEY_NATS_CA_CERT)
+    }
+
+    // MARK: - E2E Session Storage
+
+    /**
+     * Store E2E session data for app-vault encryption.
+     *
+     * @param sessionId Session ID from vault
+     * @param sessionKey Derived session key (32 bytes)
+     * @param publicKey App's session public key
+     * @param expiresAt Session expiration time (millis)
+     */
+    fun storeSession(
+        sessionId: String,
+        sessionKey: ByteArray,
+        publicKey: ByteArray,
+        expiresAt: Long
+    ) {
+        encryptedPrefs.edit().apply {
+            putString(KEY_SESSION_ID, sessionId)
+            putString(KEY_SESSION_KEY, Base64.encodeToString(sessionKey, Base64.NO_WRAP))
+            putString(KEY_SESSION_PUBLIC_KEY, Base64.encodeToString(publicKey, Base64.NO_WRAP))
+            putLong(KEY_SESSION_EXPIRES_AT, expiresAt)
+        }.apply()
+        android.util.Log.i("CredentialStore", "E2E session stored: $sessionId, expires: $expiresAt")
+    }
+
+    /**
+     * Get stored session ID.
+     */
+    fun getSessionId(): String? {
+        return encryptedPrefs.getString(KEY_SESSION_ID, null)
+    }
+
+    /**
+     * Get stored session key.
+     */
+    fun getSessionKey(): ByteArray? {
+        val keyBase64 = encryptedPrefs.getString(KEY_SESSION_KEY, null) ?: return null
+        return try {
+            Base64.decode(keyBase64, Base64.NO_WRAP)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Get stored session public key.
+     */
+    fun getSessionPublicKey(): ByteArray? {
+        val keyBase64 = encryptedPrefs.getString(KEY_SESSION_PUBLIC_KEY, null) ?: return null
+        return try {
+            Base64.decode(keyBase64, Base64.NO_WRAP)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Get session expiration time (millis).
+     */
+    fun getSessionExpiresAt(): Long {
+        return encryptedPrefs.getLong(KEY_SESSION_EXPIRES_AT, 0)
+    }
+
+    /**
+     * Check if a valid session exists.
+     */
+    fun hasValidSession(): Boolean {
+        val sessionId = getSessionId() ?: return false
+        val expiresAt = getSessionExpiresAt()
+        return sessionId.isNotEmpty() && System.currentTimeMillis() < expiresAt
+    }
+
+    /**
+     * Clear stored session data.
+     */
+    fun clearSession() {
+        encryptedPrefs.edit().apply {
+            remove(KEY_SESSION_ID)
+            remove(KEY_SESSION_KEY)
+            remove(KEY_SESSION_PUBLIC_KEY)
+            remove(KEY_SESSION_EXPIRES_AT)
+        }.apply()
     }
 
     // MARK: - Cleanup
