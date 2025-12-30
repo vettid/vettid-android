@@ -1,6 +1,6 @@
 # VettID API Status
 
-**Last Updated:** 2025-12-22 by Backend
+**Last Updated:** 2025-12-30 by Backend
 
 This file is the master coordination point between backend development and mobile app development (iOS and Android). Mobile developers should reference this file to understand API availability and required actions.
 
@@ -22,6 +22,55 @@ This file is the master coordination point between backend development and mobil
 ---
 
 ## Recent Changes
+
+### 2025-12-30 - Vault-to-Vault Real-Time Messaging Deployed
+
+- **Endpoints:** New NATS event handlers for peer-to-peer messaging
+  - `message.send` - Send encrypted message to peer vault
+  - `message.read-receipt` - Send read receipt to sender vault
+  - `profile.broadcast` - Broadcast profile updates to all connections
+  - `connection.notify-revoke` - Notify peer of connection revocation
+
+- **Breaking:** No - New functionality only
+
+- **Architecture:** Messages flow vault-to-vault via NATS MessageSpace, not through Lambda
+  - App → Vault (OwnerSpace.forVault) → Peer Vault (MessageSpace.forOwner) → Peer App (OwnerSpace.forApp)
+  - Lambda handlers store messages in DynamoDB for backup/history only
+
+- **Incoming Message Types on MessageSpace.forOwner:**
+  - `message` - Incoming message from peer
+  - `read-receipt` - Read receipt from peer
+  - `profile-update` - Profile update from peer
+  - `revoked` - Connection revocation notice from peer
+
+- **App Notifications on OwnerSpace.forApp:**
+  - `forApp.new-message` - New message received from peer
+  - `forApp.read-receipt` - Read receipt received from peer
+  - `forApp.profile-update` - Profile update from peer
+  - `forApp.connection-revoked` - Connection revoked by peer
+
+- **Mobile Action Required:**
+  - [ ] Android: Implement `message.send` for sending messages
+  - [ ] Android: Subscribe to `forApp.new-message` for incoming messages
+  - [ ] Android: Handle `forApp.read-receipt` notifications
+  - [ ] Android: Handle `forApp.connection-revoked` notifications
+
+- **Notes:**
+  - See "Messaging (Peer-to-Peer)" section below for full API documentation
+  - Credentials for peer connections are stored via `connection.store-credentials`
+
+### 2025-12-30 - Backend Response to Credential Lifecycle Document
+
+Reviewed `docs/NATS-CREDENTIAL-LIFECYCLE.md`. Status of requested features:
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Enhanced enrollment with owner_space_id | **TODO** | Will add to `/vault/enroll/finalize` response |
+| `credentials.refresh` handler | **TODO** | Vault should generate new app credentials |
+| `credentials.status` handler | **TODO** | Simple check if credential is still valid |
+| Vault-initiated credential push | **TODO** | Proactive rotation before expiry |
+
+**Prioritization:** These will be implemented in the next backend sprint. The calling infrastructure work in Android is excellent preparation.
 
 ### 2025-11-27 - Vault Services Infrastructure Deployed
 
