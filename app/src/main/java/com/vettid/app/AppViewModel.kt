@@ -103,13 +103,16 @@ class AppViewModel @Inject constructor(
                     val endpoint = credentialStore.getNatsEndpoint()
                     val ownerSpace = credentialStore.getNatsOwnerSpace()
                     val connection = credentialStore.getNatsConnection()
+                    val expiryTime = credentialStore.getNatsCredentialsExpiryTime()
+                    val expiryFormatted = expiryTime?.let { formatExpiryTime(it) }
                     _appState.update {
                         it.copy(
                             natsConnectionState = NatsConnectionState.Connected,
                             natsError = null,
                             natsEndpoint = endpoint,
                             natsOwnerSpaceId = ownerSpace,
-                            natsMessageSpaceId = connection?.messageSpace
+                            natsMessageSpaceId = connection?.messageSpace,
+                            natsCredentialsExpiry = expiryFormatted
                         )
                     }
                 }
@@ -212,6 +215,33 @@ class AppViewModel @Inject constructor(
             }
             // Note: This just signs out of this session.
             // To clear credentials entirely, we would call credentialStore.clearAll()
+        }
+    }
+
+    /**
+     * Format expiry timestamp for display.
+     * Shows relative time if within 24 hours, otherwise date/time.
+     */
+    private fun formatExpiryTime(expiryMillis: Long): String {
+        val now = System.currentTimeMillis()
+        val remainingMs = expiryMillis - now
+
+        return when {
+            remainingMs <= 0 -> "Expired"
+            remainingMs < 60 * 1000 -> "< 1 minute"
+            remainingMs < 60 * 60 * 1000 -> {
+                val minutes = remainingMs / (60 * 1000)
+                "$minutes min"
+            }
+            remainingMs < 24 * 60 * 60 * 1000 -> {
+                val hours = remainingMs / (60 * 60 * 1000)
+                val minutes = (remainingMs % (60 * 60 * 1000)) / (60 * 1000)
+                if (minutes > 0) "${hours}h ${minutes}m" else "${hours}h"
+            }
+            else -> {
+                val sdf = java.text.SimpleDateFormat("MMM d, HH:mm", java.util.Locale.getDefault())
+                sdf.format(java.util.Date(expiryMillis))
+            }
         }
     }
 }

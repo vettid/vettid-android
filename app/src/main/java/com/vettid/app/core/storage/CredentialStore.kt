@@ -689,6 +689,18 @@ class CredentialStore @Inject constructor(
     }
 
     /**
+     * Get NATS credentials expiry timestamp (24 hours after stored).
+     * Returns null if no credentials are stored.
+     */
+    fun getNatsCredentialsExpiryTime(): Long? {
+        val storedAt = encryptedPrefs.getLong(KEY_NATS_STORED_AT, 0)
+        if (storedAt == 0L) return null
+
+        val twentyFourHoursMs = 24 * 60 * 60 * 1000L
+        return storedAt + twentyFourHoursMs
+    }
+
+    /**
      * Clear stored NATS connection info.
      */
     fun clearNatsConnection() {
