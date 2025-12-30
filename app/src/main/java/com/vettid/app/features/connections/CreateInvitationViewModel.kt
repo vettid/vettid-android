@@ -1,11 +1,14 @@
 package com.vettid.app.features.connections
 
+import android.util.Base64
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.gson.Gson
 import com.vettid.app.core.crypto.ConnectionCryptoManager
 import com.vettid.app.core.crypto.ConnectionKeyPair
-import com.vettid.app.core.network.ConnectionApiClient
-import com.vettid.app.core.network.ConnectionInvitation
+import com.vettid.app.core.nats.ConnectionsClient
+import com.vettid.app.core.storage.CredentialStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -16,15 +19,20 @@ import javax.inject.Inject
  *
  * Flow:
  * 1. User selects expiration time
- * 2. Create invitation via API
+ * 2. Create invitation via NATS to vault
  * 3. Display QR code and share options
  * 4. Wait for acceptance or expiration
  */
 @HiltViewModel
 class CreateInvitationViewModel @Inject constructor(
-    private val connectionApiClient: ConnectionApiClient,
-    private val connectionCryptoManager: ConnectionCryptoManager
+    private val connectionsClient: ConnectionsClient,
+    private val connectionCryptoManager: ConnectionCryptoManager,
+    private val credentialStore: CredentialStore
 ) : ViewModel() {
+
+    companion object {
+        private const val TAG = "CreateInvitationVM"
+    }
 
     private val _state = MutableStateFlow<CreateInvitationState>(CreateInvitationState.Idle)
     val state: StateFlow<CreateInvitationState> = _state.asStateFlow()
@@ -56,7 +64,7 @@ class CreateInvitationViewModel @Inject constructor(
     }
 
     /**
-     * Create a new connection invitation.
+     * Create a new connection invitation via NATS to vault.
      */
     fun createInvitation() {
         viewModelScope.launch {
@@ -65,15 +73,50 @@ class CreateInvitationViewModel @Inject constructor(
             // Generate key pair for this invitation
             pendingKeyPair = connectionCryptoManager.generateConnectionKeyPair()
 
-            connectionApiClient.createInvitation(_expirationMinutes.value).fold(
-                onSuccess = { invitation ->
+            // Get user's display name from profile (or use a default)
+            val displayName = credentialStore.getUserGuid()?.take(8) ?: "VettID User"
+
+            // Convert expiration minutes to hours (minimum 1 hour for vault handler)
+            val expiresInHours = (_expirationMinutes.value / 60).coerceAtLeast(1)
+
+            Log.d(TAG, "Creating invitation via NATS, expires in $expiresInHours hours")
+
+            // Create invitation via vault NATS handler
+            // Note: peer_guid is set to "pending" since we don't know who will accept yet
+            connectionsClient.createInvite(
+                peerGuid = "pending",
+                label = displayName,
+                expiresInHours = expiresInHours
+            ).fold(
+                onSuccess = { natsInvitation ->
+                    Log.d(TAG, "Invitation created: ${natsInvitation.connectionId}")
+
+                    // Build QR code data for sharing
+                    val qrData = buildQrCodeData(natsInvitation)
+                    val deepLink = buildDeepLink(natsInvitation)
+
+                    // Parse expiration timestamp
+                    val expiresAtMillis = parseIsoTimestamp(natsInvitation.expiresAt)
+
+                    val invitation = VaultConnectionInvitation(
+                        connectionId = natsInvitation.connectionId,
+                        natsCredentials = natsInvitation.natsCredentials,
+                        ownerSpaceId = natsInvitation.ownerSpaceId,
+                        messageSpaceId = natsInvitation.messageSpaceId,
+                        expiresAt = expiresAtMillis,
+                        creatorDisplayName = displayName,
+                        qrCodeData = qrData,
+                        deepLinkUrl = deepLink
+                    )
+
                     _state.value = CreateInvitationState.Created(
                         invitation = invitation,
-                        expiresInSeconds = calculateRemainingSeconds(invitation.expiresAt)
+                        expiresInSeconds = calculateRemainingSeconds(expiresAtMillis)
                     )
-                    startExpirationTimer(invitation.expiresAt)
+                    startExpirationTimer(expiresAtMillis)
                 },
                 onFailure = { error ->
+                    Log.e(TAG, "Failed to create invitation: ${error.message}")
                     pendingKeyPair?.clearPrivateKey()
                     pendingKeyPair = null
                     _state.value = CreateInvitationState.Error(
@@ -81,6 +124,46 @@ class CreateInvitationViewModel @Inject constructor(
                     )
                 }
             )
+        }
+    }
+
+    /**
+     * Build QR code data from invitation.
+     */
+    private fun buildQrCodeData(invitation: com.vettid.app.core.nats.ConnectionInvitation): String {
+        val data = mapOf(
+            "type" to "vettid_connection",
+            "version" to 1,
+            "connection_id" to invitation.connectionId,
+            "credentials" to invitation.natsCredentials,
+            "owner_space" to invitation.ownerSpaceId,
+            "message_space" to invitation.messageSpaceId,
+            "expires_at" to invitation.expiresAt
+        )
+        return Gson().toJson(data)
+    }
+
+    /**
+     * Build deep link URL from invitation.
+     */
+    private fun buildDeepLink(invitation: com.vettid.app.core.nats.ConnectionInvitation): String {
+        // Encode invitation data in base64 for the deep link
+        val qrData = buildQrCodeData(invitation)
+        val encoded = Base64.encodeToString(qrData.toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP)
+        return "https://vettid.com/connect?data=$encoded"
+    }
+
+    /**
+     * Parse ISO 8601 timestamp to milliseconds.
+     */
+    private fun parseIsoTimestamp(timestamp: String): Long {
+        return try {
+            java.time.Instant.parse(timestamp).toEpochMilli()
+        } catch (e: Exception) {
+            // Fallback: assume it's already in milliseconds or seconds
+            timestamp.toLongOrNull()?.let {
+                if (it < 10000000000L) it * 1000 else it
+            } ?: (System.currentTimeMillis() + 3600000) // Default 1 hour
         }
     }
 
@@ -93,7 +176,7 @@ class CreateInvitationViewModel @Inject constructor(
             viewModelScope.launch {
                 _effects.emit(CreateInvitationEffect.ShareInvitation(
                     deepLink = currentState.invitation.deepLinkUrl,
-                    displayName = currentState.invitation.creatorDisplayName
+                    displayName = currentState.invitation.creatorDisplayName ?: "VettID User"
                 ))
             }
         }
@@ -111,6 +194,16 @@ class CreateInvitationViewModel @Inject constructor(
                 ))
             }
         }
+    }
+
+    /**
+     * Get QR code data for display.
+     */
+    fun getQrCodeData(): String? {
+        val currentState = _state.value
+        return if (currentState is CreateInvitationState.Created) {
+            currentState.invitation.qrCodeData
+        } else null
     }
 
     /**
@@ -189,7 +282,7 @@ sealed class CreateInvitationState {
     object Creating : CreateInvitationState()
 
     data class Created(
-        val invitation: ConnectionInvitation,
+        val invitation: VaultConnectionInvitation,
         val expiresInSeconds: Int
     ) : CreateInvitationState()
 
@@ -197,6 +290,20 @@ sealed class CreateInvitationState {
 
     data class Error(val message: String) : CreateInvitationState()
 }
+
+/**
+ * Connection invitation created via vault NATS handler.
+ */
+data class VaultConnectionInvitation(
+    val connectionId: String,
+    val natsCredentials: String,
+    val ownerSpaceId: String,
+    val messageSpaceId: String,
+    val expiresAt: Long,
+    val creatorDisplayName: String?,
+    val qrCodeData: String,
+    val deepLinkUrl: String
+)
 
 /**
  * Expiration option for UI.
