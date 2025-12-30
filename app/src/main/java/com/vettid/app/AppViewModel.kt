@@ -1,7 +1,9 @@
 package com.vettid.app
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.storage.CredentialStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -11,10 +13,14 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+private const val TAG = "AppViewModel"
+
 data class AppState(
     val hasCredential: Boolean = false,
     val isAuthenticated: Boolean = false,
-    val vaultStatus: VaultStatus? = null
+    val vaultStatus: VaultStatus? = null,
+    val natsConnectionState: NatsConnectionState = NatsConnectionState.Idle,
+    val natsError: String? = null
 )
 
 enum class VaultStatus {
@@ -25,9 +31,28 @@ enum class VaultStatus {
     TERMINATED
 }
 
+/**
+ * NATS connection state for UI display.
+ */
+enum class NatsConnectionState {
+    /** Not yet attempted */
+    Idle,
+    /** Checking credentials */
+    Checking,
+    /** Connecting to NATS */
+    Connecting,
+    /** Successfully connected */
+    Connected,
+    /** Credentials expired - needs re-authentication */
+    CredentialsExpired,
+    /** Connection failed */
+    Failed
+}
+
 @HiltViewModel
 class AppViewModel @Inject constructor(
-    private val credentialStore: CredentialStore
+    private val credentialStore: CredentialStore,
+    private val natsAutoConnector: NatsAutoConnector
 ) : ViewModel() {
 
     private val _appState = MutableStateFlow(AppState())
@@ -35,6 +60,7 @@ class AppViewModel @Inject constructor(
 
     init {
         refreshCredentialStatus()
+        observeNatsConnectionState()
     }
 
     fun refreshCredentialStatus() {
@@ -44,14 +70,134 @@ class AppViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Set authentication state and trigger NATS auto-connect if authenticated.
+     */
     fun setAuthenticated(authenticated: Boolean) {
         _appState.update { it.copy(isAuthenticated = authenticated) }
+
+        if (authenticated) {
+            // Attempt NATS auto-connect after successful authentication
+            connectToNats()
+        }
     }
+
+    /**
+     * Attempt to connect to NATS using stored credentials.
+     * Called automatically after authentication succeeds.
+     */
+    fun connectToNats() {
+        viewModelScope.launch {
+            Log.i(TAG, "Attempting NATS auto-connect")
+            _appState.update { it.copy(natsConnectionState = NatsConnectionState.Connecting) }
+
+            when (val result = natsAutoConnector.autoConnect()) {
+                is NatsAutoConnector.ConnectionResult.Success -> {
+                    Log.i(TAG, "NATS connected successfully")
+                    _appState.update {
+                        it.copy(
+                            natsConnectionState = NatsConnectionState.Connected,
+                            natsError = null
+                        )
+                    }
+                }
+
+                is NatsAutoConnector.ConnectionResult.NotEnrolled -> {
+                    Log.w(TAG, "NATS auto-connect: Not enrolled")
+                    _appState.update {
+                        it.copy(
+                            natsConnectionState = NatsConnectionState.Idle,
+                            natsError = null
+                        )
+                    }
+                    // Not an error - user just hasn't enrolled yet
+                }
+
+                is NatsAutoConnector.ConnectionResult.CredentialsExpired -> {
+                    Log.w(TAG, "NATS credentials expired - re-authentication required")
+                    _appState.update {
+                        it.copy(
+                            natsConnectionState = NatsConnectionState.CredentialsExpired,
+                            natsError = "Session expired. Please authenticate again."
+                        )
+                    }
+                    // In the future, this could trigger navigation to auth screen
+                    // For now, we log it and the user can still use the app
+                }
+
+                is NatsAutoConnector.ConnectionResult.MissingData -> {
+                    Log.w(TAG, "NATS auto-connect: Missing ${result.field}")
+                    _appState.update {
+                        it.copy(
+                            natsConnectionState = NatsConnectionState.Failed,
+                            natsError = "Missing connection data: ${result.field}"
+                        )
+                    }
+                }
+
+                is NatsAutoConnector.ConnectionResult.Error -> {
+                    Log.e(TAG, "NATS auto-connect failed: ${result.message}", result.cause)
+                    _appState.update {
+                        it.copy(
+                            natsConnectionState = NatsConnectionState.Failed,
+                            natsError = result.message
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Observe NatsAutoConnector's connection state for real-time updates.
+     */
+    private fun observeNatsConnectionState() {
+        viewModelScope.launch {
+            natsAutoConnector.connectionState.collect { autoConnectState ->
+                val natsState = when (autoConnectState) {
+                    is NatsAutoConnector.AutoConnectState.Idle -> NatsConnectionState.Idle
+                    is NatsAutoConnector.AutoConnectState.Checking -> NatsConnectionState.Checking
+                    is NatsAutoConnector.AutoConnectState.Connecting,
+                    is NatsAutoConnector.AutoConnectState.Subscribing -> NatsConnectionState.Connecting
+                    is NatsAutoConnector.AutoConnectState.Connected -> NatsConnectionState.Connected
+                    is NatsAutoConnector.AutoConnectState.Failed -> {
+                        when (autoConnectState.result) {
+                            is NatsAutoConnector.ConnectionResult.CredentialsExpired ->
+                                NatsConnectionState.CredentialsExpired
+                            else -> NatsConnectionState.Failed
+                        }
+                    }
+                }
+                _appState.update { it.copy(natsConnectionState = natsState) }
+            }
+        }
+    }
+
+    /**
+     * Retry NATS connection after a failure.
+     */
+    fun retryNatsConnection() {
+        connectToNats()
+    }
+
+    /**
+     * Check if NATS is currently connected.
+     */
+    fun isNatsConnected(): Boolean = natsAutoConnector.isConnected()
 
     fun signOut() {
         viewModelScope.launch {
+            // Disconnect from NATS
+            natsAutoConnector.disconnect()
+
             // Clear authentication state
-            _appState.update { it.copy(isAuthenticated = false) }
+            _appState.update {
+                it.copy(
+                    isAuthenticated = false,
+                    natsConnectionState = NatsConnectionState.Idle,
+                    natsError = null
+                )
+            }
             // Note: This just signs out of this session.
             // To clear credentials entirely, we would call credentialStore.clearAll()
         }
