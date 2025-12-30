@@ -203,6 +203,34 @@ class NatsConnectionManager @Inject constructor(
      */
     fun getNatsClient(): NatsClient = natsClient
 
+    /**
+     * Set account info from stored credentials.
+     * Used by NatsAutoConnector when connecting with stored bootstrap credentials.
+     *
+     * @param ownerSpaceId The owner space ID from stored credentials
+     * @param messageSpaceId The message space ID from stored credentials
+     * @param endpoint The NATS endpoint
+     */
+    fun setAccountFromStored(ownerSpaceId: String, messageSpaceId: String?, endpoint: String) {
+        _account.value = NatsAccount(
+            ownerSpaceId = ownerSpaceId,
+            messageSpaceId = messageSpaceId ?: "",
+            natsEndpoint = endpoint,
+            status = NatsAccountStatus.ACTIVE
+        )
+        android.util.Log.i(TAG, "Account set from stored credentials: $ownerSpaceId")
+    }
+
+    /**
+     * Update connection state after external connection (e.g., from NatsAutoConnector).
+     *
+     * @param credentials The credentials used for connection
+     */
+    fun setConnectedState(credentials: NatsCredentials) {
+        currentCredentials = credentials
+        _connectionState.value = NatsConnectionState.Connected(credentials)
+    }
+
     // MARK: - Credential Caching
 
     private fun cacheCredentials(credentials: NatsCredentials) {

@@ -17,6 +17,7 @@ import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import java.util.concurrent.TimeUnit
 import com.vettid.app.core.nats.CallSignalingClient
+import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.nats.NatsClient
 import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.OwnerSpaceClient
@@ -121,6 +122,17 @@ object AppModule {
         credentialStore: CredentialStore
     ): OwnerSpaceClient {
         return OwnerSpaceClient(connectionManager, credentialStore)
+    }
+
+    @Provides
+    @Singleton
+    fun provideNatsAutoConnector(
+        natsClient: NatsClient,
+        connectionManager: NatsConnectionManager,
+        ownerSpaceClient: OwnerSpaceClient,
+        credentialStore: CredentialStore
+    ): NatsAutoConnector {
+        return NatsAutoConnector(natsClient, connectionManager, ownerSpaceClient, credentialStore)
     }
 
     // Calling Dependencies
