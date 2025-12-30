@@ -758,6 +758,7 @@ fun MainScreen(
 ) {
     var navigationState by remember { mutableStateOf(NavigationState()) }
     val snackbarHostState = remember { SnackbarHostState() }
+    val appState by appViewModel.appState.collectAsState()
 
     MainScaffold(
         navigationState = navigationState,
@@ -765,6 +766,11 @@ fun MainScreen(
         userName = "VettID User",
         userEmail = "",
         vaultStatus = com.vettid.app.ui.navigation.VaultStatus.ACTIVE,
+        // NATS connection state
+        natsConnectionState = appState.natsConnectionState,
+        natsErrorMessage = appState.natsError,
+        onNatsRetry = { appViewModel.retryNatsConnection() },
+        onNatsStatusClick = { /* Could show a dialog with connection details */ },
         onSignOutVaultOnly = { /* Lock vault only */ },
         onSignOutVaultServices = onSignOut,
         onHeaderAction = {

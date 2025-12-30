@@ -13,12 +13,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import com.vettid.app.NatsConnectionState
+import com.vettid.app.ui.components.NatsConnectionStatusIndicator
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HeaderView(
     title: String,
     onProfileClick: () -> Unit,
+    natsConnectionState: NatsConnectionState = NatsConnectionState.Idle,
+    onNatsStatusClick: () -> Unit = {},
     actionIcon: ImageVector? = null,
     onActionClick: (() -> Unit)? = null,
     showSearch: Boolean = false,
@@ -52,6 +56,12 @@ fun HeaderView(
             )
         },
         actions = {
+            // NATS connection status indicator
+            NatsConnectionStatusIndicator(
+                connectionState = natsConnectionState,
+                onClick = onNatsStatusClick
+            )
+
             if (showSearch && onSearchClick != null) {
                 IconButton(onClick = onSearchClick) {
                     Icon(

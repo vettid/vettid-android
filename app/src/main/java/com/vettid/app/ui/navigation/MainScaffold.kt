@@ -11,6 +11,8 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import com.vettid.app.NatsConnectionState
+import com.vettid.app.ui.components.NatsConnectionStatusBanner
 import kotlinx.coroutines.launch
 
 /**
@@ -25,6 +27,11 @@ fun MainScaffold(
     userName: String = "VettID User",
     userEmail: String = "",
     vaultStatus: VaultStatus = VaultStatus.ACTIVE,
+    // NATS connection state
+    natsConnectionState: NatsConnectionState = NatsConnectionState.Idle,
+    natsErrorMessage: String? = null,
+    onNatsRetry: () -> Unit = {},
+    onNatsStatusClick: () -> Unit = {},
     onSignOutVaultOnly: () -> Unit,
     onSignOutVaultServices: () -> Unit,
     onHeaderAction: () -> Unit,
@@ -83,6 +90,8 @@ fun MainScaffold(
                     onProfileClick = {
                         onNavigationStateChange(navigationState.copy(isDrawerOpen = true))
                     },
+                    natsConnectionState = natsConnectionState,
+                    onNatsStatusClick = onNatsStatusClick,
                     actionIcon = headerConfig.actionIcon,
                     onActionClick = onHeaderAction,
                     showSearch = headerConfig.showSearch,
@@ -114,13 +123,35 @@ fun MainScaffold(
             },
             snackbarHost = { SnackbarHost(snackbarHostState) }
         ) { padding ->
-            Box(
+            // State to track if banner is dismissed
+            var isBannerDismissed by remember { mutableStateOf(false) }
+
+            // Reset banner dismissal when connection state changes
+            LaunchedEffect(natsConnectionState) {
+                if (natsConnectionState == NatsConnectionState.Connected) {
+                    isBannerDismissed = false
+                }
+            }
+
+            Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
             ) {
-                // Render content based on current section and tab
-                when (navigationState.currentSection) {
+                // NATS connection status banner (shown when not connected)
+                if (!isBannerDismissed) {
+                    NatsConnectionStatusBanner(
+                        connectionState = natsConnectionState,
+                        errorMessage = natsErrorMessage,
+                        onRetry = onNatsRetry,
+                        onDismiss = { isBannerDismissed = true }
+                    )
+                }
+
+                // Main content
+                Box(modifier = Modifier.fillMaxSize()) {
+                    // Render content based on current section and tab
+                    when (navigationState.currentSection) {
                     AppSection.VAULT -> {
                         when (navigationState.vaultTab) {
                             VaultTab.CONNECTIONS -> vaultConnectionsContent()
@@ -145,6 +176,7 @@ fun MainScaffold(
                             AppSettingsTab.BACKUP -> appSettingsBackupContent()
                         }
                     }
+                }
                 }
             }
         }
