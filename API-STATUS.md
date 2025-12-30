@@ -68,7 +68,7 @@ Implemented `credentials.refresh` and `credentials.status` handlers as requested
 | Enhanced enrollment with owner_space_id | **DONE** | `app.bootstrap` response includes `owner_space`, `message_space`, `credential_id`, `ttl_seconds` |
 | `credentials.refresh` handler | **DONE** | Returns new credentials with `credential_id` for tracking |
 | `credentials.status` handler | **DONE** | Returns `valid`, `expires_at`, `remaining_seconds` |
-| Vault-initiated credential push | **TODO** | Proactive rotation before expiry |
+| Vault-initiated credential push | **DONE** | Proactive rotation 2 hours before expiry via `forApp.credentials.rotate` |
 
 #### credentials.refresh
 
@@ -108,10 +108,38 @@ Implemented `credentials.refresh` and `credentials.status` handlers as requested
 }
 ```
 
+#### Vault-Initiated Credential Rotation
+
+The vault proactively pushes new credentials 2 hours before expiry. Check interval: 15 minutes.
+
+**Topic:** `OwnerSpace.{guid}.forApp.credentials.rotate`
+
+**Message:**
+```json
+{
+  "type": "credentials.rotate",
+  "timestamp": "2025-12-30T10:00:00Z",
+  "payload": {
+    "credentials": "-----BEGIN NATS USER JWT-----\n...",
+    "expires_at": "2026-01-06T12:00:00Z",
+    "ttl_seconds": 604800,
+    "credential_id": "cred-new12345",
+    "reason": "scheduled_rotation",
+    "old_credential_id": "cred-old67890"
+  }
+}
+```
+
+**Reason values:**
+- `scheduled_rotation` - Normal rotation (2+ hours remaining)
+- `expiry_imminent` - Urgent rotation (<30 minutes remaining)
+
 - **Mobile Action Required:**
   - [ ] Android: Implement `NatsCredentialClient.requestRefresh()` using `credentials.refresh`
   - [ ] Android: Update `NatsAutoConnector` to check credentials on startup
   - [ ] Android: Update `NatsTokenRefreshWorker` to use vault-based refresh
+  - [ ] Android: Subscribe to `forApp.credentials.rotate` for proactive rotation
+  - [ ] Android: Handle rotation message: store new credentials, reconnect with new creds
 
 ### 2025-12-30 - Backend Response to Credential Lifecycle Document (Superseded)
 
