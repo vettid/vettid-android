@@ -59,18 +59,63 @@ This file is the master coordination point between backend development and mobil
   - See "Messaging (Peer-to-Peer)" section below for full API documentation
   - Credentials for peer connections are stored via `connection.store-credentials`
 
-### 2025-12-30 - Backend Response to Credential Lifecycle Document
+### 2025-12-30 - Credential Lifecycle Handlers Deployed
 
-Reviewed `docs/NATS-CREDENTIAL-LIFECYCLE.md`. Status of requested features:
+Implemented `credentials.refresh` and `credentials.status` handlers as requested in `docs/NATS-CREDENTIAL-LIFECYCLE.md`.
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Enhanced enrollment with owner_space_id | **TODO** | Will add to `/vault/enroll/finalize` response |
-| `credentials.refresh` handler | **TODO** | Vault should generate new app credentials |
-| `credentials.status` handler | **TODO** | Simple check if credential is still valid |
+| Enhanced enrollment with owner_space_id | **DONE** | `app.bootstrap` response includes `owner_space`, `message_space`, `credential_id`, `ttl_seconds` |
+| `credentials.refresh` handler | **DONE** | Returns new credentials with `credential_id` for tracking |
+| `credentials.status` handler | **DONE** | Returns `valid`, `expires_at`, `remaining_seconds` |
 | Vault-initiated credential push | **TODO** | Proactive rotation before expiry |
 
-**Prioritization:** These will be implemented in the next backend sprint. The calling infrastructure work in Android is excellent preparation.
+#### credentials.refresh
+
+**Request** (app → vault via `OwnerSpace.{guid}.forVault.credentials.refresh`):
+```json
+{
+  "current_credential_id": "cred-abc12345",
+  "device_id": "device-xyz"
+}
+```
+
+**Response:**
+```json
+{
+  "credentials": "-----BEGIN NATS USER JWT-----\n...",
+  "expires_at": "2026-01-06T12:00:00Z",
+  "ttl_seconds": 604800,
+  "credential_id": "cred-def67890"
+}
+```
+
+#### credentials.status
+
+**Request** (app → vault via `OwnerSpace.{guid}.forVault.credentials.status`):
+```json
+{
+  "credential_id": "cred-abc12345"
+}
+```
+
+**Response:**
+```json
+{
+  "valid": true,
+  "expires_at": "2026-01-06T12:00:00Z",
+  "remaining_seconds": 518400
+}
+```
+
+- **Mobile Action Required:**
+  - [ ] Android: Implement `NatsCredentialClient.requestRefresh()` using `credentials.refresh`
+  - [ ] Android: Update `NatsAutoConnector` to check credentials on startup
+  - [ ] Android: Update `NatsTokenRefreshWorker` to use vault-based refresh
+
+### 2025-12-30 - Backend Response to Credential Lifecycle Document (Superseded)
+
+~See updated section above. The requested handlers are now implemented.~
 
 ### 2025-11-27 - Vault Services Infrastructure Deployed
 
