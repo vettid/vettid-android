@@ -20,7 +20,12 @@ data class AppState(
     val isAuthenticated: Boolean = false,
     val vaultStatus: VaultStatus? = null,
     val natsConnectionState: NatsConnectionState = NatsConnectionState.Idle,
-    val natsError: String? = null
+    val natsError: String? = null,
+    // Connection details for status dialog
+    val natsEndpoint: String? = null,
+    val natsOwnerSpaceId: String? = null,
+    val natsMessageSpaceId: String? = null,
+    val natsCredentialsExpiry: String? = null
 )
 
 enum class VaultStatus {
@@ -94,10 +99,17 @@ class AppViewModel @Inject constructor(
             when (val result = natsAutoConnector.autoConnect()) {
                 is NatsAutoConnector.ConnectionResult.Success -> {
                     Log.i(TAG, "NATS connected successfully")
+                    // Fetch connection details from credential store
+                    val endpoint = credentialStore.getNatsEndpoint()
+                    val ownerSpace = credentialStore.getNatsOwnerSpace()
+                    val connection = credentialStore.getNatsConnection()
                     _appState.update {
                         it.copy(
                             natsConnectionState = NatsConnectionState.Connected,
-                            natsError = null
+                            natsError = null,
+                            natsEndpoint = endpoint,
+                            natsOwnerSpaceId = ownerSpace,
+                            natsMessageSpaceId = connection?.messageSpace
                         )
                     }
                 }

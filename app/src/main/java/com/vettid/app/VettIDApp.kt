@@ -55,6 +55,8 @@ import com.vettid.app.ui.backup.BackupDetailScreen
 import com.vettid.app.ui.backup.BackupListScreen
 import com.vettid.app.ui.backup.BackupSettingsScreen
 import com.vettid.app.ui.backup.CredentialBackupScreen
+import com.vettid.app.ui.components.NatsConnectionDetails
+import com.vettid.app.ui.components.NatsConnectionDetailsDialog
 import com.vettid.app.ui.components.QrCodeScanner
 import com.vettid.app.ui.navigation.*
 import com.vettid.app.ui.recovery.CredentialRecoveryScreen
@@ -760,6 +762,25 @@ fun MainScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val appState by appViewModel.appState.collectAsState()
 
+    // Connection details dialog state
+    var showConnectionDetailsDialog by remember { mutableStateOf(false) }
+
+    // Show connection details dialog
+    if (showConnectionDetailsDialog) {
+        NatsConnectionDetailsDialog(
+            connectionState = appState.natsConnectionState,
+            connectionDetails = NatsConnectionDetails(
+                endpoint = appState.natsEndpoint,
+                ownerSpaceId = appState.natsOwnerSpaceId,
+                messageSpaceId = appState.natsMessageSpaceId,
+                credentialsExpiry = appState.natsCredentialsExpiry
+            ),
+            errorMessage = appState.natsError,
+            onRetry = { appViewModel.retryNatsConnection() },
+            onDismiss = { showConnectionDetailsDialog = false }
+        )
+    }
+
     MainScaffold(
         navigationState = navigationState,
         onNavigationStateChange = { navigationState = it },
@@ -770,7 +791,7 @@ fun MainScreen(
         natsConnectionState = appState.natsConnectionState,
         natsErrorMessage = appState.natsError,
         onNatsRetry = { appViewModel.retryNatsConnection() },
-        onNatsStatusClick = { /* Could show a dialog with connection details */ },
+        onNatsStatusClick = { showConnectionDetailsDialog = true },
         onSignOutVaultOnly = { /* Lock vault only */ },
         onSignOutVaultServices = onSignOut,
         onHeaderAction = {

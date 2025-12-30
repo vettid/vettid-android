@@ -201,6 +201,225 @@ fun NatsConnectionStatusBanner(
 }
 
 /**
+ * Data class holding NATS connection details for display.
+ */
+data class NatsConnectionDetails(
+    val endpoint: String? = null,
+    val ownerSpaceId: String? = null,
+    val messageSpaceId: String? = null,
+    val credentialsExpiry: String? = null
+)
+
+/**
+ * Dialog showing detailed NATS connection information.
+ */
+@Composable
+fun NatsConnectionDetailsDialog(
+    connectionState: NatsConnectionState,
+    connectionDetails: NatsConnectionDetails = NatsConnectionDetails(),
+    errorMessage: String? = null,
+    onRetry: () -> Unit = {},
+    onDismiss: () -> Unit
+) {
+    val statusInfo = when (connectionState) {
+        NatsConnectionState.Connected -> Triple(
+            "Connected",
+            Color(0xFF4CAF50),
+            Icons.Default.CloudDone
+        )
+        NatsConnectionState.Connecting -> Triple(
+            "Connecting...",
+            Color(0xFFFFC107),
+            Icons.Default.Sync
+        )
+        NatsConnectionState.Checking -> Triple(
+            "Checking credentials...",
+            Color(0xFFFFC107),
+            Icons.Default.Security
+        )
+        NatsConnectionState.CredentialsExpired -> Triple(
+            "Session Expired",
+            Color(0xFFFF9800),
+            Icons.Default.Warning
+        )
+        NatsConnectionState.Failed -> Triple(
+            "Connection Failed",
+            Color(0xFFF44336),
+            Icons.Default.CloudOff
+        )
+        NatsConnectionState.Idle -> Triple(
+            "Not Connected",
+            Color(0xFF9E9E9E),
+            Icons.Default.Cloud
+        )
+    }
+
+    val (statusText, statusColor, statusIcon) = statusInfo
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = statusIcon,
+                contentDescription = null,
+                tint = statusColor,
+                modifier = Modifier.size(32.dp)
+            )
+        },
+        title = {
+            Text(
+                text = "Vault Connection",
+                style = MaterialTheme.typography.headlineSmall
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Status row
+                ConnectionDetailRow(
+                    label = "Status",
+                    value = statusText,
+                    valueColor = statusColor
+                )
+
+                // Endpoint
+                connectionDetails.endpoint?.let { endpoint ->
+                    ConnectionDetailRow(
+                        label = "Endpoint",
+                        value = endpoint.replace("tls://", "").replace("nats://", "")
+                    )
+                }
+
+                // Owner Space
+                connectionDetails.ownerSpaceId?.let { ownerSpace ->
+                    ConnectionDetailRow(
+                        label = "Owner Space",
+                        value = ownerSpace.replace("OwnerSpace.", "").take(12) + "..."
+                    )
+                }
+
+                // Credentials expiry
+                connectionDetails.credentialsExpiry?.let { expiry ->
+                    ConnectionDetailRow(
+                        label = "Credentials Expire",
+                        value = expiry
+                    )
+                }
+
+                // Error message
+                if (connectionState == NatsConnectionState.Failed && errorMessage != null) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Error,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = errorMessage,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    }
+                }
+
+                // Expired credentials message
+                if (connectionState == NatsConnectionState.CredentialsExpired) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.tertiaryContainer,
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Info,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Your session has expired. Please re-authenticate to restore the connection.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (connectionState == NatsConnectionState.Failed ||
+                connectionState == NatsConnectionState.Idle) {
+                Button(onClick = {
+                    onRetry()
+                    onDismiss()
+                }) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Retry")
+                }
+            } else {
+                TextButton(onClick = onDismiss) {
+                    Text("Close")
+                }
+            }
+        },
+        dismissButton = {
+            if (connectionState == NatsConnectionState.Failed ||
+                connectionState == NatsConnectionState.Idle) {
+                TextButton(onClick = onDismiss) {
+                    Text("Close")
+                }
+            }
+        }
+    )
+}
+
+@Composable
+private fun ConnectionDetailRow(
+    label: String,
+    value: String,
+    valueColor: Color? = null
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = valueColor ?: MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
+
+/**
  * Connection status chip for use in lists or cards.
  */
 @Composable
