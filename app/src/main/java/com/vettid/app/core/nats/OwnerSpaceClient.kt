@@ -101,6 +101,9 @@ class OwnerSpaceClient @Inject constructor(
     /**
      * Send a message to the vault.
      *
+     * If E2E encryption is enabled, the payload is encrypted before sending.
+     * The message envelope (id, type, timestamp) remains in plaintext for routing.
+     *
      * @param messageType The message type/action (e.g., "profile.get", "secrets.datastore.add")
      * @param payload The message payload
      * @return Request ID for correlating response
@@ -116,10 +119,17 @@ class OwnerSpaceClient @Inject constructor(
         // Subject includes the message type for routing
         val subject = "$ownerSpaceId.forVault.$messageType"
 
+        // Encrypt payload if E2E session is established (skip for bootstrap)
+        val effectivePayload = if (isE2EEnabled && messageType != "app.bootstrap") {
+            encryptPayload(payload)
+        } else {
+            payload
+        }
+
         val message = VaultMessage(
             id = requestId,
             type = messageType,
-            payload = payload,
+            payload = effectivePayload,
             timestamp = Instant.now().toString()  // ISO 8601 format
         )
 

@@ -19,6 +19,7 @@ import javax.inject.Singleton
  * 4. Set account info on NatsConnectionManager
  * 5. Connect to NATS
  * 6. Subscribe to vault topics
+ * 7. Restore or bootstrap E2E session for encrypted communication
  *
  * If credentials are expired, returns [ConnectionResult.CredentialsExpired]
  * and the caller should trigger Vault Services authentication to get fresh credentials.
@@ -174,6 +175,15 @@ class NatsAutoConnector @Inject constructor(
             } else {
                 Log.i(TAG, "Subscribed to vault topics")
             }
+        }
+
+        // Step 9: Restore or bootstrap E2E session
+        if (!ownerSpaceClient.restoreSession()) {
+            Log.i(TAG, "No valid E2E session - will bootstrap on first vault message")
+            // Session will be bootstrapped when needed (e.g., on first sendToVault call)
+            // For now, we just log that there's no session
+        } else {
+            Log.i(TAG, "E2E session restored: ${ownerSpaceClient.currentSessionId}")
         }
 
         _connectionState.value = AutoConnectState.Connected

@@ -1,6 +1,6 @@
 # VettID API Status
 
-**Last Updated:** 2025-12-30 by Backend
+**Last Updated:** 2025-12-30 by Android
 
 This file is the master coordination point between backend development and mobile app development (iOS and Android). Mobile developers should reference this file to understand API availability and required actions.
 
@@ -766,6 +766,40 @@ val connections = connectionsClient.list(status = "active").getOrThrow()
 5. **Send test event** - Publish to `OwnerSpace.{user_guid}.forVault.profile.get`
 6. **Verify response** - Check `event_id` matches your request `id`
 
+### E2E Encryption (App-Vault)
+
+The Android app implements end-to-end encryption for app-vault communication:
+
+**Session Establishment:**
+1. App generates X25519 keypair
+2. Sends public key in `app.bootstrap` request
+3. Vault responds with its public key
+4. Both derive shared session key via ECDH + HKDF
+
+**Message Encryption:**
+```kotlin
+// SessionCrypto handles all encryption
+val session = SessionCrypto.fromKeyExchange(
+    sessionId = sessionInfo.sessionId,
+    appPrivateKey = keyPair.privateKey,
+    appPublicKey = keyPair.publicKey,
+    vaultPublicKey = vaultPublicKey,
+    expiresAt = expiresAt
+)
+
+// Encrypt message
+val encrypted = session.encrypt(payload.toByteArray())
+// Returns: EncryptedSessionMessage(sessionId, ciphertext, nonce)
+
+// Decrypt response
+val decrypted = session.decrypt(encryptedMessage)
+```
+
+**Key Files:**
+- `core/crypto/SessionCrypto.kt` - Session encryption/decryption
+- `core/nats/OwnerSpaceClient.kt` - Bootstrap and session management
+- `core/storage/CredentialStore.kt` - Session storage
+
 ---
 
 ## Issues
@@ -775,6 +809,20 @@ val connections = connectionsClient.list(status = "active").getOrThrow()
 *No open issues*
 
 ### Resolved
+
+#### App-Vault E2E Encryption Implemented
+**Status:** ✅ Completed (2025-12-30)
+**Affected:** `SessionCrypto.kt`, `OwnerSpaceClient.kt`, `NatsAutoConnector.kt`, `CredentialStore.kt`
+
+Implemented end-to-end encryption for app-vault NATS communication:
+- ✅ X25519 ECDH key exchange during `app.bootstrap`
+- ✅ HKDF-SHA256 session key derivation ("app-vault-session-v1")
+- ✅ ChaCha20-Poly1305 message encryption (AES-GCM fallback on older Android)
+- ✅ Encrypted payload in sendToVault (bootstrap messages excluded)
+- ✅ Automatic decryption of incoming vault messages
+- ✅ Session persistence in EncryptedSharedPreferences
+- ✅ Session restoration on app restart
+- ✅ 25 unit tests for SessionCrypto
 
 #### NATS Message Format Mismatch
 **Status:** ✅ Fixed (2025-12-22)
