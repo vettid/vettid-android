@@ -777,6 +777,7 @@ fun MainScreen(
             ),
             errorMessage = appState.natsError,
             onRetry = { appViewModel.retryNatsConnection() },
+            onRefreshCredentials = { appViewModel.refreshNatsCredentials() },
             onDismiss = { showConnectionDetailsDialog = false }
         )
     }

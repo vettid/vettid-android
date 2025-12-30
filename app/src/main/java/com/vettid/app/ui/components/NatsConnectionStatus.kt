@@ -219,6 +219,7 @@ fun NatsConnectionDetailsDialog(
     connectionDetails: NatsConnectionDetails = NatsConnectionDetails(),
     errorMessage: String? = null,
     onRetry: () -> Unit = {},
+    onRefreshCredentials: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val statusInfo = when (connectionState) {
@@ -364,29 +365,59 @@ fun NatsConnectionDetailsDialog(
             }
         },
         confirmButton = {
-            if (connectionState == NatsConnectionState.Failed ||
-                connectionState == NatsConnectionState.Idle) {
-                Button(onClick = {
-                    onRetry()
-                    onDismiss()
-                }) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Retry")
+            when (connectionState) {
+                NatsConnectionState.Failed, NatsConnectionState.Idle -> {
+                    Button(onClick = {
+                        onRetry()
+                        onDismiss()
+                    }) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Connect")
+                    }
                 }
-            } else {
-                TextButton(onClick = onDismiss) {
-                    Text("Close")
+                NatsConnectionState.Connected -> {
+                    Button(onClick = {
+                        onRefreshCredentials()
+                        onDismiss()
+                    }) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Refresh")
+                    }
+                }
+                NatsConnectionState.CredentialsExpired -> {
+                    Button(onClick = {
+                        onRefreshCredentials()
+                        onDismiss()
+                    }) {
+                        Icon(
+                            imageVector = Icons.Default.Lock,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Re-authenticate")
+                    }
+                }
+                else -> {
+                    TextButton(onClick = onDismiss) {
+                        Text("Close")
+                    }
                 }
             }
         },
         dismissButton = {
-            if (connectionState == NatsConnectionState.Failed ||
-                connectionState == NatsConnectionState.Idle) {
+            if (connectionState != NatsConnectionState.Connecting &&
+                connectionState != NatsConnectionState.Checking) {
                 TextButton(onClick = onDismiss) {
                     Text("Close")
                 }

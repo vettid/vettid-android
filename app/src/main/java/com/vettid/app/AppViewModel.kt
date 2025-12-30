@@ -196,6 +196,29 @@ class AppViewModel @Inject constructor(
     }
 
     /**
+     * Refresh NATS credentials by reconnecting.
+     * This disconnects and reconnects using stored credentials,
+     * updating the connection state and expiry time.
+     */
+    fun refreshNatsCredentials() {
+        viewModelScope.launch {
+            Log.i(TAG, "Refreshing NATS credentials")
+
+            // Disconnect first
+            natsAutoConnector.disconnect()
+            _appState.update {
+                it.copy(
+                    natsConnectionState = NatsConnectionState.Connecting,
+                    natsError = null
+                )
+            }
+
+            // Reconnect
+            connectToNats()
+        }
+    }
+
+    /**
      * Check if NATS is currently connected.
      */
     fun isNatsConnected(): Boolean = natsAutoConnector.isConnected()
