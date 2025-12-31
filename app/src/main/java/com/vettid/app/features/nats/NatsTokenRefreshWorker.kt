@@ -3,91 +3,76 @@ package com.vettid.app.features.nats
 import android.content.Context
 import androidx.hilt.work.HiltWorker
 import androidx.work.*
-import com.vettid.app.core.nats.NatsConnectionManager
-import com.vettid.app.core.nats.NatsConnectionState
+import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.storage.CredentialStore
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import java.util.concurrent.TimeUnit
 
 /**
- * Background worker for refreshing NATS tokens.
+ * Background worker for refreshing NATS credentials via vault.
  *
- * Runs every 6 hours to check if token needs refresh.
- * If connected and token is about to expire (< 1 hour remaining),
- * requests a new token and reconnects.
+ * Runs every 6 hours to check if credentials need refresh.
+ * Uses vault-based `credentials.refresh` handler instead of API calls.
+ *
+ * Note: The vault also proactively pushes new credentials 2 hours before
+ * expiry via `forApp.credentials.rotate`, so this worker serves as a
+ * backup mechanism if the app was offline during the push.
  */
 @HiltWorker
 class NatsTokenRefreshWorker @AssistedInject constructor(
     @Assisted context: Context,
     @Assisted params: WorkerParameters,
-    private val connectionManager: NatsConnectionManager,
+    private val autoConnector: NatsAutoConnector,
     private val credentialStore: CredentialStore
 ) : CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
-        android.util.Log.d(TAG, "Running NATS token refresh check")
+        android.util.Log.d(TAG, "Running NATS credential refresh check")
 
-        // Check if we have a stored action token for API calls
-        val actionToken = inputData.getString(KEY_ACTION_TOKEN)
+        // Check if connected
+        if (!autoConnector.isConnected()) {
+            android.util.Log.d(TAG, "NATS not connected, skipping refresh")
+            return Result.success()
+        }
 
-        // Check connection state
-        val connectionState = connectionManager.connectionState.value
+        // Check if credentials need refresh (within 2 hour buffer)
+        if (!autoConnector.needsCredentialRefresh(bufferMinutes = 120)) {
+            android.util.Log.d(TAG, "NATS credentials still valid, no refresh needed")
+            return Result.success()
+        }
 
-        when (connectionState) {
-            is NatsConnectionState.Connected -> {
-                val credentials = connectionState.credentials
+        android.util.Log.i(TAG, "NATS credentials need refresh, requesting from vault")
 
-                // Check if token needs refresh (expires in < 1 hour)
-                if (credentials.needsRefresh(bufferMinutes = 60)) {
-                    android.util.Log.i(TAG, "NATS token needs refresh, expires at ${credentials.expiresAt}")
+        // Get device ID for refresh request
+        val deviceId = credentialStore.getUserGuid() ?: run {
+            android.util.Log.w(TAG, "No user GUID available for refresh")
+            return Result.retry()
+        }
 
-                    if (actionToken.isNullOrEmpty()) {
-                        android.util.Log.w(TAG, "No action token available for refresh")
-                        return Result.retry()
-                    }
+        // Request refresh via vault handler
+        val result = autoConnector.requestCredentialRefresh(deviceId)
 
-                    val result = connectionManager.refreshTokenIfNeeded(actionToken)
-                    return if (result.isSuccess) {
-                        android.util.Log.i(TAG, "NATS token refreshed successfully")
-                        Result.success()
-                    } else {
-                        android.util.Log.e(TAG, "NATS token refresh failed: ${result.exceptionOrNull()?.message}")
-                        Result.retry()
-                    }
-                } else {
-                    android.util.Log.d(TAG, "NATS token still valid, expires at ${credentials.expiresAt}")
-                    return Result.success()
-                }
-            }
-            is NatsConnectionState.Disconnected,
-            is NatsConnectionState.Error -> {
-                android.util.Log.d(TAG, "NATS not connected, skipping refresh")
-                return Result.success()
-            }
-            else -> {
-                android.util.Log.d(TAG, "NATS in transitional state: $connectionState")
-                return Result.success()
-            }
+        return if (result.isSuccess) {
+            val refreshResult = result.getOrThrow()
+            android.util.Log.i(TAG, "NATS credentials refreshed successfully, expires: ${refreshResult.expiresAt}")
+            Result.success()
+        } else {
+            android.util.Log.e(TAG, "NATS credential refresh failed: ${result.exceptionOrNull()?.message}")
+            Result.retry()
         }
     }
 
     companion object {
         private const val TAG = "NatsTokenRefreshWorker"
         const val WORK_NAME = "nats_token_refresh"
-        private const val KEY_ACTION_TOKEN = "action_token"
 
         /**
-         * Schedule periodic token refresh.
+         * Schedule periodic credential refresh.
          *
          * @param context Application context
-         * @param actionToken Optional action token for API authentication
          */
-        fun schedule(context: Context, actionToken: String? = null) {
-            val inputData = workDataOf(
-                KEY_ACTION_TOKEN to actionToken
-            )
-
+        fun schedule(context: Context) {
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED)
                 .build()
@@ -97,7 +82,6 @@ class NatsTokenRefreshWorker @AssistedInject constructor(
                 30, TimeUnit.MINUTES // Flex interval
             )
                 .setConstraints(constraints)
-                .setInputData(inputData)
                 .setBackoffCriteria(
                     BackoffPolicy.EXPONENTIAL,
                     WorkRequest.MIN_BACKOFF_MILLIS,
@@ -112,85 +96,64 @@ class NatsTokenRefreshWorker @AssistedInject constructor(
                 request
             )
 
-            android.util.Log.i(TAG, "Scheduled NATS token refresh worker (6-hour interval)")
+            android.util.Log.i(TAG, "Scheduled NATS credential refresh worker (6-hour interval)")
         }
 
         /**
-         * Cancel the periodic token refresh.
+         * Cancel the periodic credential refresh.
          */
         fun cancel(context: Context) {
             WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
-            android.util.Log.i(TAG, "Cancelled NATS token refresh worker")
+            android.util.Log.i(TAG, "Cancelled NATS credential refresh worker")
         }
 
         /**
-         * Trigger an immediate token refresh.
+         * Trigger an immediate credential refresh.
          *
          * @param context Application context
-         * @param actionToken Action token for API authentication
          */
-        fun triggerImmediateRefresh(context: Context, actionToken: String) {
-            val inputData = workDataOf(
-                KEY_ACTION_TOKEN to actionToken
-            )
-
+        fun triggerImmediateRefresh(context: Context) {
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED)
                 .build()
 
             val request = OneTimeWorkRequestBuilder<NatsTokenRefreshWorker>()
                 .setConstraints(constraints)
-                .setInputData(inputData)
                 .build()
 
             WorkManager.getInstance(context).enqueue(request)
 
-            android.util.Log.i(TAG, "Triggered immediate NATS token refresh")
-        }
-
-        /**
-         * Update the action token for the scheduled worker.
-         *
-         * @param context Application context
-         * @param actionToken New action token
-         */
-        fun updateActionToken(context: Context, actionToken: String) {
-            // Re-schedule with new token
-            schedule(context, actionToken)
+            android.util.Log.i(TAG, "Triggered immediate NATS credential refresh")
         }
     }
 }
 
 /**
- * Helper object for managing NATS token refresh scheduling.
+ * Helper object for managing NATS credential refresh scheduling.
+ *
+ * Uses vault-based refresh via `credentials.refresh` handler.
+ * No action tokens needed - the vault handles authentication.
  */
 object NatsTokenRefreshManager {
 
     /**
-     * Start token refresh scheduling after successful authentication.
+     * Start credential refresh scheduling after successful NATS connection.
      */
-    fun startRefreshSchedule(context: Context, actionToken: String) {
-        NatsTokenRefreshWorker.schedule(context, actionToken)
+    fun startRefreshSchedule(context: Context) {
+        NatsTokenRefreshWorker.schedule(context)
     }
 
     /**
-     * Stop token refresh scheduling (e.g., on logout).
+     * Stop credential refresh scheduling (e.g., on logout).
      */
     fun stopRefreshSchedule(context: Context) {
         NatsTokenRefreshWorker.cancel(context)
     }
 
     /**
-     * Update the action token when it's refreshed during authentication.
+     * Force an immediate credential refresh check.
      */
-    fun updateToken(context: Context, actionToken: String) {
-        NatsTokenRefreshWorker.updateActionToken(context, actionToken)
-    }
-
-    /**
-     * Force an immediate refresh check.
-     */
-    fun forceRefresh(context: Context, actionToken: String) {
-        NatsTokenRefreshWorker.triggerImmediateRefresh(context, actionToken)
+    fun forceRefresh(context: Context) {
+        NatsTokenRefreshWorker.triggerImmediateRefresh(context)
     }
 }

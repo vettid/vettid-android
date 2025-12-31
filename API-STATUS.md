@@ -137,7 +137,7 @@ The vault proactively pushes new credentials 2 hours before expiry. Check interv
 - **Mobile Action Required:**
   - [x] Android: Implement `NatsCredentialClient.requestRefresh()` using `credentials.refresh` ✅
   - [x] Android: Update `NatsAutoConnector` to check credentials on startup ✅
-  - [ ] Android: Update `NatsTokenRefreshWorker` to use vault-based refresh
+  - [x] Android: Update `NatsTokenRefreshWorker` to use vault-based refresh ✅
   - [x] Android: Subscribe to `forApp.credentials.rotate` for proactive rotation ✅
   - [x] Android: Handle rotation message: store new credentials, reconnect with new creds ✅
 
@@ -164,9 +164,9 @@ The vault proactively pushes new credentials 2 hours before expiry. Check interv
   - [ ] iOS: Implement new multi-step enrollment flow
   - [ ] iOS: Implement action-specific authentication flow
   - [ ] iOS: Update crypto to handle UTK encryption
-  - [ ] Android: Implement new multi-step enrollment flow
-  - [ ] Android: Implement action-specific authentication flow
-  - [ ] Android: Update crypto to handle UTK encryption
+  - [x] Android: Implement new multi-step enrollment flow - `ApiClient` + `EnrollmentViewModel`
+  - [x] Android: Implement action-specific authentication flow - `ApiClient` + `AuthenticationViewModel`
+  - [x] Android: Update crypto to handle UTK encryption - `CryptoManager.encryptPasswordForServer()`
 
 - **Notes:**
   - Key ownership changed: **Ledger now owns all keys (CEK, LTK)**
