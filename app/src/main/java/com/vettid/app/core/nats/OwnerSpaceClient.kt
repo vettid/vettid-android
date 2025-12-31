@@ -47,6 +47,10 @@ class OwnerSpaceClient @Inject constructor(
     private val _vaultEvents = MutableSharedFlow<VaultEvent>(extraBufferCapacity = 64)
     val vaultEvents: SharedFlow<VaultEvent> = _vaultEvents.asSharedFlow()
 
+    private val _credentialRotation = MutableSharedFlow<CredentialRotationMessage>(extraBufferCapacity = 8)
+    /** Flow of credential rotation events from vault. Subscribe to handle proactive credential rotation. */
+    val credentialRotation: SharedFlow<CredentialRotationMessage> = _credentialRotation.asSharedFlow()
+
     private var appSubscription: NatsSubscription? = null
     private var eventTypesSubscription: NatsSubscription? = null
 
@@ -391,6 +395,12 @@ class OwnerSpaceClient @Inject constructor(
 
     private fun handleVaultResponse(message: NatsMessage) {
         try {
+            // Check if this is a credential rotation event
+            if (message.subject.endsWith(".forApp.credentials.rotate")) {
+                handleCredentialRotation(message)
+                return
+            }
+
             // Decrypt if E2E is enabled
             val data = decryptPayload(message.data)
             val responseString = String(data, Charsets.UTF_8)
@@ -508,6 +518,36 @@ class OwnerSpaceClient @Inject constructor(
                 description = obj.get("description")?.asString,
                 parameters = obj.getAsJsonArray("parameters")?.map { it.asString }
             )
+        }
+    }
+
+    /**
+     * Handle credential rotation event from vault.
+     * These are proactive push messages from the vault with new credentials.
+     */
+    private fun handleCredentialRotation(message: NatsMessage) {
+        try {
+            // Credential rotation messages are NOT encrypted (sent before session)
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) {
+                json.getJSONObject("payload")
+            } else {
+                json
+            }
+
+            val rotationMessage = CredentialRotationMessage(
+                credentials = payload.getString("credentials"),
+                expiresAt = payload.optString("expires_at", ""),
+                ttlSeconds = payload.optLong("ttl_seconds", 604800L),
+                credentialId = payload.optString("credential_id", ""),
+                reason = payload.optString("reason", "unknown"),
+                oldCredentialId = if (payload.has("old_credential_id")) payload.optString("old_credential_id") else null
+            )
+
+            android.util.Log.i(TAG, "Received credential rotation: reason=${rotationMessage.reason}")
+            _credentialRotation.tryEmit(rotationMessage)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse credential rotation event", e)
         }
     }
 
@@ -656,4 +696,29 @@ private data class EventTypeJson(
 data class BootstrapResponse(
     val requestId: String,
     val pendingKeyPair: SessionKeyPair
+)
+
+// MARK: - Credential Rotation
+
+/**
+ * Credential rotation message from vault.
+ *
+ * The vault proactively pushes new credentials before expiry.
+ * Reason values:
+ * - "scheduled_rotation" - Normal rotation (2+ hours remaining)
+ * - "expiry_imminent" - Urgent rotation (<30 minutes remaining)
+ */
+data class CredentialRotationMessage(
+    /** New NATS credentials (.creds file content) */
+    val credentials: String,
+    /** ISO 8601 expiration time */
+    val expiresAt: String,
+    /** Time to live in seconds (default: 604800 = 7 days) */
+    val ttlSeconds: Long,
+    /** Unique credential ID for tracking */
+    val credentialId: String,
+    /** Reason for rotation */
+    val reason: String,
+    /** Previous credential ID that was rotated out */
+    val oldCredentialId: String?
 )

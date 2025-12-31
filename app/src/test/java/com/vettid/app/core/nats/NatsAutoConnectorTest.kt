@@ -2,9 +2,12 @@ package com.vettid.app.core.nats
 
 import com.vettid.app.core.network.NatsConnectionInfo
 import com.vettid.app.core.storage.CredentialStore
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.*
+import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -17,6 +20,7 @@ class NatsAutoConnectorTest {
     private lateinit var connectionManager: NatsConnectionManager
     private lateinit var ownerSpaceClient: OwnerSpaceClient
     private lateinit var credentialStore: CredentialStore
+    private lateinit var credentialClient: NatsCredentialClient
     private lateinit var autoConnector: NatsAutoConnector
 
     private val testJwt = "eyJhbGciOiJlZDI1NTE5In0.test"
@@ -32,19 +36,34 @@ $testJwt
 $testSeed
 ------END USER NKEY SEED------"""
 
+    private val credentialRotationFlow = MutableSharedFlow<CredentialRotationMessage>()
+    private val testDispatcher = StandardTestDispatcher()
+
     @Before
     fun setup() {
+        Dispatchers.setMain(testDispatcher)
+
         natsClient = mock()
         connectionManager = mock()
         ownerSpaceClient = mock()
         credentialStore = mock()
+        credentialClient = mock()
+
+        // Stub the credentialRotation flow
+        whenever(ownerSpaceClient.credentialRotation).thenReturn(credentialRotationFlow)
 
         autoConnector = NatsAutoConnector(
             natsClient = natsClient,
             connectionManager = connectionManager,
             ownerSpaceClient = ownerSpaceClient,
-            credentialStore = credentialStore
+            credentialStore = credentialStore,
+            credentialClient = credentialClient
         )
+    }
+
+    @After
+    fun tearDown() {
+        Dispatchers.resetMain()
     }
 
     // MARK: - checkCredentialState Tests

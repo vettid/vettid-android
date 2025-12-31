@@ -135,11 +135,11 @@ The vault proactively pushes new credentials 2 hours before expiry. Check interv
 - `expiry_imminent` - Urgent rotation (<30 minutes remaining)
 
 - **Mobile Action Required:**
-  - [ ] Android: Implement `NatsCredentialClient.requestRefresh()` using `credentials.refresh`
-  - [ ] Android: Update `NatsAutoConnector` to check credentials on startup
+  - [x] Android: Implement `NatsCredentialClient.requestRefresh()` using `credentials.refresh` ✅
+  - [x] Android: Update `NatsAutoConnector` to check credentials on startup ✅
   - [ ] Android: Update `NatsTokenRefreshWorker` to use vault-based refresh
-  - [ ] Android: Subscribe to `forApp.credentials.rotate` for proactive rotation
-  - [ ] Android: Handle rotation message: store new credentials, reconnect with new creds
+  - [x] Android: Subscribe to `forApp.credentials.rotate` for proactive rotation ✅
+  - [x] Android: Handle rotation message: store new credentials, reconnect with new creds ✅
 
 ### 2025-12-30 - Backend Response to Credential Lifecycle Document (Superseded)
 

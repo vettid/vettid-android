@@ -2,9 +2,14 @@ package com.vettid.app.core.nats
 
 import android.util.Log
 import com.vettid.app.core.storage.CredentialStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -29,11 +34,15 @@ class NatsAutoConnector @Inject constructor(
     private val natsClient: NatsClient,
     private val connectionManager: NatsConnectionManager,
     private val ownerSpaceClient: OwnerSpaceClient,
-    private val credentialStore: CredentialStore
+    private val credentialStore: CredentialStore,
+    private val credentialClient: NatsCredentialClient
 ) {
     companion object {
         private const val TAG = "NatsAutoConnector"
     }
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var rotationListenerJob: Job? = null
 
     private val _connectionState = MutableStateFlow<AutoConnectState>(AutoConnectState.Idle)
     val connectionState: StateFlow<AutoConnectState> = _connectionState.asStateFlow()
@@ -186,6 +195,9 @@ class NatsAutoConnector @Inject constructor(
             Log.i(TAG, "E2E session restored: ${ownerSpaceClient.currentSessionId}")
         }
 
+        // Step 10: Start listening for credential rotation events
+        startRotationListener()
+
         _connectionState.value = AutoConnectState.Connected
         Log.i(TAG, "Auto-connect completed successfully")
         return ConnectionResult.Success
@@ -229,10 +241,105 @@ class NatsAutoConnector @Inject constructor(
      * Disconnect from NATS.
      */
     suspend fun disconnect() {
+        stopRotationListener()
         ownerSpaceClient.unsubscribeFromVault()
         natsClient.disconnect()
         _connectionState.value = AutoConnectState.Idle
         Log.i(TAG, "Disconnected from NATS")
+    }
+
+    /**
+     * Start listening for credential rotation events from the vault.
+     */
+    private fun startRotationListener() {
+        rotationListenerJob?.cancel()
+        rotationListenerJob = scope.launch {
+            ownerSpaceClient.credentialRotation.collect { rotation ->
+                handleCredentialRotation(rotation)
+            }
+        }
+        Log.d(TAG, "Started credential rotation listener")
+    }
+
+    /**
+     * Stop listening for credential rotation events.
+     */
+    private fun stopRotationListener() {
+        rotationListenerJob?.cancel()
+        rotationListenerJob = null
+    }
+
+    /**
+     * Handle a credential rotation event from the vault.
+     *
+     * Stores the new credentials and reconnects to NATS.
+     */
+    private suspend fun handleCredentialRotation(rotation: CredentialRotationMessage) {
+        Log.i(TAG, "Handling credential rotation: reason=${rotation.reason}, credentialId=${rotation.credentialId}")
+
+        try {
+            // Store new credentials
+            credentialClient.storeCredentials(rotation.credentials, rotation.credentialId)
+            Log.i(TAG, "Stored rotated credentials")
+
+            // Reconnect with new credentials
+            Log.i(TAG, "Reconnecting with new credentials...")
+
+            // First disconnect (but keep rotation listener until reconnected)
+            ownerSpaceClient.unsubscribeFromVault()
+            natsClient.disconnect()
+
+            // Reconnect using the new credentials
+            val result = autoConnect()
+
+            when (result) {
+                is ConnectionResult.Success -> {
+                    Log.i(TAG, "Successfully reconnected after credential rotation")
+                }
+                else -> {
+                    Log.e(TAG, "Failed to reconnect after credential rotation: $result")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error handling credential rotation", e)
+        }
+    }
+
+    /**
+     * Request credential refresh from the vault.
+     *
+     * Use this to proactively refresh credentials before they expire.
+     *
+     * @param deviceId Device identifier
+     * @return New credentials on success
+     */
+    suspend fun requestCredentialRefresh(deviceId: String): Result<CredentialRefreshResult> {
+        if (!isConnected()) {
+            return Result.failure(NatsException("Not connected to NATS"))
+        }
+
+        val result = credentialClient.requestRefresh(
+            currentCredentialId = null, // We don't track credential IDs yet
+            deviceId = deviceId
+        )
+
+        result.onSuccess { refreshResult ->
+            // Store the refreshed credentials
+            credentialClient.storeCredentials(refreshResult.credentials, refreshResult.credentialId)
+            Log.i(TAG, "Credentials refreshed successfully, expires: ${refreshResult.expiresAt}")
+        }
+
+        return result
+    }
+
+    /**
+     * Check if credentials need refresh (within buffer period).
+     *
+     * @param bufferMinutes Minutes before expiry to consider credentials stale
+     * @return true if credentials should be refreshed
+     */
+    fun needsCredentialRefresh(bufferMinutes: Long = 120): Boolean {
+        return credentialClient.needsRefresh(bufferMinutes)
     }
 
     /**

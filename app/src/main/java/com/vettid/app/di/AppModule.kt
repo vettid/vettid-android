@@ -20,6 +20,7 @@ import com.vettid.app.core.nats.CallSignalingClient
 import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.nats.NatsClient
 import com.vettid.app.core.nats.NatsConnectionManager
+import com.vettid.app.core.nats.NatsCredentialClient
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.features.calling.CallManager
 import com.vettid.app.core.network.ApiClient
@@ -126,13 +127,23 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideNatsCredentialClient(
+        ownerSpaceClient: OwnerSpaceClient,
+        credentialStore: CredentialStore
+    ): NatsCredentialClient {
+        return NatsCredentialClient(ownerSpaceClient, credentialStore)
+    }
+
+    @Provides
+    @Singleton
     fun provideNatsAutoConnector(
         natsClient: NatsClient,
         connectionManager: NatsConnectionManager,
         ownerSpaceClient: OwnerSpaceClient,
-        credentialStore: CredentialStore
+        credentialStore: CredentialStore,
+        credentialClient: NatsCredentialClient
     ): NatsAutoConnector {
-        return NatsAutoConnector(natsClient, connectionManager, ownerSpaceClient, credentialStore)
+        return NatsAutoConnector(natsClient, connectionManager, ownerSpaceClient, credentialStore, credentialClient)
     }
 
     // Calling Dependencies
