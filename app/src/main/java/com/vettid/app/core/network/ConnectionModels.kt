@@ -250,12 +250,13 @@ sealed class ConnectionEvent {
     ) : ConnectionEvent()
 
     data class ConnectionRevoked(
-        @SerializedName("connection_id") val connectionId: String
+        @SerializedName("connection_id") val connectionId: String,
+        val reason: String? = null
     ) : ConnectionEvent()
 
     data class ProfileUpdated(
         @SerializedName("connection_id") val connectionId: String,
-        val profile: Profile
+        val profile: Any // Profile or PartialProfile from messaging updates
     ) : ConnectionEvent()
 
     data class NewMessage(

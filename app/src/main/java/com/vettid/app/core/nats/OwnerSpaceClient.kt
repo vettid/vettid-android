@@ -51,6 +51,23 @@ class OwnerSpaceClient @Inject constructor(
     /** Flow of credential rotation events from vault. Subscribe to handle proactive credential rotation. */
     val credentialRotation: SharedFlow<CredentialRotationMessage> = _credentialRotation.asSharedFlow()
 
+    // Messaging events
+    private val _incomingMessages = MutableSharedFlow<IncomingMessage>(extraBufferCapacity = 64)
+    /** Flow of new messages from peers. */
+    val incomingMessages: SharedFlow<IncomingMessage> = _incomingMessages.asSharedFlow()
+
+    private val _readReceipts = MutableSharedFlow<ReadReceipt>(extraBufferCapacity = 64)
+    /** Flow of read receipts from peers. */
+    val readReceipts: SharedFlow<ReadReceipt> = _readReceipts.asSharedFlow()
+
+    private val _profileUpdates = MutableSharedFlow<ProfileUpdate>(extraBufferCapacity = 16)
+    /** Flow of profile updates from peers. */
+    val profileUpdates: SharedFlow<ProfileUpdate> = _profileUpdates.asSharedFlow()
+
+    private val _connectionRevocations = MutableSharedFlow<ConnectionRevoked>(extraBufferCapacity = 16)
+    /** Flow of connection revocation notices from peers. */
+    val connectionRevocations: SharedFlow<ConnectionRevoked> = _connectionRevocations.asSharedFlow()
+
     private var appSubscription: NatsSubscription? = null
     private var eventTypesSubscription: NatsSubscription? = null
 
@@ -395,10 +412,28 @@ class OwnerSpaceClient @Inject constructor(
 
     private fun handleVaultResponse(message: NatsMessage) {
         try {
-            // Check if this is a credential rotation event
-            if (message.subject.endsWith(".forApp.credentials.rotate")) {
-                handleCredentialRotation(message)
-                return
+            // Route based on subject suffix
+            when {
+                message.subject.endsWith(".forApp.credentials.rotate") -> {
+                    handleCredentialRotation(message)
+                    return
+                }
+                message.subject.endsWith(".forApp.new-message") -> {
+                    handleNewMessage(message)
+                    return
+                }
+                message.subject.endsWith(".forApp.read-receipt") -> {
+                    handleReadReceipt(message)
+                    return
+                }
+                message.subject.endsWith(".forApp.profile-update") -> {
+                    handleProfileUpdate(message)
+                    return
+                }
+                message.subject.endsWith(".forApp.connection-revoked") -> {
+                    handleConnectionRevoked(message)
+                    return
+                }
             }
 
             // Decrypt if E2E is enabled
@@ -548,6 +583,99 @@ class OwnerSpaceClient @Inject constructor(
             _credentialRotation.tryEmit(rotationMessage)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to parse credential rotation event", e)
+        }
+    }
+
+    /**
+     * Handle new message event from peer vault.
+     */
+    private fun handleNewMessage(message: NatsMessage) {
+        try {
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+
+            val incomingMessage = IncomingMessage(
+                messageId = payload.getString("message_id"),
+                connectionId = payload.getString("connection_id"),
+                senderGuid = payload.getString("sender_guid"),
+                encryptedContent = payload.getString("encrypted_content"),
+                nonce = payload.getString("nonce"),
+                contentType = payload.optString("content_type", "text"),
+                sentAt = payload.optString("sent_at", "")
+            )
+
+            android.util.Log.d(TAG, "Received new message: ${incomingMessage.messageId}")
+            _incomingMessages.tryEmit(incomingMessage)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse new-message event", e)
+        }
+    }
+
+    /**
+     * Handle read receipt from peer vault.
+     */
+    private fun handleReadReceipt(message: NatsMessage) {
+        try {
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+
+            val readReceipt = ReadReceipt(
+                messageId = payload.getString("message_id"),
+                connectionId = payload.getString("connection_id"),
+                readerGuid = payload.getString("reader_guid"),
+                readAt = payload.optString("read_at", "")
+            )
+
+            android.util.Log.d(TAG, "Received read receipt: ${readReceipt.messageId}")
+            _readReceipts.tryEmit(readReceipt)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse read-receipt event", e)
+        }
+    }
+
+    /**
+     * Handle profile update from peer vault.
+     */
+    private fun handleProfileUpdate(message: NatsMessage) {
+        try {
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+
+            val profileUpdate = ProfileUpdate(
+                connectionId = payload.getString("connection_id"),
+                peerGuid = payload.getString("peer_guid"),
+                displayName = if (payload.has("display_name")) payload.getString("display_name") else null,
+                avatarUrl = if (payload.has("avatar_url")) payload.getString("avatar_url") else null,
+                status = if (payload.has("status")) payload.getString("status") else null,
+                updatedAt = payload.optString("updated_at", "")
+            )
+
+            android.util.Log.d(TAG, "Received profile update from: ${profileUpdate.peerGuid}")
+            _profileUpdates.tryEmit(profileUpdate)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse profile-update event", e)
+        }
+    }
+
+    /**
+     * Handle connection revocation notice from peer vault.
+     */
+    private fun handleConnectionRevoked(message: NatsMessage) {
+        try {
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+
+            val connectionRevoked = ConnectionRevoked(
+                connectionId = payload.getString("connection_id"),
+                peerGuid = payload.getString("peer_guid"),
+                reason = if (payload.has("reason")) payload.getString("reason") else null,
+                revokedAt = payload.optString("revoked_at", "")
+            )
+
+            android.util.Log.i(TAG, "Connection revoked: ${connectionRevoked.connectionId}")
+            _connectionRevocations.tryEmit(connectionRevoked)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse connection-revoked event", e)
         }
     }
 

@@ -50,10 +50,10 @@ This file is the master coordination point between backend development and mobil
   - `forApp.connection-revoked` - Connection revoked by peer
 
 - **Mobile Action Required:**
-  - [ ] Android: Implement `message.send` for sending messages
-  - [ ] Android: Subscribe to `forApp.new-message` for incoming messages
-  - [ ] Android: Handle `forApp.read-receipt` notifications
-  - [ ] Android: Handle `forApp.connection-revoked` notifications
+  - [x] Android: Implement `message.send` for sending messages - `NatsMessagingClient.sendMessage()`
+  - [x] Android: Subscribe to `forApp.new-message` for incoming messages - `OwnerSpaceClient.incomingMessages` flow
+  - [x] Android: Handle `forApp.read-receipt` notifications - `OwnerSpaceClient.readReceipts` flow
+  - [x] Android: Handle `forApp.connection-revoked` notifications - `OwnerSpaceClient.connectionRevocations` flow
 
 - **Notes:**
   - See "Messaging (Peer-to-Peer)" section below for full API documentation

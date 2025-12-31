@@ -1,32 +1,40 @@
 package com.vettid.app.features.messaging
 
 import android.util.Log
-import com.google.gson.Gson
 import com.vettid.app.core.crypto.ConnectionCryptoManager
-import com.vettid.app.core.nats.NatsConnectionManager
-import com.vettid.app.core.nats.NatsSubscription
-import com.vettid.app.core.network.*
+import com.vettid.app.core.nats.ConnectionRevoked as NatsConnectionRevoked
+import com.vettid.app.core.nats.IncomingMessage
+import com.vettid.app.core.nats.OwnerSpaceClient
+import com.vettid.app.core.nats.ProfileUpdate as NatsProfileUpdate
+import com.vettid.app.core.nats.ReadReceipt
+import com.vettid.app.core.network.ConnectionEvent
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.launch
+import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
  * Subscribes to real-time message and connection events via NATS.
  *
- * Event types:
- * - New messages
- * - Message read receipts
- * - Connection accepted/revoked
- * - Profile updates
+ * Uses OwnerSpaceClient's forApp topic flows for receiving:
+ * - New messages (forApp.new-message)
+ * - Message read receipts (forApp.read-receipt)
+ * - Profile updates (forApp.profile-update)
+ * - Connection revocations (forApp.connection-revoked)
  */
 @Singleton
 class MessageSubscriber @Inject constructor(
-    private val connectionManager: NatsConnectionManager,
+    private val ownerSpaceClient: OwnerSpaceClient,
     private val connectionCryptoManager: ConnectionCryptoManager
 ) {
-    private val gson = Gson()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     // Message events flow
     private val _messageEvents = MutableSharedFlow<MessageEvent>(extraBufferCapacity = 64)
@@ -36,45 +44,46 @@ class MessageSubscriber @Inject constructor(
     private val _connectionEvents = MutableSharedFlow<ConnectionEvent>(extraBufferCapacity = 64)
     val connectionEvents: SharedFlow<ConnectionEvent> = _connectionEvents.asSharedFlow()
 
-    // Active subscriptions
-    private var messagesSubscription: NatsSubscription? = null
-    private var connectionsSubscription: NatsSubscription? = null
+    // Active collection jobs
+    private var messageCollectionJob: Job? = null
+    private var readReceiptCollectionJob: Job? = null
+    private var profileUpdateCollectionJob: Job? = null
+    private var revocationCollectionJob: Job? = null
 
     /**
      * Start subscribing to message and connection events.
-     * Call this after NATS is connected.
+     * Collects from OwnerSpaceClient's forApp topic flows.
      */
     fun subscribe(): Result<Unit> {
-        val ownerSpaceId = connectionManager.getOwnerSpaceId()
-            ?: return Result.failure(MessagingException("No OwnerSpace ID available"))
-
-        // Subscribe to message events
-        val messagesSubject = "$ownerSpaceId.messages.>"
-        val messagesResult = connectionManager.getNatsClient().subscribe(messagesSubject) { message ->
-            handleMessageEvent(message.dataString)
+        // Collect incoming messages
+        messageCollectionJob = scope.launch {
+            ownerSpaceClient.incomingMessages.collect { message ->
+                handleIncomingMessage(message)
+            }
         }
 
-        messagesResult.onSuccess {
-            messagesSubscription = it
-            Log.d(TAG, "Subscribed to $messagesSubject")
-        }.onFailure {
-            Log.e(TAG, "Failed to subscribe to $messagesSubject", it)
-            return Result.failure(it)
+        // Collect read receipts
+        readReceiptCollectionJob = scope.launch {
+            ownerSpaceClient.readReceipts.collect { receipt ->
+                handleReadReceipt(receipt)
+            }
         }
 
-        // Subscribe to connection events
-        val connectionsSubject = "$ownerSpaceId.connections.>"
-        val connectionsResult = connectionManager.getNatsClient().subscribe(connectionsSubject) { message ->
-            handleConnectionEvent(message.dataString)
+        // Collect profile updates
+        profileUpdateCollectionJob = scope.launch {
+            ownerSpaceClient.profileUpdates.collect { update ->
+                handleProfileUpdate(update)
+            }
         }
 
-        connectionsResult.onSuccess {
-            connectionsSubscription = it
-            Log.d(TAG, "Subscribed to $connectionsSubject")
-        }.onFailure {
-            Log.e(TAG, "Failed to subscribe to $connectionsSubject", it)
+        // Collect connection revocations
+        revocationCollectionJob = scope.launch {
+            ownerSpaceClient.connectionRevocations.collect { revocation ->
+                handleConnectionRevoked(revocation)
+            }
         }
 
+        Log.d(TAG, "Started collecting from OwnerSpaceClient flows")
         return Result.success(Unit)
     }
 
@@ -82,98 +91,111 @@ class MessageSubscriber @Inject constructor(
      * Stop subscribing to events.
      */
     fun unsubscribe() {
-        messagesSubscription?.unsubscribe()
-        messagesSubscription = null
-        connectionsSubscription?.unsubscribe()
-        connectionsSubscription = null
-        Log.d(TAG, "Unsubscribed from all topics")
+        messageCollectionJob?.cancel()
+        messageCollectionJob = null
+        readReceiptCollectionJob?.cancel()
+        readReceiptCollectionJob = null
+        profileUpdateCollectionJob?.cancel()
+        profileUpdateCollectionJob = null
+        revocationCollectionJob?.cancel()
+        revocationCollectionJob = null
+        Log.d(TAG, "Stopped collecting from OwnerSpaceClient flows")
     }
 
     /**
      * Check if currently subscribed.
      */
     fun isSubscribed(): Boolean {
-        return messagesSubscription != null
+        return messageCollectionJob?.isActive == true
     }
 
     /**
-     * Handle incoming message event.
+     * Handle incoming message from OwnerSpaceClient.
+     * Messages arrive encrypted and must be decrypted by the consumer.
      */
-    private fun handleMessageEvent(json: String) {
+    private fun handleIncomingMessage(message: IncomingMessage) {
         try {
-            val eventJson = gson.fromJson(json, MessageEventJson::class.java)
+            // Pass through the encrypted message directly
+            // Downstream consumers are responsible for decryption using connectionCryptoManager
+            val event = MessageEvent.NewMessage(
+                incomingMessage = message
+            )
 
-            val event = when (eventJson.type) {
-                "new_message" -> {
-                    val message = eventJson.message ?: return
-                    MessageEvent.NewMessage(
-                        message = message,
-                        connectionId = eventJson.connectionId ?: message.connectionId
-                    )
-                }
-                "message_read" -> {
-                    MessageEvent.MessageRead(
-                        messageId = eventJson.messageId ?: return,
-                        connectionId = eventJson.connectionId ?: return,
-                        readAt = eventJson.readAt ?: System.currentTimeMillis()
-                    )
-                }
-                "message_delivered" -> {
-                    MessageEvent.MessageDelivered(
-                        messageId = eventJson.messageId ?: return,
-                        connectionId = eventJson.connectionId ?: return,
-                        deliveredAt = eventJson.deliveredAt ?: System.currentTimeMillis()
-                    )
-                }
-                else -> {
-                    Log.w(TAG, "Unknown message event type: ${eventJson.type}")
-                    return
-                }
-            }
-
+            Log.d(TAG, "New message from ${message.connectionId}: ${message.messageId}")
             _messageEvents.tryEmit(event)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to parse message event", e)
+            Log.e(TAG, "Failed to handle incoming message", e)
         }
     }
 
     /**
-     * Handle incoming connection event.
+     * Handle read receipt from OwnerSpaceClient.
      */
-    private fun handleConnectionEvent(json: String) {
+    private fun handleReadReceipt(receipt: ReadReceipt) {
         try {
-            val eventJson = gson.fromJson(json, ConnectionEventJson::class.java)
+            val event = MessageEvent.MessageRead(
+                messageId = receipt.messageId,
+                connectionId = receipt.connectionId,
+                readAt = parseTimestamp(receipt.readAt)
+            )
 
-            val event = when (eventJson.type) {
-                "invitation_accepted" -> {
-                    val connection = eventJson.connection ?: return
-                    val peerPublicKey = eventJson.peerPublicKey ?: return
-                    ConnectionEvent.InvitationAccepted(
-                        connection = connection,
-                        peerPublicKey = peerPublicKey
-                    )
-                }
-                "connection_revoked" -> {
-                    ConnectionEvent.ConnectionRevoked(
-                        connectionId = eventJson.connectionId ?: return
-                    )
-                }
-                "profile_updated" -> {
-                    val profile = eventJson.profile ?: return
-                    ConnectionEvent.ProfileUpdated(
-                        connectionId = eventJson.connectionId ?: return,
-                        profile = profile
-                    )
-                }
-                else -> {
-                    Log.w(TAG, "Unknown connection event type: ${eventJson.type}")
-                    return
-                }
-            }
+            Log.d(TAG, "Read receipt for ${receipt.messageId}")
+            _messageEvents.tryEmit(event)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to handle read receipt", e)
+        }
+    }
 
+    /**
+     * Handle profile update from OwnerSpaceClient.
+     */
+    private fun handleProfileUpdate(update: NatsProfileUpdate) {
+        try {
+            val event = ConnectionEvent.ProfileUpdated(
+                connectionId = update.connectionId,
+                profile = PartialProfile(
+                    displayName = update.displayName,
+                    avatarUrl = update.avatarUrl,
+                    status = update.status
+                )
+            )
+
+            Log.d(TAG, "Profile update from ${update.connectionId}")
             _connectionEvents.tryEmit(event)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to parse connection event", e)
+            Log.e(TAG, "Failed to handle profile update", e)
+        }
+    }
+
+    /**
+     * Handle connection revocation from OwnerSpaceClient.
+     */
+    private fun handleConnectionRevoked(revocation: NatsConnectionRevoked) {
+        try {
+            val event = ConnectionEvent.ConnectionRevoked(
+                connectionId = revocation.connectionId,
+                reason = revocation.reason
+            )
+
+            Log.i(TAG, "Connection revoked: ${revocation.connectionId}")
+            _connectionEvents.tryEmit(event)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to handle connection revocation", e)
+        }
+    }
+
+    /**
+     * Parse ISO 8601 timestamp to epoch milliseconds.
+     */
+    private fun parseTimestamp(isoTimestamp: String): Long {
+        return try {
+            if (isoTimestamp.isNotEmpty()) {
+                Instant.parse(isoTimestamp).toEpochMilli()
+            } else {
+                System.currentTimeMillis()
+            }
+        } catch (e: Exception) {
+            System.currentTimeMillis()
         }
     }
 
@@ -189,12 +211,16 @@ class MessageSubscriber @Inject constructor(
  */
 sealed class MessageEvent {
     /**
-     * New message received.
+     * New encrypted message received.
+     * The message content is encrypted and must be decrypted by the consumer
+     * using ConnectionCryptoManager with the connection's shared secret.
      */
     data class NewMessage(
-        val message: Message,
-        val connectionId: String
-    ) : MessageEvent()
+        val incomingMessage: IncomingMessage
+    ) : MessageEvent() {
+        val messageId: String get() = incomingMessage.messageId
+        val connectionId: String get() = incomingMessage.connectionId
+    }
 
     /**
      * Message was read by recipient.
@@ -215,23 +241,16 @@ sealed class MessageEvent {
     ) : MessageEvent()
 }
 
-// MARK: - JSON Models
+// MARK: - Profile Update Model
 
-private data class MessageEventJson(
-    val type: String,
-    val connectionId: String? = null,
-    val messageId: String? = null,
-    val message: Message? = null,
-    val readAt: Long? = null,
-    val deliveredAt: Long? = null
-)
-
-private data class ConnectionEventJson(
-    val type: String,
-    val connectionId: String? = null,
-    val connection: Connection? = null,
-    val peerPublicKey: String? = null,
-    val profile: Profile? = null
+/**
+ * Partial profile update from a peer.
+ * Only contains fields that changed, all fields are optional.
+ */
+data class PartialProfile(
+    val displayName: String?,
+    val avatarUrl: String?,
+    val status: String?
 )
 
 // MARK: - Exceptions
