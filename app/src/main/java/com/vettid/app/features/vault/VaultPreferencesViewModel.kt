@@ -3,6 +3,7 @@ package com.vettid.app.features.vault
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.app.core.network.VaultLifecycleClient
 import com.vettid.app.core.storage.CredentialStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
@@ -10,6 +11,20 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 private const val TAG = "VaultPreferencesViewModel"
+
+/**
+ * Vault server status.
+ */
+enum class VaultServerStatus {
+    UNKNOWN,
+    LOADING,
+    RUNNING,
+    STOPPED,
+    STARTING,
+    STOPPING,
+    PENDING,
+    ERROR
+}
 
 /**
  * State for vault preferences.
@@ -20,7 +35,14 @@ data class VaultPreferencesState(
     val availableHandlerCount: Int = 2,
     val archiveAfterDays: Int = 7,
     val deleteAfterDays: Int = 30,
-    val isLoading: Boolean = false
+    val isLoading: Boolean = false,
+    // Vault server state
+    val vaultServerStatus: VaultServerStatus = VaultServerStatus.UNKNOWN,
+    val vaultInstanceId: String? = null,
+    val vaultInstanceIp: String? = null,
+    val natsEndpoint: String? = null,
+    val vaultActionInProgress: Boolean = false,
+    val vaultErrorMessage: String? = null
 )
 
 /**
@@ -35,7 +57,8 @@ sealed class VaultPreferencesEffect {
 
 @HiltViewModel
 class VaultPreferencesViewModel @Inject constructor(
-    private val credentialStore: CredentialStore
+    private val credentialStore: CredentialStore,
+    private val vaultLifecycleClient: VaultLifecycleClient
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(VaultPreferencesState())
@@ -46,6 +69,7 @@ class VaultPreferencesViewModel @Inject constructor(
 
     init {
         loadPreferences()
+        refreshVaultStatus()
     }
 
     private fun loadPreferences() {
@@ -120,6 +144,109 @@ class VaultPreferencesViewModel @Inject constructor(
     fun onChangePasswordClick() {
         viewModelScope.launch {
             _effects.emit(VaultPreferencesEffect.NavigateToChangePassword)
+        }
+    }
+
+    // MARK: - Vault Lifecycle
+
+    fun refreshVaultStatus() {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(
+                vaultServerStatus = VaultServerStatus.LOADING,
+                vaultErrorMessage = null
+            )
+
+            vaultLifecycleClient.getVaultStatus()
+                .onSuccess { response ->
+                    val status = when {
+                        response.isVaultRunning -> VaultServerStatus.RUNNING
+                        response.isVaultStopped -> VaultServerStatus.STOPPED
+                        response.isVaultPending -> VaultServerStatus.PENDING
+                        else -> VaultServerStatus.UNKNOWN
+                    }
+                    _state.value = _state.value.copy(
+                        vaultServerStatus = status,
+                        vaultInstanceId = response.instanceId,
+                        vaultInstanceIp = response.instanceIp,
+                        natsEndpoint = response.natsEndpoint,
+                        vaultErrorMessage = null
+                    )
+                }
+                .onFailure { error ->
+                    Log.e(TAG, "Failed to get vault status", error)
+                    _state.value = _state.value.copy(
+                        vaultServerStatus = VaultServerStatus.ERROR,
+                        vaultErrorMessage = error.message
+                    )
+                }
+        }
+    }
+
+    fun startVault() {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(
+                vaultActionInProgress = true,
+                vaultServerStatus = VaultServerStatus.STARTING,
+                vaultErrorMessage = null
+            )
+
+            vaultLifecycleClient.startVault()
+                .onSuccess { response ->
+                    Log.i(TAG, "Vault start response: ${response.status}")
+                    _effects.emit(VaultPreferencesEffect.ShowSuccess(
+                        if (response.isAlreadyRunning) "Vault is already running"
+                        else "Vault is starting..."
+                    ))
+                    // Refresh status after a short delay to get updated info
+                    kotlinx.coroutines.delay(2000)
+                    refreshVaultStatus()
+                }
+                .onFailure { error ->
+                    Log.e(TAG, "Failed to start vault", error)
+                    _state.value = _state.value.copy(
+                        vaultServerStatus = VaultServerStatus.ERROR,
+                        vaultErrorMessage = error.message
+                    )
+                    _effects.emit(VaultPreferencesEffect.ShowError(
+                        "Failed to start vault: ${error.message}"
+                    ))
+                }
+
+            _state.value = _state.value.copy(vaultActionInProgress = false)
+        }
+    }
+
+    fun stopVault() {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(
+                vaultActionInProgress = true,
+                vaultServerStatus = VaultServerStatus.STOPPING,
+                vaultErrorMessage = null
+            )
+
+            vaultLifecycleClient.stopVault()
+                .onSuccess { response ->
+                    Log.i(TAG, "Vault stop response: ${response.status}")
+                    _effects.emit(VaultPreferencesEffect.ShowSuccess(
+                        if (response.isAlreadyStopped) "Vault is already stopped"
+                        else "Vault is stopping..."
+                    ))
+                    // Refresh status after a short delay
+                    kotlinx.coroutines.delay(2000)
+                    refreshVaultStatus()
+                }
+                .onFailure { error ->
+                    Log.e(TAG, "Failed to stop vault", error)
+                    _state.value = _state.value.copy(
+                        vaultServerStatus = VaultServerStatus.ERROR,
+                        vaultErrorMessage = error.message
+                    )
+                    _effects.emit(VaultPreferencesEffect.ShowError(
+                        "Failed to stop vault: ${error.message}"
+                    ))
+                }
+
+            _state.value = _state.value.copy(vaultActionInProgress = false)
         }
     }
 }

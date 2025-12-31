@@ -25,6 +25,7 @@ import com.vettid.app.core.nats.NatsCredentialClient
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.features.calling.CallManager
 import com.vettid.app.core.network.ApiClient
+import com.vettid.app.core.network.VaultLifecycleClient
 import com.vettid.app.core.network.VaultServiceClient
 import com.vettid.app.core.storage.CredentialStore
 import com.vettid.app.features.auth.BiometricAuthManager
@@ -62,6 +63,14 @@ object AppModule {
     @Singleton
     fun provideVaultServiceClient(): VaultServiceClient {
         return VaultServiceClient()
+    }
+
+    @Provides
+    @Singleton
+    fun provideVaultLifecycleClient(
+        credentialStore: CredentialStore
+    ): VaultLifecycleClient {
+        return VaultLifecycleClient(credentialStore)
     }
 
     @Provides
