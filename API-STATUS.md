@@ -135,6 +135,33 @@ Yes, the `app.bootstrap` handler is fully implemented in `vault-manager/internal
 - [x] Session key exchange integrated with E2E encryption setup
 - [x] Updated `BootstrapClient` response parsing to match backend format (credentials field in result)
 
+**Testing Status (2025-12-31):**
+- [x] App connects to NATS with bootstrap credentials
+- [x] App subscribes to `OwnerSpace.{guid}.forApp.bootstrap.>` for responses
+- [x] App publishes bootstrap request to `OwnerSpace.{guid}.forVault.app.bootstrap`
+- [ ] **BLOCKED**: Vault-manager not responding to bootstrap requests (30s timeout)
+
+**Backend Investigation Needed:**
+The Android app successfully connects to NATS and publishes bootstrap requests, but the vault-manager doesn't respond. Tested with multiple vault instances (including one running 12+ hours). Request format matches documented structure:
+```json
+{
+  "id": "uuid",
+  "type": "app.bootstrap",
+  "timestamp": "2025-12-31T...",
+  "payload": {
+    "device_id": "android-device-id",
+    "device_type": "android",
+    "app_version": "1.0.0",
+    "app_session_public_key": "base64-X25519-key"
+  }
+}
+```
+
+Questions:
+1. Is the vault-manager subscribed to `OwnerSpace.{guid}.forVault.app.bootstrap`?
+2. What topic does it publish responses to? We're subscribed to `forApp.bootstrap.>`
+3. Can we get CloudWatch logs from a vault instance to verify message receipt?
+
 ---
 
 ## Recent Changes

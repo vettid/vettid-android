@@ -95,22 +95,20 @@ class BootstrapClient @Inject constructor(
         val subscription = subscriptionResult.getOrThrow()
 
         try {
-            // Build bootstrap request payload
+            // Build bootstrap request payload (nested structure per API-STATUS.md)
             val payload = JsonObject().apply {
-                addProperty("request_id", requestId)
-                addProperty("app_session_public_key", keyPair.publicKeyBase64())
                 addProperty("device_id", deviceId)
                 addProperty("device_type", "android")
                 addProperty("app_version", appVersion)
-                addProperty("timestamp", Instant.now().toString())
+                addProperty("app_session_public_key", keyPair.publicKeyBase64())
             }
 
-            // Build the full message
+            // Build the full message envelope
             val message = JsonObject().apply {
                 addProperty("id", requestId)
                 addProperty("type", "app.bootstrap")
-                add("payload", payload)
                 addProperty("timestamp", Instant.now().toString())
+                add("payload", payload)
             }
 
             // Publish to bootstrap topic
