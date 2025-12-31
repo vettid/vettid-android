@@ -135,6 +135,19 @@ curl -X GET /api/v1/vault/status -H "Authorization: Bearer {action_token}"
 - ✅ NATS connection succeeds
 - ❌ Bootstrap fails - NATS permissions violation (see app.bootstrap section below)
 
+**FIX #4 DEPLOYED (2025-12-31 22:45 UTC):**
+Bootstrap credentials JWT now has correct subscribe permission.
+
+**Problem:** Bootstrap JWT had permission for `forApp.bootstrap.>` but response topic is `forApp.app.bootstrap.{id}` (includes event type).
+
+**Fix:** Changed subscribe permission from:
+- `${ownerSpace}.forApp.bootstrap.>` (wrong)
+- `${ownerSpace}.forApp.app.bootstrap.>` (correct)
+
+**Note:** Existing users must re-enroll to get new bootstrap credentials with the fix. The Android dev should create a fresh test invitation.
+
+**Please retest with fresh enrollment!**
+
 ---
 
 ### [COMPLETED] Action Token Vault Endpoints Return 404
