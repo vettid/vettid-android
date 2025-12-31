@@ -1,6 +1,6 @@
 # VettID API Status
 
-**Last Updated:** 2025-12-31 (Action-token vault lifecycle endpoints)
+**Last Updated:** 2025-12-31 (Backend fixes for issues #1, #2, #3)
 
 This file is the master coordination point between backend development and mobile app development (iOS and Android). Mobile developers should reference this file to understand API availability and required actions.
 
@@ -75,52 +75,65 @@ Action token endpoints return HTTP 404. The `/api/v1/action/request` endpoint wo
 
 ---
 
-### [PENDING] Action Token Vault Endpoints Return 404
+### [COMPLETED] Action Token Vault Endpoints Return 404
 
 **Priority:** High
-**Status:** ⏳ Awaiting Backend Fix
+**Status:** ✅ Fixed (2025-12-31)
 
-**Problem:**
-The action token vault lifecycle endpoints are returning 404:
-- `POST /api/v1/vault/start` → 404
-- `POST /api/v1/vault/stop` → 404
-- `GET /api/v1/vault/status` → 404
+**Problem (Resolved):**
+The action token vault lifecycle endpoints were returning 404 because the `/api/v1/action/request` route was missing.
 
-The `/api/v1/action/request` endpoint works and returns valid action tokens, but the actual vault operation endpoints don't exist.
+**Root Cause:**
+- The vault lifecycle endpoints (`/api/v1/vault/start`, etc.) were deployed
+- But `/api/v1/action/request` only existed at `/vault/action/request` (with Cognito auth)
+- Mobile apps don't have Cognito JWT, so they couldn't request action tokens
 
-**Android Logs:**
-```
-VaultLifecycleClient: Starting vault
-VaultLifecycleClient: Got action token, executing vault_start
-VaultLifecycleException: HTTP 404: Not Found
-```
+**Fix Applied:**
+Added public route `/api/v1/action/request` (no Cognito auth required). User validation is done via DynamoDB credential lookup in the handler.
 
-**Backend Action Required:**
-- [ ] Deploy `/api/v1/vault/start` endpoint
-- [ ] Deploy `/api/v1/vault/stop` endpoint
-- [ ] Deploy `/api/v1/vault/status` endpoint
+All endpoints now work:
+- `POST /api/v1/action/request` → Returns action token
+- `POST /api/v1/vault/start` → Start vault (requires action token)
+- `POST /api/v1/vault/stop` → Stop vault (requires action token)
+- `GET /api/v1/vault/status` → Get status (requires action token)
 
 ---
 
-### [PENDING] Test Environment Vault Provisioning
+### [COMPLETED] Test Environment Vault Provisioning
 
 **Priority:** Medium
-**Status:** ⏳ Awaiting Backend Implementation
+**Status:** ✅ Fixed (2025-12-31)
 
-**Problem:**
-The test API (`/test/create-invitation`) creates new test users but doesn't provision vault EC2 instances for them. This means:
-1. Enrollment succeeds (invitation code, password, finalize)
-2. Bootstrap credentials are issued
-3. NATS connection fails with "Authentication Timeout" because no vault exists
+**Problem (Resolved):**
+The test API (`/test/create-invitation`) creates new test users but doesn't provision vault EC2 instances for them.
 
-**Current Behavior:**
-- Test users get NATS credentials pointing to a vault that doesn't exist
-- Cannot test bootstrap flow or vault communication without manually provisioning
+**Fix Applied (Option C):**
+The `/test/create-invitation` endpoint now accepts an optional `user_guid` parameter to reuse an existing vault user.
 
-**Requested:**
-Option A: Auto-provision vault when test invitation is created
-Option B: Add `/test/provision-vault` endpoint
-Option C: Allow reusing existing test vaults via `user_guid` parameter
+**Usage:**
+```json
+POST /test/create-invitation
+{
+  "test_user_id": "my_test",
+  "user_guid": "user-D84E1A00643A4C679FAEF6D6FA81B103"
+}
+```
+
+**Response includes:**
+- `reusing_existing_vault: true` - Indicates vault reuse
+- `notes.vault_reuse` - Explains if bootstrap flow will work
+
+**⚠️ IMPORTANT: Use the correct vault for bootstrap testing!**
+
+Only ONE vault has the bootstrap topic fix deployed:
+| user_guid | Has Bootstrap Fix | Use For Testing |
+|-----------|-------------------|-----------------|
+| `user-D84E1A00643A4C679FAEF6D6FA81B103` | ✅ Yes | ✅ Use this one |
+| `user-29680995BC4D4AE19F5B8F046D140005` | ❌ No | ❌ Don't use |
+| `user-0C9D219E6E3444F5B512C401AC6CD739` | ❌ No | ❌ Don't use |
+| `user-E32E2304B6274D9686B00A6E0BF97ECB` | ❌ No | ❌ Don't use |
+
+The other vaults are running an older AMI that doesn't have the bootstrap response topic fix.
 
 ---
 
