@@ -66,9 +66,61 @@ Authorization: Bearer {action_token}
 ```
 
 **Mobile Action Required:**
-- [ ] Android: Implement `VaultLifecycleClient` using action token flow
-- [ ] Android: Add vault start/stop to settings screen
-- [ ] Android: Auto-start vault on NATS connection failure
+- [x] Android: Implement `VaultLifecycleClient` using action token flow
+- [x] Android: Add vault start/stop to settings screen
+- [x] Android: Auto-start vault on NATS connection failure
+
+**Issue Found (2025-12-31):**
+Action token endpoints return HTTP 404. The `/api/v1/action/request` endpoint works, but `/api/v1/vault/start`, `/api/v1/vault/stop`, and `/api/v1/vault/status` return 404. Backend deployment may be incomplete.
+
+---
+
+### [PENDING] Action Token Vault Endpoints Return 404
+
+**Priority:** High
+**Status:** ⏳ Awaiting Backend Fix
+
+**Problem:**
+The action token vault lifecycle endpoints are returning 404:
+- `POST /api/v1/vault/start` → 404
+- `POST /api/v1/vault/stop` → 404
+- `GET /api/v1/vault/status` → 404
+
+The `/api/v1/action/request` endpoint works and returns valid action tokens, but the actual vault operation endpoints don't exist.
+
+**Android Logs:**
+```
+VaultLifecycleClient: Starting vault
+VaultLifecycleClient: Got action token, executing vault_start
+VaultLifecycleException: HTTP 404: Not Found
+```
+
+**Backend Action Required:**
+- [ ] Deploy `/api/v1/vault/start` endpoint
+- [ ] Deploy `/api/v1/vault/stop` endpoint
+- [ ] Deploy `/api/v1/vault/status` endpoint
+
+---
+
+### [PENDING] Test Environment Vault Provisioning
+
+**Priority:** Medium
+**Status:** ⏳ Awaiting Backend Implementation
+
+**Problem:**
+The test API (`/test/create-invitation`) creates new test users but doesn't provision vault EC2 instances for them. This means:
+1. Enrollment succeeds (invitation code, password, finalize)
+2. Bootstrap credentials are issued
+3. NATS connection fails with "Authentication Timeout" because no vault exists
+
+**Current Behavior:**
+- Test users get NATS credentials pointing to a vault that doesn't exist
+- Cannot test bootstrap flow or vault communication without manually provisioning
+
+**Requested:**
+Option A: Auto-provision vault when test invitation is created
+Option B: Add `/test/provision-vault` endpoint
+Option C: Allow reusing existing test vaults via `user_guid` parameter
 
 ---
 
