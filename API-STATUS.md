@@ -97,6 +97,21 @@ Also added rate limiting to vault endpoints:
 
 **Retest (2025-12-31 16:42 UTC):** Still getting HTTP 500. IAM fix may not be deployed yet.
 
+**FIX #2 DEPLOYED (2025-12-31 22:03 UTC):**
+Two additional fixes deployed:
+
+1. **Security: Action token signing key** - Moved from hardcoded fallback key to AWS Secrets Manager. Both `actionRequest` (token creation) and `authExecute` (signature verification) now use a secure 64-char cryptographic key from Secrets Manager with 5-minute caching.
+
+2. **Bug: undefined device_fingerprint** - The optional `device_fingerprint` field was causing a DynamoDB marshall error when undefined. Fixed by adding `removeUndefinedValues: true` option.
+
+**Verified working:**
+```bash
+curl -X POST /api/v1/action/request -d '{"user_guid": "user-xxx", "action_type": "vault_status"}'
+# Returns: {"action_token": "eyJ...", "action_endpoint": "/api/v1/vault/status", ...}
+```
+
+**Please retest!**
+
 ---
 
 ### [COMPLETED] Action Token Vault Endpoints Return 404
