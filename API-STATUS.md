@@ -131,7 +131,9 @@ curl -X GET /api/v1/vault/status -H "Authorization: Bearer {action_token}"
 # Returns: {"enrollment_status":"active","instance_status":"running",...}
 ```
 
-**Please retest!**
+**Retest (2025-12-31 17:30 UTC):**
+- ✅ NATS connection succeeds
+- ❌ Bootstrap fails - NATS permissions violation (see app.bootstrap section below)
 
 ---
 
@@ -379,9 +381,29 @@ Yes, the `app.bootstrap` handler is fully implemented in `vault-manager/internal
 
 **Testing Status (2025-12-31):**
 - [x] App connects to NATS with bootstrap credentials
-- [x] App subscribes to `OwnerSpace.{guid}.forApp.app.bootstrap.>` for responses
+- [ ] ❌ App subscribes to `OwnerSpace.{guid}.forApp.app.bootstrap.>` for responses → **PERMISSIONS VIOLATION**
 - [x] App publishes bootstrap request to `OwnerSpace.{guid}.forVault.app.bootstrap`
 - [x] **FIXED**: Vault-manager response topic bug resolved
+
+**NEW ISSUE (2025-12-31 17:30 UTC):**
+The bootstrap credentials JWT does NOT include permission to subscribe to the bootstrap response topic.
+
+**Error Log:**
+```
+AndroidNatsClient: Server error: -ERR 'Permissions Violation for Subscription to "OwnerSpace.userD84E1A00643A4C679FAEF6D6FA81B103.forApp.app.bootstrap.>"'
+```
+
+**Additional Permissions Violations Found:**
+- Subscribe: `OwnerSpace.{guid}.forApp.>` → DENIED
+- Subscribe: `OwnerSpace.{guid}.eventTypes` → DENIED
+- Publish: `OwnerSpace.{guid}.forVault.connection.list` → DENIED
+
+**Required Bootstrap JWT Permissions:**
+The bootstrap credentials JWT needs to include at minimum:
+1. **Subscribe:** `OwnerSpace.{guid}.forApp.app.bootstrap.>` - to receive bootstrap response
+2. **Publish:** `OwnerSpace.{guid}.forVault.app.bootstrap` - to send bootstrap request
+
+Currently, the JWT only has permissions to CONNECT, but not to subscribe/publish on the required topics.
 
 **Root Cause (FIXED 2025-12-31):**
 The vault-manager was publishing responses to `OwnerSpace.{guid}.forApp.>` literally (with `>` as part of the subject name). The `ForApp` config topic ending in `.>` is meant for subscribing (wildcard), not publishing.

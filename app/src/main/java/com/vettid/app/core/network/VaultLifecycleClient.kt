@@ -106,7 +106,7 @@ class VaultLifecycleClient @Inject constructor(
         val userGuid = credentialStore.getUserGuid()
             ?: return Result.failure(VaultLifecycleException("User not enrolled - no user GUID found"))
 
-        Log.d(TAG, "Requesting action token for $actionType")
+        Log.i(TAG, "Requesting action token for $actionType with userGuid=$userGuid")
 
         // Step 1: Request action token
         val tokenResult = requestActionToken(userGuid, actionType)
