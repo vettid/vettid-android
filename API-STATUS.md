@@ -85,6 +85,18 @@ The `/api/v1/action/request` endpoint is still returning HTTP 500.
 
 **Retest (2025-12-31 16:13 UTC):** Still HTTP 500. Action token endpoint not working.
 
+**FIX DEPLOYED (2025-12-31 21:30 UTC):**
+IAM permission was missing for the `actionRequest` Lambda to query the `user-index` GSI on LedgerAuthTokens table. Fixed and deployed.
+
+Also added rate limiting to vault endpoints:
+- `enrollStart`: 10 req / 15 min per IP
+- `enrollSetPassword`: 5 req / 15 min per session
+- `enrollFinalize`: 3 req / 15 min per session
+- `actionRequest`: 10 req / 1 min per user
+- `authExecute`: 5 req / 1 min per user
+
+**Please retest!**
+
 ---
 
 ### [COMPLETED] Action Token Vault Endpoints Return 404
