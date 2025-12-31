@@ -110,6 +110,27 @@ curl -X POST /api/v1/action/request -d '{"user_guid": "user-xxx", "action_type":
 # Returns: {"action_token": "eyJ...", "action_endpoint": "/api/v1/vault/status", ...}
 ```
 
+**FIX #3 DEPLOYED (2025-12-31 22:22 UTC):**
+DynamoDB composite key fix for vault action endpoints.
+
+**Problem:** ActionTokens table has composite key (`user_guid` + `token_id`), but vault action handlers only provided `token_id` in GetItem/UpdateItem calls.
+
+**Fix:** Updated all vault action handlers to include both key components:
+- `vaultStatusAction.ts`
+- `vaultStartAction.ts`
+- `vaultStopAction.ts`
+- `authExecute.ts`
+
+**Full flow now working:**
+```bash
+# Step 1: Get action token
+curl -X POST /api/v1/action/request -d '{"user_guid": "user-xxx", "action_type": "vault_status"}'
+
+# Step 2: Use action token
+curl -X GET /api/v1/vault/status -H "Authorization: Bearer {action_token}"
+# Returns: {"enrollment_status":"active","instance_status":"running",...}
+```
+
 **Please retest!**
 
 ---
