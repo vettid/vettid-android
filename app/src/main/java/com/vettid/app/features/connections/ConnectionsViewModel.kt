@@ -2,7 +2,11 @@ package com.vettid.app.features.connections
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.vettid.app.core.network.*
+import com.vettid.app.core.nats.ConnectionsClient
+import com.vettid.app.core.nats.NatsAutoConnector
+import com.vettid.app.core.network.Connection
+import com.vettid.app.core.network.ConnectionStatus
+import com.vettid.app.core.network.ConnectionWithLastMessage
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -12,15 +16,16 @@ import javax.inject.Inject
  * ViewModel for the connections list screen.
  *
  * Features:
- * - Load connections with last message preview
+ * - Load connections via NATS vault handlers
  * - Pull-to-refresh
  * - Search/filter connections
- * - Unread message counts
+ *
+ * Note: Connections are managed vault-to-vault via NATS, not through HTTP APIs.
  */
 @HiltViewModel
 class ConnectionsViewModel @Inject constructor(
-    private val connectionApiClient: ConnectionApiClient,
-    private val messagingApiClient: MessagingApiClient
+    private val connectionsClient: ConnectionsClient,
+    private val natsAutoConnector: NatsAutoConnector
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<ConnectionsState>(ConnectionsState.Loading)
@@ -43,7 +48,7 @@ class ConnectionsViewModel @Inject constructor(
     }
 
     /**
-     * Load connections from the server.
+     * Load connections from the vault via NATS.
      */
     fun loadConnections() {
         viewModelScope.launch {
@@ -51,24 +56,43 @@ class ConnectionsViewModel @Inject constructor(
                 _state.value = ConnectionsState.Loading
             }
 
-            connectionApiClient.listConnections().fold(
-                onSuccess = { response ->
-                    // Get unread counts
-                    val unreadCounts = try {
-                        messagingApiClient.getUnreadCount().getOrDefault(emptyMap())
-                    } catch (e: Exception) {
-                        emptyMap()
-                    }
+            // Check if NATS is connected
+            if (!natsAutoConnector.isConnected()) {
+                // Not connected to vault - show empty state
+                _state.value = ConnectionsState.Empty
+                return@launch
+            }
 
-                    // Map to ConnectionWithLastMessage
-                    val connectionsWithMessages = response.connections.map { connection ->
+            connectionsClient.list(status = "active").fold(
+                onSuccess = { listResult ->
+                    // Map ConnectionRecord to ConnectionWithLastMessage for UI
+                    val connectionsWithMessages = listResult.items.map { record ->
+                        val status = when (record.status.lowercase()) {
+                            "active" -> ConnectionStatus.ACTIVE
+                            "pending" -> ConnectionStatus.PENDING
+                            "revoked" -> ConnectionStatus.REVOKED
+                            else -> ConnectionStatus.ACTIVE
+                        }
+                        // Parse ISO8601 timestamp to epoch millis
+                        val createdAtMillis = try {
+                            java.time.Instant.parse(record.createdAt).toEpochMilli()
+                        } catch (e: Exception) {
+                            System.currentTimeMillis()
+                        }
                         ConnectionWithLastMessage(
-                            connection = connection.copy(
-                                unreadCount = unreadCounts[connection.connectionId] ?: connection.unreadCount
+                            connection = Connection(
+                                connectionId = record.connectionId,
+                                peerGuid = record.peerGuid,
+                                peerDisplayName = record.label,
+                                peerAvatarUrl = null,
+                                status = status,
+                                createdAt = createdAtMillis,
+                                lastMessageAt = null,
+                                unreadCount = 0
                             ),
-                            lastMessage = null // Could fetch last messages separately
+                            lastMessage = null
                         )
-                    }.sortedByDescending { it.connection.lastMessageAt ?: it.connection.createdAt }
+                    }.sortedByDescending { it.connection.createdAt }
 
                     allConnections = connectionsWithMessages
 
@@ -77,15 +101,15 @@ class ConnectionsViewModel @Inject constructor(
                     } else {
                         ConnectionsState.Loaded(
                             connections = filterConnections(connectionsWithMessages, _searchQuery.value),
-                            totalUnread = unreadCounts.values.sum()
+                            totalUnread = 0
                         )
                     }
                 },
                 onFailure = { error ->
-                    // Treat 401 (unauthorized) as empty state - member API auth may not be available
-                    val is401 = error.message?.contains("401") == true ||
-                            (error as? ConnectionApiException)?.code == 401
-                    if (is401) {
+                    // If vault not connected or handler failed, show empty state
+                    val isConnectionIssue = error.message?.contains("not connected", ignoreCase = true) == true ||
+                            error.message?.contains("timeout", ignoreCase = true) == true
+                    if (isConnectionIssue) {
                         _state.value = ConnectionsState.Empty
                     } else {
                         _state.value = ConnectionsState.Error(

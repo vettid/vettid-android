@@ -1,10 +1,9 @@
 package com.vettid.app.features.connections
 
-import com.vettid.app.core.network.Connection
-import com.vettid.app.core.network.ConnectionApiClient
-import com.vettid.app.core.network.ConnectionListResponse
-import com.vettid.app.core.network.ConnectionStatus
-import com.vettid.app.core.network.MessagingApiClient
+import com.vettid.app.core.nats.ConnectionListResult
+import com.vettid.app.core.nats.ConnectionRecord
+import com.vettid.app.core.nats.ConnectionsClient
+import com.vettid.app.core.nats.NatsAutoConnector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
@@ -14,44 +13,45 @@ import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
 import org.mockito.kotlin.*
+import java.time.Instant
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ConnectionsViewModelTest {
 
-    private lateinit var connectionApiClient: ConnectionApiClient
-    private lateinit var messagingApiClient: MessagingApiClient
+    private lateinit var connectionsClient: ConnectionsClient
+    private lateinit var natsAutoConnector: NatsAutoConnector
     private lateinit var viewModel: ConnectionsViewModel
     private val testDispatcher = StandardTestDispatcher()
 
-    private val testConnections = listOf(
-        Connection(
+    private val testConnectionRecords = listOf(
+        ConnectionRecord(
             connectionId = "conn-1",
             peerGuid = "peer-1",
-            peerDisplayName = "Alice",
-            peerAvatarUrl = null,
-            status = ConnectionStatus.ACTIVE,
-            createdAt = System.currentTimeMillis(),
-            lastMessageAt = null,
-            unreadCount = 0
+            label = "Alice",
+            status = "active",
+            direction = "outbound",
+            createdAt = Instant.now().toString(),
+            expiresAt = null,
+            lastRotatedAt = null
         ),
-        Connection(
+        ConnectionRecord(
             connectionId = "conn-2",
             peerGuid = "peer-2",
-            peerDisplayName = "Bob",
-            peerAvatarUrl = null,
-            status = ConnectionStatus.ACTIVE,
-            createdAt = System.currentTimeMillis(),
-            lastMessageAt = System.currentTimeMillis(),
-            unreadCount = 3
+            label = "Bob",
+            status = "active",
+            direction = "inbound",
+            createdAt = Instant.now().minusSeconds(3600).toString(),
+            expiresAt = null,
+            lastRotatedAt = null
         )
     )
 
     @Before
     fun setup() = runTest {
         Dispatchers.setMain(testDispatcher)
-        connectionApiClient = mock()
-        messagingApiClient = mock()
-        whenever(messagingApiClient.getUnreadCount()).thenReturn(Result.success(emptyMap()))
+        connectionsClient = mock()
+        natsAutoConnector = mock()
+        whenever(natsAutoConnector.isConnected()).thenReturn(true)
     }
 
     @After
@@ -61,15 +61,13 @@ class ConnectionsViewModelTest {
 
     @Test
     fun `initial state is Loading`() = runTest {
-        whenever(connectionApiClient.listConnections(any(), any()))
-            .thenReturn(Result.success(ConnectionListResponse(
-                connections = testConnections,
-                total = testConnections.size,
-                page = 1,
-                hasMore = false
+        whenever(connectionsClient.list(anyOrNull(), any(), anyOrNull()))
+            .thenReturn(Result.success(ConnectionListResult(
+                items = testConnectionRecords,
+                nextCursor = null
             )))
 
-        viewModel = ConnectionsViewModel(connectionApiClient, messagingApiClient)
+        viewModel = ConnectionsViewModel(connectionsClient, natsAutoConnector)
 
         // Initial state before loading completes
         val initialState = viewModel.state.first()
@@ -78,15 +76,13 @@ class ConnectionsViewModelTest {
 
     @Test
     fun `loadConnections populates state on success`() = runTest {
-        whenever(connectionApiClient.listConnections(any(), any()))
-            .thenReturn(Result.success(ConnectionListResponse(
-                connections = testConnections,
-                total = testConnections.size,
-                page = 1,
-                hasMore = false
+        whenever(connectionsClient.list(anyOrNull(), any(), anyOrNull()))
+            .thenReturn(Result.success(ConnectionListResult(
+                items = testConnectionRecords,
+                nextCursor = null
             )))
 
-        viewModel = ConnectionsViewModel(connectionApiClient, messagingApiClient)
+        viewModel = ConnectionsViewModel(connectionsClient, natsAutoConnector)
         testScheduler.advanceUntilIdle()
 
         val state = viewModel.state.first()
@@ -97,15 +93,13 @@ class ConnectionsViewModelTest {
 
     @Test
     fun `loadConnections shows empty state when no connections`() = runTest {
-        whenever(connectionApiClient.listConnections(any(), any()))
-            .thenReturn(Result.success(ConnectionListResponse(
-                connections = emptyList(),
-                total = 0,
-                page = 1,
-                hasMore = false
+        whenever(connectionsClient.list(anyOrNull(), any(), anyOrNull()))
+            .thenReturn(Result.success(ConnectionListResult(
+                items = emptyList(),
+                nextCursor = null
             )))
 
-        viewModel = ConnectionsViewModel(connectionApiClient, messagingApiClient)
+        viewModel = ConnectionsViewModel(connectionsClient, natsAutoConnector)
         testScheduler.advanceUntilIdle()
 
         val state = viewModel.state.first()
@@ -114,10 +108,10 @@ class ConnectionsViewModelTest {
 
     @Test
     fun `loadConnections shows error state on failure`() = runTest {
-        whenever(connectionApiClient.listConnections(any(), any()))
+        whenever(connectionsClient.list(anyOrNull(), any(), anyOrNull()))
             .thenReturn(Result.failure(Exception("Network error")))
 
-        viewModel = ConnectionsViewModel(connectionApiClient, messagingApiClient)
+        viewModel = ConnectionsViewModel(connectionsClient, natsAutoConnector)
         testScheduler.advanceUntilIdle()
 
         val state = viewModel.state.first()
@@ -126,16 +120,27 @@ class ConnectionsViewModelTest {
     }
 
     @Test
+    fun `loadConnections shows empty state when not connected to NATS`() = runTest {
+        whenever(natsAutoConnector.isConnected()).thenReturn(false)
+
+        viewModel = ConnectionsViewModel(connectionsClient, natsAutoConnector)
+        testScheduler.advanceUntilIdle()
+
+        val state = viewModel.state.first()
+        assertTrue(state is ConnectionsState.Empty)
+        // Should not call connectionsClient when not connected
+        verify(connectionsClient, never()).list(anyOrNull(), any(), anyOrNull())
+    }
+
+    @Test
     fun `search filters connections by name`() = runTest {
-        whenever(connectionApiClient.listConnections(any(), any()))
-            .thenReturn(Result.success(ConnectionListResponse(
-                connections = testConnections,
-                total = testConnections.size,
-                page = 1,
-                hasMore = false
+        whenever(connectionsClient.list(anyOrNull(), any(), anyOrNull()))
+            .thenReturn(Result.success(ConnectionListResult(
+                items = testConnectionRecords,
+                nextCursor = null
             )))
 
-        viewModel = ConnectionsViewModel(connectionApiClient, messagingApiClient)
+        viewModel = ConnectionsViewModel(connectionsClient, natsAutoConnector)
         testScheduler.advanceUntilIdle()
 
         viewModel.onSearchQueryChanged("Alice")
@@ -149,22 +154,23 @@ class ConnectionsViewModelTest {
     }
 
     @Test
-    fun `totalUnread uses unreadCounts from messaging API`() = runTest {
-        whenever(connectionApiClient.listConnections(any(), any()))
-            .thenReturn(Result.success(ConnectionListResponse(
-                connections = testConnections,
-                total = testConnections.size,
-                page = 1,
-                hasMore = false
+    fun `search is case insensitive`() = runTest {
+        whenever(connectionsClient.list(anyOrNull(), any(), anyOrNull()))
+            .thenReturn(Result.success(ConnectionListResult(
+                items = testConnectionRecords,
+                nextCursor = null
             )))
-        whenever(messagingApiClient.getUnreadCount())
-            .thenReturn(Result.success(mapOf("conn-1" to 2, "conn-2" to 5)))
 
-        viewModel = ConnectionsViewModel(connectionApiClient, messagingApiClient)
+        viewModel = ConnectionsViewModel(connectionsClient, natsAutoConnector)
+        testScheduler.advanceUntilIdle()
+
+        viewModel.onSearchQueryChanged("alice")
         testScheduler.advanceUntilIdle()
 
         val state = viewModel.state.first()
         assertTrue(state is ConnectionsState.Loaded)
-        assertEquals(7, (state as ConnectionsState.Loaded).totalUnread)
+        val loadedState = state as ConnectionsState.Loaded
+        assertEquals(1, loadedState.connections.size)
+        assertEquals("Alice", loadedState.connections[0].connection.peerDisplayName)
     }
 }

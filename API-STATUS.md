@@ -23,7 +23,61 @@ This file is the master coordination point between backend development and mobil
 
 ---
 
+## Backend Requests
+
+### [REQUEST] Mobile-Accessible Vault Lifecycle Endpoints
+
+**Priority:** High
+**Status:** Pending Backend Implementation
+
+**Problem:**
+- Vault lifecycle endpoints (`/vault/start`, `/vault/stop`, `/vault/health`) require Cognito member JWT
+- Mobile apps authenticate via vault services (enrollment JWT) and NATS, not Cognito
+- After enrollment, vault EC2 may be stopped - mobile cannot start it without Cognito auth
+
+**Proposed Solutions:**
+
+1. **Action Token Approach** (Preferred)
+   - Add `vault_start`, `vault_stop`, `vault_status` action types
+   - Mobile uses existing `/api/v1/action/request` flow
+   - Consistent with existing mobile auth pattern
+
+2. **Enrollment Token Approach**
+   - Allow enrollment JWT to access vault lifecycle endpoints
+   - Scope limited to the enrolled user's vault only
+
+3. **NATS-Based Approach**
+   - Add vault lifecycle handlers (`vault.start`, `vault.stop`, `vault.status`)
+   - Mobile calls via OwnerSpace NATS handlers
+   - Requires vault-services to listen on control topic
+
+**Mobile Impact:**
+- Currently shows "Connection failed" when vault is stopped
+- Cannot recover without backend-side intervention
+- Blocks testing of NATS messaging features
+
+---
+
 ## Recent Changes
+
+### 2025-12-31 - Lambda Connection/Messaging Handlers Removed
+
+- **Endpoints REMOVED:** All HTTP API endpoints for connections and messaging
+  - `/member/connections/*` - **REMOVED**
+  - `/member/messages/*` - **REMOVED**
+  - `/connections/*` - **REMOVED**
+  - `/messages/*` - **REMOVED**
+
+- **Breaking:** Yes - Mobile must use NATS vault handlers instead
+
+- **Architecture Change:** Connections and messaging now handled vault-to-vault via NATS
+  - All connection operations go through `connection.*` NATS handlers
+  - All messaging operations go through `message.*` NATS handlers
+  - X25519 keys and peer credentials stored in vault JetStream KV (not DynamoDB)
+
+- **Mobile Action Required:**
+  - [x] Android: Update ConnectionsViewModel to use NATS ConnectionsClient instead of HTTP API
+  - [x] Android: Remove unused ConnectionApiClient and MessagingApiClient
 
 ### 2025-12-31 - Vault Lifecycle Endpoints Deployed
 
@@ -36,7 +90,9 @@ This file is the master coordination point between backend development and mobil
 
 - **Breaking:** No - New functionality only
 
-- **Authentication:** All endpoints require member JWT authorization
+- **Authentication:** All endpoints currently require member JWT authorization
+  - **ISSUE:** Mobile apps don't use Cognito - need action token or NATS-based approach
+  - **Workaround pending:** Backend needs to add `vault_start`/`vault_stop` action types
 
 - **Usage:**
   ```kotlin
@@ -64,7 +120,7 @@ This file is the master coordination point between backend development and mobil
   ```
 
 - **Mobile Action Required:**
-  - [ ] Android: Add vault lifecycle controls to settings/vault management screen
+  - [ ] Android: Add vault lifecycle controls to settings/vault management screen (blocked on auth)
   - [ ] Android: Show vault status indicator (running/stopped/starting)
 
 ### 2025-12-30 - Vault-to-Vault Real-Time Messaging Deployed

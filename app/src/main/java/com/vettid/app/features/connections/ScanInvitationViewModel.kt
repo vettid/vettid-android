@@ -3,10 +3,12 @@ package com.vettid.app.features.connections
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.crypto.ConnectionCryptoManager
-import com.vettid.app.core.crypto.ConnectionKeyPair
-import com.vettid.app.core.network.AcceptInvitationResponse
+import com.vettid.app.core.nats.ConnectionsClient
+import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.network.Connection
-import com.vettid.app.core.network.ConnectionApiClient
+import com.vettid.app.core.network.ConnectionStatus
+import com.google.gson.Gson
+import com.google.gson.JsonObject
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -15,16 +17,17 @@ import javax.inject.Inject
 /**
  * ViewModel for scanning and accepting connection invitations.
  *
- * Flow:
- * 1. Scan QR code or enter invitation code manually
- * 2. Generate key pair for this connection
- * 3. Accept invitation via API (sends public key)
- * 4. Receive peer's public key and derive shared secret
- * 5. Store connection encryption key
+ * Flow (NATS-based):
+ * 1. Scan QR code containing peer's NATS credentials and space IDs
+ * 2. Store credentials via vault handler to enable messaging
+ * 3. Connection is immediately available for communication
+ *
+ * Note: X25519 key exchange happens within vault JetStream, not during invitation acceptance.
  */
 @HiltViewModel
 class ScanInvitationViewModel @Inject constructor(
-    private val connectionApiClient: ConnectionApiClient,
+    private val connectionsClient: ConnectionsClient,
+    private val natsAutoConnector: NatsAutoConnector,
     private val connectionCryptoManager: ConnectionCryptoManager
 ) : ViewModel() {
 
@@ -37,22 +40,20 @@ class ScanInvitationViewModel @Inject constructor(
     private val _effects = MutableSharedFlow<ScanInvitationEffect>()
     val effects: SharedFlow<ScanInvitationEffect> = _effects.asSharedFlow()
 
-    // Key pair generated for this connection attempt
-    private var connectionKeyPair: ConnectionKeyPair? = null
+    private val gson = Gson()
 
-    // Parsed invitation code (from QR or manual entry)
-    private var parsedInvitationCode: String? = null
+    // Parsed invitation data (from QR)
+    private var parsedInvitation: ConnectionInvitationData? = null
 
     /**
      * Called when QR code is scanned.
      */
     fun onQrCodeScanned(data: String) {
-        // Parse the invitation code from QR data
-        // Could be a deep link URL or raw code
-        val invitationCode = parseInvitationCode(data)
-        if (invitationCode != null) {
-            parsedInvitationCode = invitationCode
-            processInvitation(invitationCode)
+        // Parse the invitation from QR data
+        val invitation = parseInvitationData(data)
+        if (invitation != null) {
+            parsedInvitation = invitation
+            processInvitation(invitation)
         } else {
             viewModelScope.launch {
                 _effects.emit(ScanInvitationEffect.ShowError("Invalid QR code"))
@@ -69,47 +70,54 @@ class ScanInvitationViewModel @Inject constructor(
 
     /**
      * Submit manually entered code.
+     * Note: Manual entry is limited - full invitation data is in QR code.
      */
     fun onManualCodeEntered() {
-        val code = _manualCode.value.trim()
-        if (code.isNotEmpty()) {
-            parsedInvitationCode = code
-            processInvitation(code)
+        viewModelScope.launch {
+            _effects.emit(ScanInvitationEffect.ShowError(
+                "Please scan the QR code to accept an invitation"
+            ))
         }
     }
 
     /**
-     * Process the invitation code.
+     * Process the invitation by storing credentials via NATS vault handler.
      */
-    private fun processInvitation(invitationCode: String) {
+    private fun processInvitation(invitation: ConnectionInvitationData) {
         viewModelScope.launch {
+            // Check NATS connection
+            if (!natsAutoConnector.isConnected()) {
+                _state.value = ScanInvitationState.Error(
+                    message = "Not connected to vault"
+                )
+                return@launch
+            }
+
             _state.value = ScanInvitationState.Processing
 
-            // Generate our key pair
-            connectionKeyPair = connectionCryptoManager.generateConnectionKeyPair()
-            val keyPair = connectionKeyPair!!
-
-            // Accept the invitation
-            connectionApiClient.acceptInvitation(invitationCode, keyPair.publicKey).fold(
-                onSuccess = { response ->
-                    // Derive and store the connection key
-                    val connectionKey = connectionCryptoManager.deriveAndStoreConnectionKey(
-                        privateKey = keyPair.privateKey,
-                        peerPublicKey = connectionCryptoManager.decodeBase64(response.peerPublicKey),
-                        connectionId = response.connection.connectionId
+            // Store the peer's credentials via vault handler
+            connectionsClient.storeCredentials(
+                connectionId = invitation.connectionId,
+                peerGuid = invitation.peerGuid,
+                label = invitation.label,
+                natsCredentials = invitation.natsCredentials,
+                peerOwnerSpaceId = invitation.ownerSpaceId,
+                peerMessageSpaceId = invitation.messageSpaceId
+            ).fold(
+                onSuccess = { connectionRecord ->
+                    val connection = Connection(
+                        connectionId = connectionRecord.connectionId,
+                        peerGuid = connectionRecord.peerGuid,
+                        peerDisplayName = connectionRecord.label,
+                        peerAvatarUrl = null,
+                        status = ConnectionStatus.ACTIVE,
+                        createdAt = System.currentTimeMillis(),
+                        lastMessageAt = null,
+                        unreadCount = 0
                     )
-
-                    // Clear private key from memory
-                    keyPair.clearPrivateKey()
-                    connectionKeyPair = null
-
-                    _state.value = ScanInvitationState.Success(
-                        connection = response.connection
-                    )
+                    _state.value = ScanInvitationState.Success(connection = connection)
                 },
                 onFailure = { error ->
-                    keyPair.clearPrivateKey()
-                    connectionKeyPair = null
                     _state.value = ScanInvitationState.Error(
                         message = parseError(error)
                     )
@@ -122,9 +130,9 @@ class ScanInvitationViewModel @Inject constructor(
      * Accept the previewed invitation.
      */
     fun acceptInvitation() {
-        val code = parsedInvitationCode
-        if (code != null && _state.value is ScanInvitationState.Preview) {
-            processInvitation(code)
+        val invitation = parsedInvitation
+        if (invitation != null && _state.value is ScanInvitationState.Preview) {
+            processInvitation(invitation)
         }
     }
 
@@ -132,9 +140,7 @@ class ScanInvitationViewModel @Inject constructor(
      * Decline the previewed invitation.
      */
     fun declineInvitation() {
-        connectionKeyPair?.clearPrivateKey()
-        connectionKeyPair = null
-        parsedInvitationCode = null
+        parsedInvitation = null
         _state.value = ScanInvitationState.Scanning
     }
 
@@ -142,9 +148,7 @@ class ScanInvitationViewModel @Inject constructor(
      * Retry after error.
      */
     fun retry() {
-        connectionKeyPair?.clearPrivateKey()
-        connectionKeyPair = null
-        parsedInvitationCode = null
+        parsedInvitation = null
         _manualCode.value = ""
         _state.value = ScanInvitationState.Scanning
     }
@@ -164,27 +168,24 @@ class ScanInvitationViewModel @Inject constructor(
     }
 
     /**
-     * Parse invitation code from various formats.
+     * Parse invitation data from QR code.
+     * Expected format: JSON with connection credentials
      */
-    private fun parseInvitationCode(data: String): String? {
-        // Try deep link format: vettid://connect/CODE
-        val deepLinkRegex = """vettid://connect/([A-Za-z0-9-]+)""".toRegex()
-        deepLinkRegex.find(data)?.let {
-            return it.groupValues[1]
+    private fun parseInvitationData(data: String): ConnectionInvitationData? {
+        return try {
+            // Try parsing as JSON
+            val json = gson.fromJson(data, JsonObject::class.java)
+            ConnectionInvitationData(
+                connectionId = json.get("connection_id")?.asString ?: return null,
+                peerGuid = json.get("peer_guid")?.asString ?: return null,
+                label = json.get("label")?.asString ?: "Unknown",
+                natsCredentials = json.get("nats_credentials")?.asString ?: return null,
+                ownerSpaceId = json.get("owner_space_id")?.asString ?: return null,
+                messageSpaceId = json.get("message_space_id")?.asString ?: return null
+            )
+        } catch (e: Exception) {
+            null
         }
-
-        // Try HTTPS URL format: https://vettid.dev/connect/CODE
-        val urlRegex = """https?://vettid\.dev/connect/([A-Za-z0-9-]+)""".toRegex()
-        urlRegex.find(data)?.let {
-            return it.groupValues[1]
-        }
-
-        // Try raw code (alphanumeric with dashes)
-        if (data.matches("""[A-Za-z0-9-]{8,64}""".toRegex())) {
-            return data
-        }
-
-        return null
     }
 
     /**
@@ -199,16 +200,23 @@ class ScanInvitationViewModel @Inject constructor(
             message.contains("not found", ignoreCase = true) -> "Invalid invitation code"
             message.contains("revoked", ignoreCase = true) -> "This invitation has been revoked"
             message.contains("self", ignoreCase = true) -> "You cannot connect with yourself"
+            message.contains("not connected", ignoreCase = true) -> "Not connected to vault"
             else -> message
         }
     }
-
-    override fun onCleared() {
-        super.onCleared()
-        connectionKeyPair?.clearPrivateKey()
-        connectionKeyPair = null
-    }
 }
+
+/**
+ * Parsed connection invitation data from QR code.
+ */
+private data class ConnectionInvitationData(
+    val connectionId: String,
+    val peerGuid: String,
+    val label: String,
+    val natsCredentials: String,
+    val ownerSpaceId: String,
+    val messageSpaceId: String
+)
 
 // MARK: - State Types
 

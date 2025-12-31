@@ -4,6 +4,10 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.crypto.ConnectionCryptoManager
+import com.vettid.app.core.nats.ConnectionsClient
+import com.vettid.app.core.nats.NatsAutoConnector
+import com.vettid.app.core.nats.NatsMessagingClient
+import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.network.*
 import com.vettid.app.core.storage.CredentialStore
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -15,15 +19,19 @@ import javax.inject.Inject
  * ViewModel for conversation (messaging) screen.
  *
  * Features:
- * - Load message history with pagination
- * - Send encrypted messages
- * - Receive real-time messages
- * - Mark messages as read
+ * - Send encrypted messages via NATS vault handlers
+ * - Receive real-time messages via NATS subscriptions
+ * - Mark messages as read via NATS
+ *
+ * Note: Message history is stored locally and in vault JetStream.
+ * Messages flow vault-to-vault via NATS, not through HTTP APIs.
  */
 @HiltViewModel
 class ConversationViewModel @Inject constructor(
-    private val messagingApiClient: MessagingApiClient,
-    private val connectionApiClient: ConnectionApiClient,
+    private val messagingClient: NatsMessagingClient,
+    private val connectionsClient: ConnectionsClient,
+    private val ownerSpaceClient: OwnerSpaceClient,
+    private val natsAutoConnector: NatsAutoConnector,
     private val connectionCryptoManager: ConnectionCryptoManager,
     private val credentialStore: CredentialStore,
     savedStateHandle: SavedStateHandle
@@ -60,16 +68,42 @@ class ConversationViewModel @Inject constructor(
     init {
         loadConnection()
         loadMessages()
+        observeIncomingMessages()
     }
 
     /**
-     * Load connection info.
+     * Load connection info from vault via NATS.
      */
     private fun loadConnection() {
         viewModelScope.launch {
-            connectionApiClient.getConnection(connectionId).fold(
-                onSuccess = { connection ->
-                    _connection.value = connection
+            if (!natsAutoConnector.isConnected()) return@launch
+
+            connectionsClient.list().fold(
+                onSuccess = { listResult ->
+                    val record = listResult.items.find { it.connectionId == connectionId }
+                    if (record != null) {
+                        val status = when (record.status.lowercase()) {
+                            "active" -> ConnectionStatus.ACTIVE
+                            "pending" -> ConnectionStatus.PENDING
+                            "revoked" -> ConnectionStatus.REVOKED
+                            else -> ConnectionStatus.ACTIVE
+                        }
+                        val createdAtMillis = try {
+                            java.time.Instant.parse(record.createdAt).toEpochMilli()
+                        } catch (e: Exception) {
+                            System.currentTimeMillis()
+                        }
+                        _connection.value = Connection(
+                            connectionId = record.connectionId,
+                            peerGuid = record.peerGuid,
+                            peerDisplayName = record.label,
+                            peerAvatarUrl = null,
+                            status = status,
+                            createdAt = createdAtMillis,
+                            lastMessageAt = null,
+                            unreadCount = 0
+                        )
+                    }
                 },
                 onFailure = { /* Ignore, not critical */ }
             )
@@ -78,81 +112,73 @@ class ConversationViewModel @Inject constructor(
 
     /**
      * Load message history.
+     * Note: Messages are stored locally and synced via vault JetStream.
+     * For now, start with empty state - messages arrive via real-time subscription.
      */
     fun loadMessages() {
         viewModelScope.launch {
-            if (_state.value !is ConversationState.Loaded) {
-                _state.value = ConversationState.Loading
-            }
+            // TODO: Load from local storage or vault JetStream
+            // For now, start with empty state
+            _state.value = ConversationState.Empty
+        }
+    }
 
-            messagingApiClient.getMessageHistory(connectionId).fold(
-                onSuccess = { response ->
-                    // Decrypt messages
-                    val decryptedMessages = response.messages.mapNotNull { message ->
-                        decryptMessageContent(message)
-                    }
-
-                    allMessages = decryptedMessages.toMutableList()
-                    hasMore = response.hasMore
-                    nextCursor = response.nextCursor
-
-                    _state.value = if (decryptedMessages.isEmpty()) {
-                        ConversationState.Empty
-                    } else {
-                        ConversationState.Loaded(
-                            messages = decryptedMessages,
-                            hasMore = hasMore
-                        )
-                    }
-
-                    // Mark as read
-                    markAllAsRead()
-                },
-                onFailure = { error ->
-                    _state.value = ConversationState.Error(
-                        message = error.message ?: "Failed to load messages"
+    /**
+     * Observe incoming messages via NATS subscription.
+     */
+    private fun observeIncomingMessages() {
+        viewModelScope.launch {
+            ownerSpaceClient.incomingMessages
+                .filter { it.connectionId == connectionId }
+                .collect { incomingMessage ->
+                    // Decrypt the message content
+                    val decrypted = connectionCryptoManager.decryptMessageFromConnection(
+                        ciphertext = connectionCryptoManager.decodeBase64(incomingMessage.encryptedContent),
+                        nonce = connectionCryptoManager.decodeBase64(incomingMessage.nonce),
+                        connectionId = connectionId
                     )
+
+                    val sentAtMillis = try {
+                        java.time.Instant.parse(incomingMessage.sentAt).toEpochMilli()
+                    } catch (e: Exception) {
+                        System.currentTimeMillis()
+                    }
+
+                    val message = Message(
+                        messageId = incomingMessage.messageId,
+                        connectionId = connectionId,
+                        senderId = incomingMessage.senderGuid,
+                        content = decrypted ?: "[Unable to decrypt]",
+                        contentType = when (incomingMessage.contentType) {
+                            "image" -> MessageContentType.IMAGE
+                            "file" -> MessageContentType.FILE
+                            else -> MessageContentType.TEXT
+                        },
+                        sentAt = sentAtMillis,
+                        receivedAt = System.currentTimeMillis(),
+                        readAt = null,
+                        status = MessageStatus.DELIVERED
+                    )
+
+                    // Add to list
+                    allMessages.add(0, message)
+                    _state.value = ConversationState.Loaded(
+                        messages = allMessages.toList(),
+                        hasMore = false
+                    )
+
+                    // Send read receipt
+                    messagingClient.sendReadReceipt(connectionId, message.messageId)
                 }
-            )
         }
     }
 
     /**
      * Load more messages (pagination).
+     * Note: Not implemented for NATS-based messaging yet.
      */
     fun loadMoreMessages() {
-        if (!hasMore || nextCursor == null) return
-
-        viewModelScope.launch {
-            val currentState = _state.value
-            if (currentState is ConversationState.Loaded && !currentState.isLoadingMore) {
-                _state.value = currentState.copy(isLoadingMore = true)
-
-                messagingApiClient.getMessageHistory(
-                    connectionId = connectionId,
-                    before = nextCursor
-                ).fold(
-                    onSuccess = { response ->
-                        val decryptedMessages = response.messages.mapNotNull { message ->
-                            decryptMessageContent(message)
-                        }
-
-                        allMessages.addAll(decryptedMessages)
-                        hasMore = response.hasMore
-                        nextCursor = response.nextCursor
-
-                        _state.value = ConversationState.Loaded(
-                            messages = allMessages.toList(),
-                            hasMore = hasMore,
-                            isLoadingMore = false
-                        )
-                    },
-                    onFailure = {
-                        _state.value = currentState.copy(isLoadingMore = false)
-                    }
-                )
-            }
-        }
+        // TODO: Implement pagination from local storage or vault JetStream
     }
 
     /**
@@ -163,13 +189,18 @@ class ConversationViewModel @Inject constructor(
     }
 
     /**
-     * Send a message.
+     * Send a message via NATS vault handler.
      */
     fun sendMessage() {
         val text = _messageText.value.trim()
         if (text.isBlank()) return
 
         viewModelScope.launch {
+            if (!natsAutoConnector.isConnected()) {
+                _effects.emit(ConversationEffect.ShowError("Not connected to vault"))
+                return@launch
+            }
+
             _isSending.value = true
 
             // Encrypt the message
@@ -180,22 +211,41 @@ class ConversationViewModel @Inject constructor(
                 return@launch
             }
 
-            messagingApiClient.sendMessage(
+            messagingClient.sendMessage(
                 connectionId = connectionId,
-                encryptedContent = encrypted.ciphertext,
-                nonce = encrypted.nonce
+                encryptedContent = android.util.Base64.encodeToString(encrypted.ciphertext, android.util.Base64.NO_WRAP),
+                nonce = android.util.Base64.encodeToString(encrypted.nonce, android.util.Base64.NO_WRAP),
+                contentType = "text"
             ).fold(
-                onSuccess = { message ->
-                    // Decrypt the sent message for display
-                    val decryptedMessage = message.copy(content = text)
+                onSuccess = { sentMessage ->
+                    // Create message for display
+                    val sentAtMillis = try {
+                        java.time.Instant.parse(sentMessage.timestamp).toEpochMilli()
+                    } catch (e: Exception) {
+                        System.currentTimeMillis()
+                    }
+
+                    val message = Message(
+                        messageId = sentMessage.messageId,
+                        connectionId = connectionId,
+                        senderId = currentUserGuid ?: "",
+                        content = text,
+                        contentType = MessageContentType.TEXT,
+                        sentAt = sentAtMillis,
+                        receivedAt = null,
+                        readAt = null,
+                        status = when (sentMessage.status) {
+                            "delivered" -> MessageStatus.DELIVERED
+                            "read" -> MessageStatus.READ
+                            else -> MessageStatus.SENT
+                        }
+                    )
 
                     // Add to list
-                    allMessages.add(0, decryptedMessage)
-
-                    val currentState = _state.value
+                    allMessages.add(0, message)
                     _state.value = ConversationState.Loaded(
                         messages = allMessages.toList(),
-                        hasMore = hasMore
+                        hasMore = false
                     )
 
                     // Clear input
@@ -213,72 +263,23 @@ class ConversationViewModel @Inject constructor(
     }
 
     /**
-     * Mark all messages as read.
-     */
-    private fun markAllAsRead() {
-        viewModelScope.launch {
-            val firstUnread = allMessages.firstOrNull { msg ->
-                msg.senderId != currentUserGuid && msg.readAt == null
-            }
-
-            firstUnread?.let { message ->
-                messagingApiClient.markAsRead(message.messageId)
-            }
-        }
-    }
-
-    /**
-     * Handle new message from real-time subscription.
+     * Handle new message from real-time subscription (legacy).
+     * Note: Real-time messages now come via observeIncomingMessages().
      */
     fun onNewMessage(message: Message) {
         viewModelScope.launch {
-            val decryptedMessage = decryptMessageContent(message) ?: return@launch
-
             // Add to list (at beginning)
-            allMessages.add(0, decryptedMessage)
+            allMessages.add(0, message)
 
             _state.value = ConversationState.Loaded(
                 messages = allMessages.toList(),
-                hasMore = hasMore
+                hasMore = false
             )
 
             // Mark as read if from other user
             if (message.senderId != currentUserGuid) {
-                messagingApiClient.markAsRead(message.messageId)
+                messagingClient.sendReadReceipt(connectionId, message.messageId)
             }
-        }
-    }
-
-    /**
-     * Decrypt message content.
-     */
-    private fun decryptMessageContent(message: Message): Message? {
-        return try {
-            // If content is already decrypted (e.g., from send), return as-is
-            if (!message.content.startsWith("enc:")) {
-                return message
-            }
-
-            // Parse encrypted content (format: "enc:<base64_ciphertext>:<base64_nonce>")
-            val parts = message.content.removePrefix("enc:").split(":")
-            if (parts.size != 2) return null
-
-            val ciphertext = connectionCryptoManager.decodeBase64(parts[0])
-            val nonce = connectionCryptoManager.decodeBase64(parts[1])
-
-            val decrypted = connectionCryptoManager.decryptMessageFromConnection(
-                ciphertext = ciphertext,
-                nonce = nonce,
-                connectionId = connectionId
-            )
-
-            if (decrypted != null) {
-                message.copy(content = decrypted)
-            } else {
-                message.copy(content = "[Unable to decrypt message]")
-            }
-        } catch (e: Exception) {
-            message.copy(content = "[Unable to decrypt message]")
         }
     }
 

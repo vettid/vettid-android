@@ -4,8 +4,10 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.crypto.ConnectionCryptoManager
+import com.vettid.app.core.nats.ConnectionsClient
+import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.network.Connection
-import com.vettid.app.core.network.ConnectionApiClient
+import com.vettid.app.core.network.ConnectionStatus
 import com.vettid.app.core.network.Profile
 import com.vettid.app.features.calling.CallManager
 import com.vettid.app.features.calling.CallType
@@ -19,12 +21,15 @@ import javax.inject.Inject
  *
  * Features:
  * - Display connection details and profile
- * - Revoke connection
+ * - Revoke connection via NATS vault handler
  * - Navigate to messaging
+ *
+ * Note: Connection data comes from vault via NATS, not HTTP API.
  */
 @HiltViewModel
 class ConnectionDetailViewModel @Inject constructor(
-    private val connectionApiClient: ConnectionApiClient,
+    private val connectionsClient: ConnectionsClient,
+    private val natsAutoConnector: NatsAutoConnector,
     private val connectionCryptoManager: ConnectionCryptoManager,
     private val callManager: CallManager,
     savedStateHandle: SavedStateHandle
@@ -48,31 +53,56 @@ class ConnectionDetailViewModel @Inject constructor(
     }
 
     /**
-     * Load connection details and profile.
+     * Load connection details from vault via NATS.
      */
     fun loadConnection() {
         viewModelScope.launch {
             _state.value = ConnectionDetailState.Loading
 
-            // Load connection details
-            connectionApiClient.getConnection(connectionId).fold(
-                onSuccess = { connection ->
-                    // Load profile
-                    connectionApiClient.getConnectionProfile(connectionId).fold(
-                        onSuccess = { profile ->
-                            _state.value = ConnectionDetailState.Loaded(
-                                connection = connection,
-                                profile = profile
-                            )
-                        },
-                        onFailure = {
-                            // Profile might not be available, still show connection
-                            _state.value = ConnectionDetailState.Loaded(
-                                connection = connection,
-                                profile = null
-                            )
+            // Check if NATS is connected
+            if (!natsAutoConnector.isConnected()) {
+                _state.value = ConnectionDetailState.Error(
+                    message = "Not connected to vault"
+                )
+                return@launch
+            }
+
+            // Load connection list and find the matching one
+            connectionsClient.list().fold(
+                onSuccess = { listResult ->
+                    val record = listResult.items.find { it.connectionId == connectionId }
+                    if (record != null) {
+                        val status = when (record.status.lowercase()) {
+                            "active" -> ConnectionStatus.ACTIVE
+                            "pending" -> ConnectionStatus.PENDING
+                            "revoked" -> ConnectionStatus.REVOKED
+                            else -> ConnectionStatus.ACTIVE
                         }
-                    )
+                        val createdAtMillis = try {
+                            java.time.Instant.parse(record.createdAt).toEpochMilli()
+                        } catch (e: Exception) {
+                            System.currentTimeMillis()
+                        }
+                        val connection = Connection(
+                            connectionId = record.connectionId,
+                            peerGuid = record.peerGuid,
+                            peerDisplayName = record.label,
+                            peerAvatarUrl = null,
+                            status = status,
+                            createdAt = createdAtMillis,
+                            lastMessageAt = null,
+                            unreadCount = 0
+                        )
+                        // Profile comes from peer via NATS, not available here
+                        _state.value = ConnectionDetailState.Loaded(
+                            connection = connection,
+                            profile = null
+                        )
+                    } else {
+                        _state.value = ConnectionDetailState.Error(
+                            message = "Connection not found"
+                        )
+                    }
                 },
                 onFailure = { error ->
                     _state.value = ConnectionDetailState.Error(
@@ -107,7 +137,7 @@ class ConnectionDetailViewModel @Inject constructor(
     }
 
     /**
-     * Confirm and execute revocation.
+     * Confirm and execute revocation via NATS vault handler.
      */
     fun confirmRevoke() {
         _showRevokeDialog.value = false
@@ -118,7 +148,7 @@ class ConnectionDetailViewModel @Inject constructor(
                 _state.value = currentState.copy(isRevoking = true)
             }
 
-            connectionApiClient.revokeConnection(connectionId).fold(
+            connectionsClient.revoke(connectionId).fold(
                 onSuccess = {
                     // Delete the connection key
                     connectionCryptoManager.deleteConnectionKey(connectionId)
