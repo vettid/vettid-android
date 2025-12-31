@@ -79,7 +79,9 @@ Vault Preferences screen shows:
 Status: HTTP 500: Failed to process action request
 ```
 
-The `/api/v1/action/request` endpoint is now returning 500 instead of working correctly.
+The `/api/v1/action/request` endpoint is still returning HTTP 500.
+
+**Retest (2025-12-31 15:59 UTC):** Still getting HTTP 500 errors in vault controls.
 
 ---
 
@@ -141,7 +143,16 @@ BootstrapClient: Publishing to: OwnerSpace.user3166791C526F49A48B0A5BE5EFF030C0.
 BootstrapClient: Bootstrap timed out after 30000ms
 ```
 
-**Status:** ✅ FIXED (2025-12-31) - See fix documentation below.
+**Status:** ⏳ Still failing after fix (2025-12-31 15:59 UTC)
+
+**Retest Result (2025-12-31 15:58 UTC):**
+Bootstrap still times out. Enrollment still creates a NEW OwnerSpace ID:
+```
+BootstrapClient: Starting bootstrap flow for OwnerSpace.user0F49DE93C3C4487E96838E68F8EE3EF0
+```
+Expected: Should use `OwnerSpace.userD84E1A00643A4C679FAEF6D6FA81B103` (matching the vault)
+
+The fix may not be deployed, or there's another issue.
 
 Only ONE vault has the bootstrap topic fix deployed:
 | user_guid | Has Bootstrap Fix | Use For Testing |
