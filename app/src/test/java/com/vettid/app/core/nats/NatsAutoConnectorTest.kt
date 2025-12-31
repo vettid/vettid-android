@@ -2,6 +2,8 @@ package com.vettid.app.core.nats
 
 import com.vettid.app.core.network.NatsConnectionInfo
 import com.vettid.app.core.network.VaultLifecycleClient
+import com.vettid.app.core.network.VaultLifecycleStatusResponse
+import com.vettid.app.core.network.VaultStartResponse
 import com.vettid.app.core.storage.CredentialStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -415,6 +417,221 @@ $testSeed
         verify(natsClient).connect(argThat { credentials ->
             credentials.caCertificate == testCaCert
         })
+    }
+
+    // MARK: - Vault Auto-Start Tests
+
+    @Test
+    fun `autoConnect attempts vault start on authentication timeout error`() = runTest {
+        setupValidCredentials()
+        // First connection fails with auth timeout
+        whenever(natsClient.connect(any())).thenReturn(
+            Result.failure(NatsException("Authentication Timeout"))
+        )
+        // Vault start returns already running
+        whenever(vaultLifecycleClient.startVault()).thenReturn(
+            Result.success(VaultStartResponse(status = "already_running", instanceId = "i-123"))
+        )
+
+        autoConnector.autoConnect(autoStartVault = true)
+
+        verify(vaultLifecycleClient).startVault()
+    }
+
+    @Test
+    fun `autoConnect attempts vault start on auth error`() = runTest {
+        setupValidCredentials()
+        whenever(natsClient.connect(any())).thenReturn(
+            Result.failure(NatsException("Authorization Violation"))
+        )
+        whenever(vaultLifecycleClient.startVault()).thenReturn(
+            Result.success(VaultStartResponse(status = "already_running", instanceId = "i-123"))
+        )
+
+        autoConnector.autoConnect(autoStartVault = true)
+
+        verify(vaultLifecycleClient).startVault()
+    }
+
+    @Test
+    fun `autoConnect does not attempt vault start when autoStartVault is false`() = runTest {
+        setupValidCredentials()
+        whenever(natsClient.connect(any())).thenReturn(
+            Result.failure(NatsException("Authentication Timeout"))
+        )
+
+        autoConnector.autoConnect(autoStartVault = false)
+
+        verify(vaultLifecycleClient, never()).startVault()
+    }
+
+    @Test
+    fun `autoConnect does not attempt vault start on non-auth errors`() = runTest {
+        setupValidCredentials()
+        whenever(natsClient.connect(any())).thenReturn(
+            Result.failure(NatsException("Network unreachable"))
+        )
+
+        autoConnector.autoConnect(autoStartVault = true)
+
+        verify(vaultLifecycleClient, never()).startVault()
+    }
+
+    @Test
+    fun `autoConnect retries connection after vault is already running`() = runTest {
+        setupValidCredentials()
+        // First call fails, second succeeds
+        whenever(natsClient.connect(any()))
+            .thenReturn(Result.failure(NatsException("Authentication Timeout")))
+            .thenReturn(Result.success(Unit))
+        whenever(vaultLifecycleClient.startVault()).thenReturn(
+            Result.success(VaultStartResponse(status = "already_running", instanceId = "i-123"))
+        )
+        whenever(ownerSpaceClient.subscribeToVault()).thenReturn(Result.success(Unit))
+
+        val result = autoConnector.autoConnect(autoStartVault = true)
+
+        assertEquals(NatsAutoConnector.ConnectionResult.Success, result)
+        verify(natsClient, times(2)).connect(any())
+    }
+
+    @Test
+    fun `autoConnect retries with autoStartVault false to prevent infinite loop`() = runTest {
+        setupValidCredentials()
+        // Both calls fail with auth error
+        whenever(natsClient.connect(any())).thenReturn(
+            Result.failure(NatsException("Authentication Timeout"))
+        )
+        whenever(vaultLifecycleClient.startVault()).thenReturn(
+            Result.success(VaultStartResponse(status = "already_running", instanceId = "i-123"))
+        )
+
+        autoConnector.autoConnect(autoStartVault = true)
+
+        // Should only try to start vault once (not on the retry)
+        verify(vaultLifecycleClient, times(1)).startVault()
+        // Should connect twice (initial + retry)
+        verify(natsClient, times(2)).connect(any())
+    }
+
+    @Test
+    fun `autoConnect returns error when vault start fails`() = runTest {
+        setupValidCredentials()
+        whenever(natsClient.connect(any())).thenReturn(
+            Result.failure(NatsException("Authentication Timeout"))
+        )
+        whenever(vaultLifecycleClient.startVault()).thenReturn(
+            Result.failure(Exception("Vault start failed"))
+        )
+
+        val result = autoConnector.autoConnect(autoStartVault = true)
+
+        assertTrue(result is NatsAutoConnector.ConnectionResult.Error)
+        assertEquals("Authentication Timeout", (result as NatsAutoConnector.ConnectionResult.Error).message)
+    }
+
+    @Test
+    fun `autoConnect waits for vault to become ready when starting`() = runTest {
+        setupValidCredentials()
+        // First connection fails
+        whenever(natsClient.connect(any()))
+            .thenReturn(Result.failure(NatsException("Authentication Timeout")))
+            .thenReturn(Result.success(Unit))
+        // Vault is starting
+        whenever(vaultLifecycleClient.startVault()).thenReturn(
+            Result.success(VaultStartResponse(status = "starting", instanceId = "i-123"))
+        )
+        // Status polling returns running
+        whenever(vaultLifecycleClient.getVaultStatus()).thenReturn(
+            Result.success(VaultLifecycleStatusResponse(
+                enrollmentStatus = "active",
+                instanceStatus = "running",
+                instanceId = "i-123"
+            ))
+        )
+        whenever(ownerSpaceClient.subscribeToVault()).thenReturn(Result.success(Unit))
+
+        val result = autoConnector.autoConnect(autoStartVault = true)
+
+        assertEquals(NatsAutoConnector.ConnectionResult.Success, result)
+        verify(vaultLifecycleClient).getVaultStatus()
+    }
+
+    @Test
+    fun `autoConnect polls vault status until running`() = runTest {
+        setupValidCredentials()
+        whenever(natsClient.connect(any()))
+            .thenReturn(Result.failure(NatsException("Authentication Timeout")))
+            .thenReturn(Result.success(Unit))
+        whenever(vaultLifecycleClient.startVault()).thenReturn(
+            Result.success(VaultStartResponse(status = "starting", instanceId = "i-123"))
+        )
+        // First poll: pending, second poll: running
+        whenever(vaultLifecycleClient.getVaultStatus())
+            .thenReturn(Result.success(VaultLifecycleStatusResponse(
+                enrollmentStatus = "active",
+                instanceStatus = "pending",
+                instanceId = "i-123"
+            )))
+            .thenReturn(Result.success(VaultLifecycleStatusResponse(
+                enrollmentStatus = "active",
+                instanceStatus = "running",
+                instanceId = "i-123"
+            )))
+        whenever(ownerSpaceClient.subscribeToVault()).thenReturn(Result.success(Unit))
+
+        val result = autoConnector.autoConnect(autoStartVault = true)
+
+        assertEquals(NatsAutoConnector.ConnectionResult.Success, result)
+        verify(vaultLifecycleClient, times(2)).getVaultStatus()
+    }
+
+    @Test
+    fun `autoConnect returns error when vault stops unexpectedly while waiting`() = runTest {
+        setupValidCredentials()
+        whenever(natsClient.connect(any())).thenReturn(
+            Result.failure(NatsException("Authentication Timeout"))
+        )
+        whenever(vaultLifecycleClient.startVault()).thenReturn(
+            Result.success(VaultStartResponse(status = "starting", instanceId = "i-123"))
+        )
+        // Vault reports stopped
+        whenever(vaultLifecycleClient.getVaultStatus()).thenReturn(
+            Result.success(VaultLifecycleStatusResponse(
+                enrollmentStatus = "active",
+                instanceStatus = "stopped",
+                instanceId = "i-123"
+            ))
+        )
+
+        val result = autoConnector.autoConnect(autoStartVault = true)
+
+        assertTrue(result is NatsAutoConnector.ConnectionResult.Error)
+    }
+
+    @Test
+    fun `autoConnect continues polling when getVaultStatus fails`() = runTest {
+        setupValidCredentials()
+        whenever(natsClient.connect(any()))
+            .thenReturn(Result.failure(NatsException("Authentication Timeout")))
+            .thenReturn(Result.success(Unit))
+        whenever(vaultLifecycleClient.startVault()).thenReturn(
+            Result.success(VaultStartResponse(status = "starting", instanceId = "i-123"))
+        )
+        // First poll fails, second succeeds
+        whenever(vaultLifecycleClient.getVaultStatus())
+            .thenReturn(Result.failure(Exception("Network error")))
+            .thenReturn(Result.success(VaultLifecycleStatusResponse(
+                enrollmentStatus = "active",
+                instanceStatus = "running",
+                instanceId = "i-123"
+            )))
+        whenever(ownerSpaceClient.subscribeToVault()).thenReturn(Result.success(Unit))
+
+        val result = autoConnector.autoConnect(autoStartVault = true)
+
+        assertEquals(NatsAutoConnector.ConnectionResult.Success, result)
+        verify(vaultLifecycleClient, times(2)).getVaultStatus()
     }
 
     // MARK: - Helper Methods
