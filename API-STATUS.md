@@ -1,6 +1,6 @@
 # VettID API Status
 
-**Last Updated:** 2025-12-30 by Android
+**Last Updated:** 2025-12-31 by Backend
 
 This file is the master coordination point between backend development and mobile app development (iOS and Android). Mobile developers should reference this file to understand API availability and required actions.
 
@@ -15,13 +15,57 @@ This file is the master coordination point between backend development and mobil
 | POST /api/v1/enroll/finalize | **Deployed** | Finalize enrollment, receive credential |
 | POST /api/v1/action/request | **Deployed** | Request scoped action token |
 | POST /api/v1/auth/execute | **Deployed** | Execute authentication with action token |
-| GET /member/vaults/{id}/status | Not Started | Phase 5 |
-| POST /member/vaults/{id}/start | Not Started | Phase 5 |
-| POST /member/vaults/{id}/stop | Not Started | Phase 5 |
+| GET /vault/health | **Deployed** | Get vault health status (running, stopped, etc) |
+| GET /vault/status | **Deployed** | Get enrollment/credential status |
+| POST /vault/start | **Deployed** | Start a stopped vault EC2 instance |
+| POST /vault/stop | **Deployed** | Stop a running vault EC2 instance |
+| POST /vault/terminate | **Deployed** | Terminate (delete) a vault instance |
 
 ---
 
 ## Recent Changes
+
+### 2025-12-31 - Vault Lifecycle Endpoints Deployed
+
+- **Endpoints:** Complete vault lifecycle management now available
+  - `GET /vault/health` - Check vault health/status (running, stopped, terminated, etc)
+  - `GET /vault/status` - Check enrollment and credential status
+  - `POST /vault/start` - Start a stopped vault EC2 instance
+  - `POST /vault/stop` - Stop a running vault EC2 instance
+  - `POST /vault/terminate` - Terminate and delete a vault instance
+
+- **Breaking:** No - New functionality only
+
+- **Authentication:** All endpoints require member JWT authorization
+
+- **Usage:**
+  ```kotlin
+  // Start a stopped vault
+  POST /vault/start
+  Authorization: Bearer {member_jwt}
+
+  Response:
+  {
+    "status": "starting",
+    "instance_id": "i-xxx",
+    "message": "Vault is starting. Please wait for initialization to complete."
+  }
+
+  // Stop a running vault
+  POST /vault/stop
+  Authorization: Bearer {member_jwt}
+
+  Response:
+  {
+    "status": "stopping",
+    "instance_id": "i-xxx",
+    "message": "Vault is being stopped."
+  }
+  ```
+
+- **Mobile Action Required:**
+  - [ ] Android: Add vault lifecycle controls to settings/vault management screen
+  - [ ] Android: Show vault status indicator (running/stopped/starting)
 
 ### 2025-12-30 - Vault-to-Vault Real-Time Messaging Deployed
 
