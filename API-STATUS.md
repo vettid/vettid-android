@@ -1,6 +1,6 @@
 # VettID API Status
 
-**Last Updated:** 2025-12-31 by Backend
+**Last Updated:** 2025-12-31 (Action-token vault lifecycle endpoints)
 
 This file is the master coordination point between backend development and mobile app development (iOS and Android). Mobile developers should reference this file to understand API availability and required actions.
 
@@ -15,46 +15,60 @@ This file is the master coordination point between backend development and mobil
 | POST /api/v1/enroll/finalize | **Deployed** | Finalize enrollment, receive credential |
 | POST /api/v1/action/request | **Deployed** | Request scoped action token |
 | POST /api/v1/auth/execute | **Deployed** | Execute authentication with action token |
-| GET /vault/health | **Deployed** | Get vault health status (running, stopped, etc) |
-| GET /vault/status | **Deployed** | Get enrollment/credential status |
-| POST /vault/start | **Deployed** | Start a stopped vault EC2 instance |
-| POST /vault/stop | **Deployed** | Stop a running vault EC2 instance |
-| POST /vault/terminate | **Deployed** | Terminate (delete) a vault instance |
+| GET /vault/health | **Deployed** | Get vault health status (Cognito auth) |
+| GET /vault/status | **Deployed** | Get enrollment/credential status (Cognito auth) |
+| POST /vault/start | **Deployed** | Start vault EC2 instance (Cognito auth) |
+| POST /vault/stop | **Deployed** | Stop vault EC2 instance (Cognito auth) |
+| POST /vault/terminate | **Deployed** | Terminate vault instance (Cognito auth) |
+| **POST /api/v1/vault/start** | **NEW** | Start vault via action token (mobile-friendly) |
+| **POST /api/v1/vault/stop** | **NEW** | Stop vault via action token (mobile-friendly) |
+| **GET /api/v1/vault/status** | **NEW** | Get vault status via action token (mobile-friendly) |
 
 ---
 
 ## Backend Requests
 
-### [REQUEST] Mobile-Accessible Vault Lifecycle Endpoints
+### [COMPLETED] Mobile-Accessible Vault Lifecycle Endpoints
 
 **Priority:** High
-**Status:** Pending Backend Implementation
+**Status:** ✅ Implemented and Deployed (2025-12-31)
 
-**Problem:**
-- Vault lifecycle endpoints (`/vault/start`, `/vault/stop`, `/vault/health`) require Cognito member JWT
-- Mobile apps authenticate via vault services (enrollment JWT) and NATS, not Cognito
-- After enrollment, vault EC2 may be stopped - mobile cannot start it without Cognito auth
+**Solution Implemented:** Action Token Approach
 
-**Proposed Solutions:**
+New action types added to `/api/v1/action/request`:
+- `vault_start` → `/api/v1/vault/start`
+- `vault_stop` → `/api/v1/vault/stop`
+- `vault_status` → `/api/v1/vault/status`
 
-1. **Action Token Approach** (Preferred)
-   - Add `vault_start`, `vault_stop`, `vault_status` action types
-   - Mobile uses existing `/api/v1/action/request` flow
-   - Consistent with existing mobile auth pattern
+**Usage Flow:**
+```kotlin
+// Step 1: Request action token (with Cognito JWT or enrollment session)
+POST /api/v1/action/request
+{
+  "user_guid": "user_xxx",
+  "action_type": "vault_start"
+}
+→ {
+    "action_token": "eyJ...",
+    "action_endpoint": "/api/v1/vault/start",
+    ...
+  }
 
-2. **Enrollment Token Approach**
-   - Allow enrollment JWT to access vault lifecycle endpoints
-   - Scope limited to the enrolled user's vault only
+// Step 2: Execute action (with action token, no Cognito needed)
+POST /api/v1/vault/start
+Authorization: Bearer {action_token}
 
-3. **NATS-Based Approach**
-   - Add vault lifecycle handlers (`vault.start`, `vault.stop`, `vault.status`)
-   - Mobile calls via OwnerSpace NATS handlers
-   - Requires vault-services to listen on control topic
+→ {
+    "status": "starting",
+    "instance_id": "i-xxx",
+    "message": "Vault is starting..."
+  }
+```
 
-**Mobile Impact:**
-- Currently shows "Connection failed" when vault is stopped
-- Cannot recover without backend-side intervention
-- Blocks testing of NATS messaging features
+**Mobile Action Required:**
+- [ ] Android: Implement `VaultLifecycleClient` using action token flow
+- [ ] Android: Add vault start/stop to settings screen
+- [ ] Android: Auto-start vault on NATS connection failure
 
 ---
 
@@ -166,6 +180,45 @@ The vault-manager bootstrap handler needs to publish responses to `OwnerSpace.{g
 ---
 
 ## Recent Changes
+
+### 2025-12-31 - Action-Token Vault Lifecycle Endpoints Deployed
+
+- **Endpoints:** New mobile-friendly vault lifecycle endpoints (no Cognito required)
+  - `POST /api/v1/vault/start` - Start vault EC2 instance
+  - `POST /api/v1/vault/stop` - Stop vault EC2 instance
+  - `GET /api/v1/vault/status` - Get enrollment and instance status
+
+- **Breaking:** No - New functionality only
+
+- **Authentication:** Uses action tokens instead of Cognito JWT
+  - Request action token via `/api/v1/action/request` with `action_type`: `vault_start`, `vault_stop`, or `vault_status`
+  - Execute action with action token in Bearer header (single-use, 5-minute expiry)
+
+- **Response Format:**
+  ```json
+  // POST /api/v1/vault/start
+  {
+    "status": "starting",
+    "instance_id": "i-xxx",
+    "message": "Vault is starting. Please wait for initialization to complete."
+  }
+
+  // GET /api/v1/vault/status
+  {
+    "enrollment_status": "active",
+    "user_guid": "user_xxx",
+    "transaction_keys_remaining": 15,
+    "instance_status": "running",
+    "instance_id": "i-xxx",
+    "instance_ip": "x.x.x.x",
+    "nats_endpoint": "tls://nats.vettid.dev:4222"
+  }
+  ```
+
+- **Mobile Action Required:**
+  - [ ] Android: Implement `VaultLifecycleClient` using action token flow
+  - [ ] Android: Add vault start/stop to settings screen
+  - [ ] Android: Auto-start vault when NATS connection fails with "vault stopped" error
 
 ### 2025-12-31 - Lambda Connection/Messaging Handlers Removed
 
@@ -552,6 +605,9 @@ Authorization: Bearer {action_token}     // NOT Cognito token!
 | `retrieve_secret` | /api/v1/secrets/retrieve | Retrieve a secret |
 | `add_policy` | /api/v1/policies/update | Update vault policies |
 | `modify_credential` | /api/v1/credential/modify | Modify credential |
+| `vault_start` | /api/v1/vault/start | Start vault EC2 instance (NEW) |
+| `vault_stop` | /api/v1/vault/stop | Stop vault EC2 instance (NEW) |
+| `vault_status` | /api/v1/vault/status | Get vault status (NEW) |
 
 ### Error Codes
 
