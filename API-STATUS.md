@@ -394,29 +394,41 @@ Yes, the `app.bootstrap` handler is fully implemented in `vault-manager/internal
 
 **Testing Status (2025-12-31):**
 - [x] App connects to NATS with bootstrap credentials
-- [ ] ❌ App subscribes to `OwnerSpace.{guid}.forApp.app.bootstrap.>` for responses → **PERMISSIONS VIOLATION**
+- [x] App subscribes to `OwnerSpace.{guid}.forApp.app.bootstrap.>` for responses (FIX #4 resolved permission)
 - [x] App publishes bootstrap request to `OwnerSpace.{guid}.forVault.app.bootstrap`
-- [x] **FIXED**: Vault-manager response topic bug resolved
+- [x] Vault-manager receives request and creates E2E session
+- [ ] ❌ **App never receives response** - Bootstrap times out after 30s
 
-**NEW ISSUE (2025-12-31 17:30 UTC):**
-The bootstrap credentials JWT does NOT include permission to subscribe to the bootstrap response topic.
+**Retest After FIX #4 (2025-12-31 17:57 UTC):**
 
-**Error Log:**
+Subscription permission issue RESOLVED by FIX #4. But bootstrap still times out.
+
+**Timeline:**
+| Time (UTC) | Event |
+|------------|-------|
+| 22:57:00 | App publishes bootstrap request |
+| 22:57:03 | Vault-manager creates E2E session (SUCCESS!) |
+| 22:57:30 | App times out - no response received |
+
+**Vault-Manager Logs:**
 ```
-AndroidNatsClient: Server error: -ERR 'Permissions Violation for Subscription to "OwnerSpace.userD84E1A00643A4C679FAEF6D6FA81B103.forApp.app.bootstrap.>"'
+Dec 31 22:57:03 vault-manager: {"level":"info","session_id":"sess_70691f139f87247daba6f41975dc1026","device_id":"user-D84E1A00643A4C679FAEF6D6FA81B103","message":"Created new E2E session"}
+Dec 31 22:57:03 vault-manager: {"level":"info","message":"E2E encryption session established"}
 ```
 
-**Additional Permissions Violations Found:**
-- Subscribe: `OwnerSpace.{guid}.forApp.>` → DENIED
-- Subscribe: `OwnerSpace.{guid}.eventTypes` → DENIED
-- Publish: `OwnerSpace.{guid}.forVault.connection.list` → DENIED
+**Analysis:**
+The vault-manager IS processing the bootstrap request correctly:
+1. ✅ Request received
+2. ✅ E2E session created
+3. ❓ **No log of response being published**
 
-**Required Bootstrap JWT Permissions:**
-The bootstrap credentials JWT needs to include at minimum:
-1. **Subscribe:** `OwnerSpace.{guid}.forApp.app.bootstrap.>` - to receive bootstrap response
-2. **Publish:** `OwnerSpace.{guid}.forVault.app.bootstrap` - to send bootstrap request
+The bootstrap handler (`bootstrap.go`) needs to publish the response to:
+`OwnerSpace.{guid}.forApp.app.bootstrap.{requestId}`
 
-Currently, the JWT only has permissions to CONNECT, but not to subscribe/publish on the required topics.
+But there's no evidence in the logs that this publish is happening.
+
+**Action Required:**
+Check `vault-manager/internal/handlers/builtins/bootstrap.go` - is the response being published after session creation?
 
 **Root Cause (FIXED 2025-12-31):**
 The vault-manager was publishing responses to `OwnerSpace.{guid}.forApp.>` literally (with `>` as part of the subject name). The `ForApp` config topic ending in `.>` is meant for subscribing (wildcard), not publishing.
