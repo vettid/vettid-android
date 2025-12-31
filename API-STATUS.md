@@ -58,62 +58,80 @@ This file is the master coordination point between backend development and mobil
 
 ---
 
-### [QUESTION] app.bootstrap Handler - Full NATS Credentials Exchange
+### [ANSWERED] app.bootstrap Handler - Full NATS Credentials Exchange
 
 **Priority:** High
-**Status:** Awaiting Backend Clarification
+**Status:** ✅ Implemented and Deployed
 
-**Context:**
-The `app-vault-encryption.md` spec documents that after enrollment:
-1. App receives **bootstrap credentials** (limited permissions - only `app.bootstrap` topics)
-2. App calls `app.bootstrap` handler on vault-manager
-3. Vault responds with **full NATS credentials** + session keys for E2E encryption
+**Answer from Backend (2025-12-30):**
+Yes, the `app.bootstrap` handler is fully implemented in `vault-manager/internal/handlers/builtins/bootstrap.go` and deployed.
 
-**Question for Backend:**
-Is the vault-manager's `app.bootstrap` handler implemented and deployed?
-
-**What Mobile Needs to Know:**
-1. **Request format** - What should the `app.bootstrap` request payload contain?
-   - Per spec: `app_session_public_key`, `device_id`, `request_id`, `timestamp`
-
-2. **Response format** - What does the handler return?
-   - Per spec: `nats_credentials` (full creds), `vault_session_public_key`, `session_id`, `session_expires_at`
-
-3. **Topic structure** - Confirm the topics:
-   - Publish to: `OwnerSpace.{guid}.forVault.app.bootstrap`
-   - Subscribe to: `OwnerSpace.{guid}.forApp.bootstrap.{request_id}` (or wildcard `>`)
-
-**Current Situation:**
-- App connects with bootstrap credentials ✅
-- App cannot use full topics (Permissions Violation) ❌
-- App needs full credentials from vault-manager
-
-**Spec Reference:**
-From `cdk/coordination/specs/app-vault-encryption.md` (lines 56-88):
-```
-NATS Publish → ${ownerSpace}.forVault.app.bootstrap
+#### Request Format
+```json
 {
-  "request_id": "...",
-  "app_session_public_key": base64(app_session_keypair.publicKey),
-  "device_id": "...",
-  "timestamp": "..."
-}
-
-NATS Reply → ${ownerSpace}.forApp.bootstrap.{request_id}
-{
-  "status": "success",
-  "vault_session_public_key": base64(vault_session_keypair.pubKey),
-  "nats_credentials": "...",  // Full NATS creds
-  "session_id": "...",
-  "session_expires_at": "..."
+  "id": "unique-request-id",
+  "type": "app.bootstrap",
+  "timestamp": "2025-12-30T15:30:00Z",
+  "payload": {
+    "device_id": "android-device-xyz",
+    "device_type": "android",
+    "app_version": "1.0.0",
+    "requested_ttl_hours": 168,
+    "app_session_public_key": "base64-encoded-X25519-public-key"
+  }
 }
 ```
 
-**Mobile Action Required (once confirmed):**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `device_id` | string | Yes | Unique device identifier |
+| `device_type` | string | No | "android" or "ios" |
+| `app_version` | string | No | App version for compatibility |
+| `requested_ttl_hours` | int | No | Credential TTL (default: 168 = 7 days, max: 720 = 30 days) |
+| `app_session_public_key` | string | No | X25519 public key (base64) for E2E encryption |
+
+#### Response Format
+```json
+{
+  "event_id": "unique-request-id",
+  "success": true,
+  "timestamp": "2025-12-30T15:30:01Z",
+  "result": {
+    "credentials": "-----BEGIN NATS USER JWT-----\n...",
+    "nats_endpoint": "tls://nats.vettid.dev:4222",
+    "owner_space": "OwnerSpace.abc123",
+    "message_space": "MessageSpace.abc123",
+    "topics": {
+      "send_to_vault": "OwnerSpace.abc123.forVault.>",
+      "receive_from_vault": "OwnerSpace.abc123.forApp.>"
+    },
+    "expires_at": "2026-01-06T15:30:00Z",
+    "ttl_seconds": 604800,
+    "credential_id": "cred-12345678",
+    "rotation_info": {
+      "rotate_before_hours": 24,
+      "rotation_topic": "OwnerSpace.abc123.forVault.credentials.refresh"
+    },
+    "session_info": {
+      "session_id": "sess-87654321",
+      "vault_session_public_key": "base64-encoded-vault-X25519-public-key",
+      "session_expires_at": "2026-01-06T15:30:00Z",
+      "encryption_enabled": true
+    }
+  }
+}
+```
+
+**Notes:**
+- `session_info` is only present if `app_session_public_key` was provided in the request
+- `credentials` is a full NATS credentials file (JWT + seed) - replace bootstrap creds with this
+- Topic structure: `OwnerSpace.{guid}.forVault.app.bootstrap` → response on `OwnerSpace.{guid}.forApp.>`
+
+**Mobile Action Required:**
 - [ ] Implement `app.bootstrap` request in `NatsAutoConnector`
-- [ ] Store full NATS credentials from response
+- [ ] Store full NATS credentials from response (replace bootstrap creds)
 - [ ] Reconnect with full credentials
-- [ ] Complete session key exchange for E2E encryption
+- [ ] Complete session key exchange for E2E encryption using `session_info`
 
 ---
 
