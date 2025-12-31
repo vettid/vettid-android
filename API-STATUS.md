@@ -71,7 +71,15 @@ Authorization: Bearer {action_token}
 - [x] Android: Auto-start vault on NATS connection failure
 
 **Issue Found (2025-12-31):**
-Action token endpoints return HTTP 404. The `/api/v1/action/request` endpoint works, but `/api/v1/vault/start`, `/api/v1/vault/stop`, and `/api/v1/vault/status` return 404. Backend deployment may be incomplete.
+~~Action token endpoints return HTTP 404.~~ Now returning **HTTP 500: Failed to process action request**.
+
+**Android Testing (2025-12-31 15:15 UTC):**
+Vault Preferences screen shows:
+```
+Status: HTTP 500: Failed to process action request
+```
+
+The `/api/v1/action/request` endpoint is now returning 500 instead of working correctly.
 
 ---
 
