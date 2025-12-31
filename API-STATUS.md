@@ -141,11 +141,91 @@ BootstrapClient: Publishing to: OwnerSpace.user3166791C526F49A48B0A5BE5EFF030C0.
 BootstrapClient: Bootstrap timed out after 30000ms
 ```
 
-**Backend Action Required:**
-- [ ] When `user_guid` is provided, enrollment must use the SAME OwnerSpace ID as the existing vault
-- [ ] Or: The vault-manager must be configured to listen on the new OwnerSpace ID
+**Status:** ✅ FIXED (2025-12-31) - See fix documentation below.
 
-**⚠️ IMPORTANT: Bootstrap testing is currently blocked until this is fixed.**
+Only ONE vault has the bootstrap topic fix deployed:
+| user_guid | Has Bootstrap Fix | Use For Testing |
+|-----------|-------------------|-----------------|
+| `user-D84E1A00643A4C679FAEF6D6FA81B103` | ✅ Yes | ✅ Use this one |
+
+All other test vaults have been terminated. Only the one with the fix remains.
+
+---
+
+### [COMPLETED] user_guid Vault Reuse Not Working
+
+**Priority:** High
+**Status:** ✅ Fixed (2025-12-31)
+
+**Problem (Resolved):**
+When passing `user_guid` to `/test/create-invitation` to reuse an existing vault, the enrollment created NEW NATS credentials that didn't match the vault's configured credentials. The vault wouldn't recognize the bootstrap credentials.
+
+**Root Cause:**
+`enrollFinalize.ts` generated NEW account credentials before checking if the account already existed. Even when the PutItem failed (account exists), the bootstrap credentials were signed with the NEW seed - not the existing vault's seed.
+
+**Fix Applied:**
+`enrollFinalize.ts` now checks for existing NATS accounts FIRST:
+1. Query `TABLE_NATS_ACCOUNTS` by `user_guid`
+2. If account exists: use existing `account_seed` for bootstrap credentials, set `vault_status: 'EXISTING'`
+3. If new user: create new account and provision vault as before
+
+**New Response Field:**
+When reusing an existing vault, the response includes:
+```json
+{
+  "vault_status": "EXISTING",
+  "vault_bootstrap": {
+    "credentials": "...",  // Valid credentials for existing vault
+    "estimated_ready_at": "2025-12-31T12:00:00Z"  // Immediate (vault already running)
+  }
+}
+```
+
+**Testing:**
+```bash
+POST /test/create-invitation
+{
+  "test_user_id": "my_test",
+  "user_guid": "user-D84E1A00643A4C679FAEF6D6FA81B103"
+}
+```
+The returned bootstrap credentials will now work with the existing vault.
+
+---
+
+### [COMPLETED] HTTP 500 from /api/v1/action/request
+
+**Priority:** High
+**Status:** ✅ Fixed (2025-12-31)
+
+**Problem (Resolved):**
+The `/api/v1/action/request` endpoint was returning HTTP 500 with DynamoDB error: "ValidationException: The provided key element does not match the schema"
+
+**Root Cause:**
+The Lambda handler had incorrect DynamoDB queries that didn't match the actual table schemas:
+1. **Credentials table** - Used `GetItem` with just `user_guid`, but table has composite key (`user_guid` + `credential_id`)
+2. **LedgerAuthTokens table** - Queried by `user_guid`, but table uses `token` as primary key (no GSI existed)
+3. **TransactionKeys table** - Queried using `status-index` GSI, but only `user-index` GSI exists
+
+**Fix Applied:**
+1. Changed Credentials query from `GetItem` to `Query` on `user_guid` partition key
+2. Added `user-index` GSI to LedgerAuthTokens table for user_guid lookups
+3. Changed TransactionKeys query to use `user-index` GSI with client-side status filter
+
+**Deployment:**
+- Infrastructure stack updated (new GSI for LedgerAuthTokens)
+- Vault Lambda stack updated (fixed queries)
+- GSI is now ACTIVE
+
+**Testing:**
+The `/api/v1/action/request` endpoint should now work correctly:
+```bash
+POST /api/v1/action/request
+{
+  "user_guid": "user-D84E1A00643A4C679FAEF6D6FA81B103",
+  "action_type": "vault_start"
+}
+```
 
 ---
 
