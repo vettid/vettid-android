@@ -747,6 +747,130 @@ Each connection creates scoped NATS credentials allowing peers to communicate.
   }
 ```
 
+#### Messaging (Peer-to-Peer)
+
+Messages flow vault-to-vault via NATS, not through Lambda. Architecture:
+- App → Vault (OwnerSpace.forVault) → Peer Vault (MessageSpace.forOwner) → Peer App (OwnerSpace.forApp)
+
+**`message.send`** - Send encrypted message to peer vault
+```json
+{
+  "connection_id": "conn-xyz...",
+  "encrypted_content": "base64_encrypted_message...",
+  "nonce": "base64_nonce...",
+  "content_type": "text"
+}
+→ {
+    "message_id": "msg-abc123...",
+    "connection_id": "conn-xyz...",
+    "sent_at": "2025-12-30T15:30:00Z",
+    "status": "sent"
+  }
+```
+
+**`message.read-receipt`** - Send read receipt to peer vault
+```json
+{
+  "connection_id": "conn-xyz...",
+  "message_id": "msg-abc123..."
+}
+→ {
+    "message_id": "msg-abc123...",
+    "read_at": "2025-12-30T15:31:00Z",
+    "sent": true
+  }
+```
+
+**`profile.broadcast`** - Broadcast profile updates to all connections
+```json
+{
+  "fields": ["display_name", "avatar_url"]
+}
+→ {
+    "success": true,
+    "connections_count": 5,
+    "success_count": 5,
+    "failed_connection_ids": [],
+    "broadcast_at": "2025-12-30T15:30:00Z"
+  }
+```
+*Note: Empty `fields` array broadcasts all profile fields.*
+
+**`connection.notify-revoke`** - Notify peer before revoking connection
+```json
+{
+  "connection_id": "conn-xyz..."
+}
+→ {
+    "success": true,
+    "notified_at": "2025-12-30T15:30:00Z"
+  }
+```
+*Note: This also revokes the connection after notifying the peer.*
+
+#### Incoming Notifications (Vault → App)
+
+These notifications arrive on `OwnerSpace.{guid}.forApp.{type}`:
+
+**`forApp.new-message`** - New message from peer
+```json
+{
+  "type": "new-message",
+  "timestamp": "2025-12-30T15:30:00Z",
+  "data": {
+    "message_id": "msg-abc123...",
+    "sender_guid": "user-DEF456...",
+    "connection_id": "conn-xyz...",
+    "encrypted_content": "base64_encrypted...",
+    "nonce": "base64_nonce...",
+    "content_type": "text",
+    "sent_at": "2025-12-30T15:30:00Z"
+  }
+}
+```
+
+**`forApp.read-receipt`** - Peer read your message
+```json
+{
+  "type": "read-receipt",
+  "timestamp": "2025-12-30T15:31:00Z",
+  "data": {
+    "message_id": "msg-abc123...",
+    "connection_id": "conn-xyz...",
+    "read_at": "2025-12-30T15:31:00Z"
+  }
+}
+```
+
+**`forApp.profile-update`** - Profile update from peer
+```json
+{
+  "type": "profile-update",
+  "timestamp": "2025-12-30T15:30:00Z",
+  "data": {
+    "connection_id": "conn-xyz...",
+    "fields": {
+      "display_name": "Alice",
+      "avatar_url": "https://..."
+    },
+    "updated_at": "2025-12-30T15:30:00Z"
+  }
+}
+```
+
+**`forApp.connection-revoked`** - Peer revoked connection
+```json
+{
+  "type": "connection-revoked",
+  "timestamp": "2025-12-30T15:30:00Z",
+  "data": {
+    "connection_id": "conn-xyz...",
+    "revoked_at": "2025-12-30T15:30:00Z",
+    "reason": "user_initiated"
+  }
+}
+```
+
 ### Android Implementation Notes
 
 **VaultMessage format (FIXED in OwnerSpaceClient.kt):**
