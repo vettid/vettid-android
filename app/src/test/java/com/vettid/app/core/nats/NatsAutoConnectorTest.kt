@@ -1,6 +1,7 @@
 package com.vettid.app.core.nats
 
 import com.vettid.app.core.network.NatsConnectionInfo
+import com.vettid.app.core.network.VaultLifecycleClient
 import com.vettid.app.core.storage.CredentialStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -22,6 +23,7 @@ class NatsAutoConnectorTest {
     private lateinit var credentialStore: CredentialStore
     private lateinit var credentialClient: NatsCredentialClient
     private lateinit var bootstrapClient: BootstrapClient
+    private lateinit var vaultLifecycleClient: VaultLifecycleClient
     private lateinit var autoConnector: NatsAutoConnector
 
     private val testJwt = "eyJhbGciOiJlZDI1NTE5In0.test"
@@ -50,6 +52,7 @@ $testSeed
         credentialStore = mock()
         credentialClient = mock()
         bootstrapClient = mock()
+        vaultLifecycleClient = mock()
 
         // Stub the credentialRotation flow
         whenever(ownerSpaceClient.credentialRotation).thenReturn(credentialRotationFlow)
@@ -60,7 +63,8 @@ $testSeed
             ownerSpaceClient = ownerSpaceClient,
             credentialStore = credentialStore,
             credentialClient = credentialClient,
-            bootstrapClient = bootstrapClient
+            bootstrapClient = bootstrapClient,
+            vaultLifecycleClient = vaultLifecycleClient
         )
     }
 
