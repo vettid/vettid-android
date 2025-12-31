@@ -83,6 +83,8 @@ The `/api/v1/action/request` endpoint is still returning HTTP 500.
 
 **Retest (2025-12-31 15:59 UTC):** Still getting HTTP 500 errors in vault controls.
 
+**Retest (2025-12-31 16:13 UTC):** Still HTTP 500. Action token endpoint not working.
+
 ---
 
 ### [COMPLETED] Action Token Vault Endpoints Return 404
@@ -143,7 +145,11 @@ BootstrapClient: Publishing to: OwnerSpace.user3166791C526F49A48B0A5BE5EFF030C0.
 BootstrapClient: Bootstrap timed out after 30000ms
 ```
 
-**Status:** ✅ FIXED (2025-12-31 21:06 UTC)
+**Status:** ✅ user_guid fix WORKS! But bootstrap still times out.
+
+**Retest (2025-12-31 16:13 UTC):**
+OwnerSpace now correct! `OwnerSpace.userD84E1A00643A4C679FAEF6D6FA81B103`
+But bootstrap still times out - vault not responding to messages.
 
 **Second Fix Applied:**
 The first fix (`enrollFinalize.ts`) was correct but insufficient. The bug was actually in `enrollStart.ts` which was generating a NEW user_guid even when the invitation had one stored.
