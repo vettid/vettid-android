@@ -127,11 +127,13 @@ Yes, the `app.bootstrap` handler is fully implemented in `vault-manager/internal
 - `credentials` is a full NATS credentials file (JWT + seed) - replace bootstrap creds with this
 - Topic structure: `OwnerSpace.{guid}.forVault.app.bootstrap` → response on `OwnerSpace.{guid}.forApp.>`
 
-**Mobile Action Required:**
-- [ ] Implement `app.bootstrap` request in `NatsAutoConnector`
-- [ ] Store full NATS credentials from response (replace bootstrap creds)
-- [ ] Reconnect with full credentials
-- [ ] Complete session key exchange for E2E encryption using `session_info`
+**Mobile Implementation Status (Android):**
+- [x] Implemented `BootstrapClient` class for `app.bootstrap` credential exchange
+- [x] Updated `NatsAutoConnector` to detect bootstrap credentials and trigger exchange
+- [x] Full credentials stored via `CredentialStore.storeFullNatsCredentials()`
+- [x] Automatic reconnection after receiving full credentials
+- [x] Session key exchange integrated with E2E encryption setup
+- [x] Updated `BootstrapClient` response parsing to match backend format (credentials field in result)
 
 ---
 

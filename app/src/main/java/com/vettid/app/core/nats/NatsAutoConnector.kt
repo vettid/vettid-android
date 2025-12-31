@@ -23,8 +23,9 @@ import javax.inject.Singleton
  * 3. Parse JWT/seed from credential file
  * 4. Set account info on NatsConnectionManager
  * 5. Connect to NATS
- * 6. Subscribe to vault topics
- * 7. Restore or bootstrap E2E session for encrypted communication
+ * 6. If bootstrap credentials: execute app.bootstrap to get full credentials
+ * 7. Subscribe to vault topics
+ * 8. Restore or bootstrap E2E session for encrypted communication
  *
  * If credentials are expired, returns [ConnectionResult.CredentialsExpired]
  * and the caller should trigger Vault Services authentication to get fresh credentials.
@@ -35,7 +36,8 @@ class NatsAutoConnector @Inject constructor(
     private val connectionManager: NatsConnectionManager,
     private val ownerSpaceClient: OwnerSpaceClient,
     private val credentialStore: CredentialStore,
-    private val credentialClient: NatsCredentialClient
+    private val credentialClient: NatsCredentialClient,
+    private val bootstrapClient: BootstrapClient
 ) {
     companion object {
         private const val TAG = "NatsAutoConnector"
@@ -74,6 +76,8 @@ class NatsAutoConnector @Inject constructor(
         object Idle : AutoConnectState()
         object Checking : AutoConnectState()
         object Connecting : AutoConnectState()
+        /** Exchanging bootstrap credentials for full credentials */
+        object Bootstrapping : AutoConnectState()
         object Subscribing : AutoConnectState()
         object Connected : AutoConnectState()
         data class Failed(val result: ConnectionResult) : AutoConnectState()
@@ -172,7 +176,52 @@ class NatsAutoConnector @Inject constructor(
         connectionManager.setConnectedState(credentials)
         Log.i(TAG, "Connected to NATS successfully")
 
-        // Step 8: Subscribe to vault topics (if ownerSpaceId available)
+        // Step 8: Check if we have bootstrap credentials and need to exchange for full credentials
+        if (credentialStore.hasBootstrapCredentials() && ownerSpaceId != null) {
+            _connectionState.value = AutoConnectState.Bootstrapping
+            Log.i(TAG, "Have bootstrap credentials - executing app.bootstrap to get full credentials")
+
+            val bootstrapResult = executeBootstrapExchange(ownerSpaceId)
+            if (bootstrapResult.isFailure) {
+                val error = bootstrapResult.exceptionOrNull()
+                Log.e(TAG, "Bootstrap credential exchange failed: ${error?.message}")
+                // Continue with bootstrap credentials - may have limited functionality
+                // Don't fail completely as we are connected
+            } else {
+                val fullCredentialsResult = bootstrapResult.getOrThrow()
+                Log.i(TAG, "Got full credentials from bootstrap - reconnecting")
+
+                // Store full credentials
+                credentialStore.storeFullNatsCredentials(
+                    credentials = fullCredentialsResult.natsCredentials,
+                    ownerSpace = fullCredentialsResult.ownerSpace,
+                    messageSpace = fullCredentialsResult.messageSpace,
+                    credentialId = fullCredentialsResult.credentialId,
+                    ttlSeconds = fullCredentialsResult.ttlSeconds
+                )
+
+                // Store E2E session if established
+                fullCredentialsResult.sessionCrypto?.let { session ->
+                    credentialStore.storeSession(
+                        sessionId = session.sessionId,
+                        sessionKey = session.getSessionKeyForStorage(),
+                        publicKey = session.publicKey,
+                        expiresAt = fullCredentialsResult.sessionExpiresAt?.let {
+                            try { java.time.Instant.parse(it).toEpochMilli() }
+                            catch (e: Exception) { System.currentTimeMillis() + 24 * 60 * 60 * 1000L }
+                        } ?: (System.currentTimeMillis() + 24 * 60 * 60 * 1000L)
+                    )
+                }
+
+                // Disconnect and reconnect with full credentials
+                natsClient.disconnect()
+
+                // Recurse to reconnect with full credentials
+                return autoConnect()
+            }
+        }
+
+        // Step 9: Subscribe to vault topics (if ownerSpaceId available)
         if (ownerSpaceId != null) {
             _connectionState.value = AutoConnectState.Subscribing
 
@@ -186,7 +235,7 @@ class NatsAutoConnector @Inject constructor(
             }
         }
 
-        // Step 9: Restore or bootstrap E2E session
+        // Step 10: Restore or bootstrap E2E session
         if (!ownerSpaceClient.restoreSession()) {
             Log.i(TAG, "No valid E2E session - will bootstrap on first vault message")
             // Session will be bootstrapped when needed (e.g., on first sendToVault call)
@@ -195,7 +244,7 @@ class NatsAutoConnector @Inject constructor(
             Log.i(TAG, "E2E session restored: ${ownerSpaceClient.currentSessionId}")
         }
 
-        // Step 10: Start listening for credential rotation events
+        // Step 11: Start listening for credential rotation events
         startRotationListener()
 
         _connectionState.value = AutoConnectState.Connected
@@ -340,6 +389,21 @@ class NatsAutoConnector @Inject constructor(
      */
     fun needsCredentialRefresh(bufferMinutes: Long = 120): Boolean {
         return credentialClient.needsRefresh(bufferMinutes)
+    }
+
+    /**
+     * Execute the bootstrap credential exchange to get full NATS credentials.
+     *
+     * @param ownerSpaceId The OwnerSpace ID for topic construction
+     * @return BootstrapResult with full credentials on success
+     */
+    private suspend fun executeBootstrapExchange(ownerSpaceId: String): Result<BootstrapResult> {
+        val deviceId = credentialStore.getUserGuid() ?: "unknown"
+        return bootstrapClient.executeBootstrap(
+            natsClient = natsClient,
+            ownerSpaceId = ownerSpaceId,
+            deviceId = deviceId
+        )
     }
 
     /**

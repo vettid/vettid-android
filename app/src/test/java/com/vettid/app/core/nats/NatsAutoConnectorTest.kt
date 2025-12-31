@@ -21,6 +21,7 @@ class NatsAutoConnectorTest {
     private lateinit var ownerSpaceClient: OwnerSpaceClient
     private lateinit var credentialStore: CredentialStore
     private lateinit var credentialClient: NatsCredentialClient
+    private lateinit var bootstrapClient: BootstrapClient
     private lateinit var autoConnector: NatsAutoConnector
 
     private val testJwt = "eyJhbGciOiJlZDI1NTE5In0.test"
@@ -48,6 +49,7 @@ $testSeed
         ownerSpaceClient = mock()
         credentialStore = mock()
         credentialClient = mock()
+        bootstrapClient = mock()
 
         // Stub the credentialRotation flow
         whenever(ownerSpaceClient.credentialRotation).thenReturn(credentialRotationFlow)
@@ -57,7 +59,8 @@ $testSeed
             connectionManager = connectionManager,
             ownerSpaceClient = ownerSpaceClient,
             credentialStore = credentialStore,
-            credentialClient = credentialClient
+            credentialClient = credentialClient,
+            bootstrapClient = bootstrapClient
         )
     }
 

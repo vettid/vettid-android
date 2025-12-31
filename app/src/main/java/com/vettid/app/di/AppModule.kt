@@ -16,6 +16,7 @@ import com.vettid.app.core.security.SecureClipboard
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import java.util.concurrent.TimeUnit
+import com.vettid.app.core.nats.BootstrapClient
 import com.vettid.app.core.nats.CallSignalingClient
 import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.nats.NatsClient
@@ -136,14 +137,23 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideBootstrapClient(
+        credentialStore: CredentialStore
+    ): BootstrapClient {
+        return BootstrapClient(credentialStore)
+    }
+
+    @Provides
+    @Singleton
     fun provideNatsAutoConnector(
         natsClient: NatsClient,
         connectionManager: NatsConnectionManager,
         ownerSpaceClient: OwnerSpaceClient,
         credentialStore: CredentialStore,
-        credentialClient: NatsCredentialClient
+        credentialClient: NatsCredentialClient,
+        bootstrapClient: BootstrapClient
     ): NatsAutoConnector {
-        return NatsAutoConnector(natsClient, connectionManager, ownerSpaceClient, credentialStore, credentialClient)
+        return NatsAutoConnector(natsClient, connectionManager, ownerSpaceClient, credentialStore, credentialClient, bootstrapClient)
     }
 
     // Calling Dependencies

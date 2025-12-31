@@ -82,6 +82,10 @@ class CredentialStore @Inject constructor(
         private const val KEY_SESSION_KEY = "session_key"
         private const val KEY_SESSION_PUBLIC_KEY = "session_public_key"
         private const val KEY_SESSION_EXPIRES_AT = "session_expires_at"
+        // Bootstrap credential tracking
+        private const val KEY_NATS_BOOTSTRAP_TOPIC = "nats_bootstrap_topic"
+        private const val KEY_NATS_CREDENTIAL_ID = "nats_credential_id"
+        private const val KEY_NATS_CREDENTIALS_EXPIRY = "nats_credentials_expiry"
     }
 
     // MARK: - Credential Storage
@@ -569,6 +573,7 @@ class CredentialStore @Inject constructor(
     /**
      * Store NATS vault bootstrap credentials from enrollment finalize.
      * VaultBootstrap contains the minimal credentials needed for NATS connection.
+     * These are bootstrap credentials with limited permissions.
      */
     fun storeNatsConnection(vaultBootstrap: VaultBootstrap) {
         encryptedPrefs.edit().apply {
@@ -579,9 +584,83 @@ class CredentialStore @Inject constructor(
             vaultBootstrap.caCertificate?.let { caCert ->
                 putString(KEY_NATS_CA_CERT, caCert)
             }
+            // Store bootstrap topic to mark these as bootstrap (limited) credentials
+            vaultBootstrap.bootstrapTopic?.let { topic ->
+                putString(KEY_NATS_BOOTSTRAP_TOPIC, topic)
+            }
+            // Store TTL if provided
+            vaultBootstrap.credentialsTtlSeconds?.let { ttl ->
+                val expiryMs = System.currentTimeMillis() + (ttl * 1000L)
+                putLong(KEY_NATS_CREDENTIALS_EXPIRY, expiryMs)
+            }
             putLong(KEY_NATS_STORED_AT, System.currentTimeMillis())
         }.apply()
         android.util.Log.i("CredentialStore", "Stored NATS bootstrap credentials for ${vaultBootstrap.endpoint} (${vaultBootstrap.ownerSpace})")
+    }
+
+    /**
+     * Store full NATS credentials from app.bootstrap response.
+     * This replaces bootstrap credentials with full credentials.
+     *
+     * @param credentials Full NATS credentials (.creds file content)
+     * @param ownerSpace OwnerSpace ID (optional, keeps existing if null)
+     * @param messageSpace MessageSpace ID (optional, keeps existing if null)
+     * @param credentialId Credential ID for tracking
+     * @param ttlSeconds Time-to-live in seconds
+     */
+    fun storeFullNatsCredentials(
+        credentials: String,
+        ownerSpace: String? = null,
+        messageSpace: String? = null,
+        credentialId: String? = null,
+        ttlSeconds: Long? = null
+    ) {
+        encryptedPrefs.edit().apply {
+            putString(KEY_NATS_CREDENTIALS, credentials)
+            // Update ownerSpace/messageSpace if provided
+            ownerSpace?.let { putString(KEY_NATS_OWNER_SPACE, it) }
+            messageSpace?.let { putString(KEY_NATS_MESSAGE_SPACE, it) }
+            // Store credential ID if provided
+            credentialId?.let { putString(KEY_NATS_CREDENTIAL_ID, it) }
+            // Store expiry time
+            ttlSeconds?.let { ttl ->
+                val expiryMs = System.currentTimeMillis() + (ttl * 1000L)
+                putLong(KEY_NATS_CREDENTIALS_EXPIRY, expiryMs)
+            }
+            // Remove bootstrap topic marker - these are full credentials now
+            remove(KEY_NATS_BOOTSTRAP_TOPIC)
+            putLong(KEY_NATS_STORED_AT, System.currentTimeMillis())
+        }.apply()
+        android.util.Log.i("CredentialStore", "Stored full NATS credentials (id: $credentialId)")
+    }
+
+    /**
+     * Get the bootstrap topic if stored.
+     * Presence of this value indicates bootstrap (limited) credentials.
+     */
+    fun getNatsBootstrapTopic(): String? {
+        return encryptedPrefs.getString(KEY_NATS_BOOTSTRAP_TOPIC, null)
+    }
+
+    /**
+     * Check if current NATS credentials are bootstrap (limited) credentials.
+     */
+    fun hasBootstrapCredentials(): Boolean {
+        return hasNatsConnection() && getNatsBootstrapTopic() != null
+    }
+
+    /**
+     * Check if current NATS credentials are full credentials.
+     */
+    fun hasFullNatsCredentials(): Boolean {
+        return hasNatsConnection() && getNatsBootstrapTopic() == null
+    }
+
+    /**
+     * Get NATS credential ID.
+     */
+    fun getNatsCredentialId(): String? {
+        return encryptedPrefs.getString(KEY_NATS_CREDENTIAL_ID, null)
     }
 
     /**
@@ -691,10 +770,16 @@ class CredentialStore @Inject constructor(
     }
 
     /**
-     * Get NATS credentials expiry timestamp (24 hours after stored).
+     * Get NATS credentials expiry timestamp.
+     * Uses stored expiry time from TTL if available, otherwise defaults to 24 hours after stored.
      * Returns null if no credentials are stored.
      */
     fun getNatsCredentialsExpiryTime(): Long? {
+        // First check if explicit expiry is stored
+        val explicitExpiry = encryptedPrefs.getLong(KEY_NATS_CREDENTIALS_EXPIRY, 0L)
+        if (explicitExpiry > 0) return explicitExpiry
+
+        // Fall back to 24 hours after stored
         val storedAt = encryptedPrefs.getLong(KEY_NATS_STORED_AT, 0)
         if (storedAt == 0L) return null
 
@@ -715,6 +800,9 @@ class CredentialStore @Inject constructor(
             remove(KEY_NATS_TOPIC_RECEIVE)
             remove(KEY_NATS_STORED_AT)
             remove(KEY_NATS_CA_CERT)
+            remove(KEY_NATS_BOOTSTRAP_TOPIC)
+            remove(KEY_NATS_CREDENTIAL_ID)
+            remove(KEY_NATS_CREDENTIALS_EXPIRY)
         }.apply()
     }
 
