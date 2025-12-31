@@ -99,41 +99,45 @@ All endpoints now work:
 
 ---
 
-### [COMPLETED] Test Environment Vault Provisioning
+### [ISSUE] Test Environment Vault Provisioning - user_guid Not Working
 
-**Priority:** Medium
-**Status:** ✅ Fixed (2025-12-31)
+**Priority:** High
+**Status:** ⏳ Needs Backend Fix
 
-**Problem (Resolved):**
-The test API (`/test/create-invitation`) creates new test users but doesn't provision vault EC2 instances for them.
+**Original Fix (Option C):**
+The `/test/create-invitation` endpoint accepts a `user_guid` parameter to reuse an existing vault user.
 
-**Fix Applied (Option C):**
-The `/test/create-invitation` endpoint now accepts an optional `user_guid` parameter to reuse an existing vault user.
+**Issue Found (2025-12-31 Android Testing):**
 
-**Usage:**
-```json
-POST /test/create-invitation
-{
-  "test_user_id": "my_test",
+The `user_guid` parameter is not properly reusing the vault. Enrollment creates a NEW OwnerSpace ID that doesn't match the vault.
+
+**Test Performed:**
+```bash
+# Created invitation with user_guid
+curl -X POST /test/create-invitation -d '{
+  "test_user_id": "android_e2e_bootstrap_test",
   "user_guid": "user-D84E1A00643A4C679FAEF6D6FA81B103"
-}
+}'
+# Response said: "reusing_existing_vault": true
 ```
 
-**Response includes:**
-- `reusing_existing_vault: true` - Indicates vault reuse
-- `notes.vault_reuse` - Explains if bootstrap flow will work
+**Result:**
+- Enrollment succeeded (invitation code accepted, password set, finalized)
+- But NATS credentials point to a NEW OwnerSpace: `OwnerSpace.user3166791C526F49A48B0A5BE5EFF030C0`
+- The vault is configured for: `OwnerSpace.user-D84E1A00643A4C679FAEF6D6FA81B103`
+- Bootstrap times out because the vault doesn't receive messages for the wrong OwnerSpace
 
-**⚠️ IMPORTANT: Use the correct vault for bootstrap testing!**
+**Logs:**
+```
+BootstrapClient: Publishing to: OwnerSpace.user3166791C526F49A48B0A5BE5EFF030C0.forVault.app.bootstrap
+BootstrapClient: Bootstrap timed out after 30000ms
+```
 
-Only ONE vault has the bootstrap topic fix deployed:
-| user_guid | Has Bootstrap Fix | Use For Testing |
-|-----------|-------------------|-----------------|
-| `user-D84E1A00643A4C679FAEF6D6FA81B103` | ✅ Yes | ✅ Use this one |
-| `user-29680995BC4D4AE19F5B8F046D140005` | ❌ No | ❌ Don't use |
-| `user-0C9D219E6E3444F5B512C401AC6CD739` | ❌ No | ❌ Don't use |
-| `user-E32E2304B6274D9686B00A6E0BF97ECB` | ❌ No | ❌ Don't use |
+**Backend Action Required:**
+- [ ] When `user_guid` is provided, enrollment must use the SAME OwnerSpace ID as the existing vault
+- [ ] Or: The vault-manager must be configured to listen on the new OwnerSpace ID
 
-The other vaults are running an older AMI that doesn't have the bootstrap response topic fix.
+**⚠️ IMPORTANT: Bootstrap testing is currently blocked until this is fixed.**
 
 ---
 
