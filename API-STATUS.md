@@ -143,16 +143,22 @@ BootstrapClient: Publishing to: OwnerSpace.user3166791C526F49A48B0A5BE5EFF030C0.
 BootstrapClient: Bootstrap timed out after 30000ms
 ```
 
-**Status:** ⏳ Still failing after fix (2025-12-31 15:59 UTC)
+**Status:** ✅ FIXED (2025-12-31 21:06 UTC)
 
-**Retest Result (2025-12-31 15:58 UTC):**
-Bootstrap still times out. Enrollment still creates a NEW OwnerSpace ID:
-```
-BootstrapClient: Starting bootstrap flow for OwnerSpace.user0F49DE93C3C4487E96838E68F8EE3EF0
-```
-Expected: Should use `OwnerSpace.userD84E1A00643A4C679FAEF6D6FA81B103` (matching the vault)
+**Second Fix Applied:**
+The first fix (`enrollFinalize.ts`) was correct but insufficient. The bug was actually in `enrollStart.ts` which was generating a NEW user_guid even when the invitation had one stored.
 
-The fix may not be deployed, or there's another issue.
+**Root Cause:** `enrollStart.ts` line 205 always ran:
+```javascript
+userGuid = generateSecureId('user', 32);  // ALWAYS new!
+```
+
+**Fix:** Now uses invitation's user_guid if present:
+```javascript
+userGuid = invite.user_guid || generateSecureId('user', 32);
+```
+
+**Deployment:** VettID-Vault stack updated 2025-12-31T21:06:00Z
 
 Only ONE vault has the bootstrap topic fix deployed:
 | user_guid | Has Bootstrap Fix | Use For Testing |
