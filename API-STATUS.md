@@ -139,7 +139,7 @@ Yes, the `app.bootstrap` handler is fully implemented in `vault-manager/internal
 **Notes:**
 - `session_info` is only present if `app_session_public_key` was provided in the request
 - `credentials` is a full NATS credentials file (JWT + seed) - replace bootstrap creds with this
-- Topic structure: `OwnerSpace.{guid}.forVault.app.bootstrap` → response on `OwnerSpace.{guid}.forApp.>`
+- Topic structure: `OwnerSpace.{guid}.forVault.app.bootstrap` → response on `OwnerSpace.{guid}.forApp.app.bootstrap.{requestId}`
 
 **Mobile Implementation Status (Android):**
 - [x] Implemented `BootstrapClient` class for `app.bootstrap` credential exchange
@@ -151,31 +151,28 @@ Yes, the `app.bootstrap` handler is fully implemented in `vault-manager/internal
 
 **Testing Status (2025-12-31):**
 - [x] App connects to NATS with bootstrap credentials
-- [x] App subscribes to `OwnerSpace.{guid}.forApp.bootstrap.>` for responses
+- [x] App subscribes to `OwnerSpace.{guid}.forApp.app.bootstrap.>` for responses
 - [x] App publishes bootstrap request to `OwnerSpace.{guid}.forVault.app.bootstrap`
-- [ ] **BLOCKED**: Vault-manager not responding to bootstrap requests (30s timeout)
+- [x] **FIXED**: Vault-manager response topic bug resolved
 
-**Backend Investigation Needed:**
-CloudWatch/journald logs from vault-manager instance show the bootstrap request IS being received and processed:
+**Root Cause (FIXED 2025-12-31):**
+The vault-manager was publishing responses to `OwnerSpace.{guid}.forApp.>` literally (with `>` as part of the subject name). The `ForApp` config topic ending in `.>` is meant for subscribing (wildcard), not publishing.
+
+**Fix Applied:**
+1. **Vault-manager** (`processor.go`): Now constructs proper reply subjects: `forApp.{eventType}.{eventId}`
+   - e.g., `OwnerSpace.abc123.forApp.app.bootstrap.req-12345`
+2. **Android** (`BootstrapClient.kt`): Fixed subscription to match event type pattern
+   - Subscribe to: `OwnerSpace.{guid}.forApp.app.bootstrap.>` (matches `app.bootstrap` event type)
+
+**Response Topic Pattern:**
 ```
-Dec 31 15:32:01 vault-manager: {"level":"info","session_id":"sess_e8311f605e7e217c10106406655e46da","device_id":"user-...","message":"Created new E2E session"}
-Dec 31 15:32:01 vault-manager: {"level":"info","session_id":"sess_e8311f605e7e217c10106406655e46da","message":"E2E encryption session established"}
+Request:  OwnerSpace.{guid}.forVault.{eventType}
+Response: OwnerSpace.{guid}.forApp.{eventType}.{requestId}
+
+Example for app.bootstrap:
+Request:  OwnerSpace.abc123.forVault.app.bootstrap
+Response: OwnerSpace.abc123.forApp.app.bootstrap.req-12345
 ```
-
-But the response never reaches the app (times out 30 seconds later).
-
-**Root Cause Identified:**
-- App sends request at 15:31:58 UTC to `forVault.app.bootstrap`
-- Vault-manager processes request at 15:32:01 UTC (3 seconds later)
-- Vault-manager creates E2E session successfully
-- **BUT** response is not being published to the topic the app is subscribed to
-- App subscribes to `forApp.bootstrap.>` (as specified in enrollment `response_topic`)
-- App times out at 15:32:28 UTC
-
-**Backend Action Required:**
-The vault-manager bootstrap handler needs to publish responses to `OwnerSpace.{guid}.forApp.bootstrap.{requestId}` to match the `response_topic` specified in the enrollment response. Currently it appears the response is either:
-1. Not being published at all, or
-2. Being published to a different topic (e.g., `forApp.>` without the `bootstrap.` prefix)
 
 ---
 

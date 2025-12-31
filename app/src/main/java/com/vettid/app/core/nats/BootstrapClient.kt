@@ -75,9 +75,9 @@ class BootstrapClient @Inject constructor(
         pendingDeferred = deferred
 
         // Subscribe to bootstrap response topic
-        // Bootstrap response comes on: ${ownerSpace}.forApp.bootstrap.{requestId}
-        // We subscribe to the wildcard to catch any response
-        val responseSubject = "$ownerSpaceId.forApp.bootstrap.>"
+        // Bootstrap response comes on: ${ownerSpace}.forApp.{eventType}.{requestId}
+        // Since event type is "app.bootstrap", we subscribe to forApp.app.bootstrap.>
+        val responseSubject = "$ownerSpaceId.forApp.app.bootstrap.>"
         Log.d(TAG, "Subscribing to bootstrap response: $responseSubject")
 
         val subscriptionResult = natsClient.subscribe(responseSubject) { message ->
