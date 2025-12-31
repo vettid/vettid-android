@@ -1,11 +1,13 @@
 package com.vettid.app.core.nats
 
 import android.util.Log
+import com.vettid.app.core.network.VaultLifecycleClient
 import com.vettid.app.core.storage.CredentialStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -37,10 +39,13 @@ class NatsAutoConnector @Inject constructor(
     private val ownerSpaceClient: OwnerSpaceClient,
     private val credentialStore: CredentialStore,
     private val credentialClient: NatsCredentialClient,
-    private val bootstrapClient: BootstrapClient
+    private val bootstrapClient: BootstrapClient,
+    private val vaultLifecycleClient: VaultLifecycleClient
 ) {
     companion object {
         private const val TAG = "NatsAutoConnector"
+        private const val VAULT_START_WAIT_MS = 30_000L // Wait 30s for vault to start
+        private const val VAULT_POLL_INTERVAL_MS = 5_000L // Poll every 5s
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -76,6 +81,10 @@ class NatsAutoConnector @Inject constructor(
         object Idle : AutoConnectState()
         object Checking : AutoConnectState()
         object Connecting : AutoConnectState()
+        /** Starting vault EC2 instance */
+        object StartingVault : AutoConnectState()
+        /** Waiting for vault to become ready */
+        object WaitingForVault : AutoConnectState()
         /** Exchanging bootstrap credentials for full credentials */
         object Bootstrapping : AutoConnectState()
         object Subscribing : AutoConnectState()
@@ -88,9 +97,10 @@ class NatsAutoConnector @Inject constructor(
      *
      * Call this on app startup after the user has been enrolled.
      *
+     * @param autoStartVault If true, attempt to start the vault if connection fails due to auth
      * @return [ConnectionResult] indicating success or the type of failure
      */
-    suspend fun autoConnect(): ConnectionResult {
+    suspend fun autoConnect(autoStartVault: Boolean = true): ConnectionResult {
         _connectionState.value = AutoConnectState.Checking
 
         // Step 1: Check if credentials exist
@@ -164,6 +174,24 @@ class NatsAutoConnector @Inject constructor(
         if (connectResult.isFailure) {
             val error = connectResult.exceptionOrNull()
             Log.e(TAG, "Failed to connect to NATS", error)
+
+            // Check if this is an auth error that might be due to vault not running
+            val errorMessage = error?.message ?: ""
+            val isAuthError = errorMessage.contains("Authentication", ignoreCase = true) ||
+                              errorMessage.contains("auth", ignoreCase = true) ||
+                              errorMessage.contains("timeout", ignoreCase = true)
+
+            // Attempt to start vault if this looks like an auth error and auto-start is enabled
+            if (autoStartVault && isAuthError) {
+                Log.i(TAG, "Auth error detected - attempting to start vault")
+                val vaultStarted = attemptVaultStart()
+                if (vaultStarted) {
+                    Log.i(TAG, "Vault started - retrying connection")
+                    // Retry connection without auto-start to avoid infinite loop
+                    return autoConnect(autoStartVault = false)
+                }
+            }
+
             val result = ConnectionResult.Error(
                 message = error?.message ?: "Connection failed",
                 cause = error
@@ -416,5 +444,83 @@ class NatsAutoConnector @Inject constructor(
         val storedAtMs = System.currentTimeMillis() // Approximate - actual stored time not exposed
         val expiresAtMs = storedAtMs + (24 * 60 * 60 * 1000L)
         return Instant.ofEpochMilli(expiresAtMs)
+    }
+
+    /**
+     * Attempt to start the vault EC2 instance and wait for it to become ready.
+     *
+     * @return true if vault was started successfully and is running
+     */
+    private suspend fun attemptVaultStart(): Boolean {
+        _connectionState.value = AutoConnectState.StartingVault
+
+        // Try to start the vault
+        val startResult = vaultLifecycleClient.startVault()
+        if (startResult.isFailure) {
+            val error = startResult.exceptionOrNull()
+            Log.e(TAG, "Failed to start vault: ${error?.message}")
+            return false
+        }
+
+        val startResponse = startResult.getOrThrow()
+        Log.i(TAG, "Vault start response: ${startResponse.status}")
+
+        // If already running, we're good
+        if (startResponse.isAlreadyRunning) {
+            Log.i(TAG, "Vault is already running")
+            return true
+        }
+
+        // If starting, wait for it to become ready
+        if (startResponse.isStarting) {
+            Log.i(TAG, "Vault is starting - waiting for it to become ready")
+            return waitForVaultReady()
+        }
+
+        // Unknown status
+        Log.w(TAG, "Unexpected vault start status: ${startResponse.status}")
+        return false
+    }
+
+    /**
+     * Poll vault status until it's running or timeout.
+     *
+     * @return true if vault became ready within timeout
+     */
+    private suspend fun waitForVaultReady(): Boolean {
+        _connectionState.value = AutoConnectState.WaitingForVault
+
+        val startTime = System.currentTimeMillis()
+        val deadline = startTime + VAULT_START_WAIT_MS
+
+        while (System.currentTimeMillis() < deadline) {
+            delay(VAULT_POLL_INTERVAL_MS)
+
+            val statusResult = vaultLifecycleClient.getVaultStatus()
+            if (statusResult.isFailure) {
+                Log.w(TAG, "Failed to get vault status: ${statusResult.exceptionOrNull()?.message}")
+                continue // Keep polling
+            }
+
+            val status = statusResult.getOrThrow()
+            Log.d(TAG, "Vault status: ${status.instanceStatus}")
+
+            if (status.isVaultRunning) {
+                Log.i(TAG, "Vault is now running")
+                // Give the vault-manager a moment to fully initialize
+                delay(2000)
+                return true
+            }
+
+            if (status.isVaultStopped) {
+                Log.w(TAG, "Vault stopped unexpectedly")
+                return false
+            }
+
+            // Still pending/starting, keep waiting
+        }
+
+        Log.w(TAG, "Timeout waiting for vault to start")
+        return false
     }
 }

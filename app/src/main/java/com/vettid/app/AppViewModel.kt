@@ -174,7 +174,9 @@ class AppViewModel @Inject constructor(
                     is NatsAutoConnector.AutoConnectState.Checking -> NatsConnectionState.Checking
                     is NatsAutoConnector.AutoConnectState.Connecting,
                     is NatsAutoConnector.AutoConnectState.Bootstrapping,
-                    is NatsAutoConnector.AutoConnectState.Subscribing -> NatsConnectionState.Connecting
+                    is NatsAutoConnector.AutoConnectState.Subscribing,
+                    is NatsAutoConnector.AutoConnectState.StartingVault,
+                    is NatsAutoConnector.AutoConnectState.WaitingForVault -> NatsConnectionState.Connecting
                     is NatsAutoConnector.AutoConnectState.Connected -> NatsConnectionState.Connected
                     is NatsAutoConnector.AutoConnectState.Failed -> {
                         when (autoConnectState.result) {

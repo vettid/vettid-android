@@ -160,9 +160,10 @@ object AppModule {
         ownerSpaceClient: OwnerSpaceClient,
         credentialStore: CredentialStore,
         credentialClient: NatsCredentialClient,
-        bootstrapClient: BootstrapClient
+        bootstrapClient: BootstrapClient,
+        vaultLifecycleClient: VaultLifecycleClient
     ): NatsAutoConnector {
-        return NatsAutoConnector(natsClient, connectionManager, ownerSpaceClient, credentialStore, credentialClient, bootstrapClient)
+        return NatsAutoConnector(natsClient, connectionManager, ownerSpaceClient, credentialStore, credentialClient, bootstrapClient, vaultLifecycleClient)
     }
 
     // Calling Dependencies
