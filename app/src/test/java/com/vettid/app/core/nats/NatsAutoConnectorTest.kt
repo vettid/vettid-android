@@ -371,9 +371,6 @@ $testSeed
         whenever(natsClient.connect(any())).thenReturn(Result.success(Unit))
         whenever(ownerSpaceClient.subscribeToVault()).thenReturn(Result.success(Unit))
 
-        val states = mutableListOf<NatsAutoConnector.AutoConnectState>()
-
-        // Collect states during connection
         autoConnector.autoConnect()
 
         // Final state should be Connected
