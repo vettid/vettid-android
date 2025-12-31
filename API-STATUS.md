@@ -95,7 +95,7 @@ Also added rate limiting to vault endpoints:
 - `actionRequest`: 10 req / 1 min per user
 - `authExecute`: 5 req / 1 min per user
 
-**Please retest!**
+**Retest (2025-12-31 16:42 UTC):** Still getting HTTP 500. IAM fix may not be deployed yet.
 
 ---
 
