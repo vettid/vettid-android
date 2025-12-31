@@ -574,12 +574,14 @@ class CredentialStore @Inject constructor(
         encryptedPrefs.edit().apply {
             putString(KEY_NATS_ENDPOINT, vaultBootstrap.endpoint)
             putString(KEY_NATS_CREDENTIALS, vaultBootstrap.credentials)
+            putString(KEY_NATS_OWNER_SPACE, vaultBootstrap.ownerSpace)
+            putString(KEY_NATS_MESSAGE_SPACE, vaultBootstrap.messageSpace)
             vaultBootstrap.caCertificate?.let { caCert ->
                 putString(KEY_NATS_CA_CERT, caCert)
             }
             putLong(KEY_NATS_STORED_AT, System.currentTimeMillis())
         }.apply()
-        android.util.Log.i("CredentialStore", "Stored NATS bootstrap credentials for ${vaultBootstrap.endpoint}")
+        android.util.Log.i("CredentialStore", "Stored NATS bootstrap credentials for ${vaultBootstrap.endpoint} (${vaultBootstrap.ownerSpace})")
     }
 
     /**
@@ -637,14 +639,14 @@ class CredentialStore @Inject constructor(
     /**
      * Parse NATS credential file to extract JWT and seed.
      * The credential file format contains:
-     * - -----BEGIN NATS USER JWT----- / ------END NATS USER JWT------
-     * - -----BEGIN USER NKEY SEED----- / ------END USER NKEY SEED------
+     * - -----BEGIN NATS USER JWT----- / -----END NATS USER JWT-----
+     * - -----BEGIN USER NKEY SEED----- / -----END USER NKEY SEED-----
      */
     fun parseNatsCredentialFile(credentialFile: String): Pair<String, String>? {
         try {
             // Extract JWT
             val jwtStart = credentialFile.indexOf("-----BEGIN NATS USER JWT-----")
-            val jwtEnd = credentialFile.indexOf("------END NATS USER JWT------")
+            val jwtEnd = credentialFile.indexOf("-----END NATS USER JWT-----")
             if (jwtStart == -1 || jwtEnd == -1) return null
 
             val jwtContent = credentialFile.substring(
@@ -654,7 +656,7 @@ class CredentialStore @Inject constructor(
 
             // Extract NKEY seed
             val seedStart = credentialFile.indexOf("-----BEGIN USER NKEY SEED-----")
-            val seedEnd = credentialFile.indexOf("------END USER NKEY SEED------")
+            val seedEnd = credentialFile.indexOf("-----END USER NKEY SEED-----")
             if (seedStart == -1 || seedEnd == -1) return null
 
             val seedContent = credentialFile.substring(

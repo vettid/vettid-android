@@ -628,10 +628,18 @@ data class FinalizeResponse(
 /**
  * Vault bootstrap info from enrollment finalize.
  * Contains NATS credentials for vault communication.
+ *
+ * Bootstrap credentials have limited permissions - only the bootstrap_topic
+ * and response_topic are accessible until full credentials are obtained.
  */
 data class VaultBootstrap(
     val credentials: String,  // NATS credential file content (JWT + seed)
     @SerializedName("nats_endpoint") val endpoint: String,
+    @SerializedName("owner_space") val ownerSpace: String,
+    @SerializedName("message_space") val messageSpace: String,
+    @SerializedName("bootstrap_topic") val bootstrapTopic: String? = null,  // Publish topic for bootstrap
+    @SerializedName("response_topic") val responseTopic: String? = null,    // Subscribe topic for bootstrap
+    @SerializedName("credentials_ttl_seconds") val credentialsTtlSeconds: Int? = null,
     @SerializedName("ca_certificate") val caCertificate: String? = null
 )
 

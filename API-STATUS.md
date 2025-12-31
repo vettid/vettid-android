@@ -58,6 +58,50 @@ This file is the master coordination point between backend development and mobil
 
 ---
 
+### [REQUEST] Full NATS Credentials After Enrollment
+
+**Priority:** High
+**Status:** Pending Backend Implementation
+
+**Problem:**
+- Enrollment `/vault/enroll/finalize` returns `vault_bootstrap` with **limited bootstrap credentials**
+- Bootstrap credentials only allow:
+  - Publish to: `OwnerSpace.{userGuid}.forVault.app.bootstrap`
+  - Subscribe to: `OwnerSpace.{userGuid}.forApp.bootstrap.>`
+- Mobile app needs **full credentials** that allow:
+  - Subscribe to: `OwnerSpace.{userGuid}.forApp.>` (all vault responses)
+  - Subscribe to: `OwnerSpace.{userGuid}.eventTypes` (handler definitions)
+  - Publish to: `OwnerSpace.{userGuid}.forVault.*` (all vault commands)
+
+**Current Behavior:**
+- App connects to NATS successfully with bootstrap credentials
+- All subscriptions fail with "Permissions Violation"
+- App cannot communicate with vault
+
+**Expected Behavior:**
+One of the following:
+1. **Full credentials in enrollment response** - Return credentials with full OwnerSpace permissions
+2. **Bootstrap → Full credential exchange** - After vault is ready, app uses bootstrap channel to request full credentials
+3. **Vault pushes full credentials** - Vault proactively sends full credentials via bootstrap response topic
+
+**Enrollment Response Fields Used:**
+```json
+"vault_bootstrap": {
+  "credentials": "-----BEGIN NATS USER JWT-----...",
+  "nats_endpoint": "tls://nats.vettid.dev:4222",
+  "owner_space": "OwnerSpace.user...",
+  "message_space": "MessageSpace.user...",
+  "bootstrap_topic": "OwnerSpace.user....forVault.app.bootstrap",
+  "response_topic": "OwnerSpace.user....forApp.bootstrap.>"
+}
+```
+
+**Mobile Action Required:**
+- [ ] Store `bootstrap_topic` and `response_topic` from VaultBootstrap
+- [ ] Implement bootstrap → full credential exchange once backend mechanism is defined
+
+---
+
 ## Recent Changes
 
 ### 2025-12-31 - Lambda Connection/Messaging Handlers Removed

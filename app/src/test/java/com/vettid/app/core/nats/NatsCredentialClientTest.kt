@@ -36,7 +36,7 @@ class NatsCredentialClientTest {
     @Test
     fun `handleRotationEvent parses valid rotation event`() {
         val payload = JsonObject().apply {
-            addProperty("credentials", "-----BEGIN NATS USER JWT-----\ntest-jwt\n------END NATS USER JWT------")
+            addProperty("credentials", "-----BEGIN NATS USER JWT-----\ntest-jwt\n-----END NATS USER JWT-----")
             addProperty("expires_at", "2025-12-31T12:00:00Z")
             addProperty("ttl_seconds", 604800)
             addProperty("credential_id", "cred-12345")
@@ -140,7 +140,7 @@ class NatsCredentialClientTest {
 
     @Test
     fun `storeCredentials updates credential store`() {
-        val testCredentials = "-----BEGIN NATS USER JWT-----\ntest\n------END NATS USER JWT------"
+        val testCredentials = "-----BEGIN NATS USER JWT-----\ntest\n-----END NATS USER JWT-----"
         val testEndpoint = "tls://nats.vettid.dev:4222"
         val testOwnerSpace = "OwnerSpace.test"
         val testMessageSpace = "MessageSpace.test"

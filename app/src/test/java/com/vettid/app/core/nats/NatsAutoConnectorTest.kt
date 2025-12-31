@@ -30,11 +30,11 @@ class NatsAutoConnectorTest {
     private val testMessageSpaceId = "MessageSpace.test-user-123"
     private val testCredentialFile = """-----BEGIN NATS USER JWT-----
 $testJwt
-------END NATS USER JWT------
+-----END NATS USER JWT-----
 
 -----BEGIN USER NKEY SEED-----
 $testSeed
-------END USER NKEY SEED------"""
+-----END USER NKEY SEED-----"""
 
     private val credentialRotationFlow = MutableSharedFlow<CredentialRotationMessage>()
     private val testDispatcher = StandardTestDispatcher()
