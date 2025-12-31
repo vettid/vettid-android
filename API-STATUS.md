@@ -58,47 +58,62 @@ This file is the master coordination point between backend development and mobil
 
 ---
 
-### [REQUEST] Full NATS Credentials After Enrollment
+### [QUESTION] app.bootstrap Handler - Full NATS Credentials Exchange
 
 **Priority:** High
-**Status:** Pending Backend Implementation
+**Status:** Awaiting Backend Clarification
 
-**Problem:**
-- Enrollment `/vault/enroll/finalize` returns `vault_bootstrap` with **limited bootstrap credentials**
-- Bootstrap credentials only allow:
-  - Publish to: `OwnerSpace.{userGuid}.forVault.app.bootstrap`
-  - Subscribe to: `OwnerSpace.{userGuid}.forApp.bootstrap.>`
-- Mobile app needs **full credentials** that allow:
-  - Subscribe to: `OwnerSpace.{userGuid}.forApp.>` (all vault responses)
-  - Subscribe to: `OwnerSpace.{userGuid}.eventTypes` (handler definitions)
-  - Publish to: `OwnerSpace.{userGuid}.forVault.*` (all vault commands)
+**Context:**
+The `app-vault-encryption.md` spec documents that after enrollment:
+1. App receives **bootstrap credentials** (limited permissions - only `app.bootstrap` topics)
+2. App calls `app.bootstrap` handler on vault-manager
+3. Vault responds with **full NATS credentials** + session keys for E2E encryption
 
-**Current Behavior:**
-- App connects to NATS successfully with bootstrap credentials
-- All subscriptions fail with "Permissions Violation"
-- App cannot communicate with vault
+**Question for Backend:**
+Is the vault-manager's `app.bootstrap` handler implemented and deployed?
 
-**Expected Behavior:**
-One of the following:
-1. **Full credentials in enrollment response** - Return credentials with full OwnerSpace permissions
-2. **Bootstrap → Full credential exchange** - After vault is ready, app uses bootstrap channel to request full credentials
-3. **Vault pushes full credentials** - Vault proactively sends full credentials via bootstrap response topic
+**What Mobile Needs to Know:**
+1. **Request format** - What should the `app.bootstrap` request payload contain?
+   - Per spec: `app_session_public_key`, `device_id`, `request_id`, `timestamp`
 
-**Enrollment Response Fields Used:**
-```json
-"vault_bootstrap": {
-  "credentials": "-----BEGIN NATS USER JWT-----...",
-  "nats_endpoint": "tls://nats.vettid.dev:4222",
-  "owner_space": "OwnerSpace.user...",
-  "message_space": "MessageSpace.user...",
-  "bootstrap_topic": "OwnerSpace.user....forVault.app.bootstrap",
-  "response_topic": "OwnerSpace.user....forApp.bootstrap.>"
+2. **Response format** - What does the handler return?
+   - Per spec: `nats_credentials` (full creds), `vault_session_public_key`, `session_id`, `session_expires_at`
+
+3. **Topic structure** - Confirm the topics:
+   - Publish to: `OwnerSpace.{guid}.forVault.app.bootstrap`
+   - Subscribe to: `OwnerSpace.{guid}.forApp.bootstrap.{request_id}` (or wildcard `>`)
+
+**Current Situation:**
+- App connects with bootstrap credentials ✅
+- App cannot use full topics (Permissions Violation) ❌
+- App needs full credentials from vault-manager
+
+**Spec Reference:**
+From `cdk/coordination/specs/app-vault-encryption.md` (lines 56-88):
+```
+NATS Publish → ${ownerSpace}.forVault.app.bootstrap
+{
+  "request_id": "...",
+  "app_session_public_key": base64(app_session_keypair.publicKey),
+  "device_id": "...",
+  "timestamp": "..."
+}
+
+NATS Reply → ${ownerSpace}.forApp.bootstrap.{request_id}
+{
+  "status": "success",
+  "vault_session_public_key": base64(vault_session_keypair.pubKey),
+  "nats_credentials": "...",  // Full NATS creds
+  "session_id": "...",
+  "session_expires_at": "..."
 }
 ```
 
-**Mobile Action Required:**
-- [ ] Store `bootstrap_topic` and `response_topic` from VaultBootstrap
-- [ ] Implement bootstrap → full credential exchange once backend mechanism is defined
+**Mobile Action Required (once confirmed):**
+- [ ] Implement `app.bootstrap` request in `NatsAutoConnector`
+- [ ] Store full NATS credentials from response
+- [ ] Reconnect with full credentials
+- [ ] Complete session key exchange for E2E encryption
 
 ---
 
