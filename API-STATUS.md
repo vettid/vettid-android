@@ -142,25 +142,26 @@ Yes, the `app.bootstrap` handler is fully implemented in `vault-manager/internal
 - [ ] **BLOCKED**: Vault-manager not responding to bootstrap requests (30s timeout)
 
 **Backend Investigation Needed:**
-The Android app successfully connects to NATS and publishes bootstrap requests, but the vault-manager doesn't respond. Tested with multiple vault instances (including one running 12+ hours). Request format matches documented structure:
-```json
-{
-  "id": "uuid",
-  "type": "app.bootstrap",
-  "timestamp": "2025-12-31T...",
-  "payload": {
-    "device_id": "android-device-id",
-    "device_type": "android",
-    "app_version": "1.0.0",
-    "app_session_public_key": "base64-X25519-key"
-  }
-}
+CloudWatch/journald logs from vault-manager instance show the bootstrap request IS being received and processed:
+```
+Dec 31 15:32:01 vault-manager: {"level":"info","session_id":"sess_e8311f605e7e217c10106406655e46da","device_id":"user-...","message":"Created new E2E session"}
+Dec 31 15:32:01 vault-manager: {"level":"info","session_id":"sess_e8311f605e7e217c10106406655e46da","message":"E2E encryption session established"}
 ```
 
-Questions:
-1. Is the vault-manager subscribed to `OwnerSpace.{guid}.forVault.app.bootstrap`?
-2. What topic does it publish responses to? We're subscribed to `forApp.bootstrap.>`
-3. Can we get CloudWatch logs from a vault instance to verify message receipt?
+But the response never reaches the app (times out 30 seconds later).
+
+**Root Cause Identified:**
+- App sends request at 15:31:58 UTC to `forVault.app.bootstrap`
+- Vault-manager processes request at 15:32:01 UTC (3 seconds later)
+- Vault-manager creates E2E session successfully
+- **BUT** response is not being published to the topic the app is subscribed to
+- App subscribes to `forApp.bootstrap.>` (as specified in enrollment `response_topic`)
+- App times out at 15:32:28 UTC
+
+**Backend Action Required:**
+The vault-manager bootstrap handler needs to publish responses to `OwnerSpace.{guid}.forApp.bootstrap.{requestId}` to match the `response_topic` specified in the enrollment response. Currently it appears the response is either:
+1. Not being published at all, or
+2. Being published to a different topic (e.g., `forApp.>` without the `bootstrap.` prefix)
 
 ---
 
