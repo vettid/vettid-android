@@ -1,6 +1,6 @@
 # VettID API Status
 
-**Last Updated:** 2026-01-01 16:30 UTC (CORRECTED debug AMI deployed)
+**Last Updated:** 2026-01-01 16:20 UTC (✅ Bootstrap WORKING with corrected AMI)
 
 ---
 
@@ -465,67 +465,38 @@ Yes, the `app.bootstrap` handler is fully implemented in `vault-manager/internal
 - [x] Session key exchange integrated with E2E encryption setup
 - [x] Updated `BootstrapClient` response parsing to match backend format (credentials field in result)
 
-**Testing Status (2025-12-31):**
+**Testing Status (2026-01-01):**
 - [x] App connects to NATS with bootstrap credentials
-- [x] App subscribes to `OwnerSpace.{guid}.forApp.app.bootstrap.>` for responses (FIX #4 resolved permission)
+- [x] App subscribes to `OwnerSpace.{guid}.forApp.app.bootstrap.>` for responses
 - [x] App publishes bootstrap request to `OwnerSpace.{guid}.forVault.app.bootstrap`
 - [x] Vault-manager receives request and creates E2E session
-- [ ] ❌ **App never receives response** - Bootstrap times out after 30s
+- [x] ✅ **Bootstrap response received successfully!**
+- [x] ✅ Full credentials stored and reconnection with full permissions
 
-**Retest with NEW AMI (2026-01-01 15:38 UTC):**
+**✅ BOOTSTRAP WORKING (2026-01-01 16:16 UTC):**
 
-Tested with fresh enrollment. **Same issue persists.**
+Tested with corrected AMI `ami-07d7e21b36b0a38b9`. **SUCCESS!**
 
 | Test | Vault Instance | Session Created | Response |
 |------|----------------|-----------------|----------|
-| Old vault | i-02d2ab9df16ea40dc | ✅ sess_a10d3d0b... | ❌ Timeout |
-| New vault #1 | i-022f69f35b4f68245 | ✅ sess_947e99b8... | ❌ Timeout |
-| **New vault #2** | **i-016499f45558b20e9** | ✅ sess_32df6d5f... | ❌ Timeout |
+| Corrected AMI | New vault | ✅ sess_a3b8281f... | ✅ **SUCCESS** |
 
-**Latest Vault Logs (i-016499f45558b20e9):**
+**App Logs:**
 ```
-Jan 01 15:38:12 vault-manager: {"session_id":"sess_32df6d5f28dcc955bc4622366238fccc","message":"Created new E2E session"}
-Jan 01 15:38:12 vault-manager: {"message":"E2E encryption session established"}
-```
-**No log entry for publishing response.**
-
-**Analysis:**
-All vaults exhibit the SAME behavior:
-1. ✅ Request received
-2. ✅ E2E session created
-3. ❌ **Response NOT being published** ← Bug is in processor.go response publishing
-
-**DEBUG AMI DEPLOYED (2026-01-01 15:35 UTC):**
-
-New vault AMI `ami-0021f139046c6367f` deployed with Info-level logging in `processor.go`:
-
-```go
-log.Info().
-    Str("reply_subject", replySubject).
-    Str("event_id", eventID).
-    Str("event_type", eventType).
-    Int("response_size", len(data)).
-    Msg("Publishing success response")
-
-if err := p.centralNats.Publish(replySubject, data); err != nil {
-    log.Error().Err(err).Str("subject", replySubject).Msg("Failed to send success response")
-} else {
-    log.Info().Str("subject", replySubject).Msg("Response published successfully")
-}
+11:16:34 - Bootstrap response received with full credentials
+11:16:34 - E2E session established: sess_a3b8281fcaf054af0fbdec0e4fb4ad52
+11:16:34 - Stored full NATS credentials (id: cred-6a0c441a)
+11:16:34 - Reconnected with full credentials
+11:16:35 - Subscribed to OwnerSpace.{guid}.forApp.>
+11:16:35 - Auto-connect completed successfully
 ```
 
-**Next Test:**
-1. Re-enroll with fresh invitation to provision new vault with debug AMI
-2. Attempt bootstrap
-3. Check CloudWatch logs for `/vettid/vault-manager`
-4. Look for "Publishing success response" to see what subject is being used
-5. Report findings here
+**Root Cause of Previous Failures:**
+The first debug AMI (`ami-0021f139046c6367f`) had the WRONG binary due to a build path mismatch:
+- Packer uploaded from `vault-manager/vault-manager`
+- But the build was outputting to `build/vault-manager`
 
-**Previous Analysis (may be incorrect):**
-~~The `bootstrap.go` handler is NOT publishing the response after creating the session. This is a code bug, not a deployment issue.~~
-
-**Updated Analysis:**
-The bootstrap handler returns the response correctly. The issue is likely in how `processor.go` builds the reply subject or publishes the response. The debug logging will reveal exactly what's happening.
+This caused the vault-manager to run an old binary that didn't process bootstrap requests correctly.
 
 **Root Cause (FIXED 2025-12-31):**
 The vault-manager was publishing responses to `OwnerSpace.{guid}.forApp.>` literally (with `>` as part of the subject name). The `ForApp` config topic ending in `.>` is meant for subscribing (wildcard), not publishing.
