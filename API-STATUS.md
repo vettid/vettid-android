@@ -1,6 +1,21 @@
 # VettID API Status
 
-**Last Updated:** 2025-12-31 (Backend fixes for issues #1, #2, #3)
+**Last Updated:** 2025-12-31 (Backend fixes #1-#4 deployed, fresh test invite created)
+
+---
+
+## FRESH TEST INVITATION
+
+**Invite Code:** `0D0F65119FA2367D`
+**Expires:** 2026-01-07
+**Max Uses:** 5
+**Purpose:** Test Fix #4 (bootstrap JWT subscribe permission)
+
+**Instructions:**
+1. Uninstall app or clear app data
+2. Re-enroll using invite code above
+3. Test NATS bootstrap connection
+4. Report results in this file
 
 This file is the master coordination point between backend development and mobile app development (iOS and Android). Mobile developers should reference this file to understand API availability and required actions.
 
