@@ -1,6 +1,6 @@
 # VettID API Status
 
-**Last Updated:** 2026-01-01 15:45 UTC (DEBUG AMI deployed for bootstrap investigation)
+**Last Updated:** 2026-01-01 16:30 UTC (CORRECTED debug AMI deployed)
 
 ---
 
@@ -11,10 +11,12 @@
 **Max Uses:** 5
 **Purpose:** Test Fix #5 (HKDF context) + Fix #6 (vault reply subjects) + Debug logging
 
-**IMPORTANT - DEBUG AMI DEPLOYED:**
-- **New vault AMI:** `ami-0021f139046c6367f` (built 2026-01-01 01:11 UTC)
-- Previous vault instance (user-363) terminated
-- New vault instance will be provisioned with debug logging on next enrollment
+**IMPORTANT - CORRECTED DEBUG AMI DEPLOYED:**
+- **New vault AMI:** `ami-07d7e21b36b0a38b9` (built 2026-01-01 16:15 UTC)
+- Previous vault instance terminated
+- All vaults currently terminated - new vault will be provisioned on next enrollment
+
+**NOTE:** The first debug AMI (`ami-0021f139046c6367f`) had the WRONG binary due to a build path mismatch. Packer uploads from `vault-manager/vault-manager` but the build was outputting to `build/vault-manager`. This has been corrected.
 
 **What's New in Debug AMI:**
 Added Info-level logging to `processor.go` to trace bootstrap response publishing:
@@ -33,9 +35,10 @@ This will show:
 2. Rebuild app (HKDF fix is in mobile code)
 3. Uninstall app or clear app data
 4. Re-enroll using invite code above
-5. Test NATS bootstrap connection
-6. **Check CloudWatch logs** for vault-manager to see the debug output
-7. Report results in this file
+5. Start vault (should provision with new AMI)
+6. Test NATS bootstrap connection
+7. **Check CloudWatch logs** OR report bootstrap behavior
+8. Report results in this file
 
 **CloudWatch Log Group:** `/vettid/vault-manager`
 **Filter:** Look for "Publishing success response" or "Response published successfully"
