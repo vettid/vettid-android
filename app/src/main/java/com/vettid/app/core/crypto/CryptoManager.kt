@@ -153,7 +153,7 @@ class CryptoManager @Inject constructor() {
      * Uses a consistent salt across all platforms (iOS, Android, Lambda)
      * for defense-in-depth encryption.
      */
-    fun deriveEncryptionKey(sharedSecret: ByteArray, info: String = "password-encryption"): ByteArray {
+    fun deriveEncryptionKey(sharedSecret: ByteArray, info: String = "transaction-encryption-v1"): ByteArray {
         return Hkdf.computeHkdf(
             "HMACSHA256",
             sharedSecret,

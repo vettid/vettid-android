@@ -1,6 +1,6 @@
 # VettID API Status
 
-**Last Updated:** 2025-12-31 (Backend fixes #1-#4 deployed, fresh test invite created)
+**Last Updated:** 2025-12-31 (Fix #5 deployed - HKDF context mismatch)
 
 ---
 
@@ -162,6 +162,38 @@ Bootstrap credentials JWT now has correct subscribe permission.
 **Note:** Existing users must re-enroll to get new bootstrap credentials with the fix. The Android dev should create a fresh test invitation.
 
 **Please retest with fresh enrollment!**
+
+---
+
+## FIX #5: HKDF Context Mismatch (2025-12-31)
+
+**Problem:** EnrollFinalize Lambda failed with "Failed to decrypt password hash: Decryption failed: authentication error"
+
+**Root Cause:** HKDF key derivation used mismatched context strings:
+- **Mobile apps** used: `"password-encryption"`
+- **Backend** expected: `"transaction-encryption-v1"`
+
+HKDF-SHA256 derives completely different symmetric keys from the same shared secret when the info/context string differs. This caused ChaCha20-Poly1305 authenticated decryption to fail.
+
+**Fix Applied:**
+- `CryptoManager.kt` line 156: Changed default info from `"password-encryption"` to `"transaction-encryption-v1"`
+- `CryptoManager.swift` line 75: Changed sharedInfo from `"password-encryption"` to `"transaction-encryption-v1"`
+
+**Action Required:**
+- [ ] Android: Pull latest changes and rebuild
+- [ ] iOS: Pull latest changes and rebuild
+- [ ] Test enrollment with fresh invitation
+
+**Technical Details:**
+```kotlin
+// Before (incorrect)
+deriveEncryptionKey(sharedSecret, info = "password-encryption")
+
+// After (matches backend)
+deriveEncryptionKey(sharedSecret, info = "transaction-encryption-v1")
+```
+
+The backend's `decryptWithTransactionKey()` in `crypto-keys.ts` uses `"transaction-encryption-v1"` for all transaction-level encryption operations.
 
 ---
 
