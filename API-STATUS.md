@@ -1,15 +1,23 @@
 # VettID API Status
 
-**Last Updated:** 2026-01-01 16:35 UTC (✅ connection.create-invite fix deployed)
+**Last Updated:** 2026-01-01 18:05 UTC (✅ connection.create-invite verified working)
 
 ---
 
 ## ✅ FIXED: connection.create-invite Handler (2026-01-01)
 
 **Priority:** High
-**Status:** ✅ Fixed - New AMI deployed
+**Status:** ✅ Fixed and Verified Working
 
 **Problem (FIXED):** The `connection.create-invite` handler incorrectly required a `connection_id` field.
+
+**✅ Android Test (2026-01-01 18:05 UTC):**
+```
+CreateInvitationVM: Creating invitation via NATS, expires in 1 hours
+Published to forVault.connection.create-invite (347 bytes)
+Invitation created: conn-81827fe8a7b6f1d87e4103660264edf4
+```
+UI shows QR code with Share/Copy Link options.
 
 **Fix Applied:**
 1. Handler now **generates** `connection_id` if not provided (format: `conn-{random-hex}`)
