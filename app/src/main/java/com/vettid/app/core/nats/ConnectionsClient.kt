@@ -102,6 +102,9 @@ class ConnectionsClient @Inject constructor(
             addProperty("peer_message_space_id", peerMessageSpaceId)
         }
 
+        android.util.Log.d(TAG, "storeCredentials payload: connection_id=$connectionId, peer_guid=$peerGuid")
+        android.util.Log.d(TAG, "storeCredentials payload: nats_creds_len=${natsCredentials.length}, peer_owner_space=$peerOwnerSpaceId, peer_msg_space=$peerMessageSpaceId")
+
         return sendAndAwait("connection.store-credentials", payload) { result ->
             parseConnectionRecord(result)
         }

@@ -97,11 +97,14 @@ class MainActivity : ComponentActivity() {
                     code = uri.getQueryParameter("code")
                 )
             }
-            // Custom scheme: vettid://connect?code=xxx
+            // Custom scheme: vettid://connect?code=xxx or vettid://connect?data=xxx (base64 JSON)
             uri.scheme == "vettid" && uri.host == "connect" -> {
+                // Support both code (short code) and data (base64-encoded JSON)
+                val data = uri.getQueryParameter("data")
+                val code = uri.getQueryParameter("code")
                 DeepLinkData(
                     type = DeepLinkType.CONNECT,
-                    code = uri.getQueryParameter("code")
+                    code = data ?: code  // Prefer data if present
                 )
             }
             // HTTPS: https://vettid.dev/enroll/xxx

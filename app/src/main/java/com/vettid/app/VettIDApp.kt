@@ -80,7 +80,13 @@ sealed class Screen(val route: String) {
     // Connections
     object Connections : Screen("connections")
     object CreateInvitation : Screen("connections/create-invitation")
-    object ScanInvitation : Screen("connections/scan-invitation")
+    object ScanInvitation : Screen("connections/scan-invitation?data={data}") {
+        fun createRoute(data: String? = null) = if (data != null) {
+            "connections/scan-invitation?data=${java.net.URLEncoder.encode(data, "UTF-8")}"
+        } else {
+            "connections/scan-invitation"
+        }
+    }
     object ConnectionDetail : Screen("connections/{connectionId}") {
         fun createRoute(connectionId: String) = "connections/$connectionId"
     }
@@ -150,6 +156,9 @@ fun VettIDApp(
         }
     }
 
+    // Store pending connection deep link to process after authentication
+    var pendingConnectData by remember { mutableStateOf<String?>(null) }
+
     // Handle deep links
     LaunchedEffect(deepLinkData) {
         when (deepLinkData.type) {
@@ -164,10 +173,16 @@ fun VettIDApp(
                 onDeepLinkConsumed()
             }
             DeepLinkType.CONNECT -> {
-                // Navigate to scan invitation to process the connection code
-                val code = deepLinkData.code
-                if (code != null && appState.hasCredential && appState.isAuthenticated) {
-                    navController.navigate(Screen.ScanInvitation.route)
+                // Store the data for processing after authentication
+                val data = deepLinkData.code
+                if (data != null) {
+                    if (appState.hasCredential && appState.isAuthenticated) {
+                        // Already authenticated, navigate now
+                        navController.navigate(Screen.ScanInvitation.createRoute(data))
+                    } else {
+                        // Store for later processing
+                        pendingConnectData = data
+                    }
                 }
                 onDeepLinkConsumed()
             }
@@ -183,8 +198,23 @@ fun VettIDApp(
             !appState.isAuthenticated -> navController.navigate(Screen.Authentication.route) {
                 popUpTo(0) { inclusive = true }
             }
-            else -> navController.navigate(Screen.Main.route) {
-                popUpTo(0) { inclusive = true }
+            else -> {
+                // Check for pending connect data before going to Main
+                if (pendingConnectData != null) {
+                    val data = pendingConnectData
+                    pendingConnectData = null
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                    // Then navigate to ScanInvitation
+                    if (data != null) {
+                        navController.navigate(Screen.ScanInvitation.createRoute(data))
+                    }
+                } else {
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
             }
         }
     }
@@ -330,8 +360,19 @@ fun VettIDApp(
                 onBack = { navController.popBackStack() }
             )
         }
-        composable(Screen.ScanInvitation.route) {
+        composable(
+            route = Screen.ScanInvitation.route,
+            arguments = listOf(navArgument("data") {
+                type = NavType.StringType
+                nullable = true
+                defaultValue = null
+            })
+        ) { backStackEntry ->
+            val data = backStackEntry.arguments?.getString("data")?.let {
+                java.net.URLDecoder.decode(it, "UTF-8")
+            }
             ScanInvitationScreen(
+                initialData = data,
                 onConnectionEstablished = { connectionId ->
                     navController.navigate(Screen.ConnectionDetail.createRoute(connectionId)) {
                         popUpTo(Screen.Connections.route)

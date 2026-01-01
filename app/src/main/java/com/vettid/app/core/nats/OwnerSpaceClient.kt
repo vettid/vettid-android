@@ -142,8 +142,11 @@ class OwnerSpaceClient @Inject constructor(
 
         // Encrypt payload if E2E session is established (skip for bootstrap)
         val effectivePayload = if (isE2EEnabled && messageType != "app.bootstrap") {
+            android.util.Log.d(TAG, "sendToVault: encrypting payload for $messageType")
+            android.util.Log.d(TAG, "sendToVault: original payload keys: ${payload.keySet()}")
             encryptPayload(payload)
         } else {
+            android.util.Log.d(TAG, "sendToVault: NOT encrypting (E2E=${isE2EEnabled}, type=$messageType)")
             payload
         }
 

@@ -49,12 +49,15 @@ class ScanInvitationViewModel @Inject constructor(
      * Called when QR code is scanned.
      */
     fun onQrCodeScanned(data: String) {
+        android.util.Log.d("ScanInvitationVM", "onQrCodeScanned called with data length: ${data.length}")
         // Parse the invitation from QR data
         val invitation = parseInvitationData(data)
         if (invitation != null) {
+            android.util.Log.d("ScanInvitationVM", "Parsed invitation: connectionId=${invitation.connectionId}, peerGuid=${invitation.peerGuid}")
             parsedInvitation = invitation
             processInvitation(invitation)
         } else {
+            android.util.Log.e("ScanInvitationVM", "Failed to parse invitation data")
             viewModelScope.launch {
                 _effects.emit(ScanInvitationEffect.ShowError("Invalid QR code"))
             }
@@ -84,15 +87,30 @@ class ScanInvitationViewModel @Inject constructor(
      * Process the invitation by storing credentials via NATS vault handler.
      */
     private fun processInvitation(invitation: ConnectionInvitationData) {
+        android.util.Log.d("ScanInvitationVM", "processInvitation called for ${invitation.connectionId}")
         viewModelScope.launch {
-            // Check NATS connection
+            // Wait for NATS connection (with timeout)
             if (!natsAutoConnector.isConnected()) {
-                _state.value = ScanInvitationState.Error(
-                    message = "Not connected to vault"
-                )
-                return@launch
+                android.util.Log.d("ScanInvitationVM", "Waiting for NATS connection...")
+                _state.value = ScanInvitationState.Processing
+
+                // Wait up to 10 seconds for NATS to connect
+                var attempts = 0
+                while (!natsAutoConnector.isConnected() && attempts < 20) {
+                    kotlinx.coroutines.delay(500)
+                    attempts++
+                }
+
+                if (!natsAutoConnector.isConnected()) {
+                    android.util.Log.e("ScanInvitationVM", "NATS connection timeout")
+                    _state.value = ScanInvitationState.Error(
+                        message = "Not connected to vault - please try again"
+                    )
+                    return@launch
+                }
             }
 
+            android.util.Log.d("ScanInvitationVM", "NATS connected, storing credentials...")
             _state.value = ScanInvitationState.Processing
 
             // Store the peer's credentials via vault handler

@@ -21,16 +21,36 @@ import com.vettid.app.ui.components.QrCodeScanner
 
 /**
  * Screen for scanning and accepting connection invitations.
+ *
+ * @param initialData Base64-encoded invitation JSON from deep link (optional)
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ScanInvitationScreen(
     viewModel: ScanInvitationViewModel = hiltViewModel(),
+    initialData: String? = null,
     onConnectionEstablished: (String) -> Unit = {},
     onBack: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsState()
     val manualCode by viewModel.manualCode.collectAsState()
+
+    // Process initial data from deep link
+    LaunchedEffect(initialData) {
+        if (initialData != null) {
+            // Decode base64 and process as QR data
+            try {
+                val decoded = android.util.Base64.decode(
+                    initialData.replace('-', '+').replace('_', '/'),
+                    android.util.Base64.DEFAULT
+                ).toString(Charsets.UTF_8)
+                android.util.Log.d("ScanInvitation", "Processing deep link data: ${decoded.take(100)}...")
+                viewModel.onQrCodeScanned(decoded)
+            } catch (e: Exception) {
+                android.util.Log.e("ScanInvitation", "Failed to decode deep link data", e)
+            }
+        }
+    }
 
     // Handle effects
     LaunchedEffect(Unit) {
