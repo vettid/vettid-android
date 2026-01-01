@@ -454,35 +454,34 @@ Yes, the `app.bootstrap` handler is fully implemented in `vault-manager/internal
 - [x] Vault-manager receives request and creates E2E session
 - [ ] ❌ **App never receives response** - Bootstrap times out after 30s
 
-**Retest After FIX #4 (2025-12-31 19:12 UTC):**
+**Retest with NEW AMI (2026-01-01 00:47 UTC):**
 
-Subscription permission issue RESOLVED by FIX #4. But bootstrap still times out.
+Tested with fresh enrollment on NEW vault AMI (`ami-0c4331d3c781c3c23`). **Same issue persists.**
 
-**Multiple retests performed - all same result:**
+| Test | Vault Instance | Session Created | Response |
+|------|----------------|-----------------|----------|
+| Old vault | i-02d2ab9df16ea40dc | ✅ sess_a10d3d0b... | ❌ Timeout |
+| **NEW vault** | **i-022f69f35b4f68245** | ✅ sess_947e99b8... | ❌ Timeout |
 
-| Test Time (UTC) | Session Created | Response Received |
-|-----------------|-----------------|-------------------|
-| Jan 01 00:06:35 | sess_5068918c1cad096fc70aa905043e8d82 | ❌ Timeout |
-| Jan 01 00:11:54 | sess_a10d3d0b860cb98454bf1149bc4c2dd3 | ❌ Timeout |
-
-**Vault-Manager Instance Status:**
+**New Vault Logs:**
 ```
-Instance: i-02d2ab9df16ea40dc
-Started: Dec 31 22:26:37 UTC (has NOT been restarted)
+Jan 01 00:47:18 vault-manager: {"session_id":"sess_947e99b8f82d3cea8fde3ba577d47280","message":"Created new E2E session"}
+Jan 01 00:47:18 vault-manager: {"message":"E2E encryption session established"}
 ```
 
 **Analysis:**
-The vault-manager IS processing the bootstrap request correctly:
+The NEW AMI has the SAME bug - vault-manager creates E2E session but does NOT publish the response.
+
 1. ✅ Request received
 2. ✅ E2E session created
-3. ❌ **Response NOT being published**
+3. ❌ **Response NOT being published** ← Bug is in bootstrap.go
 
 **Root Cause:**
-The vault-manager instance has been running since Dec 31 22:26:37 UTC and has NOT picked up any code fixes deployed after that time.
+The `bootstrap.go` handler is NOT publishing the response after creating the session. This is a code bug, not a deployment issue.
 
 **Action Required:**
-1. Restart the vault instance to pick up the latest vault-manager code, OR
-2. Verify that `bootstrap.go` actually publishes a response after session creation
+Fix `vault-manager/internal/handlers/builtins/bootstrap.go` to publish response to:
+`OwnerSpace.{guid}.forApp.app.bootstrap.{requestId}`
 
 **Root Cause (FIXED 2025-12-31):**
 The vault-manager was publishing responses to `OwnerSpace.{guid}.forApp.>` literally (with `>` as part of the subject name). The `ForApp` config topic ending in `.>` is meant for subscribing (wildcard), not publishing.
