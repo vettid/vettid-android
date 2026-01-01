@@ -170,21 +170,75 @@ class ScanInvitationViewModel @Inject constructor(
     /**
      * Parse invitation data from QR code.
      * Expected format: JSON with connection credentials
+     *
+     * QR data format from create-invite:
+     * {
+     *   "type": "vettid_connection",
+     *   "version": 1,
+     *   "connection_id": "conn-xxx",
+     *   "credentials": "-----BEGIN NATS USER JWT-----\n...",
+     *   "owner_space": "OwnerSpace.userXXX",
+     *   "message_space": "MessageSpace.userXXX.forOwner.>",
+     *   "expires_at": "2026-01-31T..."
+     * }
      */
     private fun parseInvitationData(data: String): ConnectionInvitationData? {
         return try {
             // Try parsing as JSON
             val json = gson.fromJson(data, JsonObject::class.java)
+
+            // Validate type
+            val type = json.get("type")?.asString
+            if (type != null && type != "vettid_connection") {
+                return null
+            }
+
+            // Parse with flexible field names (backend may use different conventions)
+            val connectionId = json.get("connection_id")?.asString ?: return null
+            val natsCredentials = json.get("credentials")?.asString
+                ?: json.get("nats_credentials")?.asString ?: return null
+            val ownerSpaceId = json.get("owner_space")?.asString
+                ?: json.get("owner_space_id")?.asString ?: ""
+            val messageSpaceId = json.get("message_space")?.asString
+                ?: json.get("message_space_id")?.asString
+                ?: json.get("message_space_topic")?.asString ?: return null
+
+            // Derive peer_guid from message_space if not provided
+            // Format: MessageSpace.userXXX.forOwner.> -> userXXX
+            val peerGuid = json.get("peer_guid")?.asString
+                ?: extractUserGuidFromMessageSpace(messageSpaceId)
+                ?: "unknown"
+
+            val label = json.get("label")?.asString ?: peerGuid.take(8)
+
             ConnectionInvitationData(
-                connectionId = json.get("connection_id")?.asString ?: return null,
-                peerGuid = json.get("peer_guid")?.asString ?: return null,
-                label = json.get("label")?.asString ?: "Unknown",
-                natsCredentials = json.get("nats_credentials")?.asString ?: return null,
-                ownerSpaceId = json.get("owner_space_id")?.asString ?: return null,
-                messageSpaceId = json.get("message_space_id")?.asString ?: return null
+                connectionId = connectionId,
+                peerGuid = peerGuid,
+                label = label,
+                natsCredentials = natsCredentials,
+                ownerSpaceId = ownerSpaceId,
+                messageSpaceId = messageSpaceId
             )
         } catch (e: Exception) {
             null
+        }
+    }
+
+    /**
+     * Extract user GUID from message space ID.
+     * Format: MessageSpace.userXXX.forOwner.> -> user-XXX (with hyphen)
+     */
+    private fun extractUserGuidFromMessageSpace(messageSpace: String): String? {
+        // Pattern: MessageSpace.userXXX.forOwner.>
+        val regex = Regex("MessageSpace\\.(user[A-F0-9]+)\\.forOwner")
+        val match = regex.find(messageSpace)
+        return match?.groupValues?.get(1)?.let { userPart ->
+            // Insert hyphen after "user" if not present
+            if (userPart.startsWith("user") && !userPart.contains("-")) {
+                "user-${userPart.substring(4)}"
+            } else {
+                userPart
+            }
         }
     }
 

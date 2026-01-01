@@ -1,6 +1,54 @@
 # VettID API Status
 
-**Last Updated:** 2026-01-01 18:05 UTC (✅ connection.create-invite verified working)
+**Last Updated:** 2026-01-01 18:45 UTC (✅ fixed field name mismatch in ConnectionsClient)
+
+---
+
+## ✅ FIXED: Field Name Mismatch in Connection Handlers (2026-01-01)
+
+**Problem:** Android client was using different field names than the backend:
+- Client expected: `nats_credentials` → Backend sends: `credentials`
+- Client expected: `owner_space_id` → Backend sends: `owner_space`
+- Client expected: `message_space_id` → Backend sends: `message_space`
+
+**Fix Applied:**
+Updated both `ConnectionsClient.kt` and `ScanInvitationViewModel.kt` to accept either field name.
+
+**Test Result (2026-01-01 18:37 UTC):**
+```
+CreateInvitationVM: Invitation created: conn-fe6eda2cbf908fed2e63a94a37064aaf
+DEBUG - NATS creds length: 1017
+DEBUG - message_space: MessageSpace.userF584C3557CDD43B8B90F4A34763632D3.forOwner.>
+DEBUG - expires_at: 2026-01-31T18:37:22Z
+```
+
+✅ NATS credentials now received correctly (1017 chars with full JWT and NKEY)
+
+---
+
+## Multi-User Connection Test (2026-01-01 18:24 UTC)
+
+**Goal:** Test full connection flow between two enrolled users
+
+**Test Setup:**
+- User A: `user-82FA3FF05275458D90ADF171ABE5C595` (vault: `i-0b860f2172c191f8d`)
+- User B: `user-AF17CD1EA65F4A4E9255A0B874CDC63A` (vault: `i-05aaff6b0d6c21347`)
+
+**What Was Tested:**
+1. ✅ User B enrolled and bootstrapped successfully
+2. ✅ User B created connection invitation: `conn-c40925e9f8ac7ed023a2ee738720b895`
+3. ✅ QR code displayed with Share/Copy Link buttons
+4. ✅ Vault logs show invitation created with 1348 byte response
+
+**Limitation Encountered:**
+- Single emulator cannot test full connection acceptance flow
+- QR code uses hardware rendering (transparent in adb screenshots)
+- Invitation NATS credentials are generated per-invitation and only sent in the create-invite response
+
+**Next Steps for Full Testing:**
+- Requires two physical devices or two emulators running simultaneously
+- Or: Add test API endpoint to retrieve invitation data by connection_id for debugging
+- Or: Add debug logging to app to log the full invitation response
 
 ---
 

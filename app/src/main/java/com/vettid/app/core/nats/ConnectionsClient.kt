@@ -51,13 +51,21 @@ class ConnectionsClient @Inject constructor(
         }
 
         return sendAndAwait("connection.create-invite", payload) { result ->
+            // Backend field names may differ from our model names:
+            // - "credentials" or "nats_credentials" for the NATS credentials
+            // - "owner_space" or "owner_space_id" for owner space
+            // - "message_space" or "message_space_id" or "message_space_topic" for message space
             ConnectionInvitation(
                 connectionId = result.get("connection_id")?.asString ?: "",
                 peerGuid = peerGuid,
                 label = label,
-                natsCredentials = result.get("nats_credentials")?.asString ?: "",
-                ownerSpaceId = result.get("owner_space_id")?.asString ?: "",
-                messageSpaceId = result.get("message_space_id")?.asString ?: "",
+                natsCredentials = result.get("credentials")?.asString
+                    ?: result.get("nats_credentials")?.asString ?: "",
+                ownerSpaceId = result.get("owner_space")?.asString
+                    ?: result.get("owner_space_id")?.asString ?: "",
+                messageSpaceId = result.get("message_space")?.asString
+                    ?: result.get("message_space_id")?.asString
+                    ?: result.get("message_space_topic")?.asString ?: "",
                 expiresAt = result.get("expires_at")?.asString ?: ""
             )
         }

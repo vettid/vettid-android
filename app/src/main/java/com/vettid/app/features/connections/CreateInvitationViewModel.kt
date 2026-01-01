@@ -90,9 +90,14 @@ class CreateInvitationViewModel @Inject constructor(
             ).fold(
                 onSuccess = { natsInvitation ->
                     Log.d(TAG, "Invitation created: ${natsInvitation.connectionId}")
+                    Log.d(TAG, "DEBUG - NATS creds length: ${natsInvitation.natsCredentials.length}")
+                    Log.d(TAG, "DEBUG - owner_space: ${natsInvitation.ownerSpaceId}")
+                    Log.d(TAG, "DEBUG - message_space: ${natsInvitation.messageSpaceId}")
+                    Log.d(TAG, "DEBUG - expires_at: ${natsInvitation.expiresAt}")
 
                     // Build QR code data for sharing
                     val qrData = buildQrCodeData(natsInvitation)
+                    Log.i(TAG, "DEBUG - QR data: $qrData")
                     val deepLink = buildDeepLink(natsInvitation)
 
                     // Parse expiration timestamp
