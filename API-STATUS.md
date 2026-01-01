@@ -1,6 +1,6 @@
 # VettID API Status
 
-**Last Updated:** 2026-01-01 (New vault AMI deployed, clean slate for testing)
+**Last Updated:** 2026-01-01 15:45 UTC (DEBUG AMI deployed for bootstrap investigation)
 
 ---
 
@@ -9,13 +9,24 @@
 **Invite Code:** `0D0F65119FA2367D`
 **Expires:** 2026-01-07
 **Max Uses:** 5
-**Purpose:** Test Fix #5 (HKDF context) + Fix #6 (vault reply subjects)
+**Purpose:** Test Fix #5 (HKDF context) + Fix #6 (vault reply subjects) + Debug logging
 
-**IMPORTANT - NEW AMI DEPLOYED:**
-- New vault AMI: `ami-0c4331d3c781c3c23` (built 2026-01-01)
-- Old vault instance terminated
-- Old NATS account records deleted
-- **Fresh enrollment will provision a new vault automatically**
+**IMPORTANT - DEBUG AMI DEPLOYED:**
+- **New vault AMI:** `ami-0021f139046c6367f` (built 2026-01-01 01:11 UTC)
+- Previous vault instance (user-363) terminated
+- New vault instance will be provisioned with debug logging on next enrollment
+
+**What's New in Debug AMI:**
+Added Info-level logging to `processor.go` to trace bootstrap response publishing:
+```
+Publishing success response reply_subject=X event_id=Y event_type=Z response_size=N
+Response published successfully subject=X
+```
+
+This will show:
+1. What subject the vault is publishing responses to
+2. Whether the NATS publish call succeeds or fails
+3. The size of the response being sent
 
 **Instructions:**
 1. Pull latest code: `git pull`
@@ -23,7 +34,11 @@
 3. Uninstall app or clear app data
 4. Re-enroll using invite code above
 5. Test NATS bootstrap connection
-6. Report results in this file
+6. **Check CloudWatch logs** for vault-manager to see the debug output
+7. Report results in this file
+
+**CloudWatch Log Group:** `/vettid/vault-manager`
+**Filter:** Look for "Publishing success response" or "Response published successfully"
 
 This file is the master coordination point between backend development and mobile app development (iOS and Android). Mobile developers should reference this file to understand API availability and required actions.
 
@@ -475,14 +490,39 @@ Jan 01 15:38:12 vault-manager: {"message":"E2E encryption session established"}
 All vaults exhibit the SAME behavior:
 1. ✅ Request received
 2. ✅ E2E session created
-3. ❌ **Response NOT being published** ← Bug is in bootstrap.go
+3. ❌ **Response NOT being published** ← Bug is in processor.go response publishing
 
-**Root Cause:**
-The `bootstrap.go` handler is NOT publishing the response after creating the session. This is a code bug.
+**DEBUG AMI DEPLOYED (2026-01-01 15:35 UTC):**
 
-**Action Required:**
-Fix `vault-manager/internal/handlers/builtins/bootstrap.go` to publish response to:
-`OwnerSpace.{guid}.forApp.app.bootstrap.{requestId}`
+New vault AMI `ami-0021f139046c6367f` deployed with Info-level logging in `processor.go`:
+
+```go
+log.Info().
+    Str("reply_subject", replySubject).
+    Str("event_id", eventID).
+    Str("event_type", eventType).
+    Int("response_size", len(data)).
+    Msg("Publishing success response")
+
+if err := p.centralNats.Publish(replySubject, data); err != nil {
+    log.Error().Err(err).Str("subject", replySubject).Msg("Failed to send success response")
+} else {
+    log.Info().Str("subject", replySubject).Msg("Response published successfully")
+}
+```
+
+**Next Test:**
+1. Re-enroll with fresh invitation to provision new vault with debug AMI
+2. Attempt bootstrap
+3. Check CloudWatch logs for `/vettid/vault-manager`
+4. Look for "Publishing success response" to see what subject is being used
+5. Report findings here
+
+**Previous Analysis (may be incorrect):**
+~~The `bootstrap.go` handler is NOT publishing the response after creating the session. This is a code bug, not a deployment issue.~~
+
+**Updated Analysis:**
+The bootstrap handler returns the response correctly. The issue is likely in how `processor.go` builds the reply subject or publishes the response. The debug logging will reveal exactly what's happening.
 
 **Root Cause (FIXED 2025-12-31):**
 The vault-manager was publishing responses to `OwnerSpace.{guid}.forApp.>` literally (with `>` as part of the subject name). The `ForApp` config topic ending in `.>` is meant for subscribing (wildcard), not publishing.
