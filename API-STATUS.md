@@ -454,30 +454,31 @@ Yes, the `app.bootstrap` handler is fully implemented in `vault-manager/internal
 - [x] Vault-manager receives request and creates E2E session
 - [ ] ❌ **App never receives response** - Bootstrap times out after 30s
 
-**Retest with NEW AMI (2026-01-01 00:47 UTC):**
+**Retest with NEW AMI (2026-01-01 15:38 UTC):**
 
-Tested with fresh enrollment on NEW vault AMI (`ami-0c4331d3c781c3c23`). **Same issue persists.**
+Tested with fresh enrollment. **Same issue persists.**
 
 | Test | Vault Instance | Session Created | Response |
 |------|----------------|-----------------|----------|
 | Old vault | i-02d2ab9df16ea40dc | ✅ sess_a10d3d0b... | ❌ Timeout |
-| **NEW vault** | **i-022f69f35b4f68245** | ✅ sess_947e99b8... | ❌ Timeout |
+| New vault #1 | i-022f69f35b4f68245 | ✅ sess_947e99b8... | ❌ Timeout |
+| **New vault #2** | **i-016499f45558b20e9** | ✅ sess_32df6d5f... | ❌ Timeout |
 
-**New Vault Logs:**
+**Latest Vault Logs (i-016499f45558b20e9):**
 ```
-Jan 01 00:47:18 vault-manager: {"session_id":"sess_947e99b8f82d3cea8fde3ba577d47280","message":"Created new E2E session"}
-Jan 01 00:47:18 vault-manager: {"message":"E2E encryption session established"}
+Jan 01 15:38:12 vault-manager: {"session_id":"sess_32df6d5f28dcc955bc4622366238fccc","message":"Created new E2E session"}
+Jan 01 15:38:12 vault-manager: {"message":"E2E encryption session established"}
 ```
+**No log entry for publishing response.**
 
 **Analysis:**
-The NEW AMI has the SAME bug - vault-manager creates E2E session but does NOT publish the response.
-
+All vaults exhibit the SAME behavior:
 1. ✅ Request received
 2. ✅ E2E session created
 3. ❌ **Response NOT being published** ← Bug is in bootstrap.go
 
 **Root Cause:**
-The `bootstrap.go` handler is NOT publishing the response after creating the session. This is a code bug, not a deployment issue.
+The `bootstrap.go` handler is NOT publishing the response after creating the session. This is a code bug.
 
 **Action Required:**
 Fix `vault-manager/internal/handlers/builtins/bootstrap.go` to publish response to:
