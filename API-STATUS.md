@@ -1,6 +1,49 @@
 # VettID API Status
 
-**Last Updated:** 2026-01-01 18:45 UTC (✅ fixed field name mismatch in ConnectionsClient)
+**Last Updated:** 2026-01-02 01:25 UTC (🔴 E2E decryption still not working for connection handlers)
+
+---
+
+## 🔴 BLOCKED: connection.store-credentials E2E Decryption (2026-01-02)
+
+**GitHub Issue:** [#4 - Connection handlers not decrypting E2E encrypted payloads](https://github.com/mesmerverse/vettid-vault-ami/issues/4) (REOPENED)
+
+**Problem:** Despite the AMI being rebuilt (`ami-0414fca808483df9e` at 2026-01-01T20:32:02Z), the vault-manager is still not decrypting E2E encrypted payloads for `connection.store-credentials`.
+
+**Test Setup (2026-01-02 01:15 UTC):**
+- User A: `user-DB71AAEF4059444DB20913899342B2AE` (vault: `i-0f87bf32ec869b3e2`)
+- User B: `user-C23014BE83FE46D8899E41658A2F0C58` (vault: `i-02a732d1a71c3bc5d`)
+- Both vaults using AMI: `ami-0414fca808483df9e`
+
+**What Works:**
+- ✅ App E2E wait fix working (`Check #0: connected=true, e2e=true`)
+- ✅ Payload encryption working (`sendToVault: encrypting payload`)
+- ✅ Bootstrap handler decryption working
+- ✅ connection.list handler working
+- ✅ connection.create-invite handler working
+
+**What Fails:**
+- ❌ connection.store-credentials: `"connection_id is required"`
+
+**Vault Logs:**
+```
+Jan 02 01:22:05 vault-manager: {"level":"error","error":"connection_id is required","type":"connection.store-credentials","message":"Handler execution failed"}
+```
+
+**Android App Fix Applied:**
+- `ScanInvitationViewModel.kt`: Wait for E2E session before sending store-credentials
+- Previously sent with E2E=false (bootstrap creds, no publish permission)
+- Now correctly waits and sends with E2E=true
+
+**Next Steps:**
+- Backend needs to verify E2E decryption layer applies to connection.store-credentials
+- May need additional debug logging in vault-manager to trace payload handling
+
+---
+
+## ✅ FIXED: SSM Parameter Updated (2026-01-02)
+
+Updated `/vettid/vault/ami-id` to `ami-0414fca808483df9e`.
 
 ---
 

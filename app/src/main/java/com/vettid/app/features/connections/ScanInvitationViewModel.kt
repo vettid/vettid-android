@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.crypto.ConnectionCryptoManager
 import com.vettid.app.core.nats.ConnectionsClient
 import com.vettid.app.core.nats.NatsAutoConnector
+import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.network.Connection
 import com.vettid.app.core.network.ConnectionStatus
 import com.google.gson.Gson
@@ -28,6 +29,7 @@ import javax.inject.Inject
 class ScanInvitationViewModel @Inject constructor(
     private val connectionsClient: ConnectionsClient,
     private val natsAutoConnector: NatsAutoConnector,
+    private val ownerSpaceClient: OwnerSpaceClient,
     private val connectionCryptoManager: ConnectionCryptoManager
 ) : ViewModel() {
 
@@ -89,28 +91,43 @@ class ScanInvitationViewModel @Inject constructor(
     private fun processInvitation(invitation: ConnectionInvitationData) {
         android.util.Log.d("ScanInvitationVM", "processInvitation called for ${invitation.connectionId}")
         viewModelScope.launch {
-            // Wait for NATS connection (with timeout)
-            if (!natsAutoConnector.isConnected()) {
-                android.util.Log.d("ScanInvitationVM", "Waiting for NATS connection...")
-                _state.value = ScanInvitationState.Processing
+            _state.value = ScanInvitationState.Processing
 
-                // Wait up to 10 seconds for NATS to connect
-                var attempts = 0
-                while (!natsAutoConnector.isConnected() && attempts < 20) {
-                    kotlinx.coroutines.delay(500)
-                    attempts++
-                }
+            // Wait for NATS connection AND E2E session (with timeout)
+            // E2E session is required because store-credentials needs full permissions
+            android.util.Log.d("ScanInvitationVM", "Waiting for NATS connection and E2E session...")
 
-                if (!natsAutoConnector.isConnected()) {
-                    android.util.Log.e("ScanInvitationVM", "NATS connection timeout")
-                    _state.value = ScanInvitationState.Error(
-                        message = "Not connected to vault - please try again"
-                    )
-                    return@launch
+            var attempts = 0
+            val maxAttempts = 60 // 30 seconds (500ms each)
+            while (attempts < maxAttempts) {
+                val connected = natsAutoConnector.isConnected()
+                val e2eEnabled = ownerSpaceClient.isE2EEnabled
+                android.util.Log.d("ScanInvitationVM", "Check #$attempts: connected=$connected, e2e=$e2eEnabled")
+
+                if (connected && e2eEnabled) {
+                    break
                 }
+                kotlinx.coroutines.delay(500)
+                attempts++
             }
 
-            android.util.Log.d("ScanInvitationVM", "NATS connected, storing credentials...")
+            if (!natsAutoConnector.isConnected()) {
+                android.util.Log.e("ScanInvitationVM", "NATS connection timeout")
+                _state.value = ScanInvitationState.Error(
+                    message = "Not connected to vault - please try again"
+                )
+                return@launch
+            }
+
+            if (!ownerSpaceClient.isE2EEnabled) {
+                android.util.Log.e("ScanInvitationVM", "E2E session not established (timeout)")
+                _state.value = ScanInvitationState.Error(
+                    message = "Secure session not established - please try again"
+                )
+                return@launch
+            }
+
+            android.util.Log.d("ScanInvitationVM", "NATS connected and E2E enabled, storing credentials...")
             _state.value = ScanInvitationState.Processing
 
             // Store the peer's credentials via vault handler
