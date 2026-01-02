@@ -1,6 +1,7 @@
 package com.vettid.app.core.nats
 
 import android.util.Base64
+import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.vettid.app.core.crypto.EncryptedSessionMessage
@@ -365,6 +366,15 @@ class OwnerSpaceClient @Inject constructor(
         pendingKeyPair?.clear()
         pendingKeyPair = null
         credentialStore.clearSession()
+    }
+
+    /**
+     * Set the session directly (used during bootstrap credential rotation).
+     * This enables E2E encryption for immediate credential refresh requests.
+     */
+    fun setSession(session: SessionCrypto) {
+        sessionCrypto = session
+        Log.d(TAG, "Session set directly: ${session.sessionId}")
     }
 
     /**

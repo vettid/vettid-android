@@ -219,16 +219,7 @@ class NatsAutoConnector @Inject constructor(
                 val fullCredentialsResult = bootstrapResult.getOrThrow()
                 Log.i(TAG, "Got full credentials from bootstrap - reconnecting")
 
-                // Store full credentials
-                credentialStore.storeFullNatsCredentials(
-                    credentials = fullCredentialsResult.natsCredentials,
-                    ownerSpace = fullCredentialsResult.ownerSpace,
-                    messageSpace = fullCredentialsResult.messageSpace,
-                    credentialId = fullCredentialsResult.credentialId,
-                    ttlSeconds = fullCredentialsResult.ttlSeconds
-                )
-
-                // Store E2E session if established
+                // Store E2E session if established (needed for credential rotation)
                 fullCredentialsResult.sessionCrypto?.let { session ->
                     credentialStore.storeSession(
                         sessionId = session.sessionId,
@@ -239,7 +230,47 @@ class NatsAutoConnector @Inject constructor(
                             catch (e: Exception) { System.currentTimeMillis() + 24 * 60 * 60 * 1000L }
                         } ?: (System.currentTimeMillis() + 24 * 60 * 60 * 1000L)
                     )
+                    // Enable E2E in ownerSpaceClient for credential rotation
+                    ownerSpaceClient.setSession(session)
                 }
+
+                // Check if immediate credential rotation is required (short-lived bootstrap creds)
+                var finalCredentials = fullCredentialsResult.natsCredentials
+                var finalCredentialId = fullCredentialsResult.credentialId
+                var finalTtlSeconds = fullCredentialsResult.ttlSeconds
+
+                if (fullCredentialsResult.requiresImmediateRotation && fullCredentialsResult.sessionCrypto != null) {
+                    Log.i(TAG, "Bootstrap credentials require immediate rotation (TTL: ${fullCredentialsResult.ttlSeconds}s)")
+
+                    // Rotate credentials over E2E encrypted channel
+                    val deviceId = credentialStore.getUserGuid() ?: "unknown"
+                    val rotationResult = credentialClient.requestRefresh(
+                        currentCredentialId = fullCredentialsResult.credentialId,
+                        deviceId = deviceId
+                    )
+
+                    rotationResult.fold(
+                        onSuccess = { refreshResult ->
+                            Log.i(TAG, "Credential rotation successful. New TTL: ${refreshResult.ttlSeconds}s")
+                            finalCredentials = refreshResult.credentials
+                            finalCredentialId = refreshResult.credentialId
+                            finalTtlSeconds = refreshResult.ttlSeconds
+                        },
+                        onFailure = { error ->
+                            Log.w(TAG, "Credential rotation failed: ${error.message}. Using short-lived bootstrap credentials.")
+                            // Continue with short-lived credentials - they'll work for 5 minutes
+                        }
+                    )
+                }
+
+                // Store full credentials (either rotated or original bootstrap)
+                credentialStore.storeFullNatsCredentials(
+                    credentials = finalCredentials,
+                    ownerSpace = fullCredentialsResult.ownerSpace,
+                    messageSpace = fullCredentialsResult.messageSpace,
+                    credentialId = finalCredentialId,
+                    ttlSeconds = finalTtlSeconds
+                )
 
                 // Disconnect and reconnect with full credentials
                 natsClient.disconnect()

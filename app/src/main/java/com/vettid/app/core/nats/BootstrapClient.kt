@@ -213,6 +213,7 @@ class BootstrapClient @Inject constructor(
             val messageSpace = data.get("message_space")?.asString
             val credentialId = data.get("credential_id")?.asString
             val ttlSeconds = data.get("ttl_seconds")?.asLong ?: 604800L
+            val requiresImmediateRotation = data.get("requires_immediate_rotation")?.asBoolean ?: false
 
             // Establish E2E session if vault provided session key
             var sessionCrypto: SessionCrypto? = null
@@ -244,7 +245,8 @@ class BootstrapClient @Inject constructor(
                 sessionId = sessionId,
                 sessionExpiresAt = sessionExpiresAt,
                 credentialId = credentialId,
-                ttlSeconds = ttlSeconds
+                ttlSeconds = ttlSeconds,
+                requiresImmediateRotation = requiresImmediateRotation
             )
 
             pendingDeferred?.complete(result)
@@ -325,5 +327,8 @@ data class BootstrapResult(
     val credentialId: String?,
 
     /** Time-to-live in seconds for the credentials */
-    val ttlSeconds: Long
+    val ttlSeconds: Long,
+
+    /** Whether credentials must be rotated immediately (short-lived bootstrap creds) */
+    val requiresImmediateRotation: Boolean = false
 )
