@@ -5,6 +5,8 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.vettid.app.core.attestation.HardwareAttestationManager
+import com.vettid.app.core.attestation.NitroAttestationVerifier
+import com.vettid.app.core.attestation.PcrConfigManager
 import com.vettid.app.core.crypto.CryptoManager
 import com.vettid.app.core.crypto.RecoveryPhraseManager
 import com.vettid.app.core.nats.NatsApiClient
@@ -28,6 +30,7 @@ import com.vettid.app.core.network.ApiClient
 import com.vettid.app.core.network.VaultLifecycleClient
 import com.vettid.app.core.network.VaultServiceClient
 import com.vettid.app.core.storage.CredentialStore
+import com.vettid.app.core.storage.ProteanCredentialManager
 import com.vettid.app.features.auth.BiometricAuthManager
 import dagger.Module
 import dagger.Provides
@@ -77,6 +80,12 @@ object AppModule {
     @Singleton
     fun provideHardwareAttestationManager(@ApplicationContext context: Context): HardwareAttestationManager {
         return HardwareAttestationManager(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideProteanCredentialManager(@ApplicationContext context: Context): ProteanCredentialManager {
+        return ProteanCredentialManager(context)
     }
 
     @Provides
@@ -146,10 +155,26 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideNitroAttestationVerifier(): NitroAttestationVerifier {
+        return NitroAttestationVerifier()
+    }
+
+    @Provides
+    @Singleton
+    fun providePcrConfigManager(
+        @ApplicationContext context: android.content.Context
+    ): PcrConfigManager {
+        return PcrConfigManager(context)
+    }
+
+    @Provides
+    @Singleton
     fun provideBootstrapClient(
-        credentialStore: CredentialStore
+        credentialStore: CredentialStore,
+        attestationVerifier: NitroAttestationVerifier,
+        pcrConfigManager: PcrConfigManager
     ): BootstrapClient {
-        return BootstrapClient(credentialStore)
+        return BootstrapClient(credentialStore, attestationVerifier, pcrConfigManager)
     }
 
     @Provides

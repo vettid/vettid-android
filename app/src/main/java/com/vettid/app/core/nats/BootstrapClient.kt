@@ -4,6 +4,10 @@ import android.util.Base64
 import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import com.vettid.app.core.attestation.AttestationVerificationException
+import com.vettid.app.core.attestation.NitroAttestationVerifier
+import com.vettid.app.core.attestation.PcrConfigManager
+import com.vettid.app.core.attestation.VerifiedAttestation
 import com.vettid.app.core.crypto.SessionCrypto
 import com.vettid.app.core.crypto.SessionInfo
 import com.vettid.app.core.crypto.SessionKeyPair
@@ -19,27 +23,44 @@ import javax.inject.Singleton
 /**
  * Client for the app.bootstrap flow to exchange bootstrap credentials for full credentials.
  *
- * Flow:
+ * Flow (with Nitro Enclave attestation):
  * 1. App connects with bootstrap credentials (limited permissions)
- * 2. App calls app.bootstrap with session public key
- * 3. Vault responds with full NATS credentials + session info
- * 4. App stores full credentials and reconnects
+ * 2. App sends nonce in bootstrap request for replay protection
+ * 3. App calls app.bootstrap with session public key
+ * 4. Vault responds with:
+ *    - Attestation document (CBOR/COSE signed by AWS Nitro PKI)
+ *    - Full NATS credentials
+ *    - Session info for E2E encryption
+ * 5. App verifies attestation:
+ *    - Certificate chain to AWS Nitro root
+ *    - PCR values match expected (proves correct code is running)
+ *    - Nonce matches (replay protection)
+ * 6. App extracts enclave public key from verified attestation
+ * 7. App establishes E2E session using verified enclave key
  *
  * This implements the credential exchange documented in app-vault-encryption.md.
  */
 @Singleton
 class BootstrapClient @Inject constructor(
-    private val credentialStore: CredentialStore
+    private val credentialStore: CredentialStore,
+    private val attestationVerifier: NitroAttestationVerifier,
+    private val pcrConfigManager: PcrConfigManager
 ) {
     companion object {
         private const val TAG = "BootstrapClient"
         private const val BOOTSTRAP_TIMEOUT_MS = 30_000L
+        private const val NONCE_SIZE = 32
     }
 
     private val gson = Gson()
+    private val secureRandom = java.security.SecureRandom()
     private var pendingKeyPair: SessionKeyPair? = null
     private var pendingRequestId: String? = null
+    private var pendingNonce: ByteArray? = null
     private var pendingDeferred: CompletableDeferred<BootstrapResult>? = null
+
+    /** Whether to require attestation verification (can be disabled for testing) */
+    var requireAttestation: Boolean = true
 
     /**
      * Execute the bootstrap flow to exchange bootstrap credentials for full credentials.
@@ -61,7 +82,7 @@ class BootstrapClient @Inject constructor(
         deviceId: String,
         appVersion: String = "1.0.0"
     ): Result<BootstrapResult> {
-        Log.i(TAG, "Starting bootstrap flow for $ownerSpaceId")
+        Log.i(TAG, "Starting bootstrap flow for $ownerSpaceId (attestation: $requireAttestation)")
 
         // Generate session keypair for E2E encryption
         val keyPair = SessionCrypto.generateKeyPair()
@@ -69,6 +90,11 @@ class BootstrapClient @Inject constructor(
 
         val requestId = UUID.randomUUID().toString()
         pendingRequestId = requestId
+
+        // Generate nonce for replay protection (included in attestation)
+        val nonce = ByteArray(NONCE_SIZE)
+        secureRandom.nextBytes(nonce)
+        pendingNonce = nonce
 
         // Create deferred for response
         val deferred = CompletableDeferred<BootstrapResult>()
@@ -101,6 +127,10 @@ class BootstrapClient @Inject constructor(
                 addProperty("device_type", "android")
                 addProperty("app_version", appVersion)
                 addProperty("app_session_public_key", keyPair.publicKeyBase64())
+                // Include nonce for attestation replay protection
+                addProperty("nonce", Base64.encodeToString(nonce, Base64.NO_WRAP))
+                // Request attestation if required
+                addProperty("request_attestation", requireAttestation)
             }
 
             // Build the full message envelope
@@ -204,7 +234,6 @@ class BootstrapClient @Inject constructor(
                 data // Fallback to flat structure
             }
 
-            val vaultSessionPublicKey = sessionInfo.get("vault_session_public_key")?.asString
             val sessionId = sessionInfo.get("session_id")?.asString ?: UUID.randomUUID().toString()
             val sessionExpiresAt = sessionInfo.get("session_expires_at")?.asString
 
@@ -215,22 +244,77 @@ class BootstrapClient @Inject constructor(
             val ttlSeconds = data.get("ttl_seconds")?.asLong ?: 604800L
             val requiresImmediateRotation = data.get("requires_immediate_rotation")?.asBoolean ?: false
 
-            // Establish E2E session if vault provided session key
-            var sessionCrypto: SessionCrypto? = null
-            if (!vaultSessionPublicKey.isNullOrBlank() && pendingKeyPair != null) {
+            // Check for attestation document
+            val attestationDoc = data.get("attestation_document")?.asString
+            var verifiedAttestation: VerifiedAttestation? = null
+
+            // Verify attestation if present (Nitro Enclave flow)
+            if (!attestationDoc.isNullOrBlank()) {
+                Log.d(TAG, "Attestation document present, verifying...")
                 try {
-                    val vaultPubKey = Base64.decode(vaultSessionPublicKey, Base64.NO_WRAP)
+                    val expectedPcrs = pcrConfigManager.getCurrentPcrs()
+                    Log.d(TAG, "Using PCRs version: ${expectedPcrs.version}")
+
+                    verifiedAttestation = attestationVerifier.verify(
+                        attestationDocBase64 = attestationDoc,
+                        expectedPcrs = expectedPcrs,
+                        expectedNonce = pendingNonce
+                    )
+
+                    Log.i(TAG, "Attestation verified! Module: ${verifiedAttestation.moduleId}")
+                } catch (e: AttestationVerificationException) {
+                    Log.e(TAG, "Attestation verification failed: ${e.message}")
+                    if (requireAttestation) {
+                        pendingDeferred?.completeExceptionally(
+                            NatsException("Attestation verification failed: ${e.message}", e)
+                        )
+                        cleanup()
+                        return
+                    }
+                    // If attestation not required, continue with warning
+                    Log.w(TAG, "Continuing without verified attestation (requireAttestation=false)")
+                }
+            } else if (requireAttestation) {
+                Log.e(TAG, "Attestation required but not present in response")
+                pendingDeferred?.completeExceptionally(
+                    NatsException("Attestation document missing from bootstrap response")
+                )
+                cleanup()
+                return
+            }
+
+            // Get vault public key - from attestation if verified, otherwise from response
+            val vaultPublicKeyBytes: ByteArray? = if (verifiedAttestation != null) {
+                // Use the key from the verified attestation (most secure)
+                Log.d(TAG, "Using enclave public key from verified attestation")
+                verifiedAttestation.enclavePublicKey
+            } else {
+                // Fall back to key from response (legacy flow, less secure)
+                val vaultSessionPublicKey = sessionInfo.get("vault_session_public_key")?.asString
+                if (!vaultSessionPublicKey.isNullOrBlank()) {
+                    Log.d(TAG, "Using vault public key from response (legacy)")
+                    Base64.decode(vaultSessionPublicKey, Base64.NO_WRAP)
+                } else {
+                    null
+                }
+            }
+
+            // Establish E2E session if we have vault's public key
+            var sessionCrypto: SessionCrypto? = null
+            if (vaultPublicKeyBytes != null && pendingKeyPair != null) {
+                try {
                     val expiresAtMs = parseExpiresAt(sessionExpiresAt)
 
                     sessionCrypto = SessionCrypto.fromKeyExchange(
                         sessionId = sessionId,
                         appPrivateKey = pendingKeyPair!!.privateKey,
                         appPublicKey = pendingKeyPair!!.publicKey,
-                        vaultPublicKey = vaultPubKey,
+                        vaultPublicKey = vaultPublicKeyBytes,
                         expiresAt = expiresAtMs
                     )
 
-                    Log.i(TAG, "E2E session established: $sessionId")
+                    val attestationStatus = if (verifiedAttestation != null) "verified" else "unverified"
+                    Log.i(TAG, "E2E session established: $sessionId (attestation: $attestationStatus)")
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to establish E2E session: ${e.message}")
                     // Continue without E2E - credentials are still valid
@@ -246,7 +330,9 @@ class BootstrapClient @Inject constructor(
                 sessionExpiresAt = sessionExpiresAt,
                 credentialId = credentialId,
                 ttlSeconds = ttlSeconds,
-                requiresImmediateRotation = requiresImmediateRotation
+                requiresImmediateRotation = requiresImmediateRotation,
+                attestationVerified = verifiedAttestation != null,
+                enclaveModuleId = verifiedAttestation?.moduleId
             )
 
             pendingDeferred?.complete(result)
@@ -272,6 +358,8 @@ class BootstrapClient @Inject constructor(
         pendingKeyPair?.clear()
         pendingKeyPair = null
         pendingRequestId = null
+        pendingNonce?.fill(0)
+        pendingNonce = null
         pendingDeferred = null
     }
 
@@ -303,6 +391,11 @@ class BootstrapClient @Inject constructor(
  *
  * Contains the full NATS credentials from the vault plus session info
  * for E2E encrypted communication.
+ *
+ * When attestation is verified, it proves:
+ * - The enclave is running trusted VettID code (PCRs match)
+ * - The session key is bound to that specific enclave instance
+ * - No man-in-the-middle attack is possible (key from attestation)
  */
 data class BootstrapResult(
     /** Full NATS credentials (.creds file content) */
@@ -330,5 +423,11 @@ data class BootstrapResult(
     val ttlSeconds: Long,
 
     /** Whether credentials must be rotated immediately (short-lived bootstrap creds) */
-    val requiresImmediateRotation: Boolean = false
+    val requiresImmediateRotation: Boolean = false,
+
+    /** Whether Nitro Enclave attestation was verified */
+    val attestationVerified: Boolean = false,
+
+    /** Enclave module ID (if attestation was verified) */
+    val enclaveModuleId: String? = null
 )

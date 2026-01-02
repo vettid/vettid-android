@@ -344,6 +344,90 @@ open class VaultServiceClient @Inject constructor() {
         return safeApiCall { api.listBackups("Bearer $authToken") }
     }
 
+    // MARK: - PCR (Platform Configuration Register) Values
+
+    /**
+     * Get current PCR values for Nitro Enclave attestation verification.
+     * PCRs identify the exact code running in the enclave.
+     * These values are signed by VettID and should be verified before use.
+     */
+    suspend fun getPcrValues(): Result<PcrValuesResponse> {
+        return safeApiCall { api.getPcrValues() }
+    }
+
+    // MARK: - Protean Credential Backup
+
+    /**
+     * Backup the Protean Credential to VettID.
+     *
+     * @param authToken Member JWT for authorization
+     * @param credentialBlob Base64-encoded encrypted credential blob
+     * @param version Credential version number
+     */
+    suspend fun backupCredential(
+        authToken: String,
+        credentialBlob: String,
+        version: Int
+    ): Result<ProteanBackupResponse> {
+        val request = ProteanBackupRequest(
+            credentialBlob = credentialBlob,
+            version = version
+        )
+        return safeApiCall { api.backupCredential("Bearer $authToken", request) }
+    }
+
+    /**
+     * Get backup history for the user's credential.
+     */
+    suspend fun getCredentialBackups(authToken: String): Result<ProteanBackupListResponse> {
+        return safeApiCall { api.getCredentialBackups("Bearer $authToken") }
+    }
+
+    // MARK: - Credential Recovery (24-hour delayed)
+
+    /**
+     * Request credential recovery.
+     * This initiates a 24-hour security delay before the credential can be downloaded.
+     *
+     * @param email User's email for verification
+     * @param backupPin 6-digit backup PIN set during enrollment
+     */
+    suspend fun requestRecovery(
+        email: String,
+        backupPin: String
+    ): Result<RecoveryRequestResponse> {
+        val request = RecoveryRequest(email = email, backupPin = backupPin)
+        return safeApiCall { api.requestRecovery(request) }
+    }
+
+    /**
+     * Check the status of a recovery request.
+     *
+     * @param recoveryId Recovery request ID from requestRecovery
+     */
+    suspend fun getRecoveryStatus(recoveryId: String): Result<RecoveryStatusResponse> {
+        return safeApiCall { api.getRecoveryStatus(recoveryId) }
+    }
+
+    /**
+     * Cancel a pending recovery request.
+     *
+     * @param recoveryId Recovery request ID to cancel
+     */
+    suspend fun cancelRecovery(recoveryId: String): Result<Unit> {
+        val request = CancelRecoveryRequest(recoveryId = recoveryId)
+        return safeApiCall { api.cancelRecovery(request) }
+    }
+
+    /**
+     * Download the recovered credential after the 24-hour delay.
+     *
+     * @param recoveryId Recovery request ID
+     */
+    suspend fun downloadRecoveredCredential(recoveryId: String): Result<RecoveryDownloadResponse> {
+        return safeApiCall { api.downloadRecoveredCredential(recoveryId) }
+    }
+
     // MARK: - Helper
 
     private suspend fun <T> safeApiCall(call: suspend () -> Response<T>): Result<T> {
@@ -470,6 +554,43 @@ interface VaultServiceApi {
     suspend fun listBackups(
         @Header("Authorization") authToken: String
     ): Response<VaultBackupListResponse>
+
+    // PCR (Platform Configuration Register) Values for attestation
+    @GET("vault/pcrs/current")
+    suspend fun getPcrValues(): Response<PcrValuesResponse>
+
+    // Protean Credential Backup
+    @POST("vault/backup/credential")
+    suspend fun backupCredential(
+        @Header("Authorization") authToken: String,
+        @Body request: ProteanBackupRequest
+    ): Response<ProteanBackupResponse>
+
+    @GET("vault/backup/credentials")
+    suspend fun getCredentialBackups(
+        @Header("Authorization") authToken: String
+    ): Response<ProteanBackupListResponse>
+
+    // Credential Recovery (24-hour delayed)
+    @POST("vault/recovery/request")
+    suspend fun requestRecovery(
+        @Body request: RecoveryRequest
+    ): Response<RecoveryRequestResponse>
+
+    @GET("vault/recovery/status")
+    suspend fun getRecoveryStatus(
+        @Query("recovery_id") recoveryId: String
+    ): Response<RecoveryStatusResponse>
+
+    @POST("vault/recovery/cancel")
+    suspend fun cancelRecovery(
+        @Body request: CancelRecoveryRequest
+    ): Response<Unit>
+
+    @GET("vault/recovery/download")
+    suspend fun downloadRecoveredCredential(
+        @Query("recovery_id") recoveryId: String
+    ): Response<RecoveryDownloadResponse>
 }
 
 // MARK: - Request Types
@@ -889,6 +1010,121 @@ data class EnrollmentQRData(
         }
     }
 }
+
+// MARK: - Protean Credential Backup Request/Response Types
+
+/**
+ * Request to backup the Protean Credential.
+ */
+data class ProteanBackupRequest(
+    @SerializedName("credential_blob") val credentialBlob: String,
+    val version: Int
+)
+
+/**
+ * Response from Protean Credential backup.
+ */
+data class ProteanBackupResponse(
+    @SerializedName("backup_id") val backupId: String,
+    @SerializedName("created_at") val createdAt: String,
+    @SerializedName("size_bytes") val sizeBytes: Int
+)
+
+/**
+ * List of Protean Credential backups.
+ */
+data class ProteanBackupListResponse(
+    val backups: List<ProteanBackupInfo>
+)
+
+/**
+ * Information about a single Protean Credential backup.
+ */
+data class ProteanBackupInfo(
+    @SerializedName("backup_id") val backupId: String,
+    val version: Int,
+    @SerializedName("created_at") val createdAt: String,
+    @SerializedName("size_bytes") val sizeBytes: Int
+)
+
+// MARK: - Credential Recovery Request/Response Types
+
+/**
+ * Request to initiate credential recovery.
+ */
+data class RecoveryRequest(
+    val email: String,
+    @SerializedName("backup_pin") val backupPin: String
+)
+
+/**
+ * Response from recovery request.
+ */
+data class RecoveryRequestResponse(
+    @SerializedName("recovery_id") val recoveryId: String,
+    @SerializedName("requested_at") val requestedAt: String,
+    @SerializedName("available_at") val availableAt: String,
+    val status: String // "pending"
+)
+
+/**
+ * Response from recovery status check.
+ */
+data class RecoveryStatusResponse(
+    @SerializedName("recovery_id") val recoveryId: String,
+    val status: String, // "pending" | "ready" | "cancelled" | "expired"
+    @SerializedName("available_at") val availableAt: String,
+    @SerializedName("remaining_seconds") val remainingSeconds: Long
+)
+
+/**
+ * Request to cancel recovery.
+ */
+data class CancelRecoveryRequest(
+    @SerializedName("recovery_id") val recoveryId: String
+)
+
+/**
+ * Response from recovery download.
+ */
+data class RecoveryDownloadResponse(
+    @SerializedName("credential_blob") val credentialBlob: String,
+    val version: Int,
+    @SerializedName("user_guid") val userGuid: String
+)
+
+// MARK: - PCR Response Types
+
+/**
+ * Response from /vault/pcrs/current
+ * Contains signed PCR values for Nitro Enclave attestation verification.
+ */
+data class PcrValuesResponse(
+    /** PCR values (SHA-384 hashes) */
+    val pcrs: PcrValueSet,
+    /** Version of this PCR set */
+    val version: String,
+    /** When these PCRs were published */
+    @SerializedName("published_at") val publishedAt: String,
+    /** Ed25519 signature over canonical JSON of pcrs */
+    val signature: String,
+    /** Signing key ID (for key rotation) */
+    @SerializedName("key_id") val keyId: String? = null
+)
+
+/**
+ * Individual PCR values from API response.
+ */
+data class PcrValueSet(
+    /** PCR0: Hash of enclave image (96 hex chars = 48 bytes SHA-384) */
+    @SerializedName("PCR0") val pcr0: String,
+    /** PCR1: Hash of Linux kernel and bootstrap */
+    @SerializedName("PCR1") val pcr1: String,
+    /** PCR2: Hash of application */
+    @SerializedName("PCR2") val pcr2: String,
+    /** PCR3: Hash of IAM role (optional) */
+    @SerializedName("PCR3") val pcr3: String? = null
+)
 
 // MARK: - Exceptions
 

@@ -54,12 +54,11 @@ import com.vettid.app.features.vault.VaultStatusScreen
 import com.vettid.app.ui.backup.BackupDetailScreen
 import com.vettid.app.ui.backup.BackupListScreen
 import com.vettid.app.ui.backup.BackupSettingsScreen
-import com.vettid.app.ui.backup.CredentialBackupScreen
 import com.vettid.app.ui.components.NatsConnectionDetails
 import com.vettid.app.ui.components.NatsConnectionDetailsDialog
 import com.vettid.app.ui.components.QrCodeScanner
 import com.vettid.app.ui.navigation.*
-import com.vettid.app.ui.recovery.CredentialRecoveryScreen
+import com.vettid.app.ui.recovery.ProteanRecoveryScreen
 
 private const val TAG = "VettIDApp"
 
@@ -106,8 +105,7 @@ sealed class Screen(val route: String) {
     object BackupDetail : Screen("backups/{backupId}") {
         fun createRoute(backupId: String) = "backups/$backupId"
     }
-    object CredentialBackup : Screen("backup/credential")
-    object CredentialRecovery : Screen("recovery/credential")
+    object ProteanRecovery : Screen("recovery/protean")
     // App Lock & Setup
     object AppLock : Screen("app-lock")
     object PinSetup : Screen("pin-setup")
@@ -263,8 +261,8 @@ fun VettIDApp(
                 onNavigateToBackups = {
                     navController.navigate(Screen.Backups.route)
                 },
-                onNavigateToCredentialBackup = {
-                    navController.navigate(Screen.CredentialBackup.route)
+                onNavigateToProteanRecovery = {
+                    navController.navigate(Screen.ProteanRecovery.route)
                 },
                 onNavigateToConnectionDetail = { connectionId ->
                     navController.navigate(Screen.ConnectionDetail.createRoute(connectionId))
@@ -442,14 +440,8 @@ fun VettIDApp(
                 onBack = { navController.popBackStack() }
             )
         }
-        composable(Screen.CredentialBackup.route) {
-            CredentialBackupScreen(
-                onComplete = { navController.popBackStack() },
-                onBack = { navController.popBackStack() }
-            )
-        }
-        composable(Screen.CredentialRecovery.route) {
-            CredentialRecoveryScreen(
+        composable(Screen.ProteanRecovery.route) {
+            ProteanRecoveryScreen(
                 onRecoveryComplete = {
                     navController.navigate(Screen.Main.route) {
                         popUpTo(0) { inclusive = true }
@@ -784,7 +776,7 @@ fun MainScreen(
     onNavigateToConnections: () -> Unit = {},
     onNavigateToProfile: () -> Unit = {},
     onNavigateToBackups: () -> Unit = {},
-    onNavigateToCredentialBackup: () -> Unit = {},
+    onNavigateToProteanRecovery: () -> Unit = {},
     onNavigateToConnectionDetail: (String) -> Unit = {},
     onNavigateToCreateInvitation: () -> Unit = {},
     onNavigateToScanInvitation: () -> Unit = {},

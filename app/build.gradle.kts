@@ -162,6 +162,12 @@ dependencies {
     implementation("com.google.crypto.tink:tink-android:1.12.0")  // X25519, ChaCha20-Poly1305
     implementation("org.signal:argon2:13.1")  // Argon2id password hashing
 
+    // CBOR/COSE for AWS Nitro Enclave attestation verification
+    implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-cbor:2.16.1")
+    implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.16.1")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.77")  // Certificate chain verification
+    implementation("org.bouncycastle:bcpkix-jdk18on:1.77")  // COSE signature verification
+
     // Biometrics
     implementation("androidx.biometric:biometric:1.1.0")
 

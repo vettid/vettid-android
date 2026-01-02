@@ -551,11 +551,6 @@ fun AppSettingsSecurityContent() {
 
         SettingsSection(title = "Advanced") {
             SettingsItem(
-                icon = Icons.Default.Key,
-                title = "View Recovery Phrase",
-                subtitle = ""
-            )
-            SettingsItem(
                 icon = Icons.Default.Devices,
                 title = "Active Sessions",
                 subtitle = "1 device"
@@ -634,13 +629,8 @@ fun AppSettingsBackupContent() {
         SettingsSection(title = "Recovery") {
             SettingsItem(
                 icon = Icons.Default.Restore,
-                title = "Restore from Backup",
-                subtitle = ""
-            )
-            SettingsItem(
-                icon = Icons.Default.Key,
-                title = "Recovery Phrase",
-                subtitle = "View or export"
+                title = "Recover Credentials",
+                subtitle = "24-hour security delay"
             )
         }
 

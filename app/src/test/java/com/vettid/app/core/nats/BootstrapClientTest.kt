@@ -1,5 +1,8 @@
 package com.vettid.app.core.nats
 
+import com.vettid.app.core.attestation.ExpectedPcrs
+import com.vettid.app.core.attestation.NitroAttestationVerifier
+import com.vettid.app.core.attestation.PcrConfigManager
 import com.vettid.app.core.storage.CredentialStore
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.*
@@ -12,6 +15,8 @@ import org.mockito.kotlin.*
 class BootstrapClientTest {
 
     private lateinit var credentialStore: CredentialStore
+    private lateinit var attestationVerifier: NitroAttestationVerifier
+    private lateinit var pcrConfigManager: PcrConfigManager
     private lateinit var bootstrapClient: BootstrapClient
     private lateinit var natsClient: NatsClient
 
@@ -21,8 +26,23 @@ class BootstrapClientTest {
     @Before
     fun setup() {
         credentialStore = mock()
+        attestationVerifier = mock()
+        pcrConfigManager = mock()
         natsClient = mock()
-        bootstrapClient = BootstrapClient(credentialStore)
+
+        // Default mock behaviors
+        whenever(pcrConfigManager.getCurrentPcrs()).thenReturn(
+            ExpectedPcrs(
+                pcr0 = "0".repeat(96),
+                pcr1 = "0".repeat(96),
+                pcr2 = "0".repeat(96),
+                version = "test-1.0.0"
+            )
+        )
+
+        bootstrapClient = BootstrapClient(credentialStore, attestationVerifier, pcrConfigManager)
+        // Disable attestation for most tests
+        bootstrapClient.requireAttestation = false
     }
 
     // MARK: - hasBootstrapCredentials Tests
