@@ -3,43 +3,114 @@ package com.vettid.app.core.nats
 import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import com.vettid.app.core.storage.CredentialStore
 import com.vettid.app.features.calling.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Client for call signaling via vault NATS handlers.
+ * Client for vault-routed call signaling via NATS.
+ *
+ * All call events are routed through the user's vault for:
+ * - Security verification of caller identity
+ * - Block list enforcement
+ * - Audit logging
+ *
+ * Call flow:
+ * 1. Caller publishes to target's vault: OwnerSpace.{targetGuid}.forVault.call.initiate
+ * 2. Target's vault verifies, logs, relays: OwnerSpace.{targetGuid}.forApp.call.incoming
+ * 3. Callee accepts/rejects via their vault, which relays back to caller
  *
  * Handles WebRTC signaling for voice/video calls:
  * - call.initiate: Start outgoing call with SDP offer
- * - call.answer: Accept incoming call with SDP answer
- * - call.reject: Decline incoming call
+ * - call.offer/answer: WebRTC SDP exchange
+ * - call.accept/reject: Accept or decline incoming call
  * - call.end: Terminate active call
- * - call.ice-candidate: Exchange ICE candidates
+ * - call.candidate: Exchange ICE candidates
  * - call.history: Retrieve call history
- *
- * Uses JetStream KV bucket 'calls' (30d TTL) for state persistence.
  */
 @Singleton
 class CallSignalingClient @Inject constructor(
-    private val ownerSpaceClient: OwnerSpaceClient
+    private val ownerSpaceClient: OwnerSpaceClient,
+    private val credentialStore: CredentialStore
 ) {
     private val gson = Gson()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private val _callEvents = MutableSharedFlow<CallEvent>(extraBufferCapacity = 64)
     val callEvents: SharedFlow<CallEvent> = _callEvents.asSharedFlow()
 
+    init {
+        // Bridge vault-routed call events to legacy CallEvent flow
+        scope.launch {
+            ownerSpaceClient.callEvents.collect { event ->
+                bridgeCallSignalEvent(event)
+            }
+        }
+    }
+
     /**
-     * Initiate a call to a connection.
+     * Initiate a call to a peer (vault-routed).
      *
-     * @param connectionId Connection to call
+     * The call is routed through the target user's vault, which:
+     * - Verifies caller identity
+     * - Checks block list
+     * - Logs the call attempt
+     * - Relays to the target app
+     *
+     * @param targetUserGuid Target user's GUID
+     * @param displayName Caller's display name to show
      * @param callType Voice or video
      * @param sdpOffer WebRTC SDP offer
      * @return Call object with generated callId
      */
+    suspend fun initiateCall(
+        targetUserGuid: String,
+        displayName: String,
+        callType: CallType,
+        sdpOffer: String? = null
+    ): Result<Call> {
+        val callId = "call-${UUID.randomUUID()}"
+
+        val payload = JsonObject().apply {
+            addProperty("call_id", callId)
+            addProperty("caller_display_name", displayName)
+            addProperty("call_type", callType.name.lowercase())
+            addProperty("timestamp", System.currentTimeMillis())
+            sdpOffer?.let { addProperty("sdp_offer", it) }
+        }
+
+        Log.i(TAG, "Initiating ${callType.name} call to user $targetUserGuid")
+
+        // Send to TARGET user's vault
+        val result = ownerSpaceClient.sendToTargetVault(targetUserGuid, "call.initiate", payload)
+
+        return result.map {
+            Call(
+                callId = callId,
+                connectionId = "", // Not used in vault-routed calls
+                peerGuid = targetUserGuid,
+                peerDisplayName = "Unknown", // Will be updated when call is answered
+                peerAvatarUrl = null,
+                callType = callType,
+                direction = CallDirection.OUTGOING,
+                initiatedAt = System.currentTimeMillis()
+            )
+        }
+    }
+
+    /**
+     * Legacy method for backward compatibility.
+     * Use initiateCall(targetUserGuid, displayName, callType, sdpOffer) for vault-routed calls.
+     */
+    @Deprecated("Use initiateCall with targetUserGuid instead")
     suspend fun initiateCall(
         connectionId: String,
         callType: CallType,
@@ -54,7 +125,7 @@ class CallSignalingClient @Inject constructor(
             sdpOffer?.let { addProperty("sdp_offer", it) }
         }
 
-        Log.i(TAG, "Initiating ${callType.name} call to connection $connectionId")
+        Log.i(TAG, "Initiating ${callType.name} call to connection $connectionId (legacy)")
 
         return sendAndAwait("call.initiate", payload) { result ->
             Call(
@@ -71,62 +142,181 @@ class CallSignalingClient @Inject constructor(
     }
 
     /**
-     * Answer an incoming call.
+     * Answer an incoming call (vault-routed).
      *
      * @param callId The call to answer
+     * @param callerGuid The caller's GUID (to route response back)
      * @param sdpAnswer WebRTC SDP answer
      */
+    suspend fun answerCall(
+        callId: String,
+        callerGuid: String,
+        sdpAnswer: String? = null
+    ): Result<Unit> {
+        val payload = JsonObject().apply {
+            addProperty("call_id", callId)
+            sdpAnswer?.let { addProperty("sdp_answer", it) }
+        }
+
+        Log.i(TAG, "Answering call $callId to user $callerGuid")
+
+        // Send accept back to caller's vault
+        val result = ownerSpaceClient.sendToTargetVault(callerGuid, "call.accept", payload)
+        return result.map { Unit }
+    }
+
+    /**
+     * Legacy answer method.
+     */
+    @Deprecated("Use answerCall with callerGuid for vault-routed calls")
     suspend fun answerCall(callId: String, sdpAnswer: String? = null): Result<Unit> {
         val payload = JsonObject().apply {
             addProperty("call_id", callId)
             sdpAnswer?.let { addProperty("sdp_answer", it) }
         }
 
-        Log.i(TAG, "Answering call $callId")
+        Log.i(TAG, "Answering call $callId (legacy)")
 
         return sendAndAwait("call.answer", payload) { Unit }
     }
 
     /**
-     * Reject an incoming call.
+     * Reject an incoming call (vault-routed).
      *
      * @param callId The call to reject
+     * @param callerGuid The caller's GUID (to route response back)
      * @param reason Optional reason for rejection
      */
+    suspend fun rejectCall(
+        callId: String,
+        callerGuid: String,
+        reason: String? = null
+    ): Result<Unit> {
+        val payload = JsonObject().apply {
+            addProperty("call_id", callId)
+            reason?.let { addProperty("reason", it) }
+        }
+
+        Log.i(TAG, "Rejecting call $callId to user $callerGuid")
+
+        // Send reject back to caller's vault
+        val result = ownerSpaceClient.sendToTargetVault(callerGuid, "call.reject", payload)
+        return result.map { Unit }
+    }
+
+    /**
+     * Legacy reject method.
+     */
+    @Deprecated("Use rejectCall with callerGuid for vault-routed calls")
     suspend fun rejectCall(callId: String, reason: String? = null): Result<Unit> {
         val payload = JsonObject().apply {
             addProperty("call_id", callId)
             reason?.let { addProperty("reason", it) }
         }
 
-        Log.i(TAG, "Rejecting call $callId")
+        Log.i(TAG, "Rejecting call $callId (legacy)")
 
         return sendAndAwait("call.reject", payload) { Unit }
     }
 
     /**
-     * End an active call.
+     * End an active call (vault-routed).
      *
      * @param callId The call to end
+     * @param peerGuid The peer's GUID (to notify them)
      */
+    suspend fun endCall(callId: String, peerGuid: String): Result<Unit> {
+        val payload = JsonObject().apply {
+            addProperty("call_id", callId)
+        }
+
+        Log.i(TAG, "Ending call $callId with user $peerGuid")
+
+        // Send end to peer's vault
+        val result = ownerSpaceClient.sendToTargetVault(peerGuid, "call.end", payload)
+        return result.map { Unit }
+    }
+
+    /**
+     * Legacy end call method.
+     */
+    @Deprecated("Use endCall with peerGuid for vault-routed calls")
     suspend fun endCall(callId: String): Result<Unit> {
         val payload = JsonObject().apply {
             addProperty("call_id", callId)
         }
 
-        Log.i(TAG, "Ending call $callId")
+        Log.i(TAG, "Ending call $callId (legacy)")
 
         return sendAndAwait("call.end", payload) { Unit }
     }
 
     /**
-     * Send ICE candidate to peer.
+     * Send SDP offer to peer (vault-routed).
+     *
+     * @param callId The call ID
+     * @param peerGuid The peer's GUID
+     * @param sdpOffer WebRTC SDP offer
+     */
+    suspend fun sendOffer(callId: String, peerGuid: String, sdpOffer: String): Result<Unit> {
+        val payload = JsonObject().apply {
+            addProperty("call_id", callId)
+            addProperty("sdp_offer", sdpOffer)
+        }
+
+        val result = ownerSpaceClient.sendToTargetVault(peerGuid, "call.offer", payload)
+        return result.map { Unit }
+    }
+
+    /**
+     * Send SDP answer to peer (vault-routed).
+     *
+     * @param callId The call ID
+     * @param peerGuid The peer's GUID
+     * @param sdpAnswer WebRTC SDP answer
+     */
+    suspend fun sendAnswer(callId: String, peerGuid: String, sdpAnswer: String): Result<Unit> {
+        val payload = JsonObject().apply {
+            addProperty("call_id", callId)
+            addProperty("sdp_answer", sdpAnswer)
+        }
+
+        val result = ownerSpaceClient.sendToTargetVault(peerGuid, "call.answer", payload)
+        return result.map { Unit }
+    }
+
+    /**
+     * Send ICE candidate to peer (vault-routed).
      *
      * @param callId The active call
+     * @param peerGuid The peer's GUID
      * @param candidate ICE candidate string
      * @param sdpMid SDP mid
      * @param sdpMLineIndex SDP m-line index
      */
+    suspend fun sendIceCandidate(
+        callId: String,
+        peerGuid: String,
+        candidate: String,
+        sdpMid: String?,
+        sdpMLineIndex: Int?
+    ): Result<Unit> {
+        val payload = JsonObject().apply {
+            addProperty("call_id", callId)
+            addProperty("candidate", candidate)
+            sdpMid?.let { addProperty("sdp_mid", it) }
+            sdpMLineIndex?.let { addProperty("sdp_m_line_index", it) }
+        }
+
+        // Send to peer's vault
+        val result = ownerSpaceClient.sendToTargetVault(peerGuid, "call.candidate", payload)
+        return result.map { Unit }
+    }
+
+    /**
+     * Legacy ICE candidate method.
+     */
+    @Deprecated("Use sendIceCandidate with peerGuid for vault-routed calls")
     suspend fun sendIceCandidate(
         callId: String,
         candidate: String,
@@ -153,8 +343,23 @@ class CallSignalingClient @Inject constructor(
      * Notify peer of video state change.
      *
      * @param callId The active call
+     * @param peerGuid The peer's GUID
      * @param enabled Whether local video is enabled
      */
+    suspend fun sendVideoState(callId: String, peerGuid: String, enabled: Boolean): Result<Unit> {
+        val payload = JsonObject().apply {
+            addProperty("call_id", callId)
+            addProperty("video_enabled", enabled)
+        }
+
+        val result = ownerSpaceClient.sendToTargetVault(peerGuid, "call.video-state", payload)
+        return result.map { Unit }
+    }
+
+    /**
+     * Legacy video state method.
+     */
+    @Deprecated("Use sendVideoState with peerGuid for vault-routed calls")
     suspend fun sendVideoState(callId: String, enabled: Boolean): Result<Unit> {
         val payload = JsonObject().apply {
             addProperty("call_id", callId)
@@ -396,6 +601,75 @@ class CallSignalingClient @Inject constructor(
             "MISSED" -> CallEndReason.MISSED
             "CANCELLED" -> CallEndReason.CANCELLED
             else -> CallEndReason.COMPLETED
+        }
+    }
+
+    // MARK: - Event Bridging
+
+    /**
+     * Bridge vault-routed CallSignalEvent to legacy CallEvent flow.
+     * This allows existing UI code to continue working with CallEvent.
+     */
+    private fun bridgeCallSignalEvent(event: CallSignalEvent) {
+        val callEvent: CallEvent? = when (event) {
+            is CallSignalEvent.Incoming -> CallEvent.IncomingCall(
+                callId = event.callId,
+                connectionId = "", // Not used in vault-routed calls
+                peerGuid = event.callerGuid,
+                peerDisplayName = event.callerDisplayName,
+                peerAvatarUrl = null,
+                callType = if (event.callType == "video") CallType.VIDEO else CallType.VOICE,
+                sdpOffer = event.sdpOffer
+            )
+            is CallSignalEvent.Accepted -> CallEvent.CallAnswered(
+                callId = event.callId,
+                answeredAt = System.currentTimeMillis(),
+                sdpAnswer = event.sdpAnswer
+            )
+            is CallSignalEvent.Answer -> CallEvent.CallAnswered(
+                callId = event.callId,
+                answeredAt = System.currentTimeMillis(),
+                sdpAnswer = event.sdpAnswer
+            )
+            is CallSignalEvent.Rejected -> CallEvent.CallRejected(
+                callId = event.callId,
+                reason = event.reason
+            )
+            is CallSignalEvent.Ended -> CallEvent.CallEnded(
+                callId = event.callId,
+                reason = parseEndReason(event.reason),
+                duration = event.duration
+            )
+            is CallSignalEvent.IceCandidate -> CallEvent.IceCandidate(
+                callId = event.callId,
+                candidate = event.candidate,
+                sdpMid = event.sdpMid,
+                sdpMLineIndex = event.sdpMLineIndex
+            )
+            is CallSignalEvent.Missed -> CallEvent.CallEnded(
+                callId = event.callId,
+                reason = CallEndReason.MISSED,
+                duration = 0
+            )
+            is CallSignalEvent.Blocked -> CallEvent.CallFailed(
+                callId = event.callId,
+                error = "You are blocked by this user"
+            )
+            is CallSignalEvent.Busy -> CallEvent.CallEnded(
+                callId = event.callId,
+                reason = CallEndReason.BUSY,
+                duration = 0
+            )
+            is CallSignalEvent.Offer -> {
+                // SDP offer is typically handled during call setup, not as a separate event
+                Log.d(TAG, "Received SDP offer for call ${event.callId}")
+                null
+            }
+        }
+
+        callEvent?.let {
+            Log.d(TAG, "Bridged call event: ${it::class.simpleName}")
+            _callEvents.tryEmit(it)
         }
     }
 

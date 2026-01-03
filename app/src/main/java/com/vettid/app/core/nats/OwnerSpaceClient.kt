@@ -69,6 +69,10 @@ class OwnerSpaceClient @Inject constructor(
     /** Flow of connection revocation notices from peers. */
     val connectionRevocations: SharedFlow<ConnectionRevoked> = _connectionRevocations.asSharedFlow()
 
+    private val _callEvents = MutableSharedFlow<CallSignalEvent>(extraBufferCapacity = 64)
+    /** Flow of call signaling events (vault-routed). */
+    val callEvents: SharedFlow<CallSignalEvent> = _callEvents.asSharedFlow()
+
     private var appSubscription: NatsSubscription? = null
     private var eventTypesSubscription: NatsSubscription? = null
 
@@ -181,6 +185,45 @@ class OwnerSpaceClient @Inject constructor(
     }
 
     /**
+     * Send a message to another user's vault.
+     *
+     * Used for vault-routed signaling where messages go to the TARGET user's vault
+     * instead of our own vault. The target vault will verify, log, and relay the message.
+     *
+     * @param targetUserGuid The target user's GUID
+     * @param messageType The message type/action (e.g., "call.initiate")
+     * @param payload The message payload
+     * @return Request ID for correlating response
+     */
+    suspend fun sendToTargetVault(
+        targetUserGuid: String,
+        messageType: String,
+        payload: JsonObject = JsonObject()
+    ): Result<String> {
+        val requestId = UUID.randomUUID().toString()
+        val subject = "OwnerSpace.$targetUserGuid.forVault.$messageType"
+
+        // Add our user GUID as caller_id for identification
+        val enrichedPayload = payload.deepCopy().apply {
+            val ownGuid = credentialStore.getUserGuid()
+            if (ownGuid != null && !has("caller_id")) {
+                addProperty("caller_id", ownGuid)
+            }
+        }
+
+        val message = VaultMessage(
+            id = requestId,
+            type = messageType,
+            payload = enrichedPayload,
+            timestamp = Instant.now().toString()
+        )
+
+        val json = gson.toJson(message)
+        android.util.Log.d(TAG, "Sending to target vault: $subject")
+        return natsClient.publish(subject, json).map { requestId }
+    }
+
+    /**
      * Request vault status.
      *
      * @return Request ID
@@ -205,6 +248,51 @@ class OwnerSpaceClient @Inject constructor(
      */
     suspend fun ping(): Result<String> {
         return sendToVault("ping")
+    }
+
+    // MARK: - Block List Management
+
+    /**
+     * Block a user from contacting you.
+     *
+     * @param targetGuid The user GUID to block
+     * @param reason Optional reason for blocking
+     * @param durationSecs Duration in seconds (0 = permanent)
+     * @return Request ID
+     */
+    suspend fun blockUser(
+        targetGuid: String,
+        reason: String? = null,
+        durationSecs: Long = 0
+    ): Result<String> {
+        val payload = JsonObject().apply {
+            addProperty("target_id", targetGuid)
+            reason?.let { addProperty("reason", it) }
+            addProperty("duration_secs", durationSecs)
+        }
+        return sendToVault("block.add", payload)
+    }
+
+    /**
+     * Unblock a user.
+     *
+     * @param targetGuid The user GUID to unblock
+     * @return Request ID
+     */
+    suspend fun unblockUser(targetGuid: String): Result<String> {
+        val payload = JsonObject().apply {
+            addProperty("target_id", targetGuid)
+        }
+        return sendToVault("block.remove", payload)
+    }
+
+    /**
+     * Get list of blocked users.
+     *
+     * @return Request ID
+     */
+    suspend fun getBlockedUsers(): Result<String> {
+        return sendToVault("block.list")
     }
 
     // MARK: - E2E Session Management
@@ -445,6 +533,11 @@ class OwnerSpaceClient @Inject constructor(
                 }
                 message.subject.endsWith(".forApp.connection-revoked") -> {
                     handleConnectionRevoked(message)
+                    return
+                }
+                // Call events (vault-routed signaling)
+                message.subject.contains(".forApp.call.") -> {
+                    handleCallEvent(message)
                     return
                 }
             }
@@ -692,6 +785,94 @@ class OwnerSpaceClient @Inject constructor(
         }
     }
 
+    /**
+     * Handle call signaling events from vault (vault-routed calls).
+     *
+     * Events:
+     * - call.incoming: Incoming call notification
+     * - call.offer: WebRTC SDP offer
+     * - call.answer: WebRTC SDP answer
+     * - call.candidate: ICE candidate
+     * - call.accepted: Call was accepted
+     * - call.rejected: Call was rejected
+     * - call.ended: Call ended
+     * - call.missed: Call was not answered
+     * - call.blocked: Caller is blocked
+     * - call.busy: Callee is busy
+     */
+    private fun handleCallEvent(message: NatsMessage) {
+        try {
+            // Extract event type from subject (e.g., "OwnerSpace.guid.forApp.call.incoming" -> "incoming")
+            val eventType = message.subject.substringAfterLast(".forApp.call.")
+
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+
+            val callEvent = when (eventType) {
+                "incoming" -> CallSignalEvent.Incoming(
+                    callId = payload.getString("call_id"),
+                    callerGuid = payload.getString("caller_id"),
+                    callerDisplayName = payload.optString("caller_display_name", "Unknown"),
+                    callType = payload.optString("call_type", "voice"),
+                    sdpOffer = if (payload.has("sdp_offer")) payload.getString("sdp_offer") else null,
+                    timestamp = payload.optLong("timestamp", System.currentTimeMillis())
+                )
+                "offer" -> CallSignalEvent.Offer(
+                    callId = payload.getString("call_id"),
+                    callerGuid = payload.getString("caller_id"),
+                    sdpOffer = payload.getString("sdp_offer")
+                )
+                "answer" -> CallSignalEvent.Answer(
+                    callId = payload.getString("call_id"),
+                    sdpAnswer = payload.getString("sdp_answer")
+                )
+                "candidate" -> CallSignalEvent.IceCandidate(
+                    callId = payload.getString("call_id"),
+                    candidate = payload.getString("candidate"),
+                    sdpMid = if (payload.has("sdp_mid")) payload.getString("sdp_mid") else null,
+                    sdpMLineIndex = if (payload.has("sdp_m_line_index")) payload.getInt("sdp_m_line_index") else null
+                )
+                "accepted" -> CallSignalEvent.Accepted(
+                    callId = payload.getString("call_id"),
+                    sdpAnswer = if (payload.has("sdp_answer")) payload.getString("sdp_answer") else null
+                )
+                "rejected" -> CallSignalEvent.Rejected(
+                    callId = payload.getString("call_id"),
+                    reason = if (payload.has("reason")) payload.getString("reason") else null
+                )
+                "ended" -> CallSignalEvent.Ended(
+                    callId = payload.getString("call_id"),
+                    reason = payload.optString("reason", "completed"),
+                    duration = payload.optLong("duration", 0)
+                )
+                "missed" -> CallSignalEvent.Missed(
+                    callId = payload.getString("call_id"),
+                    callerGuid = payload.optString("caller_id", ""),
+                    callerDisplayName = payload.optString("caller_display_name", "Unknown"),
+                    timestamp = payload.optLong("timestamp", System.currentTimeMillis())
+                )
+                "blocked" -> CallSignalEvent.Blocked(
+                    callId = payload.getString("call_id"),
+                    targetGuid = payload.optString("target_id", "")
+                )
+                "busy" -> CallSignalEvent.Busy(
+                    callId = payload.getString("call_id")
+                )
+                else -> {
+                    android.util.Log.w(TAG, "Unknown call event type: $eventType")
+                    null
+                }
+            }
+
+            callEvent?.let { event ->
+                android.util.Log.d(TAG, "Received call event: $eventType (callId=${event.callId})")
+                _callEvents.tryEmit(event)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse call event", e)
+        }
+    }
+
     companion object {
         private const val TAG = "OwnerSpaceClient"
     }
@@ -863,3 +1044,86 @@ data class CredentialRotationMessage(
     /** Previous credential ID that was rotated out */
     val oldCredentialId: String?
 )
+
+// MARK: - Call Signaling Events (Vault-Routed)
+
+/**
+ * Call signaling events received from vault.
+ *
+ * These events are routed through the user's vault for:
+ * - Security verification of caller identity
+ * - Block list enforcement
+ * - Audit logging
+ */
+sealed class CallSignalEvent {
+    abstract val callId: String
+
+    /** Incoming call notification */
+    data class Incoming(
+        override val callId: String,
+        val callerGuid: String,
+        val callerDisplayName: String,
+        val callType: String,  // "voice" or "video"
+        val sdpOffer: String?,
+        val timestamp: Long
+    ) : CallSignalEvent()
+
+    /** WebRTC SDP offer */
+    data class Offer(
+        override val callId: String,
+        val callerGuid: String,
+        val sdpOffer: String
+    ) : CallSignalEvent()
+
+    /** WebRTC SDP answer */
+    data class Answer(
+        override val callId: String,
+        val sdpAnswer: String
+    ) : CallSignalEvent()
+
+    /** ICE candidate for WebRTC */
+    data class IceCandidate(
+        override val callId: String,
+        val candidate: String,
+        val sdpMid: String?,
+        val sdpMLineIndex: Int?
+    ) : CallSignalEvent()
+
+    /** Call was accepted by callee */
+    data class Accepted(
+        override val callId: String,
+        val sdpAnswer: String?
+    ) : CallSignalEvent()
+
+    /** Call was rejected by callee */
+    data class Rejected(
+        override val callId: String,
+        val reason: String?
+    ) : CallSignalEvent()
+
+    /** Call ended */
+    data class Ended(
+        override val callId: String,
+        val reason: String,
+        val duration: Long
+    ) : CallSignalEvent()
+
+    /** Call was not answered (timeout) */
+    data class Missed(
+        override val callId: String,
+        val callerGuid: String,
+        val callerDisplayName: String,
+        val timestamp: Long
+    ) : CallSignalEvent()
+
+    /** Caller is blocked by callee */
+    data class Blocked(
+        override val callId: String,
+        val targetGuid: String
+    ) : CallSignalEvent()
+
+    /** Callee is busy on another call */
+    data class Busy(
+        override val callId: String
+    ) : CallSignalEvent()
+}

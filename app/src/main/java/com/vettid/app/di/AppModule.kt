@@ -196,9 +196,10 @@ object AppModule {
     @Provides
     @Singleton
     fun provideCallSignalingClient(
-        ownerSpaceClient: OwnerSpaceClient
+        ownerSpaceClient: OwnerSpaceClient,
+        credentialStore: CredentialStore
     ): CallSignalingClient {
-        return CallSignalingClient(ownerSpaceClient)
+        return CallSignalingClient(ownerSpaceClient, credentialStore)
     }
 
     @Provides
