@@ -45,8 +45,8 @@ class PcrConfigManager @Inject constructor(
 
         // VettID's Ed25519 public key for verifying PCR signatures
         // This key is embedded in the app and used to verify PCR updates
-        // TODO: Replace with actual VettID signing key before production
-        private const val VETTID_SIGNING_KEY_BASE64 = "PLACEHOLDER_VETTID_SIGNING_KEY"
+        // Generated: 2026-01-03, Key ID: vettid-pcr-signing-key-v1
+        private const val VETTID_SIGNING_KEY_BASE64 = "MCowBQYDK2VwAyEA+1FRzTi+cZ1BIuBzNjnarDkN4T+gxNnDi4BCS7tbwX0="
 
         // Default bundled PCRs (updated with each app release)
         // These are used when the app is first installed or if updates fail
