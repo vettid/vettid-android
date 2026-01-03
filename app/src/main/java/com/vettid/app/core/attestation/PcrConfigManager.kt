@@ -36,8 +36,12 @@ class PcrConfigManager @Inject constructor(
         private const val TAG = "PcrConfigManager"
         private const val PREFS_NAME = "vettid_pcr_config"
         private const val KEY_CURRENT_PCRS = "current_pcrs"
+        private const val KEY_PREVIOUS_PCRS = "previous_pcrs"
         private const val KEY_LAST_UPDATE = "last_update_timestamp"
         private const val KEY_PCR_VERSION = "pcr_version"
+
+        // PCR update API endpoint
+        private const val PCR_UPDATE_ENDPOINT = "https://api.vettid.com/vault/pcrs/current"
 
         // VettID's Ed25519 public key for verifying PCR signatures
         // This key is embedded in the app and used to verify PCR updates
@@ -46,14 +50,14 @@ class PcrConfigManager @Inject constructor(
 
         // Default bundled PCRs (updated with each app release)
         // These are used when the app is first installed or if updates fail
-        // TODO: Replace with actual PCR values from VettID's enclave build
+        // PCR values from VettID vault enclave build 2026-01-03
         private val DEFAULT_PCRS = ExpectedPcrs(
-            pcr0 = "0".repeat(96), // Placeholder - 48 bytes = 96 hex chars
-            pcr1 = "0".repeat(96),
-            pcr2 = "0".repeat(96),
+            pcr0 = "c4fbe85714ce8e31e8568edf0bd0022f3341a18b3060b2ebafcb4b706bc8c7870b9d2353b9eba1c0b4dd94b80238a208",
+            pcr1 = "4b4d5b3661b3efc12920900c80e126e4ce783c522de6c02a2a5bf7af3a2b9327b86776f188e4be1c1c404a129dbda493",
+            pcr2 = "3f37ae4b5a503d457cf198ac15010f595383796bfdd4c779eb255acb9cdec61fce3dc430368561807a32d483faeed5dc",
             pcr3 = null,
-            version = "bundled-1.0.0",
-            publishedAt = "2026-01-01T00:00:00Z"
+            version = "2026-01-03",
+            publishedAt = "2026-01-03T00:00:00Z"
         )
 
         // How often to check for PCR updates (24 hours)
@@ -130,15 +134,68 @@ class PcrConfigManager @Inject constructor(
             return false
         }
 
+        // Save current PCRs as previous (for transition period fallback)
+        val currentPcrsJson = prefs.getString(KEY_CURRENT_PCRS, null)
+
         // Store updated PCRs
-        prefs.edit()
-            .putString(KEY_CURRENT_PCRS, gson.toJson(signedResponse.pcrs))
-            .putString(KEY_PCR_VERSION, signedResponse.pcrs.version)
-            .putLong(KEY_LAST_UPDATE, System.currentTimeMillis())
-            .apply()
+        prefs.edit().apply {
+            // Preserve previous PCRs for transition period
+            if (currentPcrsJson != null) {
+                putString(KEY_PREVIOUS_PCRS, currentPcrsJson)
+            }
+            putString(KEY_CURRENT_PCRS, gson.toJson(signedResponse.pcrs))
+            putString(KEY_PCR_VERSION, signedResponse.pcrs.version)
+            putLong(KEY_LAST_UPDATE, System.currentTimeMillis())
+            apply()
+        }
 
         Log.i(TAG, "PCRs updated to version: ${signedResponse.pcrs.version}")
         return true
+    }
+
+    /**
+     * Fetch PCR updates from VettID API.
+     *
+     * This is a suspend function that should be called from a coroutine.
+     * Network errors are handled gracefully - the app will use cached/bundled PCRs.
+     *
+     * @return Result containing the updated PCRs or an error
+     */
+    suspend fun fetchPcrUpdates(): Result<ExpectedPcrs> {
+        Log.d(TAG, "Fetching PCR updates from API")
+
+        return try {
+            val url = java.net.URL(PCR_UPDATE_ENDPOINT)
+            val connection = url.openConnection() as java.net.HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.setRequestProperty("Accept", "application/json")
+            connection.connectTimeout = 10000
+            connection.readTimeout = 10000
+
+            val responseCode = connection.responseCode
+            if (responseCode != 200) {
+                Log.w(TAG, "PCR update API returned $responseCode")
+                return Result.failure(PcrUpdateException("API returned $responseCode"))
+            }
+
+            val responseBody = connection.inputStream.bufferedReader().use { it.readText() }
+            val apiResponse = gson.fromJson(responseBody, PcrApiResponse::class.java)
+
+            // Convert and update
+            val signedResponse = apiResponse.toSignedResponse()
+            val updated = updatePcrs(signedResponse)
+
+            if (updated) {
+                Log.i(TAG, "PCRs updated to ${signedResponse.pcrs.version}")
+            } else {
+                Log.d(TAG, "PCRs already up to date")
+            }
+
+            Result.success(signedResponse.pcrs)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch PCR updates", e)
+            Result.failure(PcrUpdateException("Failed to fetch PCR updates: ${e.message}", e))
+        }
     }
 
     /**
@@ -187,11 +244,64 @@ class PcrConfigManager @Inject constructor(
     }
 
     /**
+     * Get previous PCR values (for transition period fallback).
+     *
+     * During enclave updates, both old and new PCRs may be valid.
+     */
+    fun getPreviousPcrs(): ExpectedPcrs? {
+        val storedJson = prefs.getString(KEY_PREVIOUS_PCRS, null) ?: return null
+        return try {
+            gson.fromJson(storedJson, ExpectedPcrs::class.java)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse previous PCRs", e)
+            null
+        }
+    }
+
+    /**
+     * Verify PCRs with fallback to previous version during transition.
+     *
+     * This allows a grace period when enclave is updated - both old and new
+     * PCRs are accepted until the transition period ends.
+     *
+     * @param actualPcrs The PCR values from the attestation document
+     * @return true if PCRs match current or previous expected values
+     */
+    fun verifyPcrsWithFallback(actualPcrs: ExpectedPcrs): Boolean {
+        val currentPcrs = getCurrentPcrs()
+
+        // Try current PCRs first
+        if (matchesPcrs(actualPcrs, currentPcrs)) {
+            Log.d(TAG, "PCRs match current version: ${currentPcrs.version}")
+            return true
+        }
+
+        // During transition, try previous version
+        getPreviousPcrs()?.let { previousPcrs ->
+            if (matchesPcrs(actualPcrs, previousPcrs)) {
+                Log.d(TAG, "PCRs match previous version: ${previousPcrs.version} (transition period)")
+                return true
+            }
+        }
+
+        Log.w(TAG, "PCRs do not match current (${currentPcrs.version}) or previous versions")
+        return false
+    }
+
+    private fun matchesPcrs(actual: ExpectedPcrs, expected: ExpectedPcrs): Boolean {
+        return actual.pcr0.equals(expected.pcr0, ignoreCase = true) &&
+                actual.pcr1.equals(expected.pcr1, ignoreCase = true) &&
+                actual.pcr2.equals(expected.pcr2, ignoreCase = true) &&
+                (expected.pcr3 == null || actual.pcr3.equals(expected.pcr3, ignoreCase = true))
+    }
+
+    /**
      * Clear cached PCRs (for testing or recovery).
      */
     fun clearCache() {
         prefs.edit()
             .remove(KEY_CURRENT_PCRS)
+            .remove(KEY_PREVIOUS_PCRS)
             .remove(KEY_PCR_VERSION)
             .remove(KEY_LAST_UPDATE)
             .apply()

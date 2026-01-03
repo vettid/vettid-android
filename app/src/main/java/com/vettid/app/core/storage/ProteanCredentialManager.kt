@@ -15,6 +15,10 @@ import androidx.work.workDataOf
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import dagger.hilt.android.qualifiers.ApplicationContext
+import java.net.HttpURLConnection
+import java.net.URL
+import java.time.Duration
+import java.time.Instant
 import java.util.Date
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -52,9 +56,20 @@ class ProteanCredentialManager @Inject constructor(
         private const val KEY_METADATA = "metadata"
         private const val KEY_BACKUP_STATUS = "backup_status"
         private const val KEY_USER_GUID = "user_guid"
+        private const val KEY_RECOVERY_REQUEST_ID = "recovery_request_id"
 
         // Work Manager unique work name
         const val BACKUP_WORK_NAME = "protean_credential_backup"
+
+        // Recovery API endpoints
+        private const val API_BASE_URL = "https://api.vettid.com"
+        private const val RECOVERY_REQUEST_ENDPOINT = "$API_BASE_URL/vault/recovery/request"
+        private const val RECOVERY_STATUS_ENDPOINT = "$API_BASE_URL/vault/recovery/status"
+        private const val RECOVERY_DOWNLOAD_ENDPOINT = "$API_BASE_URL/vault/recovery/download"
+        private const val RECOVERY_CANCEL_ENDPOINT = "$API_BASE_URL/vault/recovery/cancel"
+
+        // Recovery delay (24 hours)
+        val RECOVERY_DELAY: Duration = Duration.ofHours(24)
     }
 
     private val gson = Gson()
@@ -321,6 +336,234 @@ class ProteanCredentialManager @Inject constructor(
 
         Log.i(TAG, "Recovered credential imported successfully")
     }
+
+    // MARK: - Recovery Flow (24-hour delayed recovery)
+
+    /**
+     * Request credential recovery.
+     *
+     * This starts the 24-hour recovery timer. The user will receive a notification
+     * and can cancel the recovery from any authenticated device.
+     *
+     * @param email The email address associated with the account
+     * @return RecoveryRequest containing request ID and when recovery will be available
+     */
+    suspend fun requestRecovery(email: String): Result<RecoveryRequest> {
+        Log.i(TAG, "Requesting credential recovery for $email")
+
+        return try {
+            val url = URL(RECOVERY_REQUEST_ENDPOINT)
+            val connection = url.openConnection() as HttpURLConnection
+            connection.requestMethod = "POST"
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.setRequestProperty("Accept", "application/json")
+            connection.doOutput = true
+            connection.connectTimeout = 10000
+            connection.readTimeout = 10000
+
+            val requestBody = gson.toJson(mapOf("email" to email))
+            connection.outputStream.bufferedWriter().use { it.write(requestBody) }
+
+            val responseCode = connection.responseCode
+            if (responseCode != 200 && responseCode != 201) {
+                val errorBody = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                Log.e(TAG, "Recovery request failed: $responseCode - $errorBody")
+                return Result.failure(RecoveryException("Recovery request failed: $responseCode", responseCode))
+            }
+
+            val responseBody = connection.inputStream.bufferedReader().use { it.readText() }
+            val response = gson.fromJson(responseBody, RecoveryRequestResponse::class.java)
+
+            val request = RecoveryRequest(
+                requestId = response.requestId,
+                availableAt = Instant.parse(response.availableAt),
+                email = email
+            )
+
+            // Store request ID for later reference
+            prefs.edit()
+                .putString(KEY_RECOVERY_REQUEST_ID, request.requestId)
+                .apply()
+
+            Log.i(TAG, "Recovery requested, available at: ${request.availableAt}")
+            Result.success(request)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to request recovery", e)
+            Result.failure(RecoveryException("Failed to request recovery: ${e.message}", cause = e))
+        }
+    }
+
+    /**
+     * Check the status of a recovery request.
+     *
+     * @param requestId The recovery request ID
+     * @return RecoveryStatus with current state and timing info
+     */
+    suspend fun checkRecoveryStatus(requestId: String): Result<RecoveryStatus> {
+        Log.d(TAG, "Checking recovery status for $requestId")
+
+        return try {
+            val url = URL("$RECOVERY_STATUS_ENDPOINT?request_id=$requestId")
+            val connection = url.openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.setRequestProperty("Accept", "application/json")
+            connection.connectTimeout = 10000
+            connection.readTimeout = 10000
+
+            val responseCode = connection.responseCode
+            if (responseCode != 200) {
+                val errorBody = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                Log.e(TAG, "Recovery status check failed: $responseCode - $errorBody")
+                return Result.failure(RecoveryException("Status check failed: $responseCode", responseCode))
+            }
+
+            val responseBody = connection.inputStream.bufferedReader().use { it.readText() }
+            val response = gson.fromJson(responseBody, RecoveryStatusResponse::class.java)
+
+            val status = RecoveryStatus(
+                requestId = requestId,
+                state = RecoveryState.valueOf(response.status.uppercase()),
+                availableAt = Instant.parse(response.availableAt),
+                expiresAt = Instant.parse(response.expiresAt)
+            )
+
+            Log.d(TAG, "Recovery status: ${status.state}, available at: ${status.availableAt}")
+            Result.success(status)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to check recovery status", e)
+            Result.failure(RecoveryException("Failed to check status: ${e.message}", cause = e))
+        }
+    }
+
+    /**
+     * Download recovered credential after 24-hour delay.
+     *
+     * @param requestId The recovery request ID
+     * @param attestationBase64 Nitro attestation document (base64) to prove genuine device
+     * @return The recovered sealed credential
+     */
+    suspend fun downloadRecoveredCredential(
+        requestId: String,
+        attestationBase64: String
+    ): Result<SealedCredential> {
+        Log.i(TAG, "Downloading recovered credential for $requestId")
+
+        return try {
+            val url = URL(RECOVERY_DOWNLOAD_ENDPOINT)
+            val connection = url.openConnection() as HttpURLConnection
+            connection.requestMethod = "POST"
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.setRequestProperty("Accept", "application/json")
+            connection.doOutput = true
+            connection.connectTimeout = 30000
+            connection.readTimeout = 30000
+
+            val requestBody = gson.toJson(mapOf(
+                "request_id" to requestId,
+                "attestation" to attestationBase64
+            ))
+            connection.outputStream.bufferedWriter().use { it.write(requestBody) }
+
+            val responseCode = connection.responseCode
+            if (responseCode != 200) {
+                val errorBody = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                Log.e(TAG, "Recovery download failed: $responseCode - $errorBody")
+                return Result.failure(RecoveryException("Download failed: $responseCode", responseCode))
+            }
+
+            val responseBody = connection.inputStream.bufferedReader().use { it.readText() }
+            val response = gson.fromJson(responseBody, RecoveryDownloadResponse::class.java)
+
+            val credential = SealedCredential(
+                userGuid = response.userGuid,
+                sealedData = Base64.decode(response.sealedCredential, Base64.NO_WRAP),
+                version = response.version
+            )
+
+            // Import the recovered credential
+            importRecoveredCredential(
+                credentialBlob = response.sealedCredential,
+                userGuid = response.userGuid,
+                version = response.version
+            )
+
+            // Clear the recovery request ID
+            prefs.edit().remove(KEY_RECOVERY_REQUEST_ID).apply()
+
+            Log.i(TAG, "Recovered credential downloaded and imported successfully")
+            Result.success(credential)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to download recovered credential", e)
+            Result.failure(RecoveryException("Failed to download: ${e.message}", cause = e))
+        }
+    }
+
+    /**
+     * Cancel a pending recovery request.
+     *
+     * Can be called from any authenticated device to prevent unauthorized recovery.
+     *
+     * @param requestId The recovery request ID to cancel
+     * @param authToken Authentication token for the user
+     */
+    suspend fun cancelRecovery(requestId: String, authToken: String): Result<Unit> {
+        Log.i(TAG, "Cancelling recovery request $requestId")
+
+        return try {
+            val url = URL(RECOVERY_CANCEL_ENDPOINT)
+            val connection = url.openConnection() as HttpURLConnection
+            connection.requestMethod = "POST"
+            connection.setRequestProperty("Content-Type", "application/json")
+            connection.setRequestProperty("Accept", "application/json")
+            connection.setRequestProperty("Authorization", "Bearer $authToken")
+            connection.doOutput = true
+            connection.connectTimeout = 10000
+            connection.readTimeout = 10000
+
+            val requestBody = gson.toJson(mapOf("request_id" to requestId))
+            connection.outputStream.bufferedWriter().use { it.write(requestBody) }
+
+            val responseCode = connection.responseCode
+            if (responseCode != 200 && responseCode != 204) {
+                val errorBody = connection.errorStream?.bufferedReader()?.use { it.readText() } ?: ""
+                Log.e(TAG, "Recovery cancellation failed: $responseCode - $errorBody")
+                return Result.failure(RecoveryException("Cancellation failed: $responseCode", responseCode))
+            }
+
+            // Clear stored recovery request ID if it matches
+            if (prefs.getString(KEY_RECOVERY_REQUEST_ID, null) == requestId) {
+                prefs.edit().remove(KEY_RECOVERY_REQUEST_ID).apply()
+            }
+
+            Log.i(TAG, "Recovery cancelled successfully")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to cancel recovery", e)
+            Result.failure(RecoveryException("Failed to cancel: ${e.message}", cause = e))
+        }
+    }
+
+    /**
+     * Get the stored recovery request ID, if any.
+     */
+    fun getPendingRecoveryRequestId(): String? {
+        return prefs.getString(KEY_RECOVERY_REQUEST_ID, null)
+    }
+
+    /**
+     * Calculate time remaining until recovery is available.
+     *
+     * @param availableAt When recovery becomes available
+     * @return Duration until available, or Duration.ZERO if already available
+     */
+    fun getTimeUntilRecoveryAvailable(availableAt: Instant): Duration {
+        val now = Instant.now()
+        return if (now.isBefore(availableAt)) {
+            Duration.between(now, availableAt)
+        } else {
+            Duration.ZERO
+        }
+    }
 }
 
 /**
@@ -356,3 +599,104 @@ enum class BackupStatus {
     /** Backup failed */
     FAILED
 }
+
+// MARK: - Recovery Data Classes
+
+/**
+ * A sealed credential blob from the enclave.
+ */
+data class SealedCredential(
+    val userGuid: String,
+    val sealedData: ByteArray,
+    val version: Int = 1,
+    val createdAt: Date = Date()
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+        other as SealedCredential
+        return userGuid == other.userGuid && sealedData.contentEquals(other.sealedData)
+    }
+
+    override fun hashCode(): Int {
+        var result = userGuid.hashCode()
+        result = 31 * result + sealedData.contentHashCode()
+        return result
+    }
+}
+
+/**
+ * Recovery request information.
+ */
+data class RecoveryRequest(
+    /** Unique ID for this recovery request */
+    val requestId: String,
+    /** When the recovery will be available (after 24-hour delay) */
+    val availableAt: Instant,
+    /** Email used for the request */
+    val email: String
+)
+
+/**
+ * Current state of a recovery request.
+ */
+enum class RecoveryState {
+    /** Waiting for 24-hour delay to complete */
+    PENDING,
+    /** Recovery is available for download */
+    READY,
+    /** User cancelled the recovery */
+    CANCELLED,
+    /** Recovery window expired */
+    EXPIRED
+}
+
+/**
+ * Status of a recovery request.
+ */
+data class RecoveryStatus(
+    val requestId: String,
+    val state: RecoveryState,
+    val availableAt: Instant,
+    val expiresAt: Instant
+) {
+    /** Whether recovery can be downloaded now */
+    val isReady: Boolean get() = state == RecoveryState.READY
+
+    /** Whether recovery is still pending the 24-hour delay */
+    val isPending: Boolean get() = state == RecoveryState.PENDING
+}
+
+/**
+ * Exception for recovery operation failures.
+ */
+class RecoveryException(
+    message: String,
+    val statusCode: Int? = null,
+    cause: Throwable? = null
+) : Exception(message, cause)
+
+// MARK: - API Response DTOs
+
+internal data class RecoveryRequestResponse(
+    @SerializedName("request_id")
+    val requestId: String,
+    @SerializedName("available_at")
+    val availableAt: String
+)
+
+internal data class RecoveryStatusResponse(
+    val status: String,
+    @SerializedName("available_at")
+    val availableAt: String,
+    @SerializedName("expires_at")
+    val expiresAt: String
+)
+
+internal data class RecoveryDownloadResponse(
+    @SerializedName("user_guid")
+    val userGuid: String,
+    @SerializedName("sealed_credential")
+    val sealedCredential: String,
+    val version: Int
+)

@@ -949,6 +949,11 @@ sealed class VaultResponse {
 sealed class VaultEvent {
     data class EventTypesUpdated(val eventTypes: List<EventType>) : VaultEvent()
     data class HandlerTriggered(val handlerId: String, val data: JsonObject) : VaultEvent()
+
+    // Security events
+    data class RecoveryRequested(val requestId: String, val email: String?) : VaultEvent()
+    data class RecoveryCancelled(val requestId: String) : VaultEvent()
+    data class RecoveryCompleted(val requestId: String) : VaultEvent()
 }
 
 /**
