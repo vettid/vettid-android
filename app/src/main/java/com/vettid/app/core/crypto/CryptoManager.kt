@@ -102,6 +102,9 @@ class CryptoManager @Inject constructor() {
         // Salt lengths
         private const val SALT_LENGTH = 16
         private const val KEY_LENGTH = 32  // 256-bit keys
+
+        /** HKDF context for Nitro Enclave password encryption */
+        const val ENCLAVE_AUTH_CONTEXT = "enclave-auth-v1"
     }
 
     // MARK: - Password Hashing (Argon2id)
@@ -207,10 +210,10 @@ class CryptoManager @Inject constructor() {
         }
     }
 
-    // MARK: - UTK Password Encryption Flow
+    // MARK: - Password Encryption Flow
 
     /**
-     * Encrypt password hash for sending to server
+     * Encrypt password hash for sending to server (legacy UTK flow).
      *
      * Flow:
      * 1. Hash password with Argon2id
@@ -239,8 +242,57 @@ class CryptoManager @Inject constructor() {
         val utkPublicKey = Base64.decode(utkPublicKeyBase64, Base64.NO_WRAP)
         val sharedSecret = x25519SharedSecret(ephemeralPrivate, utkPublicKey)
 
-        // 4. Derive encryption key
-        val encryptionKey = deriveEncryptionKey(sharedSecret)
+        // 4. Derive encryption key (legacy context)
+        val encryptionKey = deriveEncryptionKey(sharedSecret, "transaction-encryption-v1")
+
+        // 5. Encrypt password hash
+        val (ciphertext, nonce) = chaChaEncrypt(passwordHash, encryptionKey)
+
+        // Clear sensitive data
+        ephemeralPrivate.fill(0)
+        sharedSecret.fill(0)
+        encryptionKey.fill(0)
+        passwordHash.fill(0)
+
+        return PasswordEncryptionResult(
+            encryptedPasswordHash = Base64.encodeToString(ciphertext, Base64.NO_WRAP),
+            ephemeralPublicKey = Base64.encodeToString(ephemeralPublic, Base64.NO_WRAP),
+            nonce = Base64.encodeToString(nonce, Base64.NO_WRAP)
+        )
+    }
+
+    /**
+     * Encrypt password hash for Nitro Enclave (new architecture).
+     *
+     * Flow:
+     * 1. Hash password with Argon2id
+     * 2. Generate ephemeral X25519 keypair
+     * 3. Compute shared secret with ENCLAVE public key (from attestation)
+     * 4. Derive encryption key with HKDF using "enclave-auth-v1" context
+     * 5. Encrypt password hash with ChaCha20-Poly1305
+     *
+     * @param password User's password
+     * @param salt Salt for Argon2 (should be stored locally)
+     * @param enclavePublicKeyBase64 Enclave public key from attestation (Base64)
+     * @return PasswordEncryptionResult with encrypted data for API
+     */
+    fun encryptPasswordForEnclave(
+        password: String,
+        salt: ByteArray,
+        enclavePublicKeyBase64: String
+    ): PasswordEncryptionResult {
+        // 1. Hash password
+        val passwordHash = hashPassword(password, salt)
+
+        // 2. Generate ephemeral X25519 keypair
+        val (ephemeralPrivate, ephemeralPublic) = generateX25519KeyPair()
+
+        // 3. Decode ENCLAVE public key and compute shared secret
+        val enclavePublicKey = Base64.decode(enclavePublicKeyBase64, Base64.NO_WRAP)
+        val sharedSecret = x25519SharedSecret(ephemeralPrivate, enclavePublicKey)
+
+        // 4. Derive encryption key with NEW context for enclave
+        val encryptionKey = deriveEncryptionKey(sharedSecret, ENCLAVE_AUTH_CONTEXT)
 
         // 5. Encrypt password hash
         val (ciphertext, nonce) = chaChaEncrypt(passwordHash, encryptionKey)

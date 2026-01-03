@@ -70,6 +70,45 @@ class NitroAttestationVerifier @Inject constructor() {
     private val certificateFactory = CertificateFactory.getInstance("X.509")
 
     /**
+     * Verify enclave attestation from enrollment start response.
+     *
+     * This is the primary entry point for enrollment flow attestation verification.
+     * It extracts the expected PCRs from the response and verifies the attestation.
+     *
+     * @param attestation EnclaveAttestation from enrollment start response
+     * @return VerifiedAttestation containing enclave public key and metadata
+     * @throws AttestationVerificationException if verification fails
+     */
+    fun verify(attestation: com.vettid.app.core.network.EnclaveAttestation): VerifiedAttestation {
+        if (attestation.expectedPcrs.isEmpty()) {
+            throw AttestationVerificationException("No expected PCR values provided")
+        }
+
+        val expected = attestation.expectedPcrs.first()
+        val expectedPcrs = ExpectedPcrs(
+            pcr0 = expected.pcr0,
+            pcr1 = expected.pcr1,
+            pcr2 = expected.pcr2,
+            pcr3 = expected.pcr3
+        )
+
+        val expectedNonce = attestation.nonce?.let {
+            try {
+                Base64.decode(it, Base64.NO_WRAP)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to decode nonce, skipping nonce verification", e)
+                null
+            }
+        }
+
+        return verify(
+            attestationDocBase64 = attestation.attestationDocument,
+            expectedPcrs = expectedPcrs,
+            expectedNonce = expectedNonce
+        )
+    }
+
+    /**
      * Verify an attestation document and extract verified data.
      *
      * @param attestationDocBase64 Base64-encoded attestation document from enclave

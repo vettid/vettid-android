@@ -696,7 +696,8 @@ data class EnrollStartResponse(
     @SerializedName("password_key_id") val passwordKeyId: String, // Key ID to use for password encryption
     @SerializedName("next_step") val nextStep: String? = null,
     @SerializedName("attestation_required") val attestationRequired: Boolean = false,
-    @SerializedName("attestation_challenge") val attestationChallenge: String? = null // Only if attestation required
+    @SerializedName("attestation_challenge") val attestationChallenge: String? = null, // Only if attestation required
+    @SerializedName("enclave_attestation") val enclaveAttestation: EnclaveAttestation? = null // Nitro enclave attestation
 )
 
 /**
@@ -711,7 +712,29 @@ data class EnrollStartDirectResponse(
     @SerializedName("password_key_id") val passwordKeyId: String,
     @SerializedName("next_step") val nextStep: String? = null,
     @SerializedName("attestation_required") val attestationRequired: Boolean = false,
-    @SerializedName("attestation_challenge") val attestationChallenge: String? = null
+    @SerializedName("attestation_challenge") val attestationChallenge: String? = null,
+    @SerializedName("enclave_attestation") val enclaveAttestation: EnclaveAttestation? = null // Nitro enclave attestation
+)
+
+/**
+ * Nitro Enclave attestation data from enrollment start.
+ * Contains the attestation document and enclave public key for verification.
+ */
+data class EnclaveAttestation(
+    @SerializedName("attestation_document") val attestationDocument: String, // Base64-encoded CBOR
+    @SerializedName("enclave_public_key") val enclavePublicKey: String, // Base64-encoded X25519 public key
+    val nonce: String? = null, // Base64-encoded 32-byte nonce for replay protection
+    @SerializedName("expected_pcrs") val expectedPcrs: List<ExpectedPcrValues>
+)
+
+/**
+ * Expected PCR values for enclave verification.
+ */
+data class ExpectedPcrValues(
+    val pcr0: String, // Hex-encoded 48 bytes - enclave image hash
+    val pcr1: String, // Hex-encoded 48 bytes - kernel hash
+    val pcr2: String, // Hex-encoded 48 bytes - application hash
+    val pcr3: String? = null // Hex-encoded 48 bytes - IAM role (optional)
 )
 
 data class TransactionKeyPublic(
@@ -786,15 +809,21 @@ data class NatsTopics(
 )
 
 /**
- * Credential package from finalize response
+ * Credential package from finalize response (Nitro Enclave format).
+ *
+ * Contains the sealed credential created inside the Nitro Enclave,
+ * bound to hardware PCRs for tamper-proof storage.
  */
 data class CredentialPackage(
     @SerializedName("user_guid") val userGuid: String,
     @SerializedName("credential_id") val credentialId: String,
-    @SerializedName("encrypted_blob") val encryptedBlob: String,
-    @SerializedName("ephemeral_public_key") val ephemeralPublicKey: String,
-    val nonce: String,
-    @SerializedName("cek_version") val cekVersion: Int,
+
+    // Nitro Enclave credential data
+    @SerializedName("sealed_credential") val sealedCredential: String, // Enclave-sealed blob
+    @SerializedName("enclave_public_key") val enclavePublicKey: String, // Identity public key
+    @SerializedName("backup_key") val backupKey: String? = null, // For credential backup encryption
+
+    // Common fields
     @SerializedName("ledger_auth_token") val ledgerAuthToken: LedgerAuthToken,
     @SerializedName("transaction_keys") val transactionKeys: List<TransactionKey>
 )

@@ -86,6 +86,11 @@ class CredentialStore @Inject constructor(
         private const val KEY_NATS_BOOTSTRAP_TOPIC = "nats_bootstrap_topic"
         private const val KEY_NATS_CREDENTIAL_ID = "nats_credential_id"
         private const val KEY_NATS_CREDENTIALS_EXPIRY = "nats_credentials_expiry"
+        // Nitro Enclave credential keys
+        private const val KEY_SEALED_CREDENTIAL = "sealed_credential"
+        private const val KEY_ENCLAVE_PUBLIC_KEY = "enclave_public_key"
+        private const val KEY_BACKUP_KEY = "backup_key"
+        private const val KEY_IS_ENCLAVE_FORMAT = "is_enclave_format"
     }
 
     // MARK: - Credential Storage
@@ -339,7 +344,7 @@ class CredentialStore @Inject constructor(
     // MARK: - New Vault Services API Support
 
     /**
-     * Store credential package from new finalize response format
+     * Store credential package from finalize response (Nitro Enclave format).
      */
     fun storeCredentialPackage(
         credentialPackage: CredentialPackage,
@@ -357,10 +362,13 @@ class CredentialStore @Inject constructor(
         encryptedPrefs.edit().apply {
             putString(KEY_USER_GUID, credentialPackage.userGuid)
             putString(KEY_CREDENTIAL_ID, credentialPackage.credentialId)
-            putString(KEY_ENCRYPTED_BLOB, credentialPackage.encryptedBlob)
-            putString(KEY_EPHEMERAL_PUBLIC_KEY, credentialPackage.ephemeralPublicKey)
-            putString(KEY_NONCE, credentialPackage.nonce)
-            putInt(KEY_CEK_VERSION, credentialPackage.cekVersion)
+
+            // Store sealed credential (Nitro Enclave format)
+            putString(KEY_SEALED_CREDENTIAL, credentialPackage.sealedCredential)
+            putString(KEY_ENCLAVE_PUBLIC_KEY, credentialPackage.enclavePublicKey)
+            putString(KEY_BACKUP_KEY, credentialPackage.backupKey)
+            putBoolean(KEY_IS_ENCLAVE_FORMAT, true)
+
             // LedgerAuthToken uses token directly (lat_xxx format), no separate latId
             putString(KEY_LAT_ID, credentialPackage.ledgerAuthToken.token) // Use token as ID
             putString(KEY_LAT_TOKEN, credentialPackage.ledgerAuthToken.token)

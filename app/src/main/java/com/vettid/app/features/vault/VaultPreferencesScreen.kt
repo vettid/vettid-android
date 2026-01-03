@@ -365,6 +365,7 @@ private fun VaultServerSection(
                     text = when (status) {
                         VaultServerStatus.UNKNOWN -> "Unknown"
                         VaultServerStatus.LOADING -> "Checking..."
+                        VaultServerStatus.ENCLAVE_READY -> "Enclave Ready"
                         VaultServerStatus.RUNNING -> "Running"
                         VaultServerStatus.STOPPED -> "Stopped"
                         VaultServerStatus.STARTING -> "Starting..."
@@ -377,6 +378,7 @@ private fun VaultServerSection(
             leadingContent = {
                 Icon(
                     imageVector = when (status) {
+                        VaultServerStatus.ENCLAVE_READY -> Icons.Default.CheckCircle
                         VaultServerStatus.RUNNING -> Icons.Default.CheckCircle
                         VaultServerStatus.STOPPED -> Icons.Default.Cancel
                         VaultServerStatus.ERROR -> Icons.Default.Error
@@ -384,6 +386,7 @@ private fun VaultServerSection(
                     },
                     contentDescription = null,
                     tint = when (status) {
+                        VaultServerStatus.ENCLAVE_READY -> Color(0xFF4CAF50) // Green
                         VaultServerStatus.RUNNING -> Color(0xFF4CAF50) // Green
                         VaultServerStatus.STOPPED -> MaterialTheme.colorScheme.onSurfaceVariant
                         VaultServerStatus.ERROR -> MaterialTheme.colorScheme.error
@@ -440,46 +443,49 @@ private fun VaultServerSection(
             )
         }
 
-        Divider()
+        // Only show start/stop buttons for legacy EC2 mode (not Nitro Enclave)
+        if (status != VaultServerStatus.ENCLAVE_READY) {
+            Divider()
 
-        // Action Buttons
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            // Start Button
-            OutlinedButton(
-                onClick = onStartClick,
-                enabled = !actionInProgress && (status == VaultServerStatus.STOPPED || status == VaultServerStatus.ERROR || status == VaultServerStatus.UNKNOWN),
-                modifier = Modifier.weight(1f)
+            // Action Buttons (legacy EC2 mode only)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.PlayArrow,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Start")
-            }
+                // Start Button
+                OutlinedButton(
+                    onClick = onStartClick,
+                    enabled = !actionInProgress && (status == VaultServerStatus.STOPPED || status == VaultServerStatus.ERROR || status == VaultServerStatus.UNKNOWN),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Start")
+                }
 
-            // Stop Button
-            OutlinedButton(
-                onClick = onStopClick,
-                enabled = !actionInProgress && status == VaultServerStatus.RUNNING,
-                modifier = Modifier.weight(1f),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error
-                )
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Stop,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Stop")
+                // Stop Button
+                OutlinedButton(
+                    onClick = onStopClick,
+                    enabled = !actionInProgress && status == VaultServerStatus.RUNNING,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Stop,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Stop")
+                }
             }
         }
 

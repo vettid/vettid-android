@@ -3,11 +3,15 @@ package com.vettid.app.features.enrollment
 import android.content.Context
 import android.provider.Settings
 import android.util.Base64
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.app.core.attestation.AttestationVerificationException
 import com.vettid.app.core.attestation.HardwareAttestationManager
+import com.vettid.app.core.attestation.NitroAttestationVerifier
 import com.vettid.app.core.crypto.CryptoManager
 import com.vettid.app.core.network.DeviceInfo
+import com.vettid.app.core.network.EnclaveAttestation
 import com.vettid.app.core.network.EnrollmentQRData
 import com.vettid.app.core.network.TransactionKeyPublic
 import com.vettid.app.core.network.VaultServiceClient
@@ -36,10 +40,12 @@ class EnrollmentViewModel @Inject constructor(
     private val vaultServiceClient: VaultServiceClient,
     private val cryptoManager: CryptoManager,
     private val attestationManager: HardwareAttestationManager,
+    private val nitroAttestationVerifier: NitroAttestationVerifier,
     private val credentialStore: CredentialStore
 ) : ViewModel() {
 
     companion object {
+        private const val TAG = "EnrollmentViewModel"
         const val MIN_PASSWORD_LENGTH = 12
     }
 
@@ -60,6 +66,10 @@ class EnrollmentViewModel @Inject constructor(
     // Store transaction keys during enrollment
     private var currentTransactionKeys: List<TransactionKeyPublic> = emptyList()
     private var passwordSalt: ByteArray? = null
+
+    // Nitro Enclave attestation data
+    private var enclaveAttestation: EnclaveAttestation? = null
+    private var verifiedEnclavePublicKey: String? = null
 
     /**
      * Process enrollment events
@@ -149,6 +159,11 @@ class EnrollmentViewModel @Inject constructor(
     /**
      * Process enrollment using invitation_code (direct/test flow)
      * Uses /vault/enroll/start-direct endpoint
+     *
+     * Flow:
+     * 1. Call start-direct to get enclave attestation and transaction keys
+     * 2. Verify Nitro Enclave attestation (CRITICAL security step)
+     * 3. Move to password setup with verified enclave public key
      */
     private suspend fun processDirectEnrollment(enrollmentData: EnrollmentQRData) {
         val invitationCode = enrollmentData.invitationCode
@@ -164,10 +179,40 @@ class EnrollmentViewModel @Inject constructor(
             onSuccess = { startResponse ->
                 currentTransactionKeys = startResponse.transactionKeys
 
+                // Verify Nitro Enclave attestation
+                val attestation = startResponse.enclaveAttestation
+                if (attestation == null) {
+                    Log.e(TAG, "No enclave attestation in enrollment response")
+                    _state.value = EnrollmentState.Error(
+                        message = "Server did not provide enclave attestation. Enrollment cannot proceed securely.",
+                        retryable = false
+                    )
+                    return@fold
+                }
+
+                // Verify attestation before proceeding
+                try {
+                    Log.d(TAG, "Verifying Nitro Enclave attestation...")
+                    val verified = nitroAttestationVerifier.verify(attestation)
+
+                    // Store verified enclave public key for password encryption
+                    enclaveAttestation = attestation
+                    verifiedEnclavePublicKey = verified.enclavePublicKeyBase64()
+
+                    Log.i(TAG, "Enclave attestation verified. Module: ${verified.moduleId}")
+                } catch (e: AttestationVerificationException) {
+                    Log.e(TAG, "Enclave attestation verification failed", e)
+                    _state.value = EnrollmentState.Error(
+                        message = "Enclave security verification failed: ${e.message}",
+                        retryable = false
+                    )
+                    return@fold
+                }
+
                 // Generate password salt for later use
                 passwordSalt = cryptoManager.generateSalt()
 
-                // Move directly to password setup
+                // Move to password setup
                 _state.value = EnrollmentState.SettingPassword(
                     sessionId = startResponse.enrollmentSessionId,
                     transactionKeys = startResponse.transactionKeys,
@@ -195,6 +240,12 @@ class EnrollmentViewModel @Inject constructor(
     /**
      * Process enrollment using session_token (production flow)
      * Uses /vault/enroll/authenticate then /vault/enroll/start
+     *
+     * Flow:
+     * 1. Authenticate with session_token to get enrollment JWT
+     * 2. Call enroll/start to get enclave attestation and transaction keys
+     * 3. Verify Nitro Enclave attestation (CRITICAL security step)
+     * 4. Move to password setup with verified enclave public key
      */
     private suspend fun processSessionTokenEnrollment(enrollmentData: EnrollmentQRData) {
         val sessionToken = enrollmentData.sessionToken
@@ -208,17 +259,47 @@ class EnrollmentViewModel @Inject constructor(
 
         authResult.fold(
             onSuccess = { authResponse ->
-                // Step 2: Call enroll/start to get transaction keys
+                // Step 2: Call enroll/start to get transaction keys and attestation
                 val startResult = vaultServiceClient.enrollStart(skipAttestation = true)
 
                 startResult.fold(
                     onSuccess = { startResponse ->
                         currentTransactionKeys = startResponse.transactionKeys
 
+                        // Verify Nitro Enclave attestation
+                        val attestation = startResponse.enclaveAttestation
+                        if (attestation == null) {
+                            Log.e(TAG, "No enclave attestation in enrollment response")
+                            _state.value = EnrollmentState.Error(
+                                message = "Server did not provide enclave attestation. Enrollment cannot proceed securely.",
+                                retryable = false
+                            )
+                            return@fold
+                        }
+
+                        // Verify attestation before proceeding
+                        try {
+                            Log.d(TAG, "Verifying Nitro Enclave attestation...")
+                            val verified = nitroAttestationVerifier.verify(attestation)
+
+                            // Store verified enclave public key for password encryption
+                            enclaveAttestation = attestation
+                            verifiedEnclavePublicKey = verified.enclavePublicKeyBase64()
+
+                            Log.i(TAG, "Enclave attestation verified. Module: ${verified.moduleId}")
+                        } catch (e: AttestationVerificationException) {
+                            Log.e(TAG, "Enclave attestation verification failed", e)
+                            _state.value = EnrollmentState.Error(
+                                message = "Enclave security verification failed: ${e.message}",
+                                retryable = false
+                            )
+                            return@fold
+                        }
+
                         // Generate password salt for later use
                         passwordSalt = cryptoManager.generateSalt()
 
-                        // Move directly to password setup (skipping attestation)
+                        // Move to password setup
                         _state.value = EnrollmentState.SettingPassword(
                             sessionId = authResponse.enrollmentSessionId,
                             transactionKeys = startResponse.transactionKeys,
@@ -363,20 +444,27 @@ class EnrollmentViewModel @Inject constructor(
             return
         }
 
+        // Verify we have the enclave public key from attestation
+        val enclavePublicKey = verifiedEnclavePublicKey
+        if (enclavePublicKey == null) {
+            _state.value = currentState.copy(
+                error = "Security error: Enclave key not verified. Please restart enrollment."
+            )
+            return
+        }
+
         _state.value = currentState.copy(isSubmitting = true, error = null)
 
         try {
-            // Find the transaction key specified by passwordKeyId
-            val transactionKey = currentState.transactionKeys.find { it.keyId == currentState.passwordKeyId }
-                ?: throw IllegalStateException("Password key not found: ${currentState.passwordKeyId}")
-
-            // Encrypt password with the designated transaction key
+            // Encrypt password with the VERIFIED enclave public key (from attestation)
             val salt = passwordSalt ?: cryptoManager.generateSalt().also { passwordSalt = it }
-            val encryptedResult = cryptoManager.encryptPasswordForServer(
+            val encryptedResult = cryptoManager.encryptPasswordForEnclave(
                 password = currentState.password,
                 salt = salt,
-                utkPublicKeyBase64 = transactionKey.publicKey
+                enclavePublicKeyBase64 = enclavePublicKey
             )
+
+            Log.d(TAG, "Password encrypted with enclave key, submitting...")
 
             // Submit to server with all encryption parameters
             val result = vaultServiceClient.setPassword(
@@ -498,5 +586,7 @@ class EnrollmentViewModel @Inject constructor(
         _state.value = EnrollmentState.Initial
         currentTransactionKeys = emptyList()
         passwordSalt = null
+        enclaveAttestation = null
+        verifiedEnclavePublicKey = null
     }
 }
