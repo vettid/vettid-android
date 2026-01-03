@@ -1,6 +1,44 @@
 # VettID API Status
 
-**Last Updated:** 2026-01-02 01:25 UTC (🔴 E2E decryption still not working for connection handlers)
+**Last Updated:** 2026-01-03 11:20 UTC (🔴 Enrollment endpoint returning HTTP 500)
+
+---
+
+## 🔴 BLOCKED: Enrollment Endpoint HTTP 500 (2026-01-03)
+
+**GitHub Issue:** [#6 - Enrollment endpoint returning HTTP 500](https://github.com/mesmerverse/vettid-vault-ami/issues/6)
+
+**Problem:** The `/vault/enroll/start-direct` endpoint returns HTTP 500 with `{"message":"Failed to start enrollment"}`.
+
+**Request:**
+```bash
+curl -X POST "https://tiqpij5mue.execute-api.us-east-1.amazonaws.com/vault/enroll/start-direct" \
+  -H "Content-Type: application/json" \
+  -d '{"device_id":"test","device_type":"android","invitation_code":"TEST-WBBD-ZTU7-D6K9","skip_attestation":true}'
+```
+
+**Response:**
+```json
+{"message":"Failed to start enrollment"}
+```
+HTTP Status: 500
+
+**Impact:**
+- ❌ Cannot test enrollment flow
+- ❌ Cannot test any post-enrollment features (connections, messaging, calling, vault, etc.)
+- ❌ Blocks Nitro Enclave migration testing
+
+**Android App Status:**
+The Android Nitro migration is complete (commit `b65f212`):
+- ✅ `NitroAttestationVerifier` - parses and verifies attestation documents
+- ✅ `EnrollmentViewModel` - expects and verifies enclave attestation
+- ✅ `CryptoManager.encryptPasswordForEnclave()` - encrypts to enclave public key
+- ✅ `CredentialStore` - supports `sealed_credential` format
+- ✅ All 33 unit tests passing
+
+**Backend Needs To:**
+1. Fix the HTTP 500 error on `/vault/enroll/start-direct`
+2. Return `enclave_attestation` field per `docs/NITRO-ENCLAVE-MIGRATION-FOR-MOBILE.md`
 
 ---
 
