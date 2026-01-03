@@ -30,7 +30,7 @@ class NatsSetupViewModelTest {
     private val testAccount = NatsAccount(
         ownerSpaceId = "OwnerSpace.test-guid",
         messageSpaceId = "MessageSpace.test-guid",
-        natsEndpoint = "nats://nats.vettid.dev:4222",
+        natsEndpoint = "nats://nats.vettid.dev:443",
         status = NatsAccountStatus.ACTIVE,
         createdAt = "2025-12-07T10:00:00Z"
     )
@@ -39,7 +39,7 @@ class NatsSetupViewModelTest {
         tokenId = "nats_test-token",
         jwt = "test.jwt.token",
         seed = "SUAM1234567890",
-        endpoint = "nats://nats.vettid.dev:4222",
+        endpoint = "nats://nats.vettid.dev:443",
         expiresAt = Instant.now().plus(24, ChronoUnit.HOURS),
         permissions = NatsPermissions(
             publish = listOf("OwnerSpace.test-guid.forVault.>"),

@@ -30,7 +30,7 @@ class NatsAutoConnectorTest {
 
     private val testJwt = "eyJhbGciOiJlZDI1NTE5In0.test"
     private val testSeed = "SUAIBDPBAUTW..."
-    private val testEndpoint = "tls://nats.vettid.dev:4222"
+    private val testEndpoint = "tls://nats.vettid.dev:443"
     private val testOwnerSpaceId = "OwnerSpace.test-user-123"
     private val testMessageSpaceId = "MessageSpace.test-user-123"
     private val testCredentialFile = """-----BEGIN NATS USER JWT-----

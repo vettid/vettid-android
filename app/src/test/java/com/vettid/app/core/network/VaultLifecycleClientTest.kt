@@ -90,7 +90,7 @@ class VaultLifecycleClientTest {
             enrollmentStatus = "active",
             instanceStatus = "running",
             instanceId = "i-12345",
-            natsEndpoint = "tls://nats.vettid.dev:4222"
+            natsEndpoint = "tls://nats.vettid.dev:443"
         )
 
         assertTrue(response.isVaultRunning)
@@ -131,7 +131,7 @@ class VaultLifecycleClientTest {
             instanceStatus = "running",
             instanceId = "i-12345",
             instanceIp = "10.0.1.100",
-            natsEndpoint = "tls://nats.vettid.dev:4222"
+            natsEndpoint = "tls://nats.vettid.dev:443"
         )
 
         assertEquals("active", response.enrollmentStatus)
@@ -140,7 +140,7 @@ class VaultLifecycleClientTest {
         assertEquals("running", response.instanceStatus)
         assertEquals("i-12345", response.instanceId)
         assertEquals("10.0.1.100", response.instanceIp)
-        assertEquals("tls://nats.vettid.dev:4222", response.natsEndpoint)
+        assertEquals("tls://nats.vettid.dev:443", response.natsEndpoint)
     }
 
     // MARK: - ActionTokenRequest Tests

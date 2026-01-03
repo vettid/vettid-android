@@ -12,7 +12,7 @@ class NatsCredentialsTest {
             tokenId = "nats_test-token-123",
             jwt = "eyJ0eXAiOiJKV1QiLCJhbGciOiJlZDI1NTE5LW5rZXkifQ.payload.signature",
             seed = "SUAM1234567890ABCDEFGHIJKLMNOP",
-            endpoint = "nats://nats.vettid.dev:4222",
+            endpoint = "nats://nats.vettid.dev:443",
             expiresAt = expiresAt,
             permissions = NatsPermissions(
                 publish = listOf("OwnerSpace.guid.forVault.>"),

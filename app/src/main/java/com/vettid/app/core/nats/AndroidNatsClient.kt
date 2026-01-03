@@ -328,7 +328,7 @@ class AndroidNatsClient {
 
         val parts = cleanUrl.split(":")
         val host = parts[0]
-        val port = if (parts.size > 1) parts[1].toInt() else 4222
+        val port = if (parts.size > 1) parts[1].toInt() else 443
 
         return Pair(host, port)
     }

@@ -141,7 +141,7 @@ class NatsCredentialClientTest {
     @Test
     fun `storeCredentials updates credential store`() {
         val testCredentials = "-----BEGIN NATS USER JWT-----\ntest\n-----END NATS USER JWT-----"
-        val testEndpoint = "tls://nats.vettid.dev:4222"
+        val testEndpoint = "tls://nats.vettid.dev:443"
         val testOwnerSpace = "OwnerSpace.test"
         val testMessageSpace = "MessageSpace.test"
 

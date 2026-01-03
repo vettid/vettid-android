@@ -30,7 +30,7 @@ class TcpConnectivityTest {
     companion object {
         private const val TAG = "TcpConnectivityTest"
         private const val NATS_HOST = "nats.vettid.dev"
-        private const val NATS_PORT = 4222
+        private const val NATS_PORT = 443
         private const val TIMEOUT_MS = 10000
         private const val TEST_API_BASE = "https://tiqpij5mue.execute-api.us-east-1.amazonaws.com"
         private const val TEST_API_KEY = "vettid-test-key-dev-only"
@@ -428,7 +428,7 @@ class TcpConnectivityTest {
 
             // NATS credentials are in vault_bootstrap
             val vaultBootstrap = credentials.getJSONObject("vault_bootstrap")
-            val endpoint = vaultBootstrap.optString("nats_endpoint", "tls://nats.vettid.dev:4222")
+            val endpoint = vaultBootstrap.optString("nats_endpoint", "tls://nats.vettid.dev:443")
             val credsFile = vaultBootstrap.getString("credentials")
 
             Log.i(TAG, "NATS endpoint: $endpoint")

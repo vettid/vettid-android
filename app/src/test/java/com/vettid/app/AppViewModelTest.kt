@@ -26,7 +26,7 @@ class AppViewModelTest {
         NatsAutoConnector.AutoConnectState.Idle
     )
 
-    private val testEndpoint = "tls://nats.vettid.dev:4222"
+    private val testEndpoint = "tls://nats.vettid.dev:443"
     private val testOwnerSpace = "OwnerSpace.test-user-123"
     private val testMessageSpace = "MessageSpace.test-user-123"
 
