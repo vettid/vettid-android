@@ -303,6 +303,7 @@ class ProteanCredentialManager @Inject constructor(
             .remove(KEY_METADATA)
             .remove(KEY_BACKUP_STATUS)
             .remove(KEY_USER_GUID)
+            .remove(KEY_RECOVERY_REQUEST_ID)
             .apply()
         cancelPendingBackup()
     }

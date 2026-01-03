@@ -464,6 +464,46 @@ class ProteanCredentialManagerTest {
         }
     }
 
+    // MARK: - Recovery Request ID Storage Tests
+
+    @Test
+    fun `getPendingRecoveryRequestId returns null when no request stored`() {
+        assertNull(manager.getPendingRecoveryRequestId())
+    }
+
+    @Test
+    fun `getPendingRecoveryRequestId returns stored request ID`() {
+        prefsStorage["recovery_request_id"] = "req-123"
+
+        assertEquals("req-123", manager.getPendingRecoveryRequestId())
+    }
+
+    @Test
+    fun `storePendingRecoveryRequestId saves request ID`() {
+        manager.storePendingRecoveryRequestId("req-456")
+
+        assertEquals("req-456", prefsStorage["recovery_request_id"])
+    }
+
+    @Test
+    fun `clearPendingRecoveryRequestId removes request ID`() {
+        prefsStorage["recovery_request_id"] = "req-789"
+
+        manager.clearPendingRecoveryRequestId()
+
+        assertNull(prefsStorage["recovery_request_id"])
+    }
+
+    @Test
+    fun `clearCredential also clears recovery request ID`() {
+        manager.storeCredential("blob", "user-123", triggerBackup = false)
+        prefsStorage["recovery_request_id"] = "req-123"
+
+        manager.clearCredential()
+
+        assertNull(manager.getPendingRecoveryRequestId())
+    }
+
     // MARK: - Store with Trigger Backup Tests
 
     @Test
@@ -537,6 +577,7 @@ class TestableProteanCredentialManager(
         private const val KEY_METADATA = "metadata"
         private const val KEY_BACKUP_STATUS = "backup_status"
         private const val KEY_USER_GUID = "user_guid"
+        private const val KEY_RECOVERY_REQUEST_ID = "recovery_request_id"
     }
 
     private val gson = Gson()
@@ -678,8 +719,25 @@ class TestableProteanCredentialManager(
             .remove(KEY_METADATA)
             .remove(KEY_BACKUP_STATUS)
             .remove(KEY_USER_GUID)
+            .remove(KEY_RECOVERY_REQUEST_ID)
             .apply()
         cancelPendingBackup()
+    }
+
+    fun getPendingRecoveryRequestId(): String? {
+        return prefs.getString(KEY_RECOVERY_REQUEST_ID, null)
+    }
+
+    fun storePendingRecoveryRequestId(requestId: String) {
+        prefs.edit()
+            .putString(KEY_RECOVERY_REQUEST_ID, requestId)
+            .apply()
+    }
+
+    fun clearPendingRecoveryRequestId() {
+        prefs.edit()
+            .remove(KEY_RECOVERY_REQUEST_ID)
+            .apply()
     }
 
     fun importRecoveredCredential(
