@@ -515,6 +515,312 @@ class PcrConfigManagerTest {
         assertEquals(original.keyId, restored.keyId)
     }
 
+    // MARK: - GetPreviousPcrs Tests
+
+    @Test
+    fun `getPreviousPcrs returns null when no previous PCRs stored`() {
+        assertNull(manager.getPreviousPcrs())
+    }
+
+    @Test
+    fun `getPreviousPcrs returns stored previous PCRs`() {
+        val previousPcrs = ExpectedPcrs(
+            pcr0 = "aa".repeat(48),
+            pcr1 = "bb".repeat(48),
+            pcr2 = "cc".repeat(48),
+            version = "previous-1.0.0"
+        )
+        prefsStorage["previous_pcrs"] = gson.toJson(previousPcrs)
+
+        val result = manager.getPreviousPcrs()
+
+        assertNotNull(result)
+        assertEquals("previous-1.0.0", result?.version)
+        assertEquals("aa".repeat(48), result?.pcr0)
+    }
+
+    @Test
+    fun `getPreviousPcrs returns null when stored JSON is invalid`() {
+        prefsStorage["previous_pcrs"] = "not valid json"
+
+        assertNull(manager.getPreviousPcrs())
+    }
+
+    // MARK: - UpdatePcrs Preserving Previous Tests
+
+    @Test
+    fun `updatePcrs preserves current PCRs as previous`() {
+        // First update to set current PCRs
+        val pcrsV1 = ExpectedPcrs(
+            pcr0 = "11".repeat(48),
+            pcr1 = "22".repeat(48),
+            pcr2 = "33".repeat(48),
+            version = "v1.0.0"
+        )
+        manager.updatePcrs(SignedPcrResponse(pcrsV1, "sig1"))
+
+        // Verify no previous PCRs yet (first update from bundled)
+        // Note: bundled defaults are not stored, so previous is null
+        assertNull(manager.getPreviousPcrs())
+
+        // Second update should preserve v1 as previous
+        val pcrsV2 = ExpectedPcrs(
+            pcr0 = "44".repeat(48),
+            pcr1 = "55".repeat(48),
+            pcr2 = "66".repeat(48),
+            version = "v2.0.0"
+        )
+        manager.updatePcrs(SignedPcrResponse(pcrsV2, "sig2"))
+
+        // Verify previous PCRs are now v1
+        val previous = manager.getPreviousPcrs()
+        assertNotNull(previous)
+        assertEquals("v1.0.0", previous?.version)
+        assertEquals("11".repeat(48), previous?.pcr0)
+
+        // Verify current PCRs are v2
+        assertEquals("v2.0.0", manager.getCurrentPcrs().version)
+    }
+
+    @Test
+    fun `updatePcrs chains previous PCRs through multiple updates`() {
+        // Update 1
+        val pcrsV1 = ExpectedPcrs("11".repeat(48), "22".repeat(48), "33".repeat(48), version = "v1")
+        manager.updatePcrs(SignedPcrResponse(pcrsV1, "sig1"))
+
+        // Update 2
+        val pcrsV2 = ExpectedPcrs("44".repeat(48), "55".repeat(48), "66".repeat(48), version = "v2")
+        manager.updatePcrs(SignedPcrResponse(pcrsV2, "sig2"))
+
+        // Update 3
+        val pcrsV3 = ExpectedPcrs("77".repeat(48), "88".repeat(48), "99".repeat(48), version = "v3")
+        manager.updatePcrs(SignedPcrResponse(pcrsV3, "sig3"))
+
+        // Current should be v3, previous should be v2 (not v1)
+        assertEquals("v3", manager.getCurrentPcrs().version)
+        assertEquals("v2", manager.getPreviousPcrs()?.version)
+    }
+
+    // MARK: - VerifyPcrsWithFallback Tests
+
+    @Test
+    fun `verifyPcrsWithFallback returns true when PCRs match current`() {
+        // Set up current PCRs
+        val currentPcrs = ExpectedPcrs(
+            pcr0 = "aa".repeat(48),
+            pcr1 = "bb".repeat(48),
+            pcr2 = "cc".repeat(48),
+            version = "v1.0.0"
+        )
+        manager.updatePcrs(SignedPcrResponse(currentPcrs, "sig"))
+
+        // Verify matching PCRs
+        val actualPcrs = ExpectedPcrs(
+            pcr0 = "aa".repeat(48),
+            pcr1 = "bb".repeat(48),
+            pcr2 = "cc".repeat(48)
+        )
+
+        assertTrue(manager.verifyPcrsWithFallback(actualPcrs))
+    }
+
+    @Test
+    fun `verifyPcrsWithFallback returns true when PCRs match case-insensitively`() {
+        val currentPcrs = ExpectedPcrs(
+            pcr0 = "aabbcc".repeat(16),
+            pcr1 = "ddeeff".repeat(16),
+            pcr2 = "112233".repeat(16),
+            version = "v1.0.0"
+        )
+        manager.updatePcrs(SignedPcrResponse(currentPcrs, "sig"))
+
+        // Same PCRs but uppercase
+        val actualPcrs = ExpectedPcrs(
+            pcr0 = "AABBCC".repeat(16),
+            pcr1 = "DDEEFF".repeat(16),
+            pcr2 = "112233".repeat(16)
+        )
+
+        assertTrue(manager.verifyPcrsWithFallback(actualPcrs))
+    }
+
+    @Test
+    fun `verifyPcrsWithFallback falls back to previous PCRs during transition`() {
+        // Set up v1 as current
+        val pcrsV1 = ExpectedPcrs(
+            pcr0 = "11".repeat(48),
+            pcr1 = "22".repeat(48),
+            pcr2 = "33".repeat(48),
+            version = "v1.0.0"
+        )
+        manager.updatePcrs(SignedPcrResponse(pcrsV1, "sig1"))
+
+        // Update to v2 (v1 becomes previous)
+        val pcrsV2 = ExpectedPcrs(
+            pcr0 = "44".repeat(48),
+            pcr1 = "55".repeat(48),
+            pcr2 = "66".repeat(48),
+            version = "v2.0.0"
+        )
+        manager.updatePcrs(SignedPcrResponse(pcrsV2, "sig2"))
+
+        // Verify that v1 PCRs still work during transition
+        val actualV1Pcrs = ExpectedPcrs(
+            pcr0 = "11".repeat(48),
+            pcr1 = "22".repeat(48),
+            pcr2 = "33".repeat(48)
+        )
+
+        assertTrue(manager.verifyPcrsWithFallback(actualV1Pcrs))
+    }
+
+    @Test
+    fun `verifyPcrsWithFallback returns false when neither current nor previous match`() {
+        // Set up v1 as current
+        val pcrsV1 = ExpectedPcrs(
+            pcr0 = "11".repeat(48),
+            pcr1 = "22".repeat(48),
+            pcr2 = "33".repeat(48),
+            version = "v1.0.0"
+        )
+        manager.updatePcrs(SignedPcrResponse(pcrsV1, "sig1"))
+
+        // Update to v2
+        val pcrsV2 = ExpectedPcrs(
+            pcr0 = "44".repeat(48),
+            pcr1 = "55".repeat(48),
+            pcr2 = "66".repeat(48),
+            version = "v2.0.0"
+        )
+        manager.updatePcrs(SignedPcrResponse(pcrsV2, "sig2"))
+
+        // Try to verify completely different PCRs
+        val unknownPcrs = ExpectedPcrs(
+            pcr0 = "ff".repeat(48),
+            pcr1 = "ee".repeat(48),
+            pcr2 = "dd".repeat(48)
+        )
+
+        assertFalse(manager.verifyPcrsWithFallback(unknownPcrs))
+    }
+
+    @Test
+    fun `verifyPcrsWithFallback returns false when only PCR0 matches`() {
+        val currentPcrs = ExpectedPcrs(
+            pcr0 = "aa".repeat(48),
+            pcr1 = "bb".repeat(48),
+            pcr2 = "cc".repeat(48),
+            version = "v1.0.0"
+        )
+        manager.updatePcrs(SignedPcrResponse(currentPcrs, "sig"))
+
+        // PCR0 matches but PCR1 and PCR2 don't
+        val actualPcrs = ExpectedPcrs(
+            pcr0 = "aa".repeat(48),
+            pcr1 = "xx".repeat(48),
+            pcr2 = "yy".repeat(48)
+        )
+
+        assertFalse(manager.verifyPcrsWithFallback(actualPcrs))
+    }
+
+    @Test
+    fun `verifyPcrsWithFallback ignores PCR3 when expected is null`() {
+        val currentPcrs = ExpectedPcrs(
+            pcr0 = "aa".repeat(48),
+            pcr1 = "bb".repeat(48),
+            pcr2 = "cc".repeat(48),
+            pcr3 = null,
+            version = "v1.0.0"
+        )
+        manager.updatePcrs(SignedPcrResponse(currentPcrs, "sig"))
+
+        // Actual has PCR3 but expected is null - should still match
+        val actualPcrs = ExpectedPcrs(
+            pcr0 = "aa".repeat(48),
+            pcr1 = "bb".repeat(48),
+            pcr2 = "cc".repeat(48),
+            pcr3 = "dd".repeat(48)
+        )
+
+        assertTrue(manager.verifyPcrsWithFallback(actualPcrs))
+    }
+
+    @Test
+    fun `verifyPcrsWithFallback checks PCR3 when expected is not null`() {
+        val currentPcrs = ExpectedPcrs(
+            pcr0 = "aa".repeat(48),
+            pcr1 = "bb".repeat(48),
+            pcr2 = "cc".repeat(48),
+            pcr3 = "dd".repeat(48),
+            version = "v1.0.0"
+        )
+        manager.updatePcrs(SignedPcrResponse(currentPcrs, "sig"))
+
+        // PCR3 doesn't match
+        val actualPcrs = ExpectedPcrs(
+            pcr0 = "aa".repeat(48),
+            pcr1 = "bb".repeat(48),
+            pcr2 = "cc".repeat(48),
+            pcr3 = "ee".repeat(48)
+        )
+
+        assertFalse(manager.verifyPcrsWithFallback(actualPcrs))
+    }
+
+    @Test
+    fun `verifyPcrsWithFallback uses bundled defaults when no updates`() {
+        // Without any updates, current PCRs are bundled defaults
+        // Bundled defaults have version "bundled-1.0.0" and all zeros
+        val actualPcrs = ExpectedPcrs(
+            pcr0 = "0".repeat(96),
+            pcr1 = "0".repeat(96),
+            pcr2 = "0".repeat(96)
+        )
+
+        assertTrue(manager.verifyPcrsWithFallback(actualPcrs))
+    }
+
+    // MARK: - ClearCache with Previous PCRs Tests
+
+    @Test
+    fun `clearCache also removes previous PCRs`() {
+        // Set up current and previous PCRs
+        prefsStorage["current_pcrs"] = "some json"
+        prefsStorage["previous_pcrs"] = "previous json"
+        prefsStorage["pcr_version"] = "v2.0.0"
+        prefsStorage["last_update_timestamp"] = 12345L
+
+        manager.clearCache()
+
+        assertNull(prefsStorage["current_pcrs"])
+        assertNull(prefsStorage["previous_pcrs"])
+        assertNull(prefsStorage["pcr_version"])
+        assertNull(prefsStorage["last_update_timestamp"])
+    }
+
+    @Test
+    fun `clearCache resets fallback verification to bundled defaults only`() {
+        // Set up v1 and v2
+        val pcrsV1 = ExpectedPcrs("11".repeat(48), "22".repeat(48), "33".repeat(48), version = "v1")
+        manager.updatePcrs(SignedPcrResponse(pcrsV1, "sig1"))
+        val pcrsV2 = ExpectedPcrs("44".repeat(48), "55".repeat(48), "66".repeat(48), version = "v2")
+        manager.updatePcrs(SignedPcrResponse(pcrsV2, "sig2"))
+
+        // Clear cache
+        manager.clearCache()
+
+        // Previous should be null
+        assertNull(manager.getPreviousPcrs())
+
+        // Fallback should only match bundled defaults
+        val v1Pcrs = ExpectedPcrs("11".repeat(48), "22".repeat(48), "33".repeat(48))
+        assertFalse(manager.verifyPcrsWithFallback(v1Pcrs))
+
+        val bundledPcrs = ExpectedPcrs("0".repeat(96), "0".repeat(96), "0".repeat(96))
+        assertTrue(manager.verifyPcrsWithFallback(bundledPcrs))
+    }
+
     // MARK: - Integration-like Tests
 
     @Test
@@ -568,6 +874,7 @@ class TestablePcrConfigManager(
 ) {
     companion object {
         private const val KEY_CURRENT_PCRS = "current_pcrs"
+        private const val KEY_PREVIOUS_PCRS = "previous_pcrs"
         private const val KEY_LAST_UPDATE = "last_update_timestamp"
         private const val KEY_PCR_VERSION = "pcr_version"
         private const val UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000L
@@ -598,6 +905,15 @@ class TestablePcrConfigManager(
         return DEFAULT_PCRS
     }
 
+    fun getPreviousPcrs(): ExpectedPcrs? {
+        val storedJson = prefs.getString(KEY_PREVIOUS_PCRS, null) ?: return null
+        return try {
+            gson.fromJson(storedJson, ExpectedPcrs::class.java)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun shouldCheckForUpdates(): Boolean {
         val lastUpdate = prefs.getLong(KEY_LAST_UPDATE, 0)
         val timeSinceUpdate = System.currentTimeMillis() - lastUpdate
@@ -613,12 +929,20 @@ class TestablePcrConfigManager(
             return false
         }
 
+        // Save current PCRs as previous (for transition period fallback)
+        val currentPcrsJson = prefs.getString(KEY_CURRENT_PCRS, null)
+
         // Store updated PCRs
-        prefs.edit()
-            .putString(KEY_CURRENT_PCRS, gson.toJson(signedResponse.pcrs))
-            .putString(KEY_PCR_VERSION, signedResponse.pcrs.version)
-            .putLong(KEY_LAST_UPDATE, System.currentTimeMillis())
-            .apply()
+        prefs.edit().apply {
+            // Preserve previous PCRs for transition period
+            if (currentPcrsJson != null) {
+                putString(KEY_PREVIOUS_PCRS, currentPcrsJson)
+            }
+            putString(KEY_CURRENT_PCRS, gson.toJson(signedResponse.pcrs))
+            putString(KEY_PCR_VERSION, signedResponse.pcrs.version)
+            putLong(KEY_LAST_UPDATE, System.currentTimeMillis())
+            apply()
+        }
 
         return true
     }
@@ -627,9 +951,35 @@ class TestablePcrConfigManager(
         return prefs.getString(KEY_PCR_VERSION, DEFAULT_PCRS.version) ?: DEFAULT_PCRS.version
     }
 
+    fun verifyPcrsWithFallback(actualPcrs: ExpectedPcrs): Boolean {
+        val currentPcrs = getCurrentPcrs()
+
+        // Try current PCRs first
+        if (matchesPcrs(actualPcrs, currentPcrs)) {
+            return true
+        }
+
+        // During transition, try previous version
+        getPreviousPcrs()?.let { previousPcrs ->
+            if (matchesPcrs(actualPcrs, previousPcrs)) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    private fun matchesPcrs(actual: ExpectedPcrs, expected: ExpectedPcrs): Boolean {
+        return actual.pcr0.equals(expected.pcr0, ignoreCase = true) &&
+                actual.pcr1.equals(expected.pcr1, ignoreCase = true) &&
+                actual.pcr2.equals(expected.pcr2, ignoreCase = true) &&
+                (expected.pcr3 == null || actual.pcr3.equals(expected.pcr3, ignoreCase = true))
+    }
+
     fun clearCache() {
         prefs.edit()
             .remove(KEY_CURRENT_PCRS)
+            .remove(KEY_PREVIOUS_PCRS)
             .remove(KEY_PCR_VERSION)
             .remove(KEY_LAST_UPDATE)
             .apply()
