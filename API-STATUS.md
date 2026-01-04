@@ -1,52 +1,32 @@
 # VettID API Status
 
-**Last Updated:** 2026-01-03 11:20 UTC (🔴 Enrollment endpoint returning HTTP 500)
+**Last Updated:** 2026-01-04 00:45 UTC (✅ Enrollment working with real Nitro attestation!)
 
 ---
 
-## 🔴 BLOCKED: Enrollment Endpoint HTTP 500 (2026-01-03)
+## ✅ FIXED: Enrollment Endpoint (2026-01-04)
 
-**GitHub Issue:** [#6 - Enrollment endpoint returning HTTP 500](https://github.com/mesmerverse/vettid-vault-ami/issues/6)
+**GitHub Issue:** [#6 - Enrollment endpoint returning HTTP 500](https://github.com/mesmerverse/vettid-vault-ami/issues/6) (CLOSED)
 
-**Problem:** The `/vault/enroll/start-direct` endpoint returns HTTP 500 with `{"message":"Failed to start enrollment"}`.
+**Status:** Enrollment now returns HTTP 200 with real Nitro NSM attestation!
 
-**Request:**
-```bash
-curl -X POST "https://tiqpij5mue.execute-api.us-east-1.amazonaws.com/vault/enroll/start-direct" \
-  -H "Content-Type: application/json" \
-  -d '{"device_id":"test","device_type":"android","invitation_code":"TEST-WBBD-ZTU7-D6K9","skip_attestation":true}'
-```
+**Working Response:**
+- `enrollment_session_id`, `user_guid`, `transaction_keys`
+- `enclave_attestation` with real attestation document, enclave public key, and nonce
+- `expected_pcrs` for PCR verification
 
-**Response:**
-```json
-{"message":"Failed to start enrollment"}
-```
-HTTP Status: 500
-
-**Impact:**
-- ❌ Cannot test enrollment flow
-- ❌ Cannot test any post-enrollment features (connections, messaging, calling, vault, etc.)
-- ❌ Blocks Nitro Enclave migration testing
-
-**Android App Status:**
-The Android Nitro migration is complete (commit `b65f212`):
-- ✅ `NitroAttestationVerifier` - parses and verifies attestation documents
-- ✅ `EnrollmentViewModel` - expects and verifies enclave attestation
-- ✅ `CryptoManager.encryptPasswordForEnclave()` - encrypts to enclave public key
-- ✅ `CredentialStore` - supports `sealed_credential` format
-- ✅ All 33 unit tests passing
-
-**Backend Needs To:**
-1. Fix the HTTP 500 error on `/vault/enroll/start-direct`
-2. Return `enclave_attestation` field per `docs/NITRO-ENCLAVE-MIGRATION-FOR-MOBILE.md`
+**Android App Updates (commit `08e9bdf`):**
+- ✅ Fetches PCRs from `/vault/pcrs/current` at app startup
+- ✅ Uses bundled defaults: PCR version `2026-01-04-v1`
+- ✅ Real Nitro attestation verification ready
 
 ---
 
-## 🔴 BLOCKED: connection.store-credentials E2E Decryption (2026-01-02)
+## ✅ CLOSED: connection.store-credentials E2E Decryption (2026-01-03)
 
-**GitHub Issue:** [#4 - Connection handlers not decrypting E2E encrypted payloads](https://github.com/mesmerverse/vettid-vault-ami/issues/4) (REOPENED)
+**GitHub Issue:** [#4 - Connection handlers not decrypting E2E encrypted payloads](https://github.com/mesmerverse/vettid-vault-ami/issues/4) (CLOSED)
 
-**Problem:** Despite the AMI being rebuilt (`ami-0414fca808483df9e` at 2026-01-01T20:32:02Z), the vault-manager is still not decrypting E2E encrypted payloads for `connection.store-credentials`.
+**Status:** Superseded by Nitro Enclave migration. The EC2-per-user vault architecture (vault-ami) is being replaced by a multi-tenant Nitro Enclave architecture with proper E2E handling.
 
 **Test Setup (2026-01-02 01:15 UTC):**
 - User A: `user-DB71AAEF4059444DB20913899342B2AE` (vault: `i-0f87bf32ec869b3e2`)
