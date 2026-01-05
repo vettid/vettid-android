@@ -250,6 +250,57 @@ class OwnerSpaceClient @Inject constructor(
         return sendToVault("ping")
     }
 
+    // MARK: - Credential Operations (KMS-Sealed Protean Credential)
+
+    /**
+     * Create a new Protean Credential inside the Nitro Enclave.
+     *
+     * The credential is sealed using KMS envelope encryption bound to PCR0,
+     * meaning only the exact enclave code can unseal it.
+     *
+     * @param encryptedPin Base64-encoded encrypted PIN/password
+     * @param authType Authentication type ("pin" or "password")
+     * @return Request ID for correlating the response
+     */
+    suspend fun createCredential(
+        encryptedPin: String,
+        authType: String = "pin"
+    ): Result<String> {
+        val payload = JsonObject().apply {
+            add("credential_request", JsonObject().apply {
+                addProperty("encrypted_pin", encryptedPin)
+                addProperty("auth_type", authType)
+            })
+        }
+        return sendToVault("credential.create", payload)
+    }
+
+    /**
+     * Unseal a previously created Protean Credential.
+     *
+     * Requires the sealed credential blob and correct PIN/password.
+     * KMS validates PCR0 before decrypting the DEK.
+     *
+     * @param sealedCredential Base64-encoded sealed credential blob
+     * @param challengeId Challenge identifier
+     * @param challengeResponse PIN/password response
+     * @return Request ID for correlating the response
+     */
+    suspend fun unsealCredential(
+        sealedCredential: String,
+        challengeId: String,
+        challengeResponse: String
+    ): Result<String> {
+        val payload = JsonObject().apply {
+            addProperty("sealed_credential", sealedCredential)
+            add("challenge", JsonObject().apply {
+                addProperty("challenge_id", challengeId)
+                addProperty("response", challengeResponse)
+            })
+        }
+        return sendToVault("credential.unseal", payload)
+    }
+
     // MARK: - Block List Management
 
     /**
@@ -1023,6 +1074,70 @@ private data class EventTypeJson(
 data class BootstrapResponse(
     val requestId: String,
     val pendingKeyPair: SessionKeyPair
+)
+
+// MARK: - Credential Operations (KMS-Sealed)
+
+/**
+ * Response from credential.create operation.
+ * Contains the sealed credential blob encrypted with KMS.
+ */
+data class CreateCredentialResponse(
+    /** Base64-encoded sealed credential blob */
+    val credential: String,
+    /** Algorithm used for sealing */
+    val algorithm: String = "nitro-kms-aes256-gcm"
+) {
+    companion object {
+        fun fromJson(json: JsonObject): CreateCredentialResponse? {
+            return try {
+                CreateCredentialResponse(
+                    credential = json.get("credential")?.asString ?: return null,
+                    algorithm = json.get("algorithm")?.asString ?: "nitro-kms-aes256-gcm"
+                )
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+}
+
+/**
+ * Response from credential.unseal operation.
+ * Contains session token for subsequent operations.
+ */
+data class UnsealCredentialResponse(
+    /** Session token for authenticated operations */
+    val sessionToken: String,
+    /** Session expiration (epoch seconds) */
+    val expiresAt: Long
+) {
+    companion object {
+        fun fromJson(json: JsonObject): UnsealCredentialResponse? {
+            return try {
+                val unsealResult = json.getAsJsonObject("unseal_result") ?: return null
+                UnsealCredentialResponse(
+                    sessionToken = unsealResult.get("session_token")?.asString ?: return null,
+                    expiresAt = unsealResult.get("expires_at")?.asLong ?: 0
+                )
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+}
+
+/**
+ * Sealed credential blob structure.
+ * This is what gets stored locally after credential.create.
+ */
+data class SealedCredentialBlob(
+    val version: Int,
+    val algorithm: String,
+    val encryptedDek: String,
+    val nonce: String,
+    val ciphertext: String,
+    val pcrBound: Boolean
 )
 
 // MARK: - Credential Rotation
