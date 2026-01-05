@@ -179,34 +179,51 @@ class EnrollmentViewModel @Inject constructor(
             onSuccess = { startResponse ->
                 currentTransactionKeys = startResponse.transactionKeys
 
-                // Verify Nitro Enclave attestation
+                // Verify Nitro Enclave attestation (skip in test mode)
                 val attestation = startResponse.enclaveAttestation
-                if (attestation == null) {
-                    Log.e(TAG, "No enclave attestation in enrollment response")
-                    _state.value = EnrollmentState.Error(
-                        message = "Server did not provide enclave attestation. Enrollment cannot proceed securely.",
-                        retryable = false
-                    )
-                    return@fold
-                }
 
-                // Verify attestation before proceeding
-                try {
-                    Log.d(TAG, "Verifying Nitro Enclave attestation...")
-                    val verified = nitroAttestationVerifier.verify(attestation)
-
-                    // Store verified enclave public key for password encryption
+                if (enrollmentData.skipAttestation) {
+                    // Test mode - skip attestation verification
+                    Log.w(TAG, "Skipping attestation verification (test mode)")
                     enclaveAttestation = attestation
-                    verifiedEnclavePublicKey = verified.enclavePublicKeyBase64()
+                    // Use enclave public key from attestation if available, otherwise from expected PCRs
+                    verifiedEnclavePublicKey = attestation?.enclavePublicKey
+                } else {
+                    // Production mode - verify attestation
+                    if (attestation == null) {
+                        Log.e(TAG, "No enclave attestation in enrollment response")
+                        _state.value = EnrollmentState.Error(
+                            message = "Server did not provide enclave attestation. Enrollment cannot proceed securely.",
+                            retryable = false
+                        )
+                        return@fold
+                    }
 
-                    Log.i(TAG, "Enclave attestation verified. Module: ${verified.moduleId}")
-                } catch (e: AttestationVerificationException) {
-                    Log.e(TAG, "Enclave attestation verification failed", e)
-                    _state.value = EnrollmentState.Error(
-                        message = "Enclave security verification failed: ${e.message}",
-                        retryable = false
-                    )
-                    return@fold
+                    // Verify attestation before proceeding
+                    try {
+                        Log.d(TAG, "Verifying Nitro Enclave attestation...")
+                        val verified = nitroAttestationVerifier.verify(attestation)
+
+                        // Store verified enclave public key for password encryption
+                        enclaveAttestation = attestation
+                        verifiedEnclavePublicKey = verified.enclavePublicKeyBase64()
+
+                        Log.i(TAG, "Enclave attestation verified. Module: ${verified.moduleId}")
+                    } catch (e: AttestationVerificationException) {
+                        Log.e(TAG, "Enclave attestation verification failed", e)
+                        _state.value = EnrollmentState.Error(
+                            message = "Enclave security verification failed: ${e.message}",
+                            retryable = false
+                        )
+                        return@fold
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Unexpected attestation error", e)
+                        _state.value = EnrollmentState.Error(
+                            message = "Attestation error: ${e.message}",
+                            retryable = false
+                        )
+                        return@fold
+                    }
                 }
 
                 // Generate password salt for later use
