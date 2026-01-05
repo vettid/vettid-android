@@ -461,11 +461,11 @@ class EnrollmentViewModel @Inject constructor(
             return
         }
 
-        // Verify we have the enclave public key from attestation
-        val enclavePublicKey = verifiedEnclavePublicKey
-        if (enclavePublicKey == null) {
+        // Find the transaction key for password encryption
+        val passwordKey = currentState.transactionKeys.find { it.keyId == currentState.passwordKeyId }
+        if (passwordKey == null) {
             _state.value = currentState.copy(
-                error = "Security error: Enclave key not verified. Please restart enrollment."
+                error = "Security error: Password encryption key not found. Please restart enrollment."
             )
             return
         }
@@ -473,15 +473,15 @@ class EnrollmentViewModel @Inject constructor(
         _state.value = currentState.copy(isSubmitting = true, error = null)
 
         try {
-            // Encrypt password with the VERIFIED enclave public key (from attestation)
+            // Encrypt password with the transaction key (UTK)
             val salt = passwordSalt ?: cryptoManager.generateSalt().also { passwordSalt = it }
-            val encryptedResult = cryptoManager.encryptPasswordForEnclave(
+            val encryptedResult = cryptoManager.encryptPasswordForServer(
                 password = currentState.password,
                 salt = salt,
-                enclavePublicKeyBase64 = enclavePublicKey
+                utkPublicKeyBase64 = passwordKey.publicKey
             )
 
-            Log.d(TAG, "Password encrypted with enclave key, submitting...")
+            Log.d(TAG, "Password encrypted with transaction key ${passwordKey.keyId}, submitting...")
 
             // Submit to server with all encryption parameters
             val result = vaultServiceClient.setPassword(
