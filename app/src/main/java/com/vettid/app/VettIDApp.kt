@@ -59,6 +59,7 @@ import com.vettid.app.ui.components.NatsConnectionDetailsDialog
 import com.vettid.app.ui.components.QrCodeScanner
 import com.vettid.app.ui.navigation.*
 import com.vettid.app.ui.recovery.ProteanRecoveryScreen
+import com.vettid.app.features.debug.CredentialDebugScreen
 
 private const val TAG = "VettIDApp"
 
@@ -115,6 +116,8 @@ sealed class Screen(val route: String) {
     object IncomingCall : Screen("call/incoming")
     object OutgoingCall : Screen("call/outgoing")
     object ActiveCall : Screen("call/active")
+    // Debug
+    object CredentialDebug : Screen("debug/credentials")
 }
 
 @Composable
@@ -296,6 +299,9 @@ fun VettIDApp(
                 },
                 onNavigateToPinSetup = {
                     navController.navigate(Screen.PinSetup.route)
+                },
+                onNavigateToCredentialDebug = {
+                    navController.navigate(Screen.CredentialDebug.route)
                 },
                 onSignOut = {
                     appViewModel.signOut()
@@ -525,6 +531,12 @@ fun VettIDApp(
         composable(Screen.ActiveCall.route) {
             ActiveCallScreen(
                 onDismiss = { navController.popBackStack() }
+            )
+        }
+        // Debug screens
+        composable(Screen.CredentialDebug.route) {
+            CredentialDebugScreen(
+                onBack = { navController.popBackStack() }
             )
         }
     }
@@ -788,6 +800,7 @@ fun MainScreen(
     onNavigateToPreferences: () -> Unit = {},
     onNavigateToDeployVault: () -> Unit = {},
     onNavigateToPinSetup: () -> Unit = {},
+    onNavigateToCredentialDebug: () -> Unit = {},
     onSignOut: () -> Unit = {},
     appViewModel: AppViewModel = hiltViewModel()
 ) {
@@ -881,7 +894,9 @@ fun MainScreen(
         },
         // App Settings section content
         appSettingsGeneralContent = {
-            AppSettingsGeneralContent()
+            AppSettingsGeneralContent(
+                onNavigateToCredentialDebug = onNavigateToCredentialDebug
+            )
         },
         appSettingsSecurityContent = {
             AppSettingsSecurityContent()

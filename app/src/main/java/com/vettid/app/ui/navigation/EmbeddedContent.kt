@@ -437,7 +437,9 @@ fun VaultServicesLogsContent() {
 }
 
 @Composable
-fun AppSettingsGeneralContent() {
+fun AppSettingsGeneralContent(
+    onNavigateToCredentialDebug: () -> Unit = {}
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -495,6 +497,17 @@ fun AppSettingsGeneralContent() {
                 icon = Icons.Default.PrivacyTip,
                 title = "Privacy Policy",
                 subtitle = ""
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        SettingsSection(title = "Developer") {
+            SettingsItem(
+                icon = Icons.Default.BugReport,
+                title = "Credential Debug",
+                subtitle = "Test credential.create / credential.unseal",
+                onClick = onNavigateToCredentialDebug
             )
         }
     }
