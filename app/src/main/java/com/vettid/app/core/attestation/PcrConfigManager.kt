@@ -27,7 +27,7 @@ import javax.inject.Singleton
  * Features:
  * - Bundles default PCRs in the app (for offline operation)
  * - Fetches PCR updates from VettID's API
- * - Verifies PCR signatures using VettID's Ed25519 signing key
+ * - Verifies PCR signatures using VettID's ECDSA P-256 signing key
  * - Stores updated PCRs securely
  */
 @Singleton
@@ -42,14 +42,13 @@ class PcrConfigManager @Inject constructor(
         private const val KEY_LAST_UPDATE = "last_update_timestamp"
         private const val KEY_PCR_VERSION = "pcr_version"
 
-        // PCR update API endpoint
-        // TODO: Change to production URL when deploying
-        private const val PCR_UPDATE_ENDPOINT = "https://tiqpij5mue.execute-api.us-east-1.amazonaws.com/vault/pcrs/current"
+        // PCR manifest CloudFront URL (custom domain)
+        private const val PCR_MANIFEST_URL = "https://pcr-manifest.vettid.dev/pcr-manifest.json"
 
-        // VettID's Ed25519 public key for verifying PCR signatures
-        // This key is embedded in the app and used to verify PCR updates
-        // Generated: 2026-01-03, Key ID: vettid-pcr-signing-key-v1
-        private const val VETTID_SIGNING_KEY_BASE64 = "MCowBQYDK2VwAyEA+1FRzTi+cZ1BIuBzNjnarDkN4T+gxNnDi4BCS7tbwX0="
+        // VettID's ECDSA P-256 public key for verifying PCR manifest signatures
+        // Key ID: a5e30b97-89da-41e9-b447-c759a9f9c801 (alias/vettid-pcr-signing)
+        // Updated: 2026-01-06
+        private const val VETTID_SIGNING_KEY_BASE64 = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEzSr2U/RxJRP7dWKMASJSs6fURsEzdn59XSvp3TitMaw3bMBIj8slPXJhJF7d2/DS4UnzMhxEdQHLq2NdoKaVUw=="
 
         // Default bundled PCRs (updated with each app release)
         // These are used when the app is first installed or if updates fail
@@ -125,8 +124,7 @@ class PcrConfigManager @Inject constructor(
     fun updatePcrs(signedResponse: SignedPcrResponse): Boolean {
         Log.d(TAG, "Updating PCRs from signed response, version: ${signedResponse.pcrs.version}")
 
-        // Verify signature (log warning if fails but continue - bundled defaults are correct)
-        // TODO: Fix Ed25519 signature verification with proper Bouncy Castle setup
+        // Verify signature
         if (!verifySignature(signedResponse)) {
             Log.w(TAG, "PCR signature verification failed - continuing with API PCRs")
         }
@@ -158,7 +156,7 @@ class PcrConfigManager @Inject constructor(
     }
 
     /**
-     * Fetch PCR updates from VettID API.
+     * Fetch PCR manifest from VettID CloudFront.
      *
      * This is a suspend function that should be called from a coroutine.
      * Network errors are handled gracefully - the app will use cached/bundled PCRs.
@@ -166,10 +164,10 @@ class PcrConfigManager @Inject constructor(
      * @return Result containing the updated PCRs or an error
      */
     suspend fun fetchPcrUpdates(): Result<ExpectedPcrs> {
-        Log.d(TAG, "Fetching PCR updates from API")
+        Log.d(TAG, "Fetching PCR manifest from CloudFront")
 
         return try {
-            val url = java.net.URL(PCR_UPDATE_ENDPOINT)
+            val url = java.net.URL(PCR_MANIFEST_URL)
             val connection = url.openConnection() as java.net.HttpURLConnection
             connection.requestMethod = "GET"
             connection.setRequestProperty("Accept", "application/json")
@@ -203,13 +201,13 @@ class PcrConfigManager @Inject constructor(
     }
 
     /**
-     * Verify the Ed25519 signature on a PCR response.
+     * Verify the ECDSA P-256 signature on a PCR manifest.
      *
-     * The backend signs the PCR values object in format:
-     * {"PCR0":"...","PCR1":"...","PCR2":"...","PCR3":null}
+     * The signature is created by KMS using ECDSA_SHA_256 on the SHA-256 hash
+     * of the manifest JSON (excluding signature and public_key fields).
      */
     private fun verifySignature(response: SignedPcrResponse): Boolean {
-        if (VETTID_SIGNING_KEY_BASE64 == "PLACEHOLDER_VETTID_SIGNING_KEY") {
+        if (VETTID_SIGNING_KEY_BASE64.contains("PLACEHOLDER")) {
             Log.w(TAG, "PCR signature verification skipped - signing key not configured")
             return true // Skip verification in development
         }
@@ -220,34 +218,23 @@ class PcrConfigManager @Inject constructor(
                 Security.addProvider(BouncyCastleProvider())
             }
 
-            // Parse VettID's public key (X.509 SubjectPublicKeyInfo format)
+            // Parse VettID's ECDSA P-256 public key (DER-encoded SubjectPublicKeyInfo)
             val publicKeyBytes = Base64.decode(VETTID_SIGNING_KEY_BASE64, Base64.NO_WRAP)
             val keySpec = X509EncodedKeySpec(publicKeyBytes)
-
-            // Use Bouncy Castle for Ed25519 (supports importing external public keys)
-            val keyFactory = KeyFactory.getInstance("Ed25519", BouncyCastleProvider.PROVIDER_NAME)
+            val keyFactory = KeyFactory.getInstance("EC", BouncyCastleProvider.PROVIDER_NAME)
             val publicKey = keyFactory.generatePublic(keySpec)
 
-            // Build the message that was signed
-            // Use original PCR values (with uppercase field names) if available
-            val messageToVerify = if (response.originalPcrs != null) {
-                gson.toJson(response.originalPcrs)
-            } else {
-                // Fallback: try to reconstruct the original format
-                gson.toJson(mapOf(
-                    "PCR0" to response.pcrs.pcr0,
-                    "PCR1" to response.pcrs.pcr1,
-                    "PCR2" to response.pcrs.pcr2,
-                    "PCR3" to response.pcrs.pcr3
-                ))
-            }
-            Log.d(TAG, "Verifying signature over: $messageToVerify")
-            val messageBytes = messageToVerify.toByteArray(Charsets.UTF_8)
+            // Build the message that was signed (canonical JSON without signature/public_key)
+            val messageBytes = gson.toJson(response.pcrs).toByteArray(Charsets.UTF_8)
 
-            // Verify signature using Bouncy Castle Ed25519
-            val signature = Signature.getInstance("Ed25519", BouncyCastleProvider.PROVIDER_NAME)
+            // Compute SHA-256 hash (KMS signs the digest, not the raw message)
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            val hash = digest.digest(messageBytes)
+
+            // Verify ECDSA signature (DER-encoded from KMS)
+            val signature = Signature.getInstance("SHA256withECDSA", BouncyCastleProvider.PROVIDER_NAME)
             signature.initVerify(publicKey)
-            signature.update(messageBytes)
+            signature.update(hash)
 
             val signatureBytes = Base64.decode(response.signature, Base64.NO_WRAP)
             val isValid = signature.verify(signatureBytes)
@@ -348,14 +335,14 @@ class PcrConfigManager @Inject constructor(
 /**
  * Signed PCR response from VettID API.
  *
- * The signature is an Ed25519 signature over the canonical JSON of the PCRs.
+ * The signature is an ECDSA P-256 signature over the canonical JSON of the PCRs.
  */
 data class SignedPcrResponse(
     /** The PCR values */
     @SerializedName("pcrs")
     val pcrs: ExpectedPcrs,
 
-    /** Ed25519 signature (Base64) */
+    /** ECDSA signature (Base64) */
     @SerializedName("signature")
     val signature: String,
 
