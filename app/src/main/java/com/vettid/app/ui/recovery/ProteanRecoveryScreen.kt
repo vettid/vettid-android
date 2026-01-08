@@ -11,6 +11,7 @@ import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -36,7 +37,9 @@ fun ProteanRecoveryScreen(
     val state by viewModel.state.collectAsState()
     val email by viewModel.email.collectAsState()
     val backupPin by viewModel.backupPin.collectAsState()
+    val password by viewModel.password.collectAsState()
     val isValidInput by viewModel.isValidInput.collectAsState()
+    val isValidPassword by viewModel.isValidPassword.collectAsState()
 
     Scaffold(
         topBar = {
@@ -79,12 +82,17 @@ fun ProteanRecoveryScreen(
                     )
                 }
 
-                is ProteanRecoveryState.Ready -> {
-                    ReadyContent(onDownload = viewModel::downloadCredential)
+                is ProteanRecoveryState.ReadyForAuthentication -> {
+                    AuthenticationContent(
+                        password = password,
+                        isValidPassword = isValidPassword,
+                        onPasswordChange = viewModel::setPassword,
+                        onAuthenticate = viewModel::authenticateWithPassword
+                    )
                 }
 
-                is ProteanRecoveryState.Downloading -> {
-                    LoadingContent(message = "Downloading credentials...")
+                is ProteanRecoveryState.Authenticating -> {
+                    LoadingContent(message = "Authenticating with vault...")
                 }
 
                 is ProteanRecoveryState.Complete -> {
@@ -321,48 +329,114 @@ private fun PendingContent(
 }
 
 @Composable
-private fun ReadyContent(onDownload: () -> Unit) {
+private fun AuthenticationContent(
+    password: String,
+    isValidPassword: Boolean,
+    onPasswordChange: (String) -> Unit,
+    onAuthenticate: () -> Unit
+) {
+    val focusManager = LocalFocusManager.current
+
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Icon(
-            Icons.Default.Download,
+            Icons.Default.Lock,
             contentDescription = null,
-            modifier = Modifier.size(64.dp),
+            modifier = Modifier
+                .size(64.dp)
+                .align(Alignment.CenterHorizontally),
             tint = MaterialTheme.colorScheme.primary
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "Recovery Ready",
-            style = MaterialTheme.typography.headlineMedium,
+            text = "Enter Your Password",
+            style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.primary
+            modifier = Modifier.align(Alignment.CenterHorizontally)
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "The 24-hour security period has passed. Your credentials are ready to be downloaded.",
-            style = MaterialTheme.typography.bodyLarge,
+            text = "The 24-hour security period has passed. Enter your password to authenticate and restore your credentials.",
+            style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Security notice
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer
+            )
+        ) {
+            Row(
+                modifier = Modifier.padding(16.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                Icon(
+                    Icons.Default.Lock,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
+                    Text(
+                        text = "Secure Authentication",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Your password is hashed locally and verified by your vault. It is never stored or transmitted in plain text.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedTextField(
+            value = password,
+            onValueChange = onPasswordChange,
+            label = { Text("Password") },
+            singleLine = true,
+            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Password,
+                imeAction = ImeAction.Done
+            ),
+            keyboardActions = KeyboardActions(
+                onDone = {
+                    focusManager.clearFocus()
+                    if (isValidPassword) onAuthenticate()
+                }
+            ),
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         Button(
-            onClick = onDownload,
+            onClick = onAuthenticate,
+            enabled = isValidPassword,
             modifier = Modifier.fillMaxWidth()
         ) {
-            Icon(Icons.Default.Download, contentDescription = null)
+            Icon(Icons.Default.Lock, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Download Credentials")
+            Text("Authenticate")
         }
     }
 }

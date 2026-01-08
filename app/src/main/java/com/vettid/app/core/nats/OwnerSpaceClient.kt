@@ -1140,6 +1140,66 @@ data class SealedCredentialBlob(
     val pcrBound: Boolean
 )
 
+// MARK: - App Authenticate (Restore Flow)
+
+/**
+ * Request for app.authenticate during credential restore.
+ */
+data class AppAuthenticateRequest(
+    @com.google.gson.annotations.SerializedName("device_id") val deviceId: String,
+    @com.google.gson.annotations.SerializedName("device_type") val deviceType: String = "android",
+    @com.google.gson.annotations.SerializedName("app_version") val appVersion: String,
+    @com.google.gson.annotations.SerializedName("encrypted_credential") val encryptedCredential: String,
+    @com.google.gson.annotations.SerializedName("key_id") val keyId: String,
+    @com.google.gson.annotations.SerializedName("password_hash") val passwordHash: String,
+    val nonce: String,
+    @com.google.gson.annotations.SerializedName("app_session_public_key") val appSessionPublicKey: String? = null
+)
+
+/**
+ * Response from app.authenticate handler.
+ */
+data class AppAuthenticateResponse(
+    val success: Boolean,
+    val message: String,
+    val credentials: String?,
+    @com.google.gson.annotations.SerializedName("nats_endpoint") val natsEndpoint: String?,
+    @com.google.gson.annotations.SerializedName("owner_space") val ownerSpace: String?,
+    @com.google.gson.annotations.SerializedName("message_space") val messageSpace: String?,
+    @com.google.gson.annotations.SerializedName("expires_at") val expiresAt: String?,
+    @com.google.gson.annotations.SerializedName("credential_id") val credentialId: String?,
+    @com.google.gson.annotations.SerializedName("session_info") val sessionInfo: com.vettid.app.core.crypto.SessionInfo?,
+    @com.google.gson.annotations.SerializedName("requires_immediate_rotation") val requiresImmediateRotation: Boolean?,
+    @com.google.gson.annotations.SerializedName("user_guid") val userGuid: String?,
+    @com.google.gson.annotations.SerializedName("credential_version") val credentialVersion: Int?
+) {
+    companion object {
+        fun fromJson(json: com.google.gson.JsonObject): AppAuthenticateResponse {
+            return AppAuthenticateResponse(
+                success = json.get("success")?.asBoolean ?: false,
+                message = json.get("message")?.asString ?: "",
+                credentials = json.get("credentials")?.asString,
+                natsEndpoint = json.get("nats_endpoint")?.asString,
+                ownerSpace = json.get("owner_space")?.asString,
+                messageSpace = json.get("message_space")?.asString,
+                expiresAt = json.get("expires_at")?.asString,
+                credentialId = json.get("credential_id")?.asString,
+                sessionInfo = json.getAsJsonObject("session_info")?.let { sessionJson ->
+                    com.vettid.app.core.crypto.SessionInfo(
+                        sessionId = sessionJson.get("session_id")?.asString ?: "",
+                        vaultSessionPublicKey = sessionJson.get("vault_session_public_key")?.asString ?: "",
+                        sessionExpiresAt = sessionJson.get("expires_at")?.asString ?: "",
+                        encryptionEnabled = sessionJson.get("encryption_enabled")?.asBoolean ?: true
+                    )
+                },
+                requiresImmediateRotation = json.get("requires_immediate_rotation")?.asBoolean,
+                userGuid = json.get("user_guid")?.asString,
+                credentialVersion = json.get("credential_version")?.asInt
+            )
+        }
+    }
+}
+
 // MARK: - Credential Rotation
 
 /**

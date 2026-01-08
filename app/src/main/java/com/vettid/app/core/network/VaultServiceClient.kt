@@ -428,6 +428,19 @@ open class VaultServiceClient @Inject constructor() {
         return safeApiCall { api.downloadRecoveredCredential(recoveryId) }
     }
 
+    /**
+     * Confirm restore and get bootstrap credentials for NATS authentication.
+     *
+     * After 24-hour delay, this endpoint returns:
+     * - credential_backup: The encrypted credential blob
+     * - vault_bootstrap: NATS credentials for app.authenticate
+     *
+     * @param recoveryId Recovery request ID
+     */
+    suspend fun confirmRestore(recoveryId: String): Result<RestoreConfirmResponse> {
+        return safeApiCall { api.confirmRestore(recoveryId) }
+    }
+
     // MARK: - Helper
 
     private suspend fun <T> safeApiCall(call: suspend () -> Response<T>): Result<T> {
@@ -591,6 +604,12 @@ interface VaultServiceApi {
     suspend fun downloadRecoveredCredential(
         @Query("recovery_id") recoveryId: String
     ): Response<RecoveryDownloadResponse>
+
+    // Credential Restore (NATS authentication flow)
+    @POST("vault/credentials/restore/confirm")
+    suspend fun confirmRestore(
+        @Query("recovery_id") recoveryId: String
+    ): Response<RestoreConfirmResponse>
 }
 
 // MARK: - Request Types
@@ -1120,6 +1139,42 @@ data class RecoveryDownloadResponse(
     @SerializedName("credential_blob") val credentialBlob: String,
     val version: Int,
     @SerializedName("user_guid") val userGuid: String
+)
+
+/**
+ * Response from restore confirm endpoint.
+ * Returns credential backup and vault bootstrap info for NATS authentication.
+ */
+data class RestoreConfirmResponse(
+    val success: Boolean,
+    val status: String,  // "pending_authentication"
+    val message: String,
+    @SerializedName("credential_backup") val credentialBackup: CredentialBackupInfo,
+    @SerializedName("vault_bootstrap") val vaultBootstrap: RestoreVaultBootstrap
+)
+
+/**
+ * Credential backup info from restore confirm.
+ */
+data class CredentialBackupInfo(
+    @SerializedName("encrypted_credential") val encryptedCredential: String,
+    @SerializedName("backup_id") val backupId: String,
+    @SerializedName("created_at") val createdAt: String,
+    @SerializedName("key_id") val keyId: String
+)
+
+/**
+ * Vault bootstrap info for restore flow.
+ * Contains short-lived NATS credentials for app.authenticate.
+ */
+data class RestoreVaultBootstrap(
+    val credentials: String,
+    @SerializedName("owner_space") val ownerSpace: String,
+    @SerializedName("message_space") val messageSpace: String,
+    @SerializedName("nats_endpoint") val natsEndpoint: String,
+    @SerializedName("auth_topic") val authTopic: String,
+    @SerializedName("response_topic") val responseTopic: String,
+    @SerializedName("credentials_ttl_seconds") val credentialsTtlSeconds: Int
 )
 
 // MARK: - PCR Response Types

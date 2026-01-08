@@ -1,9 +1,14 @@
 package com.vettid.app.ui.recovery
 
+import android.util.Base64
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.app.core.nats.RestoreAuthenticateClient
+import com.vettid.app.core.network.CredentialBackupInfo
 import com.vettid.app.core.network.RecoveryStatusResponse
+import com.vettid.app.core.network.RestoreVaultBootstrap
 import com.vettid.app.core.network.VaultServiceClient
+import com.vettid.app.core.storage.CredentialStore
 import com.vettid.app.core.storage.ProteanCredentialManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -12,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.util.UUID
 import javax.inject.Inject
 
 /**
@@ -31,11 +37,15 @@ sealed class ProteanRecoveryState {
         val remainingSeconds: Long
     ) : ProteanRecoveryState()
 
-    /** Recovery is ready to download */
-    data class Ready(val recoveryId: String) : ProteanRecoveryState()
+    /** Recovery is ready - user needs to enter password to authenticate */
+    data class ReadyForAuthentication(
+        val recoveryId: String,
+        val credentialBackup: CredentialBackupInfo,
+        val vaultBootstrap: RestoreVaultBootstrap
+    ) : ProteanRecoveryState()
 
-    /** Downloading recovered credential */
-    data object Downloading : ProteanRecoveryState()
+    /** Authenticating with vault via NATS */
+    data object Authenticating : ProteanRecoveryState()
 
     /** Recovery complete */
     data object Complete : ProteanRecoveryState()
@@ -54,13 +64,17 @@ sealed class ProteanRecoveryState {
  * 1. User enters email and backup PIN
  * 2. Request sent to server, 24-hour countdown starts
  * 3. User can check status or cancel during the wait
- * 4. After 24 hours, credential can be downloaded
- * 5. Credential is imported into ProteanCredentialManager
+ * 4. After 24 hours, user confirms restore and gets bootstrap NATS credentials
+ * 5. User enters password to authenticate via NATS
+ * 6. Vault verifies password and issues full NATS credentials
+ * 7. Credential is imported into ProteanCredentialManager
  */
 @HiltViewModel
 class ProteanRecoveryViewModel @Inject constructor(
     private val vaultServiceClient: VaultServiceClient,
-    private val proteanCredentialManager: ProteanCredentialManager
+    private val proteanCredentialManager: ProteanCredentialManager,
+    private val restoreAuthenticateClient: RestoreAuthenticateClient,
+    private val credentialStore: CredentialStore
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<ProteanRecoveryState>(ProteanRecoveryState.EnteringCredentials)
@@ -72,8 +86,14 @@ class ProteanRecoveryViewModel @Inject constructor(
     private val _backupPin = MutableStateFlow("")
     val backupPin: StateFlow<String> = _backupPin.asStateFlow()
 
+    private val _password = MutableStateFlow("")
+    val password: StateFlow<String> = _password.asStateFlow()
+
     private val _isValidInput = MutableStateFlow(false)
     val isValidInput: StateFlow<Boolean> = _isValidInput.asStateFlow()
+
+    private val _isValidPassword = MutableStateFlow(false)
+    val isValidPassword: StateFlow<Boolean> = _isValidPassword.asStateFlow()
 
     private var currentRecoveryId: String? = null
     private var statusPollingJob: Job? = null
@@ -88,6 +108,11 @@ class ProteanRecoveryViewModel @Inject constructor(
         val filtered = value.filter { it.isDigit() }.take(6)
         _backupPin.value = filtered
         validateInput()
+    }
+
+    fun setPassword(value: String) {
+        _password.value = value
+        _isValidPassword.value = value.isNotEmpty()
     }
 
     private fun validateInput() {
@@ -181,7 +206,8 @@ class ProteanRecoveryViewModel @Inject constructor(
             }
             "ready" -> {
                 stopStatusPolling()
-                _state.value = ProteanRecoveryState.Ready(response.recoveryId)
+                // When ready, call confirmRestore to get bootstrap credentials
+                confirmRestore(response.recoveryId)
             }
             "cancelled" -> {
                 stopStatusPolling()
@@ -194,6 +220,36 @@ class ProteanRecoveryViewModel @Inject constructor(
                     canRetry = false
                 )
             }
+        }
+    }
+
+    /**
+     * Confirm restore and get bootstrap credentials for NATS authentication.
+     */
+    private fun confirmRestore(recoveryId: String) {
+        viewModelScope.launch {
+            vaultServiceClient.confirmRestore(recoveryId).fold(
+                onSuccess = { response ->
+                    if (response.success) {
+                        _state.value = ProteanRecoveryState.ReadyForAuthentication(
+                            recoveryId = recoveryId,
+                            credentialBackup = response.credentialBackup,
+                            vaultBootstrap = response.vaultBootstrap
+                        )
+                    } else {
+                        _state.value = ProteanRecoveryState.Error(
+                            message = response.message,
+                            canRetry = true
+                        )
+                    }
+                },
+                onFailure = { error ->
+                    _state.value = ProteanRecoveryState.Error(
+                        message = error.message ?: "Failed to confirm restore",
+                        canRetry = true
+                    )
+                }
+            )
         }
     }
 
@@ -218,28 +274,74 @@ class ProteanRecoveryViewModel @Inject constructor(
     }
 
     /**
-     * Download and import the recovered credential.
+     * Authenticate with password via NATS and import the recovered credential.
+     *
+     * This method:
+     * 1. Connects to NATS with bootstrap credentials
+     * 2. Sends authenticate request with encrypted credential and password hash
+     * 3. On success, stores the credential and full NATS credentials
      */
-    fun downloadCredential() {
-        val recoveryId = currentRecoveryId ?: return
+    fun authenticateWithPassword() {
+        val currentState = _state.value
+        if (currentState !is ProteanRecoveryState.ReadyForAuthentication) return
+        if (!_isValidPassword.value) return
 
         viewModelScope.launch {
-            _state.value = ProteanRecoveryState.Downloading
+            _state.value = ProteanRecoveryState.Authenticating
 
-            vaultServiceClient.downloadRecoveredCredential(recoveryId).fold(
-                onSuccess = { response ->
-                    // Import the recovered credential
-                    proteanCredentialManager.importRecoveredCredential(
-                        credentialBlob = response.credentialBlob,
-                        userGuid = response.userGuid,
-                        version = response.version
+            // Get password salt - this should be stored during initial enrollment
+            // For recovery, we need to get it from the backup or use a default
+            val passwordSalt = credentialStore.getPasswordSaltBytes()
+                ?: run {
+                    _state.value = ProteanRecoveryState.Error(
+                        message = "Password salt not found. Please contact support.",
+                        canRetry = false
                     )
-                    currentRecoveryId = null
-                    _state.value = ProteanRecoveryState.Complete
+                    return@launch
+                }
+
+            // Generate device ID for this restore session
+            val deviceId = UUID.randomUUID().toString()
+
+            restoreAuthenticateClient.authenticate(
+                bootstrap = currentState.vaultBootstrap,
+                encryptedCredential = currentState.credentialBackup.encryptedCredential,
+                keyId = currentState.credentialBackup.keyId,
+                password = _password.value,
+                passwordSalt = passwordSalt,
+                deviceId = deviceId
+            ).fold(
+                onSuccess = { response ->
+                    if (response.success && response.credentials != null) {
+                        // Import the recovered credential
+                        proteanCredentialManager.importRecoveredCredential(
+                            credentialBlob = currentState.credentialBackup.encryptedCredential,
+                            userGuid = response.userGuid ?: "",
+                            version = response.credentialVersion ?: 1
+                        )
+
+                        // Store full NATS credentials for future connections
+                        credentialStore.storeFullNatsCredentials(
+                            credentials = response.credentials,
+                            ownerSpace = response.ownerSpace,
+                            messageSpace = response.messageSpace,
+                            credentialId = response.credentialId,
+                            ttlSeconds = 604800L // 7 days default
+                        )
+
+                        currentRecoveryId = null
+                        _password.value = ""
+                        _state.value = ProteanRecoveryState.Complete
+                    } else {
+                        _state.value = ProteanRecoveryState.Error(
+                            message = response.message.ifEmpty { "Authentication failed" },
+                            canRetry = true
+                        )
+                    }
                 },
                 onFailure = { error ->
                     _state.value = ProteanRecoveryState.Error(
-                        message = error.message ?: "Failed to download credential",
+                        message = error.message ?: "Failed to authenticate",
                         canRetry = true
                     )
                 }
@@ -255,8 +357,26 @@ class ProteanRecoveryViewModel @Inject constructor(
         currentRecoveryId = null
         _email.value = ""
         _backupPin.value = ""
+        _password.value = ""
         _isValidInput.value = false
+        _isValidPassword.value = false
         _state.value = ProteanRecoveryState.EnteringCredentials
+    }
+
+    /**
+     * Go back to the authentication step from an error state.
+     * Keeps the bootstrap info so user can retry with correct password.
+     */
+    fun retryAuthentication() {
+        val currentState = _state.value
+        if (currentState is ProteanRecoveryState.Error) {
+            // Try to restore to ReadyForAuthentication if we have the info
+            currentRecoveryId?.let { recoveryId ->
+                confirmRestore(recoveryId)
+            } ?: run {
+                reset()
+            }
+        }
     }
 
     /**
