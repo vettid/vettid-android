@@ -114,6 +114,37 @@ fun EnrollmentScreen(
                         onCancel = onCancel
                     )
                 }
+                is EnrollmentState.ConnectingToNats -> {
+                    LoadingContent(currentState.message)
+                }
+                is EnrollmentState.RequestingAttestation -> {
+                    AttestationContent(
+                        progress = currentState.progress,
+                        message = currentState.message,
+                        onCancel = onCancel
+                    )
+                }
+                is EnrollmentState.SettingPin -> {
+                    PinSetupContent(
+                        pin = currentState.pin,
+                        confirmPin = currentState.confirmPin,
+                        isSubmitting = currentState.isSubmitting,
+                        error = currentState.error,
+                        onPinChange = { viewModel.onEvent(EnrollmentEvent.PinChanged(it)) },
+                        onConfirmPinChange = { viewModel.onEvent(EnrollmentEvent.ConfirmPinChanged(it)) },
+                        onSubmit = { viewModel.onEvent(EnrollmentEvent.SubmitPin) },
+                        onCancel = onCancel
+                    )
+                }
+                is EnrollmentState.WaitingForVault -> {
+                    LoadingContent(currentState.message, currentState.progress)
+                }
+                is EnrollmentState.CreatingCredential -> {
+                    LoadingContent(currentState.message, currentState.progress)
+                }
+                is EnrollmentState.VerifyingEnrollment -> {
+                    LoadingContent(currentState.message, currentState.progress)
+                }
                 is EnrollmentState.SettingPassword -> {
                     PasswordSetupContent(
                         password = currentState.password,
@@ -377,6 +408,7 @@ private fun ManualEntryContent(
 @Composable
 private fun AttestationContent(
     progress: Float,
+    message: String = "Verifying device security...",
     onCancel: () -> Unit
 ) {
     Column(
@@ -432,6 +464,154 @@ private fun AttestationContent(
         TextButton(onClick = onCancel) {
             Text("Cancel")
         }
+    }
+}
+
+// MARK: - PIN Setup Content (Nitro Flow)
+
+@Composable
+private fun PinSetupContent(
+    pin: String,
+    confirmPin: String,
+    isSubmitting: Boolean,
+    error: String?,
+    onPinChange: (String) -> Unit,
+    onConfirmPinChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    onCancel: () -> Unit
+) {
+    val focusManager = LocalFocusManager.current
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        // Header
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(onClick = onCancel) {
+                Text("Cancel")
+            }
+            Spacer(modifier = Modifier.width(48.dp))
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Title and description
+        Icon(
+            imageVector = Icons.Default.Dialpad,
+            contentDescription = null,
+            modifier = Modifier.size(64.dp),
+            tint = MaterialTheme.colorScheme.primary
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = "Set Your PIN",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "Create a 6-digit PIN to secure your vault. This PIN is encrypted and sent directly to the secure enclave.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        // PIN input
+        OutlinedTextField(
+            value = pin,
+            onValueChange = { if (it.length <= 6) onPinChange(it) },
+            label = { Text("PIN") },
+            placeholder = { Text("Enter 6-digit PIN") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !isSubmitting,
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.NumberPassword,
+                imeAction = ImeAction.Next
+            ),
+            keyboardActions = KeyboardActions(
+                onNext = { focusManager.moveFocus(FocusDirection.Down) }
+            ),
+            visualTransformation = PasswordVisualTransformation()
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Confirm PIN input
+        OutlinedTextField(
+            value = confirmPin,
+            onValueChange = { if (it.length <= 6) onConfirmPinChange(it) },
+            label = { Text("Confirm PIN") },
+            placeholder = { Text("Re-enter PIN") },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !isSubmitting,
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.NumberPassword,
+                imeAction = ImeAction.Done
+            ),
+            keyboardActions = KeyboardActions(
+                onDone = {
+                    focusManager.clearFocus()
+                    if (pin.length == 6 && pin == confirmPin) {
+                        onSubmit()
+                    }
+                }
+            ),
+            visualTransformation = PasswordVisualTransformation()
+        )
+
+        // Error message
+        if (error != null) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = error,
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        // Submit button
+        Button(
+            onClick = onSubmit,
+            modifier = Modifier.fillMaxWidth(),
+            enabled = !isSubmitting && pin.length == 6 && confirmPin.length == 6
+        ) {
+            if (isSubmitting) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(24.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onPrimary
+                )
+            } else {
+                Text("Continue")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Security note
+        Text(
+            text = "Your PIN is protected by hardware encryption",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
     }
 }
 
@@ -783,13 +963,17 @@ private fun ErrorContent(
 // MARK: - Loading Content
 
 @Composable
-private fun LoadingContent(message: String) {
+private fun LoadingContent(message: String, progress: Float? = null) {
     Column(
         modifier = Modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        CircularProgressIndicator()
+        if (progress != null) {
+            CircularProgressIndicator(progress = progress)
+        } else {
+            CircularProgressIndicator()
+        }
         Spacer(modifier = Modifier.height(16.dp))
         Text(
             text = message,

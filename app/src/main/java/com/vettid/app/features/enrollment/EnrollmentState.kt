@@ -1,12 +1,17 @@
 package com.vettid.app.features.enrollment
 
+import com.vettid.app.core.nats.UtkInfo
 import com.vettid.app.core.network.EnrollmentQRData
 import com.vettid.app.core.network.TransactionKeyPublic
 
 /**
  * Enrollment flow state machine
  *
- * Flow: Initial → ScanningQR/ManualEntry → Attesting → SettingPassword → Finalizing → Complete
+ * Legacy Flow: Initial → ScanningQR/ManualEntry → Attesting → SettingPassword → Finalizing → Complete
+ *
+ * Nitro Enclave Flow (new):
+ * Initial → ScanningQR → ProcessingInvite → ConnectingToNats → RequestingAttestation →
+ * SettingPin → WaitingForVault → SettingPassword → CreatingCredential → VerifyingEnrollment → Complete
  */
 sealed class EnrollmentState {
     /** Initial state before enrollment starts */
@@ -28,7 +33,18 @@ sealed class EnrollmentState {
         val qrData: EnrollmentQRData
     ) : EnrollmentState()
 
-    /** Performing hardware attestation */
+    /** Connecting to NATS with bootstrap credentials (Nitro flow) */
+    data class ConnectingToNats(
+        val message: String = "Connecting to secure vault..."
+    ) : EnrollmentState()
+
+    /** Requesting attestation from enclave supervisor via NATS (Nitro flow) */
+    data class RequestingAttestation(
+        val message: String = "Verifying enclave security...",
+        val progress: Float = 0f
+    ) : EnrollmentState()
+
+    /** Performing hardware attestation (legacy flow) */
     data class Attesting(
         val sessionId: String,
         val challenge: ByteArray,
@@ -56,6 +72,20 @@ sealed class EnrollmentState {
         }
     }
 
+    /** User setting up 6-digit PIN (Nitro flow) */
+    data class SettingPin(
+        val pin: String = "",
+        val confirmPin: String = "",
+        val isSubmitting: Boolean = false,
+        val error: String? = null
+    ) : EnrollmentState()
+
+    /** Waiting for vault to be ready with UTKs (Nitro flow) */
+    data class WaitingForVault(
+        val message: String = "Initializing your secure vault...",
+        val progress: Float = 0f
+    ) : EnrollmentState()
+
     /** Attestation complete, waiting for user to set password */
     data class SettingPassword(
         val sessionId: String,
@@ -65,10 +95,25 @@ sealed class EnrollmentState {
         val confirmPassword: String = "",
         val strength: PasswordStrength = PasswordStrength.WEAK,
         val isSubmitting: Boolean = false,
-        val error: String? = null
+        val error: String? = null,
+        // For Nitro flow - UTKs from vault ready
+        val utks: List<UtkInfo> = emptyList(),
+        val isNitroFlow: Boolean = false
     ) : EnrollmentState()
 
-    /** Finalizing enrollment */
+    /** Creating credential via NATS (Nitro flow) */
+    data class CreatingCredential(
+        val message: String = "Creating your secure credential...",
+        val progress: Float = 0f
+    ) : EnrollmentState()
+
+    /** Verifying enrollment with test operation (Nitro flow) */
+    data class VerifyingEnrollment(
+        val message: String = "Verifying enrollment...",
+        val progress: Float = 0f
+    ) : EnrollmentState()
+
+    /** Finalizing enrollment (legacy flow) */
     data class Finalizing(
         val sessionId: String,
         val progress: Float = 0f
@@ -174,6 +219,15 @@ sealed class EnrollmentEvent {
 
     /** Attestation completed */
     data class AttestationComplete(val success: Boolean) : EnrollmentEvent()
+
+    /** PIN field updated (Nitro flow) */
+    data class PinChanged(val pin: String) : EnrollmentEvent()
+
+    /** Confirm PIN field updated (Nitro flow) */
+    data class ConfirmPinChanged(val confirmPin: String) : EnrollmentEvent()
+
+    /** Submit PIN (Nitro flow) */
+    object SubmitPin : EnrollmentEvent()
 
     /** Password field updated */
     data class PasswordChanged(val password: String) : EnrollmentEvent()

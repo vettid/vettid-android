@@ -310,6 +310,47 @@ class CryptoManager @Inject constructor() {
         )
     }
 
+    /**
+     * Encrypt arbitrary data to an X25519 public key.
+     *
+     * Uses X25519 key exchange + HKDF + ChaCha20-Poly1305 for authenticated encryption.
+     * This is used to encrypt data to an attested enclave public key (e.g., PIN during enrollment).
+     *
+     * @param plaintext Data to encrypt
+     * @param publicKeyBase64 Target X25519 public key (Base64)
+     * @param context HKDF context string for key derivation (default: "enclave-encryption-v1")
+     * @return EncryptedData containing ciphertext, ephemeral public key, and nonce
+     */
+    fun encryptToPublicKey(
+        plaintext: ByteArray,
+        publicKeyBase64: String,
+        context: String = "enclave-encryption-v1"
+    ): EncryptedData {
+        // 1. Generate ephemeral X25519 keypair
+        val (ephemeralPrivate, ephemeralPublic) = generateX25519KeyPair()
+
+        // 2. Decode target public key and compute shared secret
+        val targetPublicKey = Base64.decode(publicKeyBase64, Base64.NO_WRAP)
+        val sharedSecret = x25519SharedSecret(ephemeralPrivate, targetPublicKey)
+
+        // 3. Derive encryption key
+        val encryptionKey = deriveEncryptionKey(sharedSecret, context)
+
+        // 4. Encrypt plaintext
+        val (ciphertext, nonce) = chaChaEncrypt(plaintext, encryptionKey)
+
+        // Clear sensitive data
+        ephemeralPrivate.fill(0)
+        sharedSecret.fill(0)
+        encryptionKey.fill(0)
+
+        return EncryptedData(
+            ciphertext = Base64.encodeToString(ciphertext, Base64.NO_WRAP),
+            ephemeralPublicKey = Base64.encodeToString(ephemeralPublic, Base64.NO_WRAP),
+            nonce = Base64.encodeToString(nonce, Base64.NO_WRAP)
+        )
+    }
+
     // MARK: - Legacy EC Key Operations (for attestation)
 
     /**
@@ -468,6 +509,15 @@ data class KeyPair(
  */
 data class PasswordEncryptionResult(
     val encryptedPasswordHash: String,  // Base64
+    val ephemeralPublicKey: String,     // Base64
+    val nonce: String                   // Base64
+)
+
+/**
+ * Result of encrypting arbitrary data to a public key
+ */
+data class EncryptedData(
+    val ciphertext: String,             // Base64
     val ephemeralPublicKey: String,     // Base64
     val nonce: String                   // Base64
 )

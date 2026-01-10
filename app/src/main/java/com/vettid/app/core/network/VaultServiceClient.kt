@@ -219,6 +219,23 @@ open class VaultServiceClient @Inject constructor() {
         }
     }
 
+    /**
+     * Finalize enrollment for Nitro flow.
+     * Returns NATS bootstrap credentials for connecting to the enclave.
+     */
+    suspend fun enrollFinalizeForNats(): Result<com.vettid.app.features.enrollment.NatsBootstrapInfo> {
+        return safeApiCall {
+            getEnrollmentApi().finalizeForNats(getEnrollmentAuthHeader())
+        }.map { response ->
+            com.vettid.app.features.enrollment.NatsBootstrapInfo(
+                credentials = response.natsCredentials,
+                ownerSpace = response.ownerSpace,
+                natsEndpoint = response.natsEndpoint,
+                userGuid = response.userGuid
+            )
+        }
+    }
+
     // MARK: - Authentication Flow
 
     /**
@@ -501,6 +518,12 @@ interface VaultServiceApi {
     suspend fun finalize(
         @Header("Authorization") authToken: String
     ): Response<FinalizeResponse>
+
+    // Enrollment - Step 5 (Nitro): Finalize for NATS (requires Bearer token)
+    @POST("vault/enroll/finalize")
+    suspend fun finalizeForNats(
+        @Header("Authorization") authToken: String
+    ): Response<NatsFinalizeResponse>
 
     @POST("vault/auth/request")
     suspend fun authRequest(@Body request: VaultAuthRequest): Response<AuthRequestResponse>
@@ -789,6 +812,18 @@ data class FinalizeResponse(
 )
 
 /**
+ * Response from finalize endpoint for Nitro Enclave flow.
+ * Contains NATS bootstrap credentials for connecting to the enclave supervisor.
+ */
+data class NatsFinalizeResponse(
+    val status: String,
+    @SerializedName("nats_credentials") val natsCredentials: String,
+    @SerializedName("nats_endpoint") val natsEndpoint: String,
+    @SerializedName("owner_space") val ownerSpace: String,
+    @SerializedName("user_guid") val userGuid: String?
+)
+
+/**
  * Vault bootstrap info from enrollment finalize.
  * Contains NATS credentials for vault communication.
  *
@@ -1010,6 +1045,13 @@ data class EnrollmentQRData(
      */
     val isSessionTokenEnrollment: Boolean
         get() = sessionToken != null
+
+    /**
+     * Returns true if this QR data should use the new Nitro Enclave enrollment flow.
+     * This is detected by presence of user_guid in the QR data (new format).
+     */
+    val isNitroFlow: Boolean
+        get() = sessionToken != null && userGuid != null
 
     companion object {
         // Invitation code pattern: TEST-XXXX-XXXX-XXXX or similar

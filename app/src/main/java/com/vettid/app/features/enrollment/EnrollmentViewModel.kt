@@ -9,8 +9,10 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.attestation.AttestationVerificationException
 import com.vettid.app.core.attestation.HardwareAttestationManager
 import com.vettid.app.core.attestation.NitroAttestationVerifier
+import com.vettid.app.core.attestation.VerifiedAttestation
 import com.vettid.app.core.crypto.CryptoManager
-import com.vettid.app.core.network.DeviceInfo
+import com.vettid.app.core.nats.NitroEnrollmentClient
+import com.vettid.app.core.nats.UtkInfo
 import com.vettid.app.core.network.EnclaveAttestation
 import com.vettid.app.core.network.EnrollmentQRData
 import com.vettid.app.core.network.TransactionKeyPublic
@@ -31,8 +33,14 @@ import javax.inject.Inject
 /**
  * ViewModel for the enrollment flow
  *
- * Manages state transitions through:
+ * Manages state transitions through two flows:
+ *
+ * Legacy Flow:
  * 1. QR Scanning → 2. Attestation → 3. Password Setup → 4. Finalization
+ *
+ * Nitro Enclave Flow (new):
+ * 1. QR Scanning → 2. API Auth → 3. NATS Connect → 4. Attestation via NATS →
+ * 5. PIN Setup → 6. Wait for Vault → 7. Password Setup → 8. Create Credential → 9. Verify
  */
 @HiltViewModel
 class EnrollmentViewModel @Inject constructor(
@@ -41,12 +49,14 @@ class EnrollmentViewModel @Inject constructor(
     private val cryptoManager: CryptoManager,
     private val attestationManager: HardwareAttestationManager,
     private val nitroAttestationVerifier: NitroAttestationVerifier,
+    private val nitroEnrollmentClient: NitroEnrollmentClient,
     private val credentialStore: CredentialStore
 ) : ViewModel() {
 
     companion object {
         private const val TAG = "EnrollmentViewModel"
         const val MIN_PASSWORD_LENGTH = 12
+        const val PIN_LENGTH = 6
     }
 
     /**
@@ -63,13 +73,19 @@ class EnrollmentViewModel @Inject constructor(
     private val _effects = MutableSharedFlow<EnrollmentEffect>()
     val effects: SharedFlow<EnrollmentEffect> = _effects.asSharedFlow()
 
-    // Store transaction keys during enrollment
+    // Store transaction keys during enrollment (legacy flow)
     private var currentTransactionKeys: List<TransactionKeyPublic> = emptyList()
     private var passwordSalt: ByteArray? = null
 
-    // Nitro Enclave attestation data
+    // Nitro Enclave attestation data (legacy API flow)
     private var enclaveAttestation: EnclaveAttestation? = null
     private var verifiedEnclavePublicKey: String? = null
+
+    // Nitro Enclave flow data (new NATS flow)
+    private var isNitroFlow: Boolean = false
+    private var nitroVerifiedAttestation: VerifiedAttestation? = null
+    private var nitroUtks: List<UtkInfo> = emptyList()
+    private var userGuid: String? = null
 
     /**
      * Process enrollment events
@@ -84,6 +100,9 @@ class EnrollmentViewModel @Inject constructor(
                 is EnrollmentEvent.SubmitInviteCode -> submitManualInviteCode()
                 is EnrollmentEvent.QRCodeScanned -> processQRCode(event.qrData)
                 is EnrollmentEvent.AttestationComplete -> handleAttestationResult(event.success)
+                is EnrollmentEvent.PinChanged -> updatePin(event.pin)
+                is EnrollmentEvent.ConfirmPinChanged -> updateConfirmPin(event.confirmPin)
+                is EnrollmentEvent.SubmitPin -> submitPin()
                 is EnrollmentEvent.PasswordChanged -> updatePassword(event.password)
                 is EnrollmentEvent.ConfirmPasswordChanged -> updateConfirmPassword(event.confirmPassword)
                 is EnrollmentEvent.SubmitPassword -> submitPassword()
@@ -151,7 +170,11 @@ class EnrollmentViewModel @Inject constructor(
         // Use the appropriate flow based on QR data
         if (enrollmentData.isDirectEnrollment) {
             processDirectEnrollment(enrollmentData)
+        } else if (enrollmentData.isNitroFlow) {
+            // New Nitro Enclave enrollment flow
+            processNitroEnrollment(enrollmentData)
         } else {
+            // Legacy session token enrollment
             processSessionTokenEnrollment(enrollmentData)
         }
     }
@@ -454,6 +477,14 @@ class EnrollmentViewModel @Inject constructor(
         val currentState = _state.value
         if (currentState !is EnrollmentState.SettingPassword) return
 
+        // Use Nitro flow if applicable
+        if (currentState.isNitroFlow) {
+            submitPasswordNitro()
+            return
+        }
+
+        // Legacy flow continues below
+
         // Validate password
         val validationError = validatePassword(currentState.password, currentState.confirmPassword)
         if (validationError != null) {
@@ -592,6 +623,372 @@ class EnrollmentViewModel @Inject constructor(
         }
     }
 
+    // MARK: - PIN Methods (Nitro flow)
+
+    private fun updatePin(pin: String) {
+        val currentState = _state.value
+        if (currentState is EnrollmentState.SettingPin) {
+            // Only allow digits, max 6 characters
+            val filteredPin = pin.filter { it.isDigit() }.take(PIN_LENGTH)
+            _state.value = currentState.copy(pin = filteredPin, error = null)
+        }
+    }
+
+    private fun updateConfirmPin(confirmPin: String) {
+        val currentState = _state.value
+        if (currentState is EnrollmentState.SettingPin) {
+            val filteredPin = confirmPin.filter { it.isDigit() }.take(PIN_LENGTH)
+            _state.value = currentState.copy(confirmPin = filteredPin, error = null)
+        }
+    }
+
+    private suspend fun submitPin() {
+        val currentState = _state.value
+        if (currentState !is EnrollmentState.SettingPin) return
+
+        // Validate PIN
+        val validationError = validatePin(currentState.pin, currentState.confirmPin)
+        if (validationError != null) {
+            _state.value = currentState.copy(error = validationError)
+            return
+        }
+
+        _state.value = currentState.copy(isSubmitting = true, error = null)
+
+        try {
+            Log.d(TAG, "Submitting PIN to enclave...")
+
+            val result = nitroEnrollmentClient.setupPin(currentState.pin)
+
+            result.fold(
+                onSuccess = { response ->
+                    if (response.success) {
+                        Log.i(TAG, "PIN setup complete, waiting for vault ready")
+                        waitForVaultReady()
+                    } else {
+                        _state.value = currentState.copy(
+                            isSubmitting = false,
+                            error = response.message ?: "PIN setup failed"
+                        )
+                    }
+                },
+                onFailure = { error ->
+                    Log.e(TAG, "PIN setup failed", error)
+                    _state.value = currentState.copy(
+                        isSubmitting = false,
+                        error = error.message ?: "PIN setup failed"
+                    )
+                }
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "PIN setup error", e)
+            _state.value = currentState.copy(
+                isSubmitting = false,
+                error = "Error: ${e.message}"
+            )
+        }
+    }
+
+    private fun validatePin(pin: String, confirmPin: String): String? {
+        return when {
+            pin.length != PIN_LENGTH -> "PIN must be exactly $PIN_LENGTH digits"
+            !pin.all { it.isDigit() } -> "PIN must contain only digits"
+            pin != confirmPin -> "PINs do not match"
+            pin == "000000" || pin == "123456" || pin == "654321" ->
+                "PIN is too simple. Please choose a different PIN."
+            else -> null
+        }
+    }
+
+    // MARK: - Nitro Enrollment Flow
+
+    /**
+     * Process enrollment using the new Nitro Enclave flow.
+     * This is the main entry point for the new flow when QR contains session_token.
+     */
+    private suspend fun processNitroEnrollment(enrollmentData: EnrollmentQRData) {
+        isNitroFlow = true
+        userGuid = enrollmentData.userGuid
+
+        Log.i(TAG, "Starting Nitro Enclave enrollment flow")
+
+        // Step 1: Authenticate with session_token to get enrollment JWT
+        val sessionToken = enrollmentData.sessionToken
+            ?: throw IllegalStateException("session_token required for Nitro enrollment")
+
+        val authResult = vaultServiceClient.enrollAuthenticate(
+            sessionToken = sessionToken,
+            deviceId = getDeviceId()
+        )
+
+        authResult.fold(
+            onSuccess = { authResponse ->
+                Log.d(TAG, "Authentication successful, getting NATS bootstrap")
+
+                // Step 2: Call finalize to get NATS bootstrap credentials
+                val finalizeResult = vaultServiceClient.enrollFinalizeForNats()
+
+                finalizeResult.fold(
+                    onSuccess = { bootstrapResponse ->
+                        Log.d(TAG, "Got NATS bootstrap, connecting...")
+
+                        // Store user GUID
+                        userGuid = bootstrapResponse.userGuid
+
+                        // Step 3: Connect to NATS
+                        connectToNatsAndContinue(bootstrapResponse)
+                    },
+                    onFailure = { error ->
+                        _state.value = EnrollmentState.Error(
+                            message = "Failed to get vault connection: ${error.message}",
+                            retryable = true,
+                            previousState = EnrollmentState.ScanningQR()
+                        )
+                    }
+                )
+            },
+            onFailure = { error ->
+                val errorMessage = if (error.message?.contains("401") == true) {
+                    "Enrollment QR code has expired. Please request a new one."
+                } else {
+                    error.message ?: "Failed to authenticate enrollment"
+                }
+                _state.value = EnrollmentState.Error(
+                    message = errorMessage,
+                    retryable = true,
+                    previousState = EnrollmentState.ScanningQR()
+                )
+            }
+        )
+    }
+
+    /**
+     * Connect to NATS with bootstrap credentials and continue the flow.
+     */
+    private suspend fun connectToNatsAndContinue(bootstrap: NatsBootstrapInfo) {
+        _state.value = EnrollmentState.ConnectingToNats()
+
+        val connectResult = nitroEnrollmentClient.connect(
+            natsEndpoint = bootstrap.natsEndpoint,
+            credentials = bootstrap.credentials
+        )
+
+        connectResult.fold(
+            onSuccess = {
+                nitroEnrollmentClient.setOwnerSpace(bootstrap.ownerSpace)
+                Log.i(TAG, "Connected to NATS, requesting attestation")
+                requestNitroAttestation()
+            },
+            onFailure = { error ->
+                Log.e(TAG, "Failed to connect to NATS", error)
+                _state.value = EnrollmentState.Error(
+                    message = "Failed to connect to secure vault: ${error.message}",
+                    retryable = true,
+                    previousState = EnrollmentState.ScanningQR()
+                )
+            }
+        )
+    }
+
+    /**
+     * Request attestation from the enclave supervisor via NATS.
+     */
+    private suspend fun requestNitroAttestation() {
+        _state.value = EnrollmentState.RequestingAttestation(progress = 0.2f)
+
+        try {
+            val result = nitroEnrollmentClient.requestAttestation()
+
+            result.fold(
+                onSuccess = { verifiedAttestation ->
+                    Log.i(TAG, "Attestation verified: ${verifiedAttestation.moduleId}")
+                    nitroVerifiedAttestation = verifiedAttestation
+
+                    _state.value = EnrollmentState.RequestingAttestation(progress = 1.0f)
+                    delay(300)
+
+                    // Move to PIN setup
+                    _state.value = EnrollmentState.SettingPin()
+                },
+                onFailure = { error ->
+                    Log.e(TAG, "Attestation verification failed", error)
+                    _state.value = EnrollmentState.Error(
+                        message = "Security verification failed: ${error.message}",
+                        retryable = false
+                    )
+                }
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Attestation error", e)
+            _state.value = EnrollmentState.Error(
+                message = "Attestation error: ${e.message}",
+                retryable = false
+            )
+        }
+    }
+
+    /**
+     * Wait for vault to be ready and receive UTKs.
+     */
+    private suspend fun waitForVaultReady() {
+        _state.value = EnrollmentState.WaitingForVault(progress = 0.3f)
+
+        try {
+            val result = nitroEnrollmentClient.waitForVaultReady()
+
+            result.fold(
+                onSuccess = { response ->
+                    Log.i(TAG, "Vault ready with ${response.utks.size} UTKs")
+                    nitroUtks = response.utks
+
+                    // Generate password salt
+                    passwordSalt = cryptoManager.generateSalt()
+
+                    _state.value = EnrollmentState.WaitingForVault(progress = 1.0f)
+                    delay(300)
+
+                    // Move to password setup
+                    _state.value = EnrollmentState.SettingPassword(
+                        sessionId = "",
+                        transactionKeys = emptyList(),
+                        passwordKeyId = response.utks.firstOrNull()?.keyId ?: "",
+                        utks = response.utks,
+                        isNitroFlow = true
+                    )
+                },
+                onFailure = { error ->
+                    Log.e(TAG, "Waiting for vault failed", error)
+                    _state.value = EnrollmentState.Error(
+                        message = "Vault initialization failed: ${error.message}",
+                        retryable = true
+                    )
+                }
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Vault wait error", e)
+            _state.value = EnrollmentState.Error(
+                message = "Error: ${e.message}",
+                retryable = true
+            )
+        }
+    }
+
+    /**
+     * Submit password for Nitro flow - create credential via NATS.
+     */
+    private suspend fun submitPasswordNitro() {
+        val currentState = _state.value
+        if (currentState !is EnrollmentState.SettingPassword || !currentState.isNitroFlow) return
+
+        // Validate password
+        val validationError = validatePassword(currentState.password, currentState.confirmPassword)
+        if (validationError != null) {
+            _state.value = currentState.copy(error = validationError)
+            return
+        }
+
+        // Get UTK for encryption
+        val utk = currentState.utks.firstOrNull()
+        if (utk == null) {
+            _state.value = currentState.copy(error = "No transaction key available")
+            return
+        }
+
+        _state.value = currentState.copy(isSubmitting = true, error = null)
+        _state.value = EnrollmentState.CreatingCredential(progress = 0.2f)
+
+        try {
+            val salt = passwordSalt ?: cryptoManager.generateSalt().also { passwordSalt = it }
+
+            val result = nitroEnrollmentClient.createCredential(
+                password = currentState.password,
+                passwordSalt = salt,
+                utkPublicKey = utk.publicKey,
+                utkKeyId = utk.keyId
+            )
+
+            result.fold(
+                onSuccess = { response ->
+                    Log.i(TAG, "Credential created: ${response.credentialGuid}")
+
+                    // Update UTKs with new ones
+                    nitroUtks = response.newUtks
+
+                    // Store credential locally
+                    credentialStore.storeNitroCredential(
+                        encryptedCredential = response.encryptedCredential,
+                        credentialGuid = response.credentialGuid,
+                        userGuid = response.userGuid ?: userGuid ?: "",
+                        passwordSalt = salt,
+                        utks = response.newUtks
+                    )
+
+                    _state.value = EnrollmentState.CreatingCredential(progress = 0.8f)
+
+                    // Verify enrollment
+                    verifyNitroEnrollment(response.userGuid ?: userGuid ?: "")
+                },
+                onFailure = { error ->
+                    Log.e(TAG, "Credential creation failed", error)
+                    _state.value = EnrollmentState.Error(
+                        message = "Failed to create credential: ${error.message}",
+                        retryable = true
+                    )
+                }
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Credential creation error", e)
+            _state.value = EnrollmentState.Error(
+                message = "Error: ${e.message}",
+                retryable = true
+            )
+        }
+    }
+
+    /**
+     * Verify enrollment with a test operation.
+     */
+    private suspend fun verifyNitroEnrollment(userGuid: String) {
+        _state.value = EnrollmentState.VerifyingEnrollment(progress = 0.5f)
+
+        try {
+            val result = nitroEnrollmentClient.verifyEnrollment()
+
+            result.fold(
+                onSuccess = {
+                    Log.i(TAG, "Enrollment verified successfully")
+
+                    _state.value = EnrollmentState.VerifyingEnrollment(progress = 1.0f)
+                    delay(300)
+
+                    // Disconnect from NATS
+                    nitroEnrollmentClient.disconnect()
+
+                    // Complete enrollment
+                    _state.value = EnrollmentState.Complete(
+                        userGuid = userGuid,
+                        vaultStatus = "enrolled"
+                    )
+
+                    _effects.emit(EnrollmentEffect.NavigateToMain)
+                },
+                onFailure = { error ->
+                    Log.e(TAG, "Enrollment verification failed", error)
+                    _state.value = EnrollmentState.Error(
+                        message = "Enrollment verification failed: ${error.message}",
+                        retryable = true
+                    )
+                }
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Verification error", e)
+            _state.value = EnrollmentState.Error(
+                message = "Error: ${e.message}",
+                retryable = true
+            )
+        }
+    }
+
     private fun retry() {
         val currentState = _state.value
         if (currentState is EnrollmentState.Error && currentState.retryable) {
@@ -600,10 +997,35 @@ class EnrollmentViewModel @Inject constructor(
     }
 
     private fun cancel() {
+        viewModelScope.launch {
+            // Disconnect from NATS if connected
+            if (isNitroFlow) {
+                try {
+                    nitroEnrollmentClient.disconnect()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error disconnecting from NATS", e)
+                }
+            }
+        }
+
         _state.value = EnrollmentState.Initial
         currentTransactionKeys = emptyList()
         passwordSalt = null
         enclaveAttestation = null
         verifiedEnclavePublicKey = null
+        isNitroFlow = false
+        nitroVerifiedAttestation = null
+        nitroUtks = emptyList()
+        userGuid = null
     }
 }
+
+/**
+ * NATS bootstrap info from enrollment finalize.
+ */
+data class NatsBootstrapInfo(
+    val credentials: String,
+    val ownerSpace: String,
+    val natsEndpoint: String,
+    val userGuid: String?
+)

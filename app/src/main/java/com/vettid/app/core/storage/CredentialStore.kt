@@ -643,6 +643,46 @@ class CredentialStore @Inject constructor(
     }
 
     /**
+     * Store credential from Nitro Enclave enrollment flow.
+     * This stores the encrypted credential blob, user info, and UTKs.
+     *
+     * @param encryptedCredential Encrypted credential blob from vault-manager
+     * @param credentialGuid Unique identifier for the credential
+     * @param userGuid User's GUID
+     * @param passwordSalt Salt used for password hashing
+     * @param utks User Transaction Keys for future operations
+     */
+    fun storeNitroCredential(
+        encryptedCredential: String,
+        credentialGuid: String,
+        userGuid: String,
+        passwordSalt: ByteArray,
+        utks: List<com.vettid.app.core.nats.UtkInfo>
+    ) {
+        // Convert UtkInfo to TransactionKeyInfo for storage
+        val keyInfoList = utks.map { utk ->
+            TransactionKeyInfo(
+                keyId = utk.keyId,
+                publicKey = utk.publicKey,
+                algorithm = "X25519"
+            )
+        }
+
+        encryptedPrefs.edit().apply {
+            putString(KEY_USER_GUID, userGuid)
+            putString(KEY_CREDENTIAL_ID, credentialGuid)
+            putString(KEY_ENCRYPTED_BLOB, encryptedCredential)
+            putString(KEY_PASSWORD_SALT, Base64.encodeToString(passwordSalt, Base64.NO_WRAP))
+            putString(KEY_UTK_POOL, gson.toJson(keyInfoList))
+            putLong(KEY_LAST_USED_AT, System.currentTimeMillis())
+            // Mark as Nitro enrollment
+            putBoolean("is_nitro_credential", true)
+        }.apply()
+
+        android.util.Log.i("CredentialStore", "Stored Nitro credential: $credentialGuid for user $userGuid with ${utks.size} UTKs")
+    }
+
+    /**
      * Get the bootstrap topic if stored.
      * Presence of this value indicates bootstrap (limited) credentials.
      */

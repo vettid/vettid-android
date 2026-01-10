@@ -6,6 +6,7 @@ import com.vettid.app.core.attestation.HardwareAttestationManager
 import com.vettid.app.core.attestation.NitroAttestationVerifier
 import com.vettid.app.core.crypto.CryptoManager
 import com.vettid.app.core.crypto.PasswordEncryptionResult
+import com.vettid.app.core.nats.NitroEnrollmentClient
 import com.vettid.app.core.network.*
 import com.vettid.app.core.storage.CredentialStore
 import kotlinx.coroutines.Dispatchers
@@ -29,6 +30,7 @@ class EnrollmentViewModelTest {
     private lateinit var cryptoManager: CryptoManager
     private lateinit var attestationManager: HardwareAttestationManager
     private lateinit var nitroAttestationVerifier: NitroAttestationVerifier
+    private lateinit var nitroEnrollmentClient: NitroEnrollmentClient
     private lateinit var credentialStore: CredentialStore
 
     private val testDispatcher = StandardTestDispatcher()
@@ -42,6 +44,7 @@ class EnrollmentViewModelTest {
         cryptoManager = mock()
         attestationManager = mock()
         nitroAttestationVerifier = mock()
+        nitroEnrollmentClient = mock()
         credentialStore = mock()
 
         viewModel = EnrollmentViewModel(
@@ -50,6 +53,7 @@ class EnrollmentViewModelTest {
             cryptoManager = cryptoManager,
             attestationManager = attestationManager,
             nitroAttestationVerifier = nitroAttestationVerifier,
+            nitroEnrollmentClient = nitroEnrollmentClient,
             credentialStore = credentialStore
         )
     }
