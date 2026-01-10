@@ -155,16 +155,18 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideNitroAttestationVerifier(): NitroAttestationVerifier {
-        return NitroAttestationVerifier()
-    }
-
-    @Provides
-    @Singleton
     fun providePcrConfigManager(
         @ApplicationContext context: android.content.Context
     ): PcrConfigManager {
         return PcrConfigManager(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideNitroAttestationVerifier(
+        pcrConfigManager: PcrConfigManager
+    ): NitroAttestationVerifier {
+        return NitroAttestationVerifier(pcrConfigManager)
     }
 
     @Provides

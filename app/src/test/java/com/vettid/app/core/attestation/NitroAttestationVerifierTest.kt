@@ -5,6 +5,8 @@ import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.mockito.Mockito.mock
+import org.mockito.Mockito.`when`
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.lang.reflect.Method
@@ -29,10 +31,23 @@ import java.lang.reflect.Method
 class NitroAttestationVerifierTest {
 
     private lateinit var verifier: NitroAttestationVerifier
+    private lateinit var mockPcrConfigManager: PcrConfigManager
 
     @Before
     fun setup() {
-        verifier = NitroAttestationVerifier()
+        mockPcrConfigManager = mock(PcrConfigManager::class.java)
+        // Setup default mock behavior
+        val defaultPcrs = ExpectedPcrs(
+            pcr0 = "aa".repeat(48),
+            pcr1 = "bb".repeat(48),
+            pcr2 = "cc".repeat(48),
+            version = "test-version"
+        )
+        `when`(mockPcrConfigManager.getCurrentPcrs()).thenReturn(defaultPcrs)
+        `when`(mockPcrConfigManager.getPreviousPcrs()).thenReturn(null)
+        `when`(mockPcrConfigManager.getCurrentVersion()).thenReturn("test-version")
+
+        verifier = NitroAttestationVerifier(mockPcrConfigManager)
     }
 
     // MARK: - ExpectedPcrs Tests

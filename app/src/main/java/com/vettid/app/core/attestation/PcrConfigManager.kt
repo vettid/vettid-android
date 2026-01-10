@@ -64,6 +64,11 @@ class PcrConfigManager @Inject constructor(
 
         // How often to check for PCR updates (24 hours)
         private const val UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000L
+
+        // Retry configuration
+        private const val MAX_RETRY_ATTEMPTS = 3
+        private const val INITIAL_RETRY_DELAY_MS = 1000L
+        private const val RETRY_BACKOFF_MULTIPLIER = 2.0
     }
 
     private val gson = Gson()
@@ -156,24 +161,61 @@ class PcrConfigManager @Inject constructor(
     }
 
     /**
-     * Fetch PCR manifest from VettID CloudFront.
+     * Fetch PCR manifest from VettID CloudFront with retry logic.
      *
      * This is a suspend function that should be called from a coroutine.
-     * Network errors are handled gracefully - the app will use cached/bundled PCRs.
+     * Network errors are handled gracefully with exponential backoff retries.
+     * If all retries fail, the app will use cached/bundled PCRs.
      *
      * @return Result containing the updated PCRs or an error
      */
     suspend fun fetchPcrUpdates(): Result<ExpectedPcrs> {
         Log.d(TAG, "Fetching PCR manifest from CloudFront")
 
-        return try {
-            val url = java.net.URL(PCR_MANIFEST_URL)
-            val connection = url.openConnection() as java.net.HttpURLConnection
-            connection.requestMethod = "GET"
-            connection.setRequestProperty("Accept", "application/json")
-            connection.connectTimeout = 10000
-            connection.readTimeout = 10000
+        var lastException: Exception? = null
+        var delayMs = INITIAL_RETRY_DELAY_MS
 
+        for (attempt in 1..MAX_RETRY_ATTEMPTS) {
+            try {
+                val result = performFetch()
+                if (result.isSuccess) {
+                    return result
+                }
+                lastException = result.exceptionOrNull() as? Exception
+            } catch (e: Exception) {
+                lastException = e
+                Log.w(TAG, "PCR fetch attempt $attempt failed: ${e.message}")
+            }
+
+            // Don't delay after the last attempt
+            if (attempt < MAX_RETRY_ATTEMPTS) {
+                Log.d(TAG, "Retrying in ${delayMs}ms...")
+                kotlinx.coroutines.delay(delayMs)
+                delayMs = (delayMs * RETRY_BACKOFF_MULTIPLIER).toLong()
+            }
+        }
+
+        Log.e(TAG, "All PCR fetch attempts failed after $MAX_RETRY_ATTEMPTS retries")
+        return Result.failure(
+            PcrUpdateException(
+                "Failed to fetch PCR updates after $MAX_RETRY_ATTEMPTS attempts",
+                lastException
+            )
+        )
+    }
+
+    /**
+     * Perform a single fetch attempt.
+     */
+    private fun performFetch(): Result<ExpectedPcrs> {
+        val url = java.net.URL(PCR_MANIFEST_URL)
+        val connection = url.openConnection() as java.net.HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.setRequestProperty("Accept", "application/json")
+        connection.connectTimeout = 10000
+        connection.readTimeout = 10000
+
+        try {
             val responseCode = connection.responseCode
             if (responseCode != 200) {
                 Log.w(TAG, "PCR update API returned $responseCode")
@@ -193,11 +235,91 @@ class PcrConfigManager @Inject constructor(
                 Log.d(TAG, "PCRs already up to date")
             }
 
-            Result.success(signedResponse.pcrs)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to fetch PCR updates", e)
-            Result.failure(PcrUpdateException("Failed to fetch PCR updates: ${e.message}", e))
+            return Result.success(signedResponse.pcrs)
+        } finally {
+            connection.disconnect()
         }
+    }
+
+    /**
+     * Fetch PCR manifest from the API endpoint.
+     *
+     * This fetches from /api/enclave/pcrs as specified in the architecture doc.
+     *
+     * @param baseUrl The base URL for the API (e.g., "https://api.vettid.com")
+     * @return Result containing the updated PCRs or an error
+     */
+    suspend fun fetchFromApi(baseUrl: String): Result<ExpectedPcrs> {
+        Log.d(TAG, "Fetching PCRs from API: $baseUrl/api/enclave/pcrs")
+
+        var lastException: Exception? = null
+        var delayMs = INITIAL_RETRY_DELAY_MS
+
+        for (attempt in 1..MAX_RETRY_ATTEMPTS) {
+            try {
+                val url = java.net.URL("$baseUrl/api/enclave/pcrs")
+                val connection = url.openConnection() as java.net.HttpURLConnection
+                connection.requestMethod = "GET"
+                connection.setRequestProperty("Accept", "application/json")
+                connection.connectTimeout = 10000
+                connection.readTimeout = 10000
+
+                try {
+                    val responseCode = connection.responseCode
+                    if (responseCode != 200) {
+                        throw PcrUpdateException("API returned $responseCode")
+                    }
+
+                    val responseBody = connection.inputStream.bufferedReader().use { it.readText() }
+                    val apiResponse = gson.fromJson(responseBody, PcrApiResponse::class.java)
+
+                    // Convert and update
+                    val signedResponse = apiResponse.toSignedResponse()
+                    val updated = updatePcrs(signedResponse)
+
+                    if (updated) {
+                        Log.i(TAG, "PCRs updated to ${signedResponse.pcrs.version}")
+                    } else {
+                        Log.d(TAG, "PCRs already up to date")
+                    }
+
+                    return Result.success(signedResponse.pcrs)
+                } finally {
+                    connection.disconnect()
+                }
+            } catch (e: Exception) {
+                lastException = e
+                Log.w(TAG, "PCR API fetch attempt $attempt failed: ${e.message}")
+            }
+
+            if (attempt < MAX_RETRY_ATTEMPTS) {
+                Log.d(TAG, "Retrying in ${delayMs}ms...")
+                kotlinx.coroutines.delay(delayMs)
+                delayMs = (delayMs * RETRY_BACKOFF_MULTIPLIER).toLong()
+            }
+        }
+
+        Log.e(TAG, "All PCR API fetch attempts failed")
+        return Result.failure(
+            PcrUpdateException(
+                "Failed to fetch PCRs from API after $MAX_RETRY_ATTEMPTS attempts",
+                lastException
+            )
+        )
+    }
+
+    /**
+     * Get the last update timestamp.
+     */
+    fun getLastUpdateTimestamp(): Long {
+        return prefs.getLong(KEY_LAST_UPDATE, 0)
+    }
+
+    /**
+     * Record the current time as last update (for manual refresh tracking).
+     */
+    fun markUpdated() {
+        prefs.edit().putLong(KEY_LAST_UPDATE, System.currentTimeMillis()).apply()
     }
 
     /**

@@ -42,9 +42,16 @@ import javax.inject.Singleton
  * - public_key: Enclave's ephemeral public key
  * - user_data: Optional user-provided data
  * - nonce: Optional nonce for freshness
+ *
+ * PCR Validation:
+ * - By default, validates API-provided PCRs against locally cached/fetched PCRs
+ * - Can fall back to bundled default PCRs if network is unavailable
+ * - Optionally supports previous version for rollback scenarios
  */
 @Singleton
-class NitroAttestationVerifier @Inject constructor() {
+class NitroAttestationVerifier @Inject constructor(
+    private val pcrConfigManager: PcrConfigManager
+) {
 
     companion object {
         private const val TAG = "NitroAttestation"
@@ -163,6 +170,145 @@ class NitroAttestationVerifier @Inject constructor() {
             pcrs = attestation.pcrs,
             userData = attestation.userData
         )
+    }
+
+    /**
+     * Verify enclave attestation using locally cached/fetched PCR values.
+     *
+     * This method ignores API-provided PCR values and uses the locally cached ones
+     * from PcrConfigManager. This provides additional security by not trusting
+     * the API to provide correct PCR values.
+     *
+     * @param attestationDocBase64 Base64-encoded attestation document
+     * @param expectedNonce Optional nonce for freshness verification
+     * @return VerifiedAttestation containing enclave public key and metadata
+     * @throws AttestationVerificationException if verification fails
+     */
+    fun verifyWithCachedPcrs(
+        attestationDocBase64: String,
+        expectedNonce: ByteArray? = null
+    ): VerifiedAttestation {
+        Log.d(TAG, "Verifying attestation with cached PCR values")
+
+        val cachedPcrs = pcrConfigManager.getCurrentPcrs()
+        Log.d(TAG, "Using cached PCRs version: ${cachedPcrs.version}")
+
+        return verify(
+            attestationDocBase64 = attestationDocBase64,
+            expectedPcrs = cachedPcrs,
+            expectedNonce = expectedNonce
+        )
+    }
+
+    /**
+     * Validate API-provided PCR values against locally cached ones.
+     *
+     * This should be called before trusting PCR values from an API response.
+     * It checks if the API-provided PCRs match either the current or previous
+     * cached PCR version (to handle rolling updates).
+     *
+     * @param apiPcrs PCR values from API response
+     * @return ValidationResult indicating if PCRs are valid and which version matched
+     */
+    fun validateApiPcrs(apiPcrs: ExpectedPcrs): PcrValidationResult {
+        Log.d(TAG, "Validating API-provided PCRs against cached values")
+
+        val currentPcrs = pcrConfigManager.getCurrentPcrs()
+        val previousPcrs = pcrConfigManager.getPreviousPcrs()
+
+        // Check against current version
+        if (pcrsMatch(apiPcrs, currentPcrs)) {
+            Log.d(TAG, "API PCRs match current version: ${currentPcrs.version}")
+            return PcrValidationResult(
+                isValid = true,
+                matchedVersion = currentPcrs.version,
+                reason = "Matches current PCR version"
+            )
+        }
+
+        // Check against previous version (for rolling updates)
+        if (previousPcrs != null && pcrsMatch(apiPcrs, previousPcrs)) {
+            Log.w(TAG, "API PCRs match previous version: ${previousPcrs.version}")
+            return PcrValidationResult(
+                isValid = true,
+                matchedVersion = previousPcrs.version,
+                reason = "Matches previous PCR version (rolling update)"
+            )
+        }
+
+        // PCRs don't match any known version
+        Log.e(TAG, "API PCRs do not match any known version")
+        Log.e(TAG, "  API PCR0: ${apiPcrs.pcr0}")
+        Log.e(TAG, "  Cached PCR0: ${currentPcrs.pcr0}")
+
+        return PcrValidationResult(
+            isValid = false,
+            matchedVersion = null,
+            reason = "API-provided PCRs do not match any known version. " +
+                    "Current: ${currentPcrs.version}, " +
+                    "Previous: ${previousPcrs?.version ?: "none"}"
+        )
+    }
+
+    /**
+     * Verify attestation with PCR validation against cached values.
+     *
+     * This is the most secure verification mode. It:
+     * 1. Validates that API-provided PCRs match cached values
+     * 2. Verifies the attestation document signature
+     * 3. Verifies PCR values in the attestation match expected values
+     *
+     * @param attestation EnclaveAttestation from API response
+     * @param requirePcrValidation If true, throws exception if PCRs don't match cached values
+     * @return VerifiedAttestation with validation result
+     * @throws AttestationVerificationException if verification fails
+     */
+    fun verifyWithPcrValidation(
+        attestation: com.vettid.app.core.network.EnclaveAttestation,
+        requirePcrValidation: Boolean = true
+    ): VerifiedAttestationWithValidation {
+        if (attestation.expectedPcrs.isEmpty()) {
+            throw AttestationVerificationException("No expected PCR values provided")
+        }
+
+        val apiExpectedPcr = attestation.expectedPcrs.first()
+        val apiPcrs = ExpectedPcrs(
+            pcr0 = apiExpectedPcr.pcr0,
+            pcr1 = apiExpectedPcr.pcr1,
+            pcr2 = apiExpectedPcr.pcr2,
+            pcr3 = apiExpectedPcr.pcr3
+        )
+
+        // Validate API PCRs against cached values
+        val validationResult = validateApiPcrs(apiPcrs)
+
+        if (!validationResult.isValid && requirePcrValidation) {
+            throw AttestationVerificationException(
+                "PCR validation failed: ${validationResult.reason}"
+            )
+        }
+
+        if (!validationResult.isValid) {
+            Log.w(TAG, "PCR validation failed but not required: ${validationResult.reason}")
+        }
+
+        // Proceed with attestation verification
+        val verifiedAttestation = verify(attestation)
+
+        return VerifiedAttestationWithValidation(
+            attestation = verifiedAttestation,
+            pcrValidation = validationResult
+        )
+    }
+
+    /**
+     * Check if two ExpectedPcrs have matching PCR values.
+     */
+    private fun pcrsMatch(a: ExpectedPcrs, b: ExpectedPcrs): Boolean {
+        return a.pcr0.equals(b.pcr0, ignoreCase = true) &&
+                a.pcr1.equals(b.pcr1, ignoreCase = true) &&
+                a.pcr2.equals(b.pcr2, ignoreCase = true) &&
+                (a.pcr3 == null || b.pcr3 == null || a.pcr3.equals(b.pcr3, ignoreCase = true))
     }
 
     /**
@@ -683,3 +829,25 @@ class AttestationVerificationException(
     message: String,
     cause: Throwable? = null
 ) : Exception(message, cause)
+
+/**
+ * Result of validating API-provided PCR values against cached values.
+ */
+data class PcrValidationResult(
+    /** Whether the API PCRs matched a known version */
+    val isValid: Boolean,
+    /** Which version the PCRs matched (current or previous) */
+    val matchedVersion: String?,
+    /** Human-readable explanation */
+    val reason: String
+)
+
+/**
+ * Verified attestation with PCR validation result.
+ */
+data class VerifiedAttestationWithValidation(
+    /** The verified attestation data */
+    val attestation: VerifiedAttestation,
+    /** Result of validating API PCRs against cached values */
+    val pcrValidation: PcrValidationResult
+)
