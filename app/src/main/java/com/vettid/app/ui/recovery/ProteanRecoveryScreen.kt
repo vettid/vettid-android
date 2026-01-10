@@ -12,7 +12,9 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Warning
+import com.vettid.app.ui.components.QrCodeScanner
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -66,8 +68,21 @@ fun ProteanRecoveryScreen(
                         isValidInput = isValidInput,
                         onEmailChange = viewModel::setEmail,
                         onBackupPinChange = viewModel::setBackupPin,
-                        onSubmit = viewModel::requestRecovery
+                        onSubmit = viewModel::requestRecovery,
+                        onScanQrCode = viewModel::startQrScanning
                     )
+                }
+
+                is ProteanRecoveryState.ScanningQrCode -> {
+                    QrScanningContent(
+                        onQrCodeScanned = viewModel::onQrCodeScanned,
+                        onError = viewModel::onQrScanError,
+                        onCancel = viewModel::cancelQrScanning
+                    )
+                }
+
+                is ProteanRecoveryState.ProcessingQrCode -> {
+                    LoadingContent(message = "Processing recovery QR code...")
                 }
 
                 is ProteanRecoveryState.Submitting -> {
@@ -122,7 +137,8 @@ private fun EnteringCredentialsContent(
     isValidInput: Boolean,
     onEmailChange: (String) -> Unit,
     onBackupPinChange: (String) -> Unit,
-    onSubmit: () -> Unit
+    onSubmit: () -> Unit,
+    onScanQrCode: () -> Unit
 ) {
     val focusManager = LocalFocusManager.current
 
@@ -223,6 +239,64 @@ private fun EnteringCredentialsContent(
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("Request Recovery")
+        }
+
+        // Divider with "or"
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Divider(modifier = Modifier.weight(1f))
+            Text(
+                text = "  or  ",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Divider(modifier = Modifier.weight(1f))
+        }
+
+        // QR Code scanning option
+        OutlinedButton(
+            onClick = onScanQrCode,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.QrCodeScanner, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Scan Recovery QR Code")
+        }
+
+        Text(
+            text = "If you have already completed the 24-hour wait on the Account Portal, scan the QR code to instantly restore your credentials.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun QrScanningContent(
+    onQrCodeScanned: (String) -> Unit,
+    onError: (String) -> Unit,
+    onCancel: () -> Unit
+) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        QrCodeScanner(
+            onQrCodeScanned = onQrCodeScanned,
+            onError = onError,
+            modifier = Modifier.fillMaxSize()
+        )
+
+        // Cancel button overlay
+        FilledTonalButton(
+            onClick = onCancel,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(24.dp)
+        ) {
+            Icon(Icons.Default.Cancel, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Cancel")
         }
     }
 }
