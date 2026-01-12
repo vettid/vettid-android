@@ -64,7 +64,13 @@ android {
             ndk {
                 debugSymbolLevel = "NONE"
             }
-            signingConfig = signingConfigs.getByName("release")
+            // Use release signing if configured, otherwise use debug signing for development builds
+            val releaseSigningConfig = signingConfigs.findByName("release")
+            signingConfig = if (releaseSigningConfig?.storeFile != null) {
+                releaseSigningConfig
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
         debug {
             isMinifyEnabled = false
