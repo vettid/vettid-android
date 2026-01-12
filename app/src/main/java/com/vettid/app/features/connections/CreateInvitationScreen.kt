@@ -1,7 +1,5 @@
 package com.vettid.app.features.connections
 
-import android.content.ClipData
-import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -41,6 +39,7 @@ fun CreateInvitationScreen(
     val state by viewModel.state.collectAsState()
     val expirationMinutes by viewModel.expirationMinutes.collectAsState()
     val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
 
     // Handle effects
     LaunchedEffect(Unit) {
@@ -49,8 +48,8 @@ fun CreateInvitationScreen(
                 is CreateInvitationEffect.ShareInvitation -> {
                     shareInvitation(context, effect.deepLink, effect.displayName)
                 }
-                is CreateInvitationEffect.CopyToClipboard -> {
-                    copyToClipboard(context, effect.text)
+                is CreateInvitationEffect.LinkCopied -> {
+                    snackbarHostState.showSnackbar("Link copied (auto-clears in 30s)")
                 }
             }
         }
@@ -69,7 +68,8 @@ fun CreateInvitationScreen(
                     }
                 }
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         Column(
             modifier = Modifier
@@ -420,10 +420,4 @@ private fun shareInvitation(context: Context, deepLink: String, displayName: Str
         putExtra(Intent.EXTRA_TEXT, "Join me on VettID: $deepLink")
     }
     context.startActivity(Intent.createChooser(shareIntent, "Share invitation"))
-}
-
-private fun copyToClipboard(context: Context, text: String) {
-    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    val clip = ClipData.newPlainText("VettID Invitation", text)
-    clipboard.setPrimaryClip(clip)
 }

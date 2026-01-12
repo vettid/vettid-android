@@ -12,6 +12,7 @@ import com.vettid.app.core.crypto.RecoveryPhraseManager
 import com.vettid.app.core.nats.NatsApiClient
 import com.vettid.app.core.network.BackupApiClient
 import com.vettid.app.core.network.CredentialBackupApiClient
+import com.vettid.app.core.network.NetworkConfig
 import com.vettid.app.core.security.ApiSecurity
 import com.vettid.app.core.security.RuntimeProtection
 import com.vettid.app.core.security.SecureClipboard
@@ -218,16 +219,8 @@ object AppModule {
     @Provides
     @Singleton
     fun provideOkHttpClient(): OkHttpClient {
-        val loggingInterceptor = HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
-        }
-
-        return OkHttpClient.Builder()
-            .addInterceptor(loggingInterceptor)
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
-            .build()
+        // Use centralized NetworkConfig with certificate pinning support
+        return NetworkConfig.createHttpClient()
     }
 
     @Provides

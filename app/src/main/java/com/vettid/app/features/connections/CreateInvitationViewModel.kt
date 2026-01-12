@@ -8,6 +8,7 @@ import com.google.gson.Gson
 import com.vettid.app.core.crypto.ConnectionCryptoManager
 import com.vettid.app.core.crypto.ConnectionKeyPair
 import com.vettid.app.core.nats.ConnectionsClient
+import com.vettid.app.core.security.SecureClipboard
 import com.vettid.app.core.storage.CredentialStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
@@ -27,7 +28,8 @@ import javax.inject.Inject
 class CreateInvitationViewModel @Inject constructor(
     private val connectionsClient: ConnectionsClient,
     private val connectionCryptoManager: ConnectionCryptoManager,
-    private val credentialStore: CredentialStore
+    private val credentialStore: CredentialStore,
+    private val secureClipboard: SecureClipboard
 ) : ViewModel() {
 
     companion object {
@@ -188,15 +190,19 @@ class CreateInvitationViewModel @Inject constructor(
     }
 
     /**
-     * Copy the invitation link to clipboard.
+     * Copy the invitation link to clipboard securely.
+     * Uses SecureClipboard which auto-clears after 30 seconds.
      */
     fun copyLink() {
         val currentState = _state.value
         if (currentState is CreateInvitationState.Created) {
+            // Use SecureClipboard for auto-clear after timeout
+            secureClipboard.copyText(
+                text = currentState.invitation.deepLinkUrl,
+                isSensitive = false // Invitation links are not highly sensitive
+            )
             viewModelScope.launch {
-                _effects.emit(CreateInvitationEffect.CopyToClipboard(
-                    text = currentState.invitation.deepLinkUrl
-                ))
+                _effects.emit(CreateInvitationEffect.LinkCopied)
             }
         }
     }
@@ -329,5 +335,6 @@ sealed class CreateInvitationEffect {
         val displayName: String
     ) : CreateInvitationEffect()
 
-    data class CopyToClipboard(val text: String) : CreateInvitationEffect()
+    /** Link was copied to clipboard (auto-clears after 30 seconds) */
+    object LinkCopied : CreateInvitationEffect()
 }
