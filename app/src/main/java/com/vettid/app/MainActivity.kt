@@ -81,20 +81,27 @@ class MainActivity : ComponentActivity() {
     /**
      * Extract deep link data from the intent.
      * Supports:
-     * - vettid://enroll?code=xxx
-     * - https://vettid.dev/enroll/xxx
+     * - vettid://enroll?code=xxx (short code)
+     * - vettid://enroll?data=xxx (base64-encoded JSON - clickable link from QR)
+     * - https://vettid.dev/enroll/xxx (short code in path)
+     * - https://vettid.dev/enroll?data=xxx (base64-encoded JSON - clickable link)
      * - vettid://connect?code=xxx
+     * - vettid://connect?data=xxx (base64-encoded JSON)
      * - https://vettid.dev/connect/xxx
+     * - https://vettid.dev/connect?data=xxx
      */
     private fun extractDeepLinkData(intent: Intent?): DeepLinkData {
         val uri = intent?.data ?: return DeepLinkData(DeepLinkType.NONE)
 
         return when {
-            // Custom scheme: vettid://enroll?code=xxx
+            // Custom scheme: vettid://enroll?code=xxx or vettid://enroll?data=xxx
             uri.scheme == "vettid" && uri.host == "enroll" -> {
+                // Support both code (short code) and data (base64-encoded JSON)
+                val data = uri.getQueryParameter("data")
+                val code = uri.getQueryParameter("code")
                 DeepLinkData(
                     type = DeepLinkType.ENROLL,
-                    code = uri.getQueryParameter("code")
+                    code = data?.let { decodeBase64IfNeeded(it) } ?: code
                 )
             }
             // Custom scheme: vettid://connect?code=xxx or vettid://connect?data=xxx (base64 JSON)
@@ -104,24 +111,50 @@ class MainActivity : ComponentActivity() {
                 val code = uri.getQueryParameter("code")
                 DeepLinkData(
                     type = DeepLinkType.CONNECT,
-                    code = data ?: code  // Prefer data if present
+                    code = data?.let { decodeBase64IfNeeded(it) } ?: code
                 )
             }
-            // HTTPS: https://vettid.dev/enroll/xxx
+            // HTTPS: https://vettid.dev/enroll/xxx or https://vettid.dev/enroll?data=xxx
             uri.host == "vettid.dev" && uri.pathSegments.firstOrNull() == "enroll" -> {
+                val data = uri.getQueryParameter("data")
                 DeepLinkData(
                     type = DeepLinkType.ENROLL,
-                    code = uri.pathSegments.getOrNull(1)
+                    code = data?.let { decodeBase64IfNeeded(it) } ?: uri.pathSegments.getOrNull(1)
                 )
             }
-            // HTTPS: https://vettid.dev/connect/xxx
+            // HTTPS: https://vettid.dev/connect/xxx or https://vettid.dev/connect?data=xxx
             uri.host == "vettid.dev" && uri.pathSegments.firstOrNull() == "connect" -> {
+                val data = uri.getQueryParameter("data")
                 DeepLinkData(
                     type = DeepLinkType.CONNECT,
-                    code = uri.pathSegments.getOrNull(1)
+                    code = data?.let { decodeBase64IfNeeded(it) } ?: uri.pathSegments.getOrNull(1)
                 )
             }
             else -> DeepLinkData(DeepLinkType.NONE)
+        }
+    }
+
+    /**
+     * Decode base64 string if it appears to be base64-encoded.
+     * Returns the original string if decoding fails or it's not base64.
+     */
+    private fun decodeBase64IfNeeded(input: String): String {
+        return try {
+            // Check if it looks like base64 (only contains valid base64 chars)
+            if (input.matches(Regex("^[A-Za-z0-9+/=_-]+$"))) {
+                // Try URL-safe base64 first, then standard
+                val decoded = try {
+                    android.util.Base64.decode(input, android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP)
+                } catch (e: Exception) {
+                    android.util.Base64.decode(input, android.util.Base64.DEFAULT)
+                }
+                String(decoded, Charsets.UTF_8)
+            } else {
+                input
+            }
+        } catch (e: Exception) {
+            // If decoding fails, return original string
+            input
         }
     }
 
