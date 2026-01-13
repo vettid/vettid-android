@@ -26,7 +26,7 @@ import javax.inject.Singleton
 open class VaultServiceClient @Inject constructor() {
 
     companion object {
-        private const val BASE_URL = "https://tiqpij5mue.execute-api.us-east-1.amazonaws.com/"
+        private const val BASE_URL = "https://api.vettid.dev/"
         private const val TIMEOUT_SECONDS = 30L
     }
 
@@ -1058,7 +1058,7 @@ data class EnrollmentQRData(
         private val INVITATION_CODE_PATTERN = Regex("^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$")
 
         // Default test API URL for invitation code flow
-        private const val DEFAULT_TEST_API_URL = "https://tiqpij5mue.execute-api.us-east-1.amazonaws.com"
+        private const val DEFAULT_TEST_API_URL = "https://api.vettid.dev"
 
         /**
          * Parse QR code data (JSON or plain invitation code)

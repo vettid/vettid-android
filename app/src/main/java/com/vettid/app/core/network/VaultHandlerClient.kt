@@ -24,7 +24,7 @@ import javax.inject.Singleton
 class VaultHandlerClient @Inject constructor() {
 
     companion object {
-        private const val BASE_URL = "https://tiqpij5mue.execute-api.us-east-1.amazonaws.com/"
+        private const val BASE_URL = "https://api.vettid.dev/"
         private const val TIMEOUT_SECONDS = 60L // Longer timeout for handler execution
     }
 
