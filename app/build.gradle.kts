@@ -88,7 +88,7 @@ android {
             buildConfigField("Boolean", "SKIP_ATTESTATION", "false")
             buildConfigField("Boolean", "AUTO_BIOMETRIC", "false")
             buildConfigField("Boolean", "TEST_MODE", "false")
-            buildConfigField("String", "API_BASE_URL", "\"https://api.vettid.com\"")
+            buildConfigField("String", "API_BASE_URL", "\"https://api.vettid.dev\"")
         }
         create("automation") {
             dimension = "environment"
@@ -98,7 +98,7 @@ android {
             buildConfigField("Boolean", "SKIP_ATTESTATION", "true")
             buildConfigField("Boolean", "AUTO_BIOMETRIC", "true")
             buildConfigField("Boolean", "TEST_MODE", "true")
-            buildConfigField("String", "API_BASE_URL", "\"https://test-api.vettid.com\"")
+            buildConfigField("String", "API_BASE_URL", "\"https://api.vettid.dev\"")
             buildConfigField("String", "TEST_API_KEY", "\"\"")  // Set via environment or test-config.json
         }
     }

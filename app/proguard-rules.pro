@@ -26,9 +26,9 @@
     public java.lang.String toString();
 }
 
-# Optimize aggressively
--optimizationpasses 5
--optimizations !code/simplification/arithmetic,!code/simplification/cast,!field/*,!class/merging/*
+# Optimize but preserve type information for Retrofit
+-optimizationpasses 3
+-optimizations !code/simplification/arithmetic,!code/simplification/cast,!field/*,!class/merging/*,!class/unboxing/enum
 
 # Don't keep source file attributes or line numbers in release
 -renamesourcefileattribute SourceFile
@@ -36,21 +36,56 @@
 
 # ==================== KEEP RULES ====================
 
-# Retrofit and OkHttp
+# Retrofit and OkHttp - CRITICAL: Keep generic type signatures
 -keepattributes Signature
 -keepattributes *Annotation*
+-keepattributes Exceptions
+-keepattributes InnerClasses
+-keepattributes EnclosingMethod
+
+# Retrofit core - keep everything including internal utils for type resolution
 -keep class retrofit2.** { *; }
+-keep interface retrofit2.** { *; }
+-keepclassmembers class retrofit2.** { *; }
+-dontwarn retrofit2.**
+
+# OkHttp
 -keep class okhttp3.** { *; }
 -keep interface okhttp3.** { *; }
--dontwarn retrofit2.**
 -dontwarn okhttp3.**
 -dontwarn okio.**
 
-# Keep Retrofit service interfaces
--keep,allowobfuscation interface com.vettid.app.core.network.VaultServiceApi { *; }
+# Gson - preserve ALL generic type information
+-keep class com.google.gson.** { *; }
+-keep interface com.google.gson.** { *; }
+-keep class com.google.gson.reflect.TypeToken { *; }
+-keep class * extends com.google.gson.reflect.TypeToken { *; }
+-keepclassmembers class * extends com.google.gson.reflect.TypeToken { *; }
 
-# Keep all network classes (API requests/responses)
--keep class com.vettid.app.core.network.* { *; }
+# Keep generic signatures on ALL classes that use Retrofit Response
+-keepclassmembers,allowobfuscation class * {
+    @com.google.gson.annotations.SerializedName <fields>;
+}
+
+# Keep Retrofit service interfaces - DO NOT allow obfuscation
+-keep interface com.vettid.app.core.network.VaultServiceApi { *; }
+-keep interface com.vettid.app.core.network.VaultLifecycleApi { *; }
+-keep interface com.vettid.app.core.network.VaultHandlerApi { *; }
+-keep interface com.vettid.app.core.nats.NatsApi { *; }
+
+# Keep ALL network classes with full signatures (API requests/responses)
+-keep class com.vettid.app.core.network.** { *; }
+-keepclassmembers class com.vettid.app.core.network.** { *; }
+
+# Keep NATS API classes
+-keep class com.vettid.app.core.nats.** { *; }
+-keepclassmembers class com.vettid.app.core.nats.** { *; }
+
+# Preserve generic type info on method return types
+-keepclassmembers,allowshrinking,allowobfuscation interface * {
+    @retrofit2.http.* <methods>;
+}
+
 -keep class com.vettid.app.core.storage.StoredCredential { *; }
 
 # Keep Hilt and Dagger
@@ -80,6 +115,14 @@
 -keep class androidx.compose.** { *; }
 -keep class androidx.lifecycle.** { *; }
 
+# Keep Kotlin metadata for proper type resolution
+-keep class kotlin.Metadata { *; }
+-keepattributes RuntimeVisibleAnnotations
+
+# Keep Kotlin coroutines
+-keep class kotlinx.coroutines.** { *; }
+-dontwarn kotlinx.coroutines.**
+
 # Keep security-related enums (needed for proper deserialization)
 -keep enum com.vettid.app.core.security.SecurityThreat { *; }
 -keep enum com.vettid.app.features.auth.BiometricCapability { *; }
@@ -105,6 +148,8 @@
 -dontwarn org.bouncycastle.**
 -dontwarn org.openjsse.**
 -dontwarn javax.naming.**
+-dontwarn java.beans.**
+-dontwarn com.fasterxml.jackson.**
 
 # EdDSA/NATS dependencies (uses Sun internal classes not available on Android)
 -dontwarn sun.security.x509.**

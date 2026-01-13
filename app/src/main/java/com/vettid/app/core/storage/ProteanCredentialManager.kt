@@ -62,7 +62,7 @@ class ProteanCredentialManager @Inject constructor(
         const val BACKUP_WORK_NAME = "protean_credential_backup"
 
         // Recovery API endpoints
-        private const val API_BASE_URL = "https://api.vettid.com"
+        private const val API_BASE_URL = "https://api.vettid.dev"
         private const val RECOVERY_REQUEST_ENDPOINT = "$API_BASE_URL/vault/recovery/request"
         private const val RECOVERY_STATUS_ENDPOINT = "$API_BASE_URL/vault/recovery/status"
         private const val RECOVERY_DOWNLOAD_ENDPOINT = "$API_BASE_URL/vault/recovery/download"
