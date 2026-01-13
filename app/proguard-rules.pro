@@ -36,22 +36,21 @@
 
 # ==================== KEEP RULES ====================
 
-# Keep Retrofit interfaces and their generic signatures
-# The Signature attribute is required for Retrofit to deserialize Response<T> types
--keep,allowobfuscation,allowshrinking interface * {
-    @retrofit2.http.* <methods>;
-}
--keepattributes Signature
--keep class retrofit2.** { *; }
--keepclassmembers,allowshrinking,allowobfuscation interface * {
-    @retrofit2.http.* <methods>;
-}
-
-# Keep Gson serialized classes and Retrofit response types
+# Retrofit and OkHttp
 -keepattributes Signature
 -keepattributes *Annotation*
+-keep class retrofit2.** { *; }
+-keep class okhttp3.** { *; }
+-keep interface okhttp3.** { *; }
+-dontwarn retrofit2.**
+-dontwarn okhttp3.**
+-dontwarn okio.**
+
+# Keep Retrofit service interfaces
+-keep,allowobfuscation interface com.vettid.app.core.network.VaultServiceApi { *; }
+
+# Keep all network classes (API requests/responses)
 -keep class com.vettid.app.core.network.* { *; }
--keep interface com.vettid.app.core.network.VaultServiceApi { *; }
 -keep class com.vettid.app.core.storage.StoredCredential { *; }
 
 # Keep Hilt generated classes
