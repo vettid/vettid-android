@@ -53,13 +53,32 @@
 -keep class com.vettid.app.core.network.* { *; }
 -keep class com.vettid.app.core.storage.StoredCredential { *; }
 
-# Keep Hilt generated classes
+# Keep Hilt and Dagger
+-keep class dagger.** { *; }
 -keep class dagger.hilt.** { *; }
 -keep class javax.inject.** { *; }
 -keep class * extends dagger.hilt.android.internal.managers.ComponentSupplier { *; }
+-keep class * implements dagger.hilt.internal.GeneratedComponent { *; }
+-keep class * implements dagger.hilt.internal.GeneratedComponentManager { *; }
+-keepclasseswithmembers class * {
+    @dagger.* <methods>;
+}
+-keepclasseswithmembers class * {
+    @javax.inject.* <fields>;
+}
+-keepclasseswithmembers class * {
+    @javax.inject.* <methods>;
+}
+
+# Keep all ViewModels
+-keep class * extends androidx.lifecycle.ViewModel { *; }
+-keep class * extends androidx.lifecycle.AndroidViewModel { *; }
+-keep class com.vettid.app.features.**.* { *; }
+-keep class com.vettid.app.ui.**.* { *; }
 
 # Keep Compose runtime
 -keep class androidx.compose.** { *; }
+-keep class androidx.lifecycle.** { *; }
 
 # Keep security-related enums (needed for proper deserialization)
 -keep enum com.vettid.app.core.security.SecurityThreat { *; }
