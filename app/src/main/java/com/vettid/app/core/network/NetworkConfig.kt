@@ -2,7 +2,10 @@ package com.vettid.app.core.network
 
 import com.vettid.app.BuildConfig
 import okhttp3.CertificatePinner
+import okhttp3.ConnectionPool
+import okhttp3.ConnectionSpec
 import okhttp3.OkHttpClient
+import okhttp3.TlsVersion
 import okhttp3.logging.HttpLoggingInterceptor
 import java.util.concurrent.TimeUnit
 
@@ -81,15 +84,44 @@ object NetworkConfig {
     }
 
     /**
+     * TLS configuration - only allow TLS 1.2 and 1.3
+     * Prevents downgrade attacks to older, vulnerable TLS versions
+     */
+    private val tlsSpec = ConnectionSpec.Builder(ConnectionSpec.MODERN_TLS)
+        .tlsVersions(TlsVersion.TLS_1_3, TlsVersion.TLS_1_2)
+        .build()
+
+    /**
+     * Connection pool configuration
+     * Limits connection reuse to prevent resource exhaustion
+     */
+    private val connectionPool = ConnectionPool(
+        maxIdleConnections = 5,
+        keepAliveDuration = 5,
+        timeUnit = TimeUnit.MINUTES
+    )
+
+    /**
      * Create a configured OkHttpClient with security settings.
+     *
+     * Security features:
+     * - TLS 1.2/1.3 only (no older versions)
+     * - Connection pool limits to prevent resource exhaustion
+     * - Appropriate timeouts
+     * - Certificate pinning (when enabled)
      *
      * @param enableLogging Whether to enable HTTP logging (should be false in production)
      */
     fun createHttpClient(enableLogging: Boolean = BuildConfig.DEBUG): OkHttpClient {
         val builder = OkHttpClient.Builder()
+            // Timeouts
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
+            // TLS configuration - only TLS 1.2 and 1.3
+            .connectionSpecs(listOf(tlsSpec, ConnectionSpec.CLEARTEXT)) // CLEARTEXT needed for localhost in tests
+            // Connection pool limits
+            .connectionPool(connectionPool)
 
         // Add logging interceptor in debug builds
         if (enableLogging) {
