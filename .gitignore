@@ -67,3 +67,4 @@ proguard/
 
 # Coverage reports
 coverage/
+keystore.properties

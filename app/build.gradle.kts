@@ -1,3 +1,6 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -24,30 +27,48 @@ android {
 
     signingConfigs {
         create("release") {
-            // SECURITY: Signing credentials MUST be provided via environment variables
-            // Do not commit signing keys or passwords to version control
-            // Required environment variables:
-            //   VETTID_KEYSTORE_PATH - Path to the release keystore file
-            //   VETTID_KEYSTORE_PASSWORD - Password for the keystore
-            //   VETTID_KEY_ALIAS - Alias of the signing key
-            //   VETTID_KEY_PASSWORD - Password for the signing key
-            val keystorePath = System.getenv("VETTID_KEYSTORE_PATH")
-            val keystorePassword = System.getenv("VETTID_KEYSTORE_PASSWORD")
-            val keyAliasValue = System.getenv("VETTID_KEY_ALIAS")
-            val keyPasswordValue = System.getenv("VETTID_KEY_PASSWORD")
+            // SECURITY: Signing credentials can be provided via:
+            // 1. keystore.properties file (for local development - gitignored)
+            // 2. Environment variables (for CI/CD)
+            //
+            // keystore.properties format:
+            //   storeFile=keystore/release.keystore
+            //   storePassword=xxx
+            //   keyAlias=vettid-release
+            //   keyPassword=xxx
+            //
+            // Environment variables:
+            //   VETTID_KEYSTORE_PATH, VETTID_KEYSTORE_PASSWORD,
+            //   VETTID_KEY_ALIAS, VETTID_KEY_PASSWORD
 
-            if (keystorePath != null && keystorePassword != null &&
-                keyAliasValue != null && keyPasswordValue != null) {
-                storeFile = file(keystorePath)
-                storePassword = keystorePassword
-                keyAlias = keyAliasValue
-                keyPassword = keyPasswordValue
+            // Try keystore.properties first (local development)
+            val keystorePropertiesFile = rootProject.file("keystore.properties")
+            if (keystorePropertiesFile.exists()) {
+                val keystoreProperties = Properties()
+                keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+
+                storeFile = rootProject.file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
             } else {
-                // For debug/development builds, skip release signing configuration
-                // Release builds will fail if environment variables are not set
-                println("WARNING: Release signing credentials not configured. " +
-                        "Set VETTID_KEYSTORE_PATH, VETTID_KEYSTORE_PASSWORD, " +
-                        "VETTID_KEY_ALIAS, and VETTID_KEY_PASSWORD environment variables.")
+                // Fall back to environment variables (CI/CD)
+                val keystorePath = System.getenv("VETTID_KEYSTORE_PATH")
+                val keystorePassword = System.getenv("VETTID_KEYSTORE_PASSWORD")
+                val keyAliasValue = System.getenv("VETTID_KEY_ALIAS")
+                val keyPasswordValue = System.getenv("VETTID_KEY_PASSWORD")
+
+                if (keystorePath != null && keystorePassword != null &&
+                    keyAliasValue != null && keyPasswordValue != null) {
+                    storeFile = file(keystorePath)
+                    storePassword = keystorePassword
+                    keyAlias = keyAliasValue
+                    keyPassword = keyPasswordValue
+                } else {
+                    // No signing config available
+                    println("WARNING: Release signing credentials not configured. " +
+                            "Create keystore.properties or set environment variables.")
+                }
             }
         }
     }
