@@ -113,7 +113,7 @@ class NitroEnrollmentClient @Inject constructor(
             addProperty("timestamp", java.time.Instant.now().toString())
         }
 
-        val topic = "$space.supervisor.attestation"
+        val topic = "$space.forVault.attestation"
         val responseTopic = "$space.app.attestation.response"
 
         return try {
@@ -256,7 +256,7 @@ class NitroEnrollmentClient @Inject constructor(
             addProperty("timestamp", java.time.Instant.now().toString())
         }
 
-        val topic = "$space.supervisor.pin"
+        val topic = "$space.forVault.pin"
         val responseTopic = "$space.app.pin.response"
 
         return sendRequestAndWaitForResponse(client, topic, responseTopic, request, requestId)
@@ -368,7 +368,7 @@ class NitroEnrollmentClient @Inject constructor(
             addProperty("timestamp", java.time.Instant.now().toString())
         }
 
-        val topic = "$space.vault.credential"
+        val topic = "$space.forVault.credential"
         val responseTopic = "$space.app.credential.response"
 
         return sendRequestAndWaitForResponse(client, topic, responseTopic, request, requestId)
@@ -395,7 +395,7 @@ class NitroEnrollmentClient @Inject constructor(
             addProperty("timestamp", java.time.Instant.now().toString())
         }
 
-        val topic = "$space.vault.info"
+        val topic = "$space.forVault.info"
         val responseTopic = "$space.app.info.response"
 
         return try {
