@@ -35,6 +35,7 @@ fun EnrollmentScreen(
     onEnrollmentComplete: () -> Unit,
     onCancel: () -> Unit,
     startWithManualEntry: Boolean = false,
+    initialCode: String? = null,
     viewModel: EnrollmentViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
@@ -49,10 +50,13 @@ fun EnrollmentScreen(
         }
     }
 
-    // Auto-start scanning or manual entry when screen opens
-    LaunchedEffect(startWithManualEntry) {
+    // Auto-start scanning, manual entry, or process initial code when screen opens
+    LaunchedEffect(startWithManualEntry, initialCode) {
         if (state is EnrollmentState.Initial) {
-            if (startWithManualEntry) {
+            if (initialCode != null) {
+                // Process the code from deep link directly
+                viewModel.onEvent(EnrollmentEvent.QRCodeScanned(initialCode))
+            } else if (startWithManualEntry) {
                 viewModel.onEvent(EnrollmentEvent.SwitchToManualEntry)
             } else {
                 viewModel.onEvent(EnrollmentEvent.StartScanning)

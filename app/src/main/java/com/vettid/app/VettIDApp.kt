@@ -65,8 +65,11 @@ private const val TAG = "VettIDApp"
 
 sealed class Screen(val route: String) {
     object Welcome : Screen("welcome")
-    object Enrollment : Screen("enrollment?startWithManualEntry={startWithManualEntry}") {
-        fun createRoute(startWithManualEntry: Boolean = false) = "enrollment?startWithManualEntry=$startWithManualEntry"
+    object Enrollment : Screen("enrollment?startWithManualEntry={startWithManualEntry}&initialCode={initialCode}") {
+        fun createRoute(startWithManualEntry: Boolean = false, initialCode: String? = null): String {
+            val encodedCode = initialCode?.let { java.net.URLEncoder.encode(it, "UTF-8") } ?: ""
+            return "enrollment?startWithManualEntry=$startWithManualEntry&initialCode=$encodedCode"
+        }
     }
     object Authentication : Screen("authentication")
     object Main : Screen("main")
@@ -167,7 +170,7 @@ fun VettIDApp(
                 // Navigate to enrollment with the code
                 val code = deepLinkData.code
                 if (code != null) {
-                    navController.navigate(Screen.Enrollment.createRoute(startWithManualEntry = true)) {
+                    navController.navigate(Screen.Enrollment.createRoute(startWithManualEntry = true, initialCode = code)) {
                         popUpTo(0) { inclusive = true }
                     }
                 }
@@ -235,14 +238,23 @@ fun VettIDApp(
                 navArgument("startWithManualEntry") {
                     type = NavType.BoolType
                     defaultValue = false
+                },
+                navArgument("initialCode") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
                 }
             )
         ) { backStackEntry ->
             val startWithManualEntry = backStackEntry.arguments?.getBoolean("startWithManualEntry") ?: false
+            val initialCode = backStackEntry.arguments?.getString("initialCode")?.let {
+                if (it.isNotEmpty()) java.net.URLDecoder.decode(it, "UTF-8") else null
+            }
             EnrollmentScreen(
                 onEnrollmentComplete = { appViewModel.refreshCredentialStatus() },
                 onCancel = { navController.popBackStack() },
-                startWithManualEntry = startWithManualEntry
+                startWithManualEntry = startWithManualEntry,
+                initialCode = initialCode
             )
         }
         composable(Screen.Authentication.route) {
