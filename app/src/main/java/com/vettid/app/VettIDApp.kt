@@ -160,33 +160,24 @@ fun VettIDApp(
         }
     }
 
-    // Store pending connection deep link to process after authentication
+    // Store pending deep links to process after app state is ready
     var pendingConnectData by remember { mutableStateOf<String?>(null) }
+    var pendingEnrollData by remember { mutableStateOf<String?>(null) }
 
-    // Handle deep links
+    // Handle deep links - store data for processing in appState effect
     LaunchedEffect(deepLinkData) {
         when (deepLinkData.type) {
             DeepLinkType.ENROLL -> {
-                // Navigate to enrollment with the code
                 val code = deepLinkData.code
                 if (code != null) {
-                    navController.navigate(Screen.Enrollment.createRoute(startWithManualEntry = true, initialCode = code)) {
-                        popUpTo(0) { inclusive = true }
-                    }
+                    pendingEnrollData = code
                 }
                 onDeepLinkConsumed()
             }
             DeepLinkType.CONNECT -> {
-                // Store the data for processing after authentication
                 val data = deepLinkData.code
                 if (data != null) {
-                    if (appState.hasCredential && appState.isAuthenticated) {
-                        // Already authenticated, navigate now
-                        navController.navigate(Screen.ScanInvitation.createRoute(data))
-                    } else {
-                        // Store for later processing
-                        pendingConnectData = data
-                    }
+                    pendingConnectData = data
                 }
                 onDeepLinkConsumed()
             }
@@ -194,7 +185,18 @@ fun VettIDApp(
         }
     }
 
-    LaunchedEffect(appState) {
+    // Handle navigation based on app state and pending deep links
+    LaunchedEffect(appState, pendingEnrollData, pendingConnectData) {
+        // Handle pending enrollment - takes priority
+        if (pendingEnrollData != null) {
+            val code = pendingEnrollData
+            pendingEnrollData = null
+            navController.navigate(Screen.Enrollment.createRoute(startWithManualEntry = true, initialCode = code)) {
+                popUpTo(0) { inclusive = true }
+            }
+            return@LaunchedEffect
+        }
+
         when {
             !appState.hasCredential -> navController.navigate(Screen.Welcome.route) {
                 popUpTo(0) { inclusive = true }
