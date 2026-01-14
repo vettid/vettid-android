@@ -723,14 +723,14 @@ class EnrollmentViewModel @Inject constructor(
 
         authResult.fold(
             onSuccess = { authResponse ->
-                Log.d(TAG, "Authentication successful, getting NATS bootstrap")
+                Log.d(TAG, "Authentication successful, getting NATS bootstrap credentials")
 
-                // Step 2: Call finalize to get NATS bootstrap credentials
-                val finalizeResult = vaultServiceClient.enrollFinalizeForNats()
+                // Step 2: Get NATS bootstrap credentials from dedicated endpoint
+                val bootstrapResult = vaultServiceClient.getNatsBootstrapCredentials()
 
-                finalizeResult.fold(
+                bootstrapResult.fold(
                     onSuccess = { bootstrapResponse ->
-                        Log.d(TAG, "Got NATS bootstrap, connecting...")
+                        Log.d(TAG, "Got NATS bootstrap credentials, connecting...")
 
                         // Store user GUID
                         userGuid = bootstrapResponse.userGuid

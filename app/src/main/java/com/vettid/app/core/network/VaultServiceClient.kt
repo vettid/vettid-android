@@ -222,6 +222,7 @@ open class VaultServiceClient @Inject constructor() {
     /**
      * Finalize enrollment for Nitro flow.
      * Returns NATS bootstrap credentials for connecting to the enclave.
+     * @deprecated Use getNatsBootstrapCredentials() instead
      */
     suspend fun enrollFinalizeForNats(): Result<com.vettid.app.features.enrollment.NatsBootstrapInfo> {
         return safeApiCall {
@@ -229,6 +230,24 @@ open class VaultServiceClient @Inject constructor() {
         }.map { response ->
             com.vettid.app.features.enrollment.NatsBootstrapInfo(
                 credentials = response.natsCredentials,
+                ownerSpace = response.ownerSpace,
+                natsEndpoint = response.natsEndpoint,
+                userGuid = response.userGuid
+            )
+        }
+    }
+
+    /**
+     * Get NATS bootstrap credentials for Nitro enrollment flow.
+     * Call this after enrollAuthenticate() to get credentials for connecting to NATS.
+     * This is the correct endpoint - do NOT call enrollFinalizeForNats() which will return 409.
+     */
+    suspend fun getNatsBootstrapCredentials(): Result<com.vettid.app.features.enrollment.NatsBootstrapInfo> {
+        return safeApiCall {
+            getEnrollmentApi().natsBootstrap(getEnrollmentAuthHeader())
+        }.map { response ->
+            com.vettid.app.features.enrollment.NatsBootstrapInfo(
+                credentials = response.natsCreds,
                 ownerSpace = response.ownerSpace,
                 natsEndpoint = response.natsEndpoint,
                 userGuid = response.userGuid
@@ -524,6 +543,13 @@ interface VaultServiceApi {
     suspend fun finalizeForNats(
         @Header("Authorization") authToken: String
     ): Response<NatsFinalizeResponse>
+
+    // Enrollment - NATS Bootstrap (requires Bearer token from authenticate)
+    // Returns NATS credentials for connecting to enclave supervisor
+    @POST("vault/enroll/nats-bootstrap")
+    suspend fun natsBootstrap(
+        @Header("Authorization") authToken: String
+    ): Response<NatsBootstrapResponse>
 
     @POST("vault/auth/request")
     suspend fun authRequest(@Body request: VaultAuthRequest): Response<AuthRequestResponse>
@@ -821,6 +847,22 @@ data class NatsFinalizeResponse(
     @SerializedName("nats_endpoint") val natsEndpoint: String,
     @SerializedName("owner_space") val ownerSpace: String,
     @SerializedName("user_guid") val userGuid: String?
+)
+
+/**
+ * Response from /vault/enroll/nats-bootstrap endpoint.
+ * Provides NATS credentials after authentication, before finalization.
+ */
+data class NatsBootstrapResponse(
+    @SerializedName("nats_endpoint") val natsEndpoint: String,
+    @SerializedName("nats_jwt") val natsJwt: String,
+    @SerializedName("nats_seed") val natsSeed: String,
+    @SerializedName("nats_creds") val natsCreds: String,
+    @SerializedName("owner_space") val ownerSpace: String,
+    @SerializedName("message_space") val messageSpace: String,
+    @SerializedName("user_guid") val userGuid: String,
+    @SerializedName("token_id") val tokenId: String,
+    @SerializedName("expires_at") val expiresAt: String
 )
 
 /**
