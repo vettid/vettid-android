@@ -114,7 +114,7 @@ class NitroEnrollmentClient @Inject constructor(
         }
 
         val topic = "$space.forVault.attestation"
-        val responseTopic = "$space.app.attestation.response"
+        val responseTopic = "$space.forApp.attestation.response"
 
         return try {
             withTimeout(ATTESTATION_TIMEOUT_MS) {
@@ -324,7 +324,7 @@ class NitroEnrollmentClient @Inject constructor(
         }
 
         val topic = "$space.forVault.pin"
-        val responseTopic = "$space.app.pin.response"
+        val responseTopic = "$space.forApp.pin.response"
 
         return sendRequestAndWaitForResponse(client, topic, responseTopic, request, requestId)
     }
@@ -340,7 +340,7 @@ class NitroEnrollmentClient @Inject constructor(
         val space = ownerSpace
             ?: return Result.failure(NatsException("Owner space not set"))
 
-        val responseTopic = "$space.app.vault.ready"
+        val responseTopic = "$space.forApp.vault.ready"
 
         Log.d(TAG, "Waiting for vault ready...")
 
@@ -436,7 +436,7 @@ class NitroEnrollmentClient @Inject constructor(
         }
 
         val topic = "$space.forVault.credential"
-        val responseTopic = "$space.app.credential.response"
+        val responseTopic = "$space.forApp.credential.response"
 
         return sendRequestAndWaitForResponse(client, topic, responseTopic, request, requestId)
     }
@@ -463,7 +463,7 @@ class NitroEnrollmentClient @Inject constructor(
         }
 
         val topic = "$space.forVault.info"
-        val responseTopic = "$space.app.info.response"
+        val responseTopic = "$space.forApp.info.response"
 
         return try {
             val result: Result<JsonObject> = sendRequestAndWaitForResponse(
