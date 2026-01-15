@@ -52,14 +52,14 @@ class PcrConfigManager @Inject constructor(
 
         // Default bundled PCRs (updated with each app release)
         // These are used when the app is first installed or if updates fail
-        // PCR values from VettID vault enclave build 2026-01-04-v1
+        // PCR values from VettID vault enclave build 2026-01-14-v1
         private val DEFAULT_PCRS = ExpectedPcrs(
-            pcr0 = "bacdb032668b92b5f18413e77ca3f3637de7c60bbd373547e2c18257068e4df6273e24dbbfeebc63a44534ed47201a46",
+            pcr0 = "44aaecfbaa55110bb5f1892d0726558ae40b22e5d271c3da35f331c1424938c8105310d3e7977b744145aae5cd2deebc",
             pcr1 = "4b4d5b3661b3efc12920900c80e126e4ce783c522de6c02a2a5bf7af3a2b9327b86776f188e4be1c1c404a129dbda493",
-            pcr2 = "cecbc6e5037719cf68e55436b52c65122b9345a822aec9ce28ba8f73a0dc2e1251e82c56dc16405b10fc0e6927dc2348",
-            pcr3 = null,
-            version = "2026-01-04-v1",
-            publishedAt = "2026-01-04T00:00:00Z"
+            pcr2 = "0e1637e25c1acafbb6589048618f97ca2fa121dba43afe05d554b4064dffcf6544d3e7c30b06dc3ee97e87e1665fcb54",
+            pcr3 = "6f50b5d008e752caf8a5b5f14821dd91e4aaaa671fd042261e7bb06c5a0911705000ea27537881ea28fec748ffcbb21e",
+            version = "2026-01-14-v1",
+            publishedAt = "2026-01-14T00:00:00Z"
         )
 
         // How often to check for PCR updates (24 hours)
@@ -244,20 +244,20 @@ class PcrConfigManager @Inject constructor(
     /**
      * Fetch PCR manifest from the API endpoint.
      *
-     * This fetches from /api/enclave/pcrs as specified in the architecture doc.
+     * This fetches from /vault/pcrs/current endpoint.
      *
      * @param baseUrl The base URL for the API (e.g., "https://api.vettid.com")
      * @return Result containing the updated PCRs or an error
      */
     suspend fun fetchFromApi(baseUrl: String): Result<ExpectedPcrs> {
-        Log.d(TAG, "Fetching PCRs from API: $baseUrl/api/enclave/pcrs")
+        Log.d(TAG, "Fetching PCRs from API: $baseUrl/vault/pcrs/current")
 
         var lastException: Exception? = null
         var delayMs = INITIAL_RETRY_DELAY_MS
 
         for (attempt in 1..MAX_RETRY_ATTEMPTS) {
             try {
-                val url = java.net.URL("$baseUrl/api/enclave/pcrs")
+                val url = java.net.URL("$baseUrl/vault/pcrs/current")
                 val connection = url.openConnection() as java.net.HttpURLConnection
                 connection.requestMethod = "GET"
                 connection.setRequestProperty("Accept", "application/json")

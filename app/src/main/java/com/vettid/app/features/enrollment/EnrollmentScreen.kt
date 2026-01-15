@@ -554,7 +554,10 @@ private fun PinSetupContent(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Confirm PIN input
+        // Confirm PIN input with match indicator
+        val pinsMatch = pin.length == 6 && confirmPin.length == 6 && pin == confirmPin
+        val pinsMismatch = pin.length == 6 && confirmPin.length == 6 && pin != confirmPin
+
         OutlinedTextField(
             value = confirmPin,
             onValueChange = { if (it.length <= 6) onConfirmPinChange(it) },
@@ -570,13 +573,58 @@ private fun PinSetupContent(
             keyboardActions = KeyboardActions(
                 onDone = {
                     focusManager.clearFocus()
-                    if (pin.length == 6 && pin == confirmPin) {
+                    if (pinsMatch) {
                         onSubmit()
                     }
                 }
             ),
-            visualTransformation = PasswordVisualTransformation()
+            visualTransformation = PasswordVisualTransformation(),
+            trailingIcon = {
+                when {
+                    pinsMatch -> Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = "PINs match",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    pinsMismatch -> Icon(
+                        imageVector = Icons.Default.Error,
+                        contentDescription = "PINs don't match",
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                    else -> null
+                }
+            },
+            isError = pinsMismatch
         )
+
+        // PIN match feedback
+        if (pinsMatch) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text(
+                    text = "PINs match",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        } else if (pinsMismatch) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "PINs don't match",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        }
 
         // Error message
         if (error != null) {

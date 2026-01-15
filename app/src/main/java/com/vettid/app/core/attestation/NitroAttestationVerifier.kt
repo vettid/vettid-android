@@ -410,9 +410,9 @@ class NitroAttestationVerifier @Inject constructor(
                 "pcrs" -> pcrs = parsePcrs(parser)
                 "certificate" -> certificate = parser.binaryValue
                 "cabundle" -> cabundle = parseCabundle(parser)
-                "public_key" -> publicKey = parser.binaryValue
-                "user_data" -> userData = parser.binaryValue
-                "nonce" -> nonce = parser.binaryValue
+                "public_key" -> publicKey = if (parser.currentToken == com.fasterxml.jackson.core.JsonToken.VALUE_NULL) null else parser.binaryValue
+                "user_data" -> userData = if (parser.currentToken == com.fasterxml.jackson.core.JsonToken.VALUE_NULL) null else parser.binaryValue
+                "nonce" -> nonce = if (parser.currentToken == com.fasterxml.jackson.core.JsonToken.VALUE_NULL) null else parser.binaryValue
             }
         }
 
@@ -479,19 +479,23 @@ class NitroAttestationVerifier @Inject constructor(
         val signingCert = parseCertificate(signingCertDer)
         val intermediateCerts = cabundle.map { parseCertificate(it) }
 
-        // The root CA should be the last in cabundle
+        // The root CA should be the first in cabundle (AWS orders root-to-leaf)
         if (intermediateCerts.isEmpty()) {
             throw AttestationVerificationException("CA bundle is empty")
         }
 
-        val rootCert = intermediateCerts.last()
+        val rootCert = intermediateCerts.first()
 
-        // Verify root CA is AWS Nitro Enclaves
+        // Verify root CA is AWS Nitro Enclaves (check CN only, ignore other attributes)
         val rootSubject = X500Name(rootCert.subjectX500Principal.name)
-        val expectedRoot = X500Name("CN=$AWS_NITRO_ROOT_CA_CN")
-        if (rootSubject != expectedRoot) {
+        val rootCN = rootSubject.rdNs
+            .flatMap { it.typesAndValues.toList() }
+            .firstOrNull { it.type == org.bouncycastle.asn1.x500.style.BCStyle.CN }
+            ?.value?.toString()
+
+        if (rootCN != AWS_NITRO_ROOT_CA_CN) {
             throw AttestationVerificationException(
-                "Root CA is not AWS Nitro: expected $expectedRoot, got $rootSubject"
+                "Root CA is not AWS Nitro: expected CN=$AWS_NITRO_ROOT_CA_CN, got CN=$rootCN"
             )
         }
 
@@ -506,8 +510,10 @@ class NitroAttestationVerifier @Inject constructor(
         val trustAnchor = TrustAnchor(rootCert, null)
         val trustAnchors = setOf(trustAnchor)
 
+        // Build cert path: signing cert -> intermediates (excluding root which is trust anchor)
+        // Cabundle is root-to-leaf, so drop first (root) and reverse to get leaf-to-root order for PKIX
         val certPath = certificateFactory.generateCertPath(
-            listOf(signingCert) + intermediateCerts.dropLast(1)
+            listOf(signingCert) + intermediateCerts.drop(1).reversed()
         )
 
         val params = PKIXParameters(trustAnchors).apply {
@@ -543,7 +549,8 @@ class NitroAttestationVerifier @Inject constructor(
         }
 
         try {
-            val signature = java.security.Signature.getInstance(algorithm, "BC")
+            // Use default provider (AndroidOpenSSL) - BC may not have SHA384withECDSA
+            val signature = java.security.Signature.getInstance(algorithm)
             signature.initVerify(publicKey)
             signature.update(sigStructure)
 

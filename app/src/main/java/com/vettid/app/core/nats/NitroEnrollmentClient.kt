@@ -125,10 +125,12 @@ class NitroEnrollmentClient @Inject constructor(
                         // Subscribe to response
                         val subResult = client.subscribe(responseTopic) { message ->
                             try {
+                                Log.d(TAG, "Received attestation response: ${message.dataString}")
                                 val response = gson.fromJson(
                                     message.dataString,
                                     AttestationResponse::class.java
                                 )
+                                Log.d(TAG, "Parsed response - eventId: ${response.eventId}, attestationDocument: ${response.attestationDocument?.take(50) ?: "NULL"}")
 
                                 if (response.eventId == requestId || response.eventId == null) {
                                     // Verify the attestation document
@@ -525,7 +527,7 @@ class NitroEnrollmentClient @Inject constructor(
 
 data class AttestationResponse(
     @SerializedName("event_id") val eventId: String?,
-    @SerializedName("attestation_document") val attestationDocument: String,
+    @SerializedName("attestation") val attestationDocument: String,
     @SerializedName("enclave_public_key") val enclavePublicKey: String?
 )
 
