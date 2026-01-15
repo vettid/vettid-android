@@ -9,6 +9,8 @@ import androidx.security.crypto.MasterKey
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.security.KeyFactory
 import java.security.Signature
 import java.security.spec.X509EncodedKeySpec
@@ -67,10 +69,16 @@ class PcrConfigManager @Inject constructor(
         private const val MAX_RETRY_ATTEMPTS = 3
         private const val INITIAL_RETRY_DELAY_MS = 1000L
         private const val RETRY_BACKOFF_MULTIPLIER = 2.0
+
+        // Manifest freshness validation (reject manifests older than 10 minutes)
+        private const val MANIFEST_MAX_AGE_MS = 10 * 60 * 1000L
     }
 
     private val gson = Gson()
     private val prefs: SharedPreferences by lazy { createSecurePrefs() }
+
+    // Mutex for thread-safe PCR updates
+    private val updateMutex = Mutex()
 
     private fun createSecurePrefs(): SharedPreferences {
         val masterKey = MasterKey.Builder(context)
@@ -120,11 +128,14 @@ class PcrConfigManager @Inject constructor(
     /**
      * Update PCRs from a signed response.
      *
+     * Thread-safe: Uses mutex to prevent race conditions during concurrent updates.
+     * Uses commit() for synchronous writes to ensure data integrity for security-critical data.
+     *
      * @param signedResponse The signed PCR response from the API
      * @return true if update was successful
      * @throws PcrSignatureException if signature verification fails
      */
-    fun updatePcrs(signedResponse: SignedPcrResponse): Boolean {
+    suspend fun updatePcrs(signedResponse: SignedPcrResponse): Boolean = updateMutex.withLock {
         Log.d(TAG, "Updating PCRs from signed response, version: ${signedResponse.pcrs.version}")
 
         // CRITICAL: Verify signature - MUST NOT proceed with unverified PCRs
@@ -137,18 +148,18 @@ class PcrConfigManager @Inject constructor(
             )
         }
 
-        // Check version is newer
+        // Check version is newer (within lock to prevent race condition)
         val currentVersion = prefs.getString(KEY_PCR_VERSION, "")
         if (signedResponse.pcrs.version == currentVersion) {
             Log.d(TAG, "PCRs already at version ${signedResponse.pcrs.version}")
-            return false
+            return@withLock false
         }
 
         // Save current PCRs as previous (for transition period fallback)
         val currentPcrsJson = prefs.getString(KEY_CURRENT_PCRS, null)
 
-        // Store updated PCRs
-        prefs.edit().apply {
+        // Store updated PCRs using commit() for synchronous write (security-critical data)
+        val success = prefs.edit().apply {
             // Preserve previous PCRs for transition period
             if (currentPcrsJson != null) {
                 putString(KEY_PREVIOUS_PCRS, currentPcrsJson)
@@ -156,11 +167,14 @@ class PcrConfigManager @Inject constructor(
             putString(KEY_CURRENT_PCRS, gson.toJson(signedResponse.pcrs))
             putString(KEY_PCR_VERSION, signedResponse.pcrs.version)
             putLong(KEY_LAST_UPDATE, System.currentTimeMillis())
-            apply()
-        }
+        }.commit()
 
-        Log.i(TAG, "PCRs updated to version: ${signedResponse.pcrs.version}")
-        return true
+        if (success) {
+            Log.i(TAG, "PCRs updated to version: ${signedResponse.pcrs.version}")
+        } else {
+            Log.e(TAG, "Failed to write PCRs to secure storage")
+        }
+        success
     }
 
     /**
@@ -213,7 +227,7 @@ class PcrConfigManager @Inject constructor(
      * If signature verification fails, this returns a failure result with
      * PcrSignatureException. The caller should fall back to cached/bundled PCRs.
      */
-    private fun performFetch(): Result<ExpectedPcrs> {
+    private suspend fun performFetch(): Result<ExpectedPcrs> {
         val url = java.net.URL(PCR_MANIFEST_URL)
         val connection = url.openConnection() as java.net.HttpURLConnection
         connection.requestMethod = "GET"
@@ -236,6 +250,12 @@ class PcrConfigManager @Inject constructor(
 
             // Parse full manifest
             val manifest = gson.fromJson(responseBody, PcrManifestResponse::class.java)
+
+            // Validate manifest freshness (#38)
+            if (!isManifestFresh(manifest.timestamp)) {
+                Log.w(TAG, "PCR manifest is stale (timestamp: ${manifest.timestamp})")
+                return Result.failure(PcrUpdateException("Manifest is stale: ${manifest.timestamp}"))
+            }
 
             if (manifest.pcrSets.isEmpty()) {
                 Log.e(TAG, "PCR manifest contains no pcr_sets")
@@ -263,6 +283,31 @@ class PcrConfigManager @Inject constructor(
             }
         } finally {
             connection.disconnect()
+        }
+    }
+
+    /**
+     * Check if manifest timestamp is fresh (not older than MANIFEST_MAX_AGE_MS).
+     *
+     * This prevents using stale cached responses from CDN or replay attacks.
+     */
+    private fun isManifestFresh(timestamp: String): Boolean {
+        return try {
+            val manifestTime = java.time.Instant.parse(timestamp).toEpochMilli()
+            val now = System.currentTimeMillis()
+            val age = now - manifestTime
+
+            if (age > MANIFEST_MAX_AGE_MS) {
+                Log.w(TAG, "Manifest timestamp $timestamp is ${age / 1000}s old (max: ${MANIFEST_MAX_AGE_MS / 1000}s)")
+                false
+            } else {
+                Log.d(TAG, "Manifest timestamp $timestamp is fresh (${age / 1000}s old)")
+                true
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse manifest timestamp: $timestamp", e)
+            // Be conservative - reject if we can't parse
+            false
         }
     }
 
