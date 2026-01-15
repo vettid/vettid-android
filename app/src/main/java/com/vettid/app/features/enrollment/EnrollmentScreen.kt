@@ -748,6 +748,21 @@ private fun PinSetupContent(
                             Spacer(modifier = Modifier.height(8.dp))
                         }
 
+                        // PCR Description (#44)
+                        if (attestationInfo.pcrDescription != null) {
+                            Text(
+                                text = "Changes",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = attestationInfo.pcrDescription,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+
                         // PCR0 (enclave image hash)
                         Text(
                             text = "Enclave Image (PCR0)",

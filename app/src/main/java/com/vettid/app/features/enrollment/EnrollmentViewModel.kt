@@ -816,8 +816,10 @@ class EnrollmentViewModel @Inject constructor(
                         pcr0Full.take(16) + "..." + pcr0Full.takeLast(8)
                     } else pcr0Full
 
-                    // Get PCR version from config manager
-                    val pcrVersion = pcrConfigManager.getCurrentVersion()
+                    // Get PCR version and description from config manager (#44)
+                    val currentPcrs = pcrConfigManager.getCurrentPcrs()
+                    val pcrVersion = currentPcrs.version
+                    val pcrDescription = currentPcrs.description
 
                     val attestationInfo = AttestationInfo(
                         moduleId = verifiedAttestation.moduleId,
@@ -825,7 +827,8 @@ class EnrollmentViewModel @Inject constructor(
                         pcr0Short = pcr0Short,
                         pcrsVerified = true,
                         pcrVersion = pcrVersion,
-                        pcr0Full = pcr0Full
+                        pcr0Full = pcr0Full,
+                        pcrDescription = pcrDescription
                     )
 
                     // Move to PIN setup

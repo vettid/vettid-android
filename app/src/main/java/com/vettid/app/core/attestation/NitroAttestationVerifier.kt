@@ -791,7 +791,9 @@ data class ExpectedPcrs(
     /** When these PCRs were published (ISO 8601) */
     val publishedAt: String? = null,
     /** When these PCRs expire (ISO 8601), null means no expiration (current version) */
-    val validUntil: String? = null
+    val validUntil: String? = null,
+    /** Human-readable description of what changed in this version (#44) */
+    val description: String? = null
 )
 
 /**

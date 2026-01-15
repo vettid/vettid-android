@@ -69,7 +69,8 @@ class PcrConfigManager @Inject constructor(
             pcr2 = "9e281de6792cb3a3ba56f61989380126fdfe16cf38ebf148b4e762b5e58b130520ac3772b56f103a9afffcaa02310f19",
             pcr3 = null,
             version = "2026-01-15-v3",
-            publishedAt = "2026-01-15T16:51:00Z"
+            publishedAt = "2026-01-15T16:51:00Z",
+            description = "ECIES crypto parameter fix"
         )
 
         // How often to check for PCR updates
@@ -837,6 +838,103 @@ class PcrConfigManager @Inject constructor(
     }
 
     /**
+     * Validate API-provided PCRs against cached values (#24).
+     *
+     * This detects potential MITM attacks or stale cache scenarios by comparing
+     * PCR values from the attestation API response against locally cached values.
+     *
+     * @param apiPcrs PCRs provided in the API response
+     * @return PcrValidationResult with match status and reason
+     */
+    fun validateApiPcrs(apiPcrs: ExpectedPcrs): PcrValidationResult {
+        val cachedPcrs = getCurrentPcrs()
+        val previousPcrs = getPreviousPcrs()
+
+        // Check if matches current cached PCRs
+        if (matchesPcrs(apiPcrs, cachedPcrs)) {
+            Log.d(TAG, "API PCRs match cached version: ${cachedPcrs.version}")
+            return PcrValidationResult(
+                isValid = true,
+                matchedVersion = cachedPcrs.version,
+                reason = "PCRs match current cached version"
+            )
+        }
+
+        // Check if matches previous version (transition period)
+        if (previousPcrs != null && matchesPcrs(apiPcrs, previousPcrs)) {
+            if (isPcrVersionValid(previousPcrs)) {
+                Log.i(TAG, "API PCRs match previous version: ${previousPcrs.version} (transition period)")
+                return PcrValidationResult(
+                    isValid = true,
+                    matchedVersion = previousPcrs.version,
+                    reason = "PCRs match previous version - cache may need refresh"
+                )
+            } else {
+                Log.w(TAG, "API PCRs match expired previous version: ${previousPcrs.version}")
+                return PcrValidationResult(
+                    isValid = false,
+                    matchedVersion = null,
+                    reason = "API PCRs match expired version - potential downgrade attack"
+                )
+            }
+        }
+
+        // No match - potential MITM or stale cache
+        Log.w(TAG, "SECURITY: API PCRs do not match any known version")
+        Log.w(TAG, "  Cached version: ${cachedPcrs.version}")
+        Log.w(TAG, "  API PCR0 (truncated): ${apiPcrs.pcr0.take(16)}...")
+        Log.w(TAG, "  Cached PCR0 (truncated): ${cachedPcrs.pcr0.take(16)}...")
+
+        return PcrValidationResult(
+            isValid = false,
+            matchedVersion = null,
+            reason = "API PCRs don't match cached - refresh cache or check for MITM"
+        )
+    }
+
+    /**
+     * Validate API PCRs and refresh cache if needed (#24).
+     *
+     * This is the recommended method to call during attestation verification.
+     * It validates API PCRs and optionally triggers a cache refresh.
+     *
+     * @param apiPcrs PCRs from the API response
+     * @param autoRefresh Whether to automatically refresh cache on mismatch
+     * @return PcrValidationResult with action taken
+     */
+    suspend fun validateAndRefreshIfNeeded(
+        apiPcrs: ExpectedPcrs,
+        autoRefresh: Boolean = true
+    ): PcrValidationResult {
+        val initialResult = validateApiPcrs(apiPcrs)
+
+        if (initialResult.isValid) {
+            return initialResult
+        }
+
+        // Mismatch detected - try refreshing cache if auto-refresh enabled
+        if (autoRefresh && shouldCheckForUpdates()) {
+            Log.i(TAG, "PCR mismatch detected, refreshing cache...")
+            val refreshResult = fetchPcrUpdates()
+
+            if (refreshResult.isSuccess) {
+                // Re-validate after refresh
+                val afterRefresh = validateApiPcrs(apiPcrs)
+                if (afterRefresh.isValid) {
+                    Log.i(TAG, "PCR validation passed after cache refresh")
+                    return PcrValidationResult(
+                        isValid = afterRefresh.isValid,
+                        matchedVersion = afterRefresh.matchedVersion,
+                        reason = "PCRs validated after cache refresh"
+                    )
+                }
+            }
+        }
+
+        return initialResult
+    }
+
+    /**
      * Clear cached PCRs (for testing or recovery).
      */
     fun clearCache() {
@@ -933,7 +1031,8 @@ data class PcrManifestResponse(
                 pcr3 = currentPcrSet.pcr3,
                 version = currentPcrSet.id,
                 publishedAt = currentPcrSet.validFrom,
-                validUntil = currentPcrSet.validUntil  // null for current = no expiration
+                validUntil = currentPcrSet.validUntil,  // null for current = no expiration
+                description = currentPcrSet.description  // #44 - pass through description
             ),
             signature = signature,
             pcrSetsJson = pcrSetsJson
@@ -954,7 +1053,8 @@ data class PcrManifestResponse(
             pcr3 = previousSet.pcr3,
             version = previousSet.id,
             publishedAt = previousSet.validFrom,
-            validUntil = previousSet.validUntil
+            validUntil = previousSet.validUntil,
+            description = previousSet.description
         )
     }
 

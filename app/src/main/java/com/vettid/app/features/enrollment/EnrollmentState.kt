@@ -278,5 +278,7 @@ data class AttestationInfo(
     /** PCR version used for verification */
     val pcrVersion: String? = null,
     /** Full PCR0 hash for display */
-    val pcr0Full: String? = null
+    val pcr0Full: String? = null,
+    /** Description of what changed in this PCR version (#44) */
+    val pcrDescription: String? = null
 )
