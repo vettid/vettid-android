@@ -4,6 +4,7 @@ import android.content.Context
 import com.vettid.app.core.attestation.AttestationResult
 import com.vettid.app.core.attestation.HardwareAttestationManager
 import com.vettid.app.core.attestation.NitroAttestationVerifier
+import com.vettid.app.core.attestation.PcrConfigManager
 import com.vettid.app.core.crypto.CryptoManager
 import com.vettid.app.core.crypto.PasswordEncryptionResult
 import com.vettid.app.core.nats.NitroEnrollmentClient
@@ -32,6 +33,7 @@ class EnrollmentViewModelTest {
     private lateinit var nitroAttestationVerifier: NitroAttestationVerifier
     private lateinit var nitroEnrollmentClient: NitroEnrollmentClient
     private lateinit var credentialStore: CredentialStore
+    private lateinit var pcrConfigManager: PcrConfigManager
 
     private val testDispatcher = StandardTestDispatcher()
 
@@ -46,6 +48,7 @@ class EnrollmentViewModelTest {
         nitroAttestationVerifier = mock()
         nitroEnrollmentClient = mock()
         credentialStore = mock()
+        pcrConfigManager = mock()
 
         viewModel = EnrollmentViewModel(
             context = context,
@@ -54,7 +57,8 @@ class EnrollmentViewModelTest {
             attestationManager = attestationManager,
             nitroAttestationVerifier = nitroAttestationVerifier,
             nitroEnrollmentClient = nitroEnrollmentClient,
-            credentialStore = credentialStore
+            credentialStore = credentialStore,
+            pcrConfigManager = pcrConfigManager
         )
     }
 

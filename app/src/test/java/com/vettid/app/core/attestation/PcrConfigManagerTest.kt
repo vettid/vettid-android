@@ -863,6 +863,238 @@ class PcrConfigManagerTest {
         prefsStorage["last_update_timestamp"] = System.currentTimeMillis() - (25 * 60 * 60 * 1000L)
         assertTrue(manager.shouldCheckForUpdates())
     }
+
+    // MARK: - Integration Tests for PCR Verification Flow (#43)
+
+    @Test
+    fun `validateApiPcrs returns valid when PCRs match current version`() {
+        // Setup current PCRs
+        val currentPcrs = ExpectedPcrs(
+            pcr0 = "aa".repeat(48),
+            pcr1 = "bb".repeat(48),
+            pcr2 = "cc".repeat(48),
+            version = "v1.0.0"
+        )
+        manager.updatePcrs(SignedPcrResponse(currentPcrs, "sig"))
+
+        // Validate matching API PCRs
+        val apiPcrs = ExpectedPcrs(
+            pcr0 = "aa".repeat(48),
+            pcr1 = "bb".repeat(48),
+            pcr2 = "cc".repeat(48)
+        )
+
+        val result = manager.validateApiPcrs(apiPcrs)
+
+        assertTrue(result.isValid)
+        assertEquals("v1.0.0", result.matchedVersion)
+    }
+
+    @Test
+    fun `validateApiPcrs returns valid when PCRs match previous version during transition`() {
+        // Setup v1 as current, then update to v2
+        val pcrsV1 = ExpectedPcrs(
+            pcr0 = "11".repeat(48),
+            pcr1 = "22".repeat(48),
+            pcr2 = "33".repeat(48),
+            version = "v1.0.0"
+        )
+        manager.updatePcrs(SignedPcrResponse(pcrsV1, "sig1"))
+
+        val pcrsV2 = ExpectedPcrs(
+            pcr0 = "44".repeat(48),
+            pcr1 = "55".repeat(48),
+            pcr2 = "66".repeat(48),
+            version = "v2.0.0"
+        )
+        manager.updatePcrs(SignedPcrResponse(pcrsV2, "sig2"))
+
+        // Validate v1 PCRs (should match previous during transition)
+        val apiPcrsV1 = ExpectedPcrs(
+            pcr0 = "11".repeat(48),
+            pcr1 = "22".repeat(48),
+            pcr2 = "33".repeat(48)
+        )
+
+        val result = manager.validateApiPcrs(apiPcrsV1)
+
+        assertTrue(result.isValid)
+        assertEquals("v1.0.0", result.matchedVersion)
+    }
+
+    @Test
+    fun `validateApiPcrs returns invalid when PCRs match no known version`() {
+        // Setup current PCRs
+        val currentPcrs = ExpectedPcrs(
+            pcr0 = "aa".repeat(48),
+            pcr1 = "bb".repeat(48),
+            pcr2 = "cc".repeat(48),
+            version = "v1.0.0"
+        )
+        manager.updatePcrs(SignedPcrResponse(currentPcrs, "sig"))
+
+        // Validate completely unknown PCRs
+        val unknownPcrs = ExpectedPcrs(
+            pcr0 = "ff".repeat(48),
+            pcr1 = "ee".repeat(48),
+            pcr2 = "dd".repeat(48)
+        )
+
+        val result = manager.validateApiPcrs(unknownPcrs)
+
+        assertFalse(result.isValid)
+        assertNull(result.matchedVersion)
+        assertTrue(result.reason.contains("don't match"))
+    }
+
+    @Test
+    fun `validateApiPcrs rejects expired previous version PCRs`() {
+        // Setup v1 with past expiration
+        val pcrsV1 = ExpectedPcrs(
+            pcr0 = "11".repeat(48),
+            pcr1 = "22".repeat(48),
+            pcr2 = "33".repeat(48),
+            version = "v1.0.0",
+            validUntil = "2020-01-01T00:00:00Z"  // Past date
+        )
+        manager.updatePcrs(SignedPcrResponse(pcrsV1, "sig1"))
+
+        // Update to v2 (v1 becomes previous with expiration)
+        val pcrsV2 = ExpectedPcrs(
+            pcr0 = "44".repeat(48),
+            pcr1 = "55".repeat(48),
+            pcr2 = "66".repeat(48),
+            version = "v2.0.0"
+        )
+        manager.updatePcrs(SignedPcrResponse(pcrsV2, "sig2"))
+
+        // Try to validate with v1 PCRs (should be rejected as expired)
+        val apiPcrsV1 = ExpectedPcrs(
+            pcr0 = "11".repeat(48),
+            pcr1 = "22".repeat(48),
+            pcr2 = "33".repeat(48)
+        )
+
+        val result = manager.validateApiPcrs(apiPcrsV1)
+
+        assertFalse(result.isValid)
+        assertTrue(result.reason.contains("expired"))
+    }
+
+    @Test
+    fun `rolling update transition allows both versions during grace period`() {
+        // Simulate rolling update: v1 → v2
+        // Both should be valid during transition
+
+        // Setup v1
+        val pcrsV1 = ExpectedPcrs(
+            pcr0 = "11".repeat(48),
+            pcr1 = "22".repeat(48),
+            pcr2 = "33".repeat(48),
+            version = "v1.0.0",
+            validUntil = "2030-01-01T00:00:00Z"  // Future date = still valid
+        )
+        manager.updatePcrs(SignedPcrResponse(pcrsV1, "sig1"))
+
+        // Update to v2
+        val pcrsV2 = ExpectedPcrs(
+            pcr0 = "44".repeat(48),
+            pcr1 = "55".repeat(48),
+            pcr2 = "66".repeat(48),
+            version = "v2.0.0"
+        )
+        manager.updatePcrs(SignedPcrResponse(pcrsV2, "sig2"))
+
+        // Both v1 and v2 should be valid
+        val apiV1 = ExpectedPcrs("11".repeat(48), "22".repeat(48), "33".repeat(48))
+        val apiV2 = ExpectedPcrs("44".repeat(48), "55".repeat(48), "66".repeat(48))
+
+        assertTrue(manager.validateApiPcrs(apiV1).isValid)
+        assertTrue(manager.validateApiPcrs(apiV2).isValid)
+        assertEquals("v1.0.0", manager.validateApiPcrs(apiV1).matchedVersion)
+        assertEquals("v2.0.0", manager.validateApiPcrs(apiV2).matchedVersion)
+    }
+
+    @Test
+    fun `network failure fallback uses cached PCRs`() {
+        // Setup cached PCRs
+        val cachedPcrs = ExpectedPcrs(
+            pcr0 = "aa".repeat(48),
+            pcr1 = "bb".repeat(48),
+            pcr2 = "cc".repeat(48),
+            version = "cached-v1"
+        )
+        manager.updatePcrs(SignedPcrResponse(cachedPcrs, "sig"))
+
+        // Verify cached PCRs are used for validation (even without network)
+        val apiPcrs = ExpectedPcrs(
+            pcr0 = "aa".repeat(48),
+            pcr1 = "bb".repeat(48),
+            pcr2 = "cc".repeat(48)
+        )
+
+        val result = manager.validateApiPcrs(apiPcrs)
+
+        assertTrue(result.isValid)
+        assertEquals("cached-v1", result.matchedVersion)
+    }
+
+    @Test
+    fun `bundled defaults are used when no cached PCRs available`() {
+        // Clear any cached PCRs
+        manager.clearCache()
+
+        // Verify bundled defaults are used
+        val bundledPcrs = ExpectedPcrs(
+            pcr0 = "0".repeat(96),
+            pcr1 = "0".repeat(96),
+            pcr2 = "0".repeat(96)
+        )
+
+        val result = manager.validateApiPcrs(bundledPcrs)
+
+        assertTrue(result.isValid)
+        assertEquals("bundled-1.0.0", result.matchedVersion)
+    }
+
+    @Test
+    fun `full PCR verification flow works end to end`() {
+        // 1. Start with bundled defaults
+        assertTrue(manager.isUsingBundledDefaults())
+
+        // 2. Simulate first PCR fetch and update
+        val pcrsV1 = ExpectedPcrs(
+            pcr0 = "aa".repeat(48),
+            pcr1 = "bb".repeat(48),
+            pcr2 = "cc".repeat(48),
+            version = "2026-01-15-v1",
+            publishedAt = "2026-01-15T10:00:00Z"
+        )
+        assertTrue(manager.updatePcrs(SignedPcrResponse(pcrsV1, "sig1")))
+
+        // 3. Verify current PCRs are used for validation
+        val apiPcrs = ExpectedPcrs("aa".repeat(48), "bb".repeat(48), "cc".repeat(48))
+        assertTrue(manager.validateApiPcrs(apiPcrs).isValid)
+
+        // 4. Simulate rolling update
+        val pcrsV2 = ExpectedPcrs(
+            pcr0 = "dd".repeat(48),
+            pcr1 = "ee".repeat(48),
+            pcr2 = "ff".repeat(48),
+            version = "2026-01-15-v2"
+        )
+        assertTrue(manager.updatePcrs(SignedPcrResponse(pcrsV2, "sig2")))
+
+        // 5. Both versions should work during transition
+        val apiV1 = ExpectedPcrs("aa".repeat(48), "bb".repeat(48), "cc".repeat(48))
+        val apiV2 = ExpectedPcrs("dd".repeat(48), "ee".repeat(48), "ff".repeat(48))
+        assertTrue(manager.validateApiPcrs(apiV1).isValid)  // Previous version
+        assertTrue(manager.validateApiPcrs(apiV2).isValid)  // Current version
+
+        // 6. Unknown PCRs should be rejected
+        val unknownPcrs = ExpectedPcrs("11".repeat(48), "22".repeat(48), "33".repeat(48))
+        assertFalse(manager.validateApiPcrs(unknownPcrs).isValid)
+    }
 }
 
 /**
@@ -987,5 +1219,55 @@ class TestablePcrConfigManager(
 
     fun isUsingBundledDefaults(): Boolean {
         return prefs.getString(KEY_CURRENT_PCRS, null) == null
+    }
+
+    /**
+     * Validate API-provided PCRs against cached values (#24, #43).
+     */
+    fun validateApiPcrs(apiPcrs: ExpectedPcrs): PcrValidationResult {
+        val cachedPcrs = getCurrentPcrs()
+        val previousPcrs = getPreviousPcrs()
+
+        // Check if matches current cached PCRs
+        if (matchesPcrs(apiPcrs, cachedPcrs)) {
+            return PcrValidationResult(
+                isValid = true,
+                matchedVersion = cachedPcrs.version,
+                reason = "PCRs match current cached version"
+            )
+        }
+
+        // Check if matches previous version (transition period)
+        if (previousPcrs != null && matchesPcrs(apiPcrs, previousPcrs)) {
+            if (isPcrVersionValid(previousPcrs)) {
+                return PcrValidationResult(
+                    isValid = true,
+                    matchedVersion = previousPcrs.version,
+                    reason = "PCRs match previous version - cache may need refresh"
+                )
+            } else {
+                return PcrValidationResult(
+                    isValid = false,
+                    matchedVersion = null,
+                    reason = "API PCRs match expired version - potential downgrade attack"
+                )
+            }
+        }
+
+        return PcrValidationResult(
+            isValid = false,
+            matchedVersion = null,
+            reason = "API PCRs don't match cached - refresh cache or check for MITM"
+        )
+    }
+
+    private fun isPcrVersionValid(pcrs: ExpectedPcrs): Boolean {
+        val validUntil = pcrs.validUntil ?: return true
+        return try {
+            val expirationTime = java.time.Instant.parse(validUntil).toEpochMilli()
+            System.currentTimeMillis() < expirationTime
+        } catch (e: Exception) {
+            false
+        }
     }
 }
