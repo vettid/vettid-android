@@ -77,7 +77,8 @@ sealed class EnrollmentState {
         val pin: String = "",
         val confirmPin: String = "",
         val isSubmitting: Boolean = false,
-        val error: String? = null
+        val error: String? = null,
+        val attestationInfo: AttestationInfo? = null
     ) : EnrollmentState()
 
     /** Waiting for vault to be ready with UTKs (Nitro flow) */
@@ -261,3 +262,17 @@ sealed class EnrollmentEffect {
     /** Enrollment complete - navigate to main app */
     object NavigateToMain : EnrollmentEffect()
 }
+
+/**
+ * Information about verified enclave attestation
+ */
+data class AttestationInfo(
+    /** Enclave module ID (instance + enclave ID) */
+    val moduleId: String,
+    /** Attestation timestamp */
+    val timestamp: Long,
+    /** PCR0 hash (enclave image) - truncated for display */
+    val pcr0Short: String,
+    /** Whether all PCR values matched */
+    val pcrsVerified: Boolean
+)

@@ -807,8 +807,21 @@ class EnrollmentViewModel @Inject constructor(
                     _state.value = EnrollmentState.RequestingAttestation(progress = 1.0f)
                     delay(300)
 
+                    // Create attestation info for display
+                    val pcr0Bytes = verifiedAttestation.pcrs[0]
+                    val pcr0Short = pcr0Bytes?.let { bytes ->
+                        bytes.take(8).joinToString("") { "%02x".format(it) } + "..."
+                    } ?: "unknown"
+
+                    val attestationInfo = AttestationInfo(
+                        moduleId = verifiedAttestation.moduleId,
+                        timestamp = verifiedAttestation.timestamp,
+                        pcr0Short = pcr0Short,
+                        pcrsVerified = true
+                    )
+
                     // Move to PIN setup
-                    _state.value = EnrollmentState.SettingPin()
+                    _state.value = EnrollmentState.SettingPin(attestationInfo = attestationInfo)
                 },
                 onFailure = { error ->
                     Log.e(TAG, "Attestation verification failed", error)

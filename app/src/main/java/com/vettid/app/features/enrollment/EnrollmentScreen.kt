@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -134,6 +135,7 @@ fun EnrollmentScreen(
                         confirmPin = currentState.confirmPin,
                         isSubmitting = currentState.isSubmitting,
                         error = currentState.error,
+                        attestationInfo = currentState.attestationInfo,
                         onPinChange = { viewModel.onEvent(EnrollmentEvent.PinChanged(it)) },
                         onConfirmPinChange = { viewModel.onEvent(EnrollmentEvent.ConfirmPinChanged(it)) },
                         onSubmit = { viewModel.onEvent(EnrollmentEvent.SubmitPin) },
@@ -479,6 +481,7 @@ private fun PinSetupContent(
     confirmPin: String,
     isSubmitting: Boolean,
     error: String?,
+    attestationInfo: AttestationInfo?,
     onPinChange: (String) -> Unit,
     onConfirmPinChange: (String) -> Unit,
     onSubmit: () -> Unit,
@@ -656,6 +659,114 @@ private fun PinSetupContent(
         }
 
         Spacer(modifier = Modifier.height(16.dp))
+
+        // Attestation info section
+        if (attestationInfo != null) {
+            var expanded by remember { mutableStateOf(false) }
+
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                )
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                imageVector = if (attestationInfo.pcrsVerified)
+                                    Icons.Default.VerifiedUser
+                                else
+                                    Icons.Default.Warning,
+                                contentDescription = null,
+                                tint = if (attestationInfo.pcrsVerified)
+                                    MaterialTheme.colorScheme.primary
+                                else
+                                    MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (attestationInfo.pcrsVerified)
+                                    "Enclave Verified"
+                                else
+                                    "Verification Warning",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        Icon(
+                            imageVector = if (expanded)
+                                Icons.Default.ExpandLess
+                            else
+                                Icons.Default.ExpandMore,
+                            contentDescription = if (expanded) "Collapse" else "Expand"
+                        )
+                    }
+
+                    if (expanded) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Divider()
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Module ID
+                        Text(
+                            text = "Module ID",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = attestationInfo.moduleId,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // PCR0 (enclave image hash)
+                        Text(
+                            text = "Enclave Image (PCR0)",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = attestationInfo.pcr0Short,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium
+                        )
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Timestamp
+                        Text(
+                            text = "Attested At",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = java.text.SimpleDateFormat(
+                                "yyyy-MM-dd HH:mm:ss",
+                                java.util.Locale.getDefault()
+                            ).format(java.util.Date(attestationInfo.timestamp)),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+        }
 
         // Security note
         Text(
