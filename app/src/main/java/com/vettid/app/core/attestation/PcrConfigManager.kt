@@ -9,9 +9,7 @@ import androidx.security.crypto.MasterKey
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import dagger.hilt.android.qualifiers.ApplicationContext
-import org.bouncycastle.jce.provider.BouncyCastleProvider
 import java.security.KeyFactory
-import java.security.Security
 import java.security.Signature
 import java.security.spec.X509EncodedKeySpec
 import javax.inject.Inject
@@ -52,14 +50,14 @@ class PcrConfigManager @Inject constructor(
 
         // Default bundled PCRs (updated with each app release)
         // These are used when the app is first installed or if updates fail
-        // PCR values from VettID vault enclave build 2026-01-15-v2
+        // PCR values from VettID vault enclave build 2026-01-15-v3
         private val DEFAULT_PCRS = ExpectedPcrs(
-            pcr0 = "42b6b3cfc2d8001624dc54513c67f12d3a4752f717ce67cd483d77b71d60f846b4b6481d67fc182dcb7795648e92238e",
+            pcr0 = "5cbc157248fbf4ead4f793248b403aa637a4a423bf665c1e8fa23cae2dca3f893a5f4e3311e8f46fb8ab36590040a89b",
             pcr1 = "4b4d5b3661b3efc12920900c80e126e4ce783c522de6c02a2a5bf7af3a2b9327b86776f188e4be1c1c404a129dbda493",
             pcr2 = "9e281de6792cb3a3ba56f61989380126fdfe16cf38ebf148b4e762b5e58b130520ac3772b56f103a9afffcaa02310f19",
             pcr3 = null,
-            version = "2026-01-15-v2",
-            publishedAt = "2026-01-15T04:54:55Z"
+            version = "2026-01-15-v3",
+            publishedAt = "2026-01-15T16:51:00Z"
         )
 
         // How often to check for PCR updates (24 hours)
@@ -124,14 +122,19 @@ class PcrConfigManager @Inject constructor(
      *
      * @param signedResponse The signed PCR response from the API
      * @return true if update was successful
-     * @throws PcrUpdateException if signature verification fails
+     * @throws PcrSignatureException if signature verification fails
      */
     fun updatePcrs(signedResponse: SignedPcrResponse): Boolean {
         Log.d(TAG, "Updating PCRs from signed response, version: ${signedResponse.pcrs.version}")
 
-        // Verify signature
+        // CRITICAL: Verify signature - MUST NOT proceed with unverified PCRs
+        // See PCR-HANDLING-GUIDE.md: "Always verify signatures - Never trust PCRs without signature verification"
         if (!verifySignature(signedResponse)) {
-            Log.w(TAG, "PCR signature verification failed - continuing with API PCRs")
+            Log.e(TAG, "SECURITY: PCR signature verification failed - rejecting update")
+            throw PcrSignatureException(
+                "PCR manifest signature verification failed. " +
+                "This could indicate a man-in-the-middle attack or corrupted data."
+            )
         }
 
         // Check version is newer
@@ -206,6 +209,9 @@ class PcrConfigManager @Inject constructor(
 
     /**
      * Perform a single fetch attempt.
+     *
+     * If signature verification fails, this returns a failure result with
+     * PcrSignatureException. The caller should fall back to cached/bundled PCRs.
      */
     private fun performFetch(): Result<ExpectedPcrs> {
         val url = java.net.URL(PCR_MANIFEST_URL)
@@ -223,19 +229,38 @@ class PcrConfigManager @Inject constructor(
             }
 
             val responseBody = connection.inputStream.bufferedReader().use { it.readText() }
-            val apiResponse = gson.fromJson(responseBody, PcrApiResponse::class.java)
 
-            // Convert and update
-            val signedResponse = apiResponse.toSignedResponse()
-            val updated = updatePcrs(signedResponse)
+            // Parse manifest and extract pcr_sets JSON for signature verification
+            val jsonObject = com.google.gson.JsonParser.parseString(responseBody).asJsonObject
+            val pcrSetsJson = jsonObject.get("pcr_sets")?.toString()
 
-            if (updated) {
-                Log.i(TAG, "PCRs updated to ${signedResponse.pcrs.version}")
-            } else {
-                Log.d(TAG, "PCRs already up to date")
+            // Parse full manifest
+            val manifest = gson.fromJson(responseBody, PcrManifestResponse::class.java)
+
+            if (manifest.pcrSets.isEmpty()) {
+                Log.e(TAG, "PCR manifest contains no pcr_sets")
+                return Result.failure(PcrUpdateException("Empty pcr_sets in manifest"))
             }
 
-            return Result.success(signedResponse.pcrs)
+            // Convert to SignedPcrResponse with pcr_sets JSON for signature verification
+            val signedResponse = manifest.toSignedResponse(pcrSetsJson ?: "")
+
+            try {
+                val updated = updatePcrs(signedResponse)
+
+                if (updated) {
+                    Log.i(TAG, "PCRs updated to ${signedResponse.pcrs.version}")
+                } else {
+                    Log.d(TAG, "PCRs already up to date")
+                }
+
+                return Result.success(signedResponse.pcrs)
+            } catch (e: PcrSignatureException) {
+                // Signature verification failed - this is a security issue
+                // Return failure so caller falls back to cached/bundled PCRs
+                Log.e(TAG, "SECURITY: Signature verification failed, falling back to cached PCRs", e)
+                return Result.failure(e)
+            }
         } finally {
             connection.disconnect()
         }
@@ -245,6 +270,7 @@ class PcrConfigManager @Inject constructor(
      * Fetch PCR manifest from the API endpoint.
      *
      * This fetches from /vault/pcrs/current endpoint.
+     * If signature verification fails, returns failure and caller should use cached/bundled PCRs.
      *
      * @param baseUrl The base URL for the API (e.g., "https://api.vettid.com")
      * @return Result containing the updated PCRs or an error
@@ -273,7 +299,7 @@ class PcrConfigManager @Inject constructor(
                     val responseBody = connection.inputStream.bufferedReader().use { it.readText() }
                     val apiResponse = gson.fromJson(responseBody, PcrApiResponse::class.java)
 
-                    // Convert and update
+                    // Convert and update - will throw PcrSignatureException if verification fails
                     val signedResponse = apiResponse.toSignedResponse()
                     val updated = updatePcrs(signedResponse)
 
@@ -287,6 +313,10 @@ class PcrConfigManager @Inject constructor(
                 } finally {
                     connection.disconnect()
                 }
+            } catch (e: PcrSignatureException) {
+                // Signature verification failed - don't retry, this is a security issue
+                Log.e(TAG, "SECURITY: PCR signature verification failed - not retrying", e)
+                return Result.failure(e)
             } catch (e: Exception) {
                 lastException = e
                 Log.w(TAG, "PCR API fetch attempt $attempt failed: ${e.message}")
@@ -325,8 +355,13 @@ class PcrConfigManager @Inject constructor(
     /**
      * Verify the ECDSA P-256 signature on a PCR manifest.
      *
-     * The signature is created by KMS using ECDSA_SHA_256 on the SHA-256 hash
-     * of the manifest JSON (excluding signature and public_key fields).
+     * Per PCR-HANDLING-GUIDE.md, the signature is computed over the SHA-256 hash
+     * of the JSON-serialized pcr_sets array.
+     *
+     * Algorithm:
+     * 1. Extract pcr_sets array from response
+     * 2. Compute SHA-256 hash of JSON-serialized pcr_sets
+     * 3. Verify ECDSA signature using VettID public key
      */
     private fun verifySignature(response: SignedPcrResponse): Boolean {
         if (VETTID_SIGNING_KEY_BASE64.contains("PLACEHOLDER")) {
@@ -334,42 +369,43 @@ class PcrConfigManager @Inject constructor(
             return true // Skip verification in development
         }
 
-        try {
-            // Ensure Bouncy Castle provider is registered
-            if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
-                Security.addProvider(BouncyCastleProvider())
-            }
+        // Check if we have the pcr_sets JSON for proper verification
+        if (response.pcrSetsJson == null) {
+            Log.e(TAG, "SECURITY: Cannot verify signature - missing pcr_sets JSON (legacy format?)")
+            // For legacy format without pcr_sets, we cannot verify properly
+            // This is a security issue - reject the response
+            return false
+        }
 
-            // Parse VettID's ECDSA P-256 public key (DER-encoded SubjectPublicKeyInfo)
+        try {
+            // Use Android's built-in crypto provider (more reliable than BouncyCastle on Android)
             val publicKeyBytes = Base64.decode(VETTID_SIGNING_KEY_BASE64, Base64.NO_WRAP)
             val keySpec = X509EncodedKeySpec(publicKeyBytes)
-            val keyFactory = KeyFactory.getInstance("EC", BouncyCastleProvider.PROVIDER_NAME)
+            val keyFactory = KeyFactory.getInstance("EC")
             val publicKey = keyFactory.generatePublic(keySpec)
 
-            // Build the message that was signed (canonical JSON without signature/public_key)
-            val messageBytes = gson.toJson(response.pcrs).toByteArray(Charsets.UTF_8)
+            // The message that was signed is the pcr_sets array JSON
+            // Per spec: "Compute SHA-256 hash of JSON-serialized pcr_sets"
+            val messageBytes = response.pcrSetsJson.toByteArray(Charsets.UTF_8)
 
-            // Compute SHA-256 hash (KMS signs the digest, not the raw message)
-            val digest = java.security.MessageDigest.getInstance("SHA-256")
-            val hash = digest.digest(messageBytes)
-
-            // Verify ECDSA signature (DER-encoded from KMS)
-            val signature = Signature.getInstance("SHA256withECDSA", BouncyCastleProvider.PROVIDER_NAME)
+            // Verify ECDSA signature
+            // Note: SHA256withECDSA internally computes SHA-256, so we pass the raw message
+            val signature = Signature.getInstance("SHA256withECDSA")
             signature.initVerify(publicKey)
-            signature.update(hash)
+            signature.update(messageBytes)
 
             val signatureBytes = Base64.decode(response.signature, Base64.NO_WRAP)
             val isValid = signature.verify(signatureBytes)
 
             if (!isValid) {
-                Log.e(TAG, "PCR signature verification failed")
+                Log.e(TAG, "SECURITY: PCR signature verification failed - signature mismatch")
             } else {
                 Log.d(TAG, "PCR signature verification successful")
             }
 
             return isValid
         } catch (e: Exception) {
-            Log.e(TAG, "Error verifying PCR signature: ${e.message}", e)
+            Log.e(TAG, "SECURITY: Error verifying PCR signature: ${e.message}", e)
             return false
         }
     }
@@ -457,14 +493,15 @@ class PcrConfigManager @Inject constructor(
 /**
  * Signed PCR response from VettID API.
  *
- * The signature is an ECDSA P-256 signature over the canonical JSON of the PCRs.
+ * The signature is an ECDSA P-256 signature over the SHA-256 hash of the
+ * canonical JSON serialization of the pcr_sets array.
  */
 data class SignedPcrResponse(
-    /** The PCR values */
+    /** The current PCR values to use */
     @SerializedName("pcrs")
     val pcrs: ExpectedPcrs,
 
-    /** ECDSA signature (Base64) */
+    /** ECDSA signature (Base64) over pcr_sets JSON */
     @SerializedName("signature")
     val signature: String,
 
@@ -472,12 +509,112 @@ data class SignedPcrResponse(
     @SerializedName("key_id")
     val keyId: String? = null,
 
-    /** Original PCR values from API (for signature verification) */
-    val originalPcrs: PcrValues? = null
+    /** Raw JSON of pcr_sets array for signature verification */
+    val pcrSetsJson: String? = null
 )
 
 /**
- * API response for PCR current endpoint.
+ * PCR manifest response (version 2 format per PCR-HANDLING-GUIDE.md).
+ *
+ * Example:
+ * ```json
+ * {
+ *   "version": 2,
+ *   "timestamp": "2026-01-15T11:10:00Z",
+ *   "pcr_sets": [
+ *     {
+ *       "id": "2026-01-15-v1",
+ *       "pcr0": "5cbc157248...",
+ *       "pcr1": "4b4d5b3661...",
+ *       "pcr2": "f7ca84f78d...",
+ *       "valid_from": "2026-01-15T11:10:00Z",
+ *       "valid_until": null,
+ *       "is_current": true,
+ *       "description": "ECIES crypto parameter fix"
+ *     }
+ *   ],
+ *   "signature": "MEUCIQC...base64..."
+ * }
+ * ```
+ */
+data class PcrManifestResponse(
+    @SerializedName("version")
+    val version: Int,
+
+    @SerializedName("timestamp")
+    val timestamp: String,
+
+    @SerializedName("pcr_sets")
+    val pcrSets: List<PcrSetEntry>,
+
+    @SerializedName("signature")
+    val signature: String
+) {
+    /**
+     * Convert to SignedPcrResponse, extracting the current PCR set.
+     */
+    fun toSignedResponse(pcrSetsJson: String): SignedPcrResponse {
+        val currentPcrSet = pcrSets.find { it.isCurrent }
+            ?: pcrSets.firstOrNull()
+            ?: throw PcrUpdateException("No PCR sets in manifest")
+
+        return SignedPcrResponse(
+            pcrs = ExpectedPcrs(
+                pcr0 = currentPcrSet.pcr0,
+                pcr1 = currentPcrSet.pcr1,
+                pcr2 = currentPcrSet.pcr2,
+                pcr3 = currentPcrSet.pcr3,
+                version = currentPcrSet.id,
+                publishedAt = currentPcrSet.validFrom
+            ),
+            signature = signature,
+            pcrSetsJson = pcrSetsJson
+        )
+    }
+
+    /**
+     * Get previous PCR set for transition period support.
+     */
+    fun getPreviousPcrSet(): PcrSetEntry? {
+        return pcrSets.find { !it.isCurrent && it.validUntil != null }
+    }
+}
+
+/**
+ * Individual PCR set entry in the manifest.
+ */
+data class PcrSetEntry(
+    @SerializedName("id")
+    val id: String,
+
+    @SerializedName("pcr0")
+    val pcr0: String,
+
+    @SerializedName("pcr1")
+    val pcr1: String,
+
+    @SerializedName("pcr2")
+    val pcr2: String,
+
+    @SerializedName("pcr3")
+    val pcr3: String? = null,
+
+    @SerializedName("valid_from")
+    val validFrom: String,
+
+    @SerializedName("valid_until")
+    val validUntil: String? = null,
+
+    @SerializedName("is_current")
+    val isCurrent: Boolean = false,
+
+    @SerializedName("description")
+    val description: String? = null
+)
+
+/**
+ * Legacy API response for PCR current endpoint (pre-manifest format).
+ * Kept for backward compatibility during transition.
  */
 data class PcrApiResponse(
     @SerializedName("pcrs")
@@ -497,6 +634,7 @@ data class PcrApiResponse(
 ) {
     /**
      * Convert to SignedPcrResponse format.
+     * NOTE: Legacy format doesn't have pcr_sets array, signature verification may fail.
      */
     fun toSignedResponse(): SignedPcrResponse {
         return SignedPcrResponse(
@@ -510,14 +648,14 @@ data class PcrApiResponse(
             ),
             signature = signature,
             keyId = keyId,
-            // Keep original PCR values for signature verification
-            originalPcrs = pcrs
+            // Legacy format - no pcr_sets array for proper signature verification
+            pcrSetsJson = null
         )
     }
 }
 
 /**
- * PCR values from API.
+ * PCR values from legacy API format.
  */
 data class PcrValues(
     @SerializedName("PCR0")
@@ -540,3 +678,22 @@ class PcrUpdateException(
     message: String,
     cause: Throwable? = null
 ) : Exception(message, cause)
+
+/**
+ * Security exception for PCR signature verification failures.
+ *
+ * This is a critical security error - the PCR manifest signature could not be verified,
+ * which means we cannot trust the PCR values. This could indicate:
+ * - A man-in-the-middle attack substituting malicious PCR values
+ * - A corrupted or tampered manifest
+ * - A signing key mismatch (key rotation issue)
+ *
+ * When this exception is thrown, the app should:
+ * 1. NOT use the unverified PCR values
+ * 2. Fall back to cached or bundled PCRs
+ * 3. Log the incident for security monitoring
+ */
+class PcrSignatureException(
+    message: String,
+    cause: Throwable? = null
+) : SecurityException(message, cause)
