@@ -725,10 +725,28 @@ class EnrollmentViewModel @Inject constructor(
 
         authResult.fold(
             onSuccess = { authResponse ->
-                Log.d(TAG, "Authentication successful, getting NATS bootstrap credentials")
+                Log.d(TAG, "Authentication successful, generating device attestation")
 
-                // Step 2: Get NATS bootstrap credentials from dedicated endpoint
-                val bootstrapResult = vaultServiceClient.getNatsBootstrapCredentials()
+                // Step 2: Generate device attestation for session binding (#132)
+                val deviceAttestation = try {
+                    attestationManager.generateSessionAttestation(
+                        sessionId = authResponse.enrollmentSessionId,
+                        userGuid = authResponse.userGuid
+                    )
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to generate device attestation", e)
+                    _state.value = EnrollmentState.Error(
+                        message = "Device attestation failed: ${e.message}",
+                        retryable = true,
+                        previousState = EnrollmentState.ScanningQR()
+                    )
+                    return@fold
+                }
+
+                Log.d(TAG, "Device attestation generated (${deviceAttestation.securityLevel}), getting NATS bootstrap")
+
+                // Step 3: Get NATS bootstrap credentials with attestation
+                val bootstrapResult = vaultServiceClient.getNatsBootstrapCredentials(deviceAttestation)
 
                 bootstrapResult.fold(
                     onSuccess = { bootstrapResponse ->

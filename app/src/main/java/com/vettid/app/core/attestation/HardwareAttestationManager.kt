@@ -231,7 +231,96 @@ class HardwareAttestationManager @Inject constructor(
 
     private fun ByteArray.toHexString(): String =
         joinToString("") { "%02x".format(it) }
+
+    /**
+     * Generate device attestation for session binding (#132).
+     *
+     * Creates a fresh attestation certificate chain bound to the session ID.
+     * The backend can verify:
+     * - Certificate chain is valid (roots to Google/device manufacturer)
+     * - Challenge matches expected session binding
+     * - Security level meets requirements
+     *
+     * @param sessionId The enrollment session ID to bind to
+     * @param userGuid The user GUID for additional binding
+     * @return DeviceAttestationPayload ready for API submission
+     */
+    fun generateSessionAttestation(
+        sessionId: String,
+        userGuid: String
+    ): DeviceAttestationPayload {
+        // Create challenge that binds attestation to session
+        val challengeInput = "$sessionId:$userGuid:${System.currentTimeMillis()}"
+        val challenge = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(challengeInput.toByteArray())
+
+        val result = generateAttestationKey(challenge)
+        val securityLevel = if (BuildConfig.SKIP_ATTESTATION) {
+            SecurityLevel.SOFTWARE
+        } else {
+            getSecurityLevel()
+        }
+
+        // Encode certificate chain as base64 for JSON transport
+        val certChainBase64 = result.certificateChain.map { cert ->
+            android.util.Base64.encodeToString(cert.encoded, android.util.Base64.NO_WRAP)
+        }
+
+        return DeviceAttestationPayload(
+            attestationType = if (BuildConfig.SKIP_ATTESTATION) "test" else "android_key_attestation",
+            certificateChain = certChainBase64,
+            challenge = android.util.Base64.encodeToString(challenge, android.util.Base64.NO_WRAP),
+            securityLevel = securityLevel.name.lowercase(),
+            deviceInfo = DeviceInfo(
+                manufacturer = Build.MANUFACTURER,
+                model = Build.MODEL,
+                osVersion = Build.VERSION.RELEASE,
+                sdkVersion = Build.VERSION.SDK_INT,
+                securityPatch = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    Build.VERSION.SECURITY_PATCH
+                } else null
+            )
+        )
+    }
 }
+
+/**
+ * Device attestation payload for API requests (#132).
+ */
+data class DeviceAttestationPayload(
+    /** Type of attestation: "android_key_attestation" or "test" */
+    @com.google.gson.annotations.SerializedName("attestation_type")
+    val attestationType: String,
+
+    /** Base64-encoded X.509 certificate chain (leaf first) */
+    @com.google.gson.annotations.SerializedName("certificate_chain")
+    val certificateChain: List<String>,
+
+    /** Base64-encoded challenge used for attestation */
+    val challenge: String,
+
+    /** Security level: "strong_box", "tee", or "software" */
+    @com.google.gson.annotations.SerializedName("security_level")
+    val securityLevel: String,
+
+    /** Device information for additional context */
+    @com.google.gson.annotations.SerializedName("device_info")
+    val deviceInfo: DeviceInfo
+)
+
+/**
+ * Device information included with attestation.
+ */
+data class DeviceInfo(
+    val manufacturer: String,
+    val model: String,
+    @com.google.gson.annotations.SerializedName("os_version")
+    val osVersion: String,
+    @com.google.gson.annotations.SerializedName("sdk_version")
+    val sdkVersion: Int,
+    @com.google.gson.annotations.SerializedName("security_patch")
+    val securityPatch: String?
+)
 
 // MARK: - Data Classes
 

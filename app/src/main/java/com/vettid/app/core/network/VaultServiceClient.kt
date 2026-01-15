@@ -241,10 +241,15 @@ open class VaultServiceClient @Inject constructor() {
      * Get NATS bootstrap credentials for Nitro enrollment flow.
      * Call this after enrollAuthenticate() to get credentials for connecting to NATS.
      * This is the correct endpoint - do NOT call enrollFinalizeForNats() which will return 409.
+     *
+     * @param deviceAttestation Device attestation for session binding (#132)
      */
-    suspend fun getNatsBootstrapCredentials(): Result<com.vettid.app.features.enrollment.NatsBootstrapInfo> {
+    suspend fun getNatsBootstrapCredentials(
+        deviceAttestation: com.vettid.app.core.attestation.DeviceAttestationPayload
+    ): Result<com.vettid.app.features.enrollment.NatsBootstrapInfo> {
+        val request = NatsBootstrapRequest(deviceAttestation = deviceAttestation)
         return safeApiCall {
-            getEnrollmentApi().natsBootstrap(getEnrollmentAuthHeader())
+            getEnrollmentApi().natsBootstrap(getEnrollmentAuthHeader(), request)
         }.map { response ->
             com.vettid.app.features.enrollment.NatsBootstrapInfo(
                 credentials = response.natsCreds,
@@ -546,9 +551,11 @@ interface VaultServiceApi {
 
     // Enrollment - NATS Bootstrap (requires Bearer token from authenticate)
     // Returns NATS credentials for connecting to enclave supervisor
+    // Includes device attestation for session binding (#132)
     @POST("vault/enroll/nats-bootstrap")
     suspend fun natsBootstrap(
-        @Header("Authorization") authToken: String
+        @Header("Authorization") authToken: String,
+        @Body request: NatsBootstrapRequest
     ): Response<NatsBootstrapResponse>
 
     @POST("vault/auth/request")
@@ -847,6 +854,16 @@ data class NatsFinalizeResponse(
     @SerializedName("nats_endpoint") val natsEndpoint: String,
     @SerializedName("owner_space") val ownerSpace: String,
     @SerializedName("user_guid") val userGuid: String?
+)
+
+/**
+ * Request for /vault/enroll/nats-bootstrap endpoint (#132).
+ * Includes device attestation for session binding.
+ */
+data class NatsBootstrapRequest(
+    /** Device attestation data for session binding */
+    @SerializedName("device_attestation")
+    val deviceAttestation: com.vettid.app.core.attestation.DeviceAttestationPayload
 )
 
 /**
