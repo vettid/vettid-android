@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.attestation.AttestationVerificationException
 import com.vettid.app.core.attestation.HardwareAttestationManager
 import com.vettid.app.core.attestation.NitroAttestationVerifier
+import com.vettid.app.core.attestation.PcrConfigManager
 import com.vettid.app.core.attestation.VerifiedAttestation
 import com.vettid.app.core.crypto.CryptoManager
 import com.vettid.app.core.nats.NitroEnrollmentClient
@@ -50,7 +51,8 @@ class EnrollmentViewModel @Inject constructor(
     private val attestationManager: HardwareAttestationManager,
     private val nitroAttestationVerifier: NitroAttestationVerifier,
     private val nitroEnrollmentClient: NitroEnrollmentClient,
-    private val credentialStore: CredentialStore
+    private val credentialStore: CredentialStore,
+    private val pcrConfigManager: PcrConfigManager
 ) : ViewModel() {
 
     companion object {
@@ -809,15 +811,21 @@ class EnrollmentViewModel @Inject constructor(
 
                     // Create attestation info for display
                     val pcr0Bytes = verifiedAttestation.pcrs[0]
-                    val pcr0Short = pcr0Bytes?.let { bytes ->
-                        bytes.take(8).joinToString("") { "%02x".format(it) } + "..."
-                    } ?: "unknown"
+                    val pcr0Full = pcr0Bytes?.joinToString("") { "%02x".format(it) } ?: "unknown"
+                    val pcr0Short = if (pcr0Full.length > 16) {
+                        pcr0Full.take(16) + "..." + pcr0Full.takeLast(8)
+                    } else pcr0Full
+
+                    // Get PCR version from config manager
+                    val pcrVersion = pcrConfigManager.getCurrentVersion()
 
                     val attestationInfo = AttestationInfo(
                         moduleId = verifiedAttestation.moduleId,
                         timestamp = verifiedAttestation.timestamp,
                         pcr0Short = pcr0Short,
-                        pcrsVerified = true
+                        pcrsVerified = true,
+                        pcrVersion = pcrVersion,
+                        pcr0Full = pcr0Full
                     )
 
                     // Move to PIN setup

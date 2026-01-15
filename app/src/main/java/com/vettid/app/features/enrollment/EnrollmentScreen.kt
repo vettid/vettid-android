@@ -733,6 +733,21 @@ private fun PinSetupContent(
 
                         Spacer(modifier = Modifier.height(8.dp))
 
+                        // PCR Version
+                        if (attestationInfo.pcrVersion != null) {
+                            Text(
+                                text = "PCR Version",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = attestationInfo.pcrVersion,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+
                         // PCR0 (enclave image hash)
                         Text(
                             text = "Enclave Image (PCR0)",
@@ -742,7 +757,8 @@ private fun PinSetupContent(
                         Text(
                             text = attestationInfo.pcr0Short,
                             style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Medium
+                            fontWeight = FontWeight.Medium,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
                         )
 
                         Spacer(modifier = Modifier.height(8.dp))

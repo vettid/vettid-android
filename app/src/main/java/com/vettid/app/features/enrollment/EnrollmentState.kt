@@ -274,5 +274,9 @@ data class AttestationInfo(
     /** PCR0 hash (enclave image) - truncated for display */
     val pcr0Short: String,
     /** Whether all PCR values matched */
-    val pcrsVerified: Boolean
+    val pcrsVerified: Boolean,
+    /** PCR version used for verification */
+    val pcrVersion: String? = null,
+    /** Full PCR0 hash for display */
+    val pcr0Full: String? = null
 )
