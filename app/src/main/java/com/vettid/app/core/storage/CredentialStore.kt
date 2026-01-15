@@ -579,14 +579,19 @@ class CredentialStore @Inject constructor(
     }
 
     /**
-     * Store NATS vault bootstrap credentials from enrollment finalize.
-     * VaultBootstrap contains the minimal credentials needed for NATS connection.
-     * These are bootstrap credentials with limited permissions.
+     * Store NATS vault bootstrap info from enrollment finalize.
+     * VaultBootstrap contains connection info for NATS.
+     *
+     * Note: As of API change #49, credentials are no longer in finalize response.
+     * Use credentials from nats-bootstrap endpoint instead.
      */
     fun storeNatsConnection(vaultBootstrap: VaultBootstrap) {
         encryptedPrefs.edit().apply {
             putString(KEY_NATS_ENDPOINT, vaultBootstrap.endpoint)
-            putString(KEY_NATS_CREDENTIALS, vaultBootstrap.credentials)
+            // Only store credentials if present (removed from finalize in API #49)
+            vaultBootstrap.credentials?.let { creds ->
+                putString(KEY_NATS_CREDENTIALS, creds)
+            }
             putString(KEY_NATS_OWNER_SPACE, vaultBootstrap.ownerSpace)
             putString(KEY_NATS_MESSAGE_SPACE, vaultBootstrap.messageSpace)
             vaultBootstrap.caCertificate?.let { caCert ->
@@ -596,14 +601,14 @@ class CredentialStore @Inject constructor(
             vaultBootstrap.bootstrapTopic?.let { topic ->
                 putString(KEY_NATS_BOOTSTRAP_TOPIC, topic)
             }
-            // Store TTL if provided
+            // Store TTL if provided (removed from finalize in API #49)
             vaultBootstrap.credentialsTtlSeconds?.let { ttl ->
                 val expiryMs = System.currentTimeMillis() + (ttl * 1000L)
                 putLong(KEY_NATS_CREDENTIALS_EXPIRY, expiryMs)
             }
             putLong(KEY_NATS_STORED_AT, System.currentTimeMillis())
         }.apply()
-        android.util.Log.i("CredentialStore", "Stored NATS bootstrap credentials for ${vaultBootstrap.endpoint} (${vaultBootstrap.ownerSpace})")
+        android.util.Log.i("CredentialStore", "Stored NATS bootstrap info for ${vaultBootstrap.endpoint} (${vaultBootstrap.ownerSpace})")
     }
 
     /**

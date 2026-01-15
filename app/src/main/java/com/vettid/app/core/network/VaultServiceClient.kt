@@ -867,19 +867,19 @@ data class NatsBootstrapResponse(
 
 /**
  * Vault bootstrap info from enrollment finalize.
- * Contains NATS credentials for vault communication.
+ * Contains NATS connection info for vault communication.
  *
- * Bootstrap credentials have limited permissions - only the bootstrap_topic
- * and response_topic are accessible until full credentials are obtained.
+ * Note: As of API change #49, credentials are no longer returned from enrollFinalize.
+ * Use getNatsBootstrapCredentials() to get credentials from /vault/enroll/nats-bootstrap.
  */
 data class VaultBootstrap(
-    val credentials: String,  // NATS credential file content (JWT + seed)
+    val credentials: String? = null,  // NATS credential file (removed from finalize response - use nats-bootstrap)
     @SerializedName("nats_endpoint") val endpoint: String,
     @SerializedName("owner_space") val ownerSpace: String,
     @SerializedName("message_space") val messageSpace: String,
     @SerializedName("bootstrap_topic") val bootstrapTopic: String? = null,  // Publish topic for bootstrap
     @SerializedName("response_topic") val responseTopic: String? = null,    // Subscribe topic for bootstrap
-    @SerializedName("credentials_ttl_seconds") val credentialsTtlSeconds: Int? = null,
+    @SerializedName("credentials_ttl_seconds") val credentialsTtlSeconds: Int? = null,  // Removed - use expires_at from nats-bootstrap
     @SerializedName("ca_certificate") val caCertificate: String? = null
 )
 
