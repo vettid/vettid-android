@@ -32,7 +32,8 @@ import kotlin.coroutines.resume
 class NitroEnrollmentClient @Inject constructor(
     private val cryptoManager: CryptoManager,
     private val nitroAttestationVerifier: NitroAttestationVerifier,
-    private val pcrConfigManager: PcrConfigManager
+    private val pcrConfigManager: PcrConfigManager,
+    private val replayProtection: NatsReplayProtection
 ) {
     companion object {
         private const val TAG = "NitroEnrollmentClient"
@@ -175,7 +176,22 @@ class NitroEnrollmentClient @Inject constructor(
 
                                 val eventId = if (jsonObject.has("event_id") && !jsonObject.get("event_id").isJsonNull) {
                                     jsonObject.get("event_id").asString
+                                } else UUID.randomUUID().toString() // Generate ID for dedup if missing
+
+                                val timestamp = if (jsonObject.has("timestamp") && !jsonObject.get("timestamp").isJsonNull) {
+                                    jsonObject.get("timestamp").asString
                                 } else null
+
+                                // Validate message for replay attacks (#47)
+                                val validationResult = replayProtection.validateMessage(
+                                    eventId = eventId,
+                                    timestamp = timestamp,
+                                    sessionKey = "attestation"
+                                )
+                                if (!validationResult.isValid) {
+                                    Log.w(TAG, "SECURITY: Attestation response rejected - $validationResult")
+                                    return@subscribe
+                                }
 
                                 val response = AttestationResponse(
                                     eventId = eventId,
@@ -352,6 +368,28 @@ class NitroEnrollmentClient @Inject constructor(
                     kotlinx.coroutines.runBlocking {
                         val subResult = client.subscribe(responseTopic) { message ->
                             try {
+                                // Parse JSON to validate message (#47)
+                                val jsonObject = gson.fromJson(message.dataString, JsonObject::class.java)
+
+                                val eventId = if (jsonObject.has("event_id") && !jsonObject.get("event_id").isJsonNull) {
+                                    jsonObject.get("event_id").asString
+                                } else UUID.randomUUID().toString()
+
+                                val timestamp = if (jsonObject.has("timestamp") && !jsonObject.get("timestamp").isJsonNull) {
+                                    jsonObject.get("timestamp").asString
+                                } else null
+
+                                // Validate message for replay attacks
+                                val validationResult = replayProtection.validateMessage(
+                                    eventId = eventId,
+                                    timestamp = timestamp,
+                                    sessionKey = responseTopic
+                                )
+                                if (!validationResult.isValid) {
+                                    Log.w(TAG, "SECURITY: Vault ready response rejected - $validationResult")
+                                    return@subscribe
+                                }
+
                                 val response = gson.fromJson(
                                     message.dataString,
                                     VaultReadyResponse::class.java
@@ -492,6 +530,8 @@ class NitroEnrollmentClient @Inject constructor(
         ownerSpace = null
         verifiedAttestation = null
         attestationNonce = null
+        // Clear replay protection state (#47)
+        replayProtection.reset()
     }
 
     /**
@@ -515,6 +555,28 @@ class NitroEnrollmentClient @Inject constructor(
                     kotlinx.coroutines.runBlocking {
                         val subResult = client.subscribe(responseTopic) { message ->
                             try {
+                                // Parse JSON to validate message (#47)
+                                val jsonObject = gson.fromJson(message.dataString, JsonObject::class.java)
+
+                                val eventId = if (jsonObject.has("event_id") && !jsonObject.get("event_id").isJsonNull) {
+                                    jsonObject.get("event_id").asString
+                                } else UUID.randomUUID().toString()
+
+                                val timestamp = if (jsonObject.has("timestamp") && !jsonObject.get("timestamp").isJsonNull) {
+                                    jsonObject.get("timestamp").asString
+                                } else null
+
+                                // Validate message for replay attacks
+                                val validationResult = replayProtection.validateMessage(
+                                    eventId = eventId,
+                                    timestamp = timestamp,
+                                    sessionKey = responseTopic
+                                )
+                                if (!validationResult.isValid) {
+                                    Log.w(TAG, "SECURITY: Response rejected - $validationResult")
+                                    return@subscribe
+                                }
+
                                 val response = gson.fromJson(message.dataString, T::class.java)
                                 if (continuation.isActive) {
                                     continuation.resume(Result.success(response))
