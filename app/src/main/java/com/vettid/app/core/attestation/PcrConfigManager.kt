@@ -52,14 +52,14 @@ class PcrConfigManager @Inject constructor(
 
         // Default bundled PCRs (updated with each app release)
         // These are used when the app is first installed or if updates fail
-        // PCR values from VettID vault enclave build 2026-01-14-v1
+        // PCR values from VettID vault enclave build 2026-01-15-v1
         private val DEFAULT_PCRS = ExpectedPcrs(
-            pcr0 = "44aaecfbaa55110bb5f1892d0726558ae40b22e5d271c3da35f331c1424938c8105310d3e7977b744145aae5cd2deebc",
+            pcr0 = "6b76139136bccadcae1996001518c7c740fcdbd0246bc5c690f9dcbc8d2150a267f42360aa5d52ac99ecfcb51656a342",
             pcr1 = "4b4d5b3661b3efc12920900c80e126e4ce783c522de6c02a2a5bf7af3a2b9327b86776f188e4be1c1c404a129dbda493",
-            pcr2 = "0e1637e25c1acafbb6589048618f97ca2fa121dba43afe05d554b4064dffcf6544d3e7c30b06dc3ee97e87e1665fcb54",
-            pcr3 = "6f50b5d008e752caf8a5b5f14821dd91e4aaaa671fd042261e7bb06c5a0911705000ea27537881ea28fec748ffcbb21e",
-            version = "2026-01-14-v1",
-            publishedAt = "2026-01-14T00:00:00Z"
+            pcr2 = "3add1ff8eda7cce0c1224e0be6dcf31d4c368f7a51dd2056eb4441c65390037cd82e5fec016cbe6462c2813a85f1e8b6",
+            pcr3 = null,
+            version = "2026-01-15-v1",
+            publishedAt = "2026-01-15T01:03:08Z"
         )
 
         // How often to check for PCR updates (24 hours)

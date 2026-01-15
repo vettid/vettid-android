@@ -125,17 +125,82 @@ class NitroEnrollmentClient @Inject constructor(
                         // Subscribe to response
                         val subResult = client.subscribe(responseTopic) { message ->
                             try {
-                                Log.d(TAG, "Received attestation response: ${message.dataString}")
-                                val response = gson.fromJson(
-                                    message.dataString,
-                                    AttestationResponse::class.java
+                                Log.d(TAG, "Received attestation response (${message.dataString.length} chars): ${message.dataString.take(200)}")
+
+                                // Parse as JsonObject first to debug structure
+                                val jsonObject = gson.fromJson(message.dataString, JsonObject::class.java)
+                                Log.d(TAG, "JSON keys: ${jsonObject.keySet()}")
+
+                                // Try to extract attestation from various possible locations
+                                val attestationDoc = when {
+                                    jsonObject.has("attestation") && !jsonObject.get("attestation").isJsonNull -> {
+                                        jsonObject.get("attestation").asString
+                                    }
+                                    jsonObject.has("payload") && jsonObject.get("payload").isJsonObject -> {
+                                        val payload = jsonObject.getAsJsonObject("payload")
+                                        Log.d(TAG, "Payload keys: ${payload.keySet()}")
+                                        when {
+                                            payload.has("attestation") -> payload.get("attestation").asString
+                                            payload.has("attestation_document") -> payload.get("attestation_document").asString
+                                            else -> null
+                                        }
+                                    }
+                                    jsonObject.has("attestation_document") -> {
+                                        jsonObject.get("attestation_document").asString
+                                    }
+                                    else -> null
+                                }
+
+                                val enclaveKey = when {
+                                    jsonObject.has("public_key") && !jsonObject.get("public_key").isJsonNull -> {
+                                        jsonObject.get("public_key").asString
+                                    }
+                                    jsonObject.has("enclave_public_key") && !jsonObject.get("enclave_public_key").isJsonNull -> {
+                                        jsonObject.get("enclave_public_key").asString
+                                    }
+                                    jsonObject.has("payload") && jsonObject.get("payload").isJsonObject -> {
+                                        val payload = jsonObject.getAsJsonObject("payload")
+                                        when {
+                                            payload.has("public_key") && !payload.get("public_key").isJsonNull -> {
+                                                payload.get("public_key").asString
+                                            }
+                                            payload.has("enclave_public_key") && !payload.get("enclave_public_key").isJsonNull -> {
+                                                payload.get("enclave_public_key").asString
+                                            }
+                                            else -> null
+                                        }
+                                    }
+                                    else -> null
+                                }
+
+                                val eventId = if (jsonObject.has("event_id") && !jsonObject.get("event_id").isJsonNull) {
+                                    jsonObject.get("event_id").asString
+                                } else null
+
+                                val response = AttestationResponse(
+                                    eventId = eventId,
+                                    attestationDocument = attestationDoc,
+                                    enclavePublicKey = enclaveKey
                                 )
-                                Log.d(TAG, "Parsed response - eventId: ${response.eventId}, attestationDocument: ${response.attestationDocument?.take(50) ?: "NULL"}")
+
+                                Log.d(TAG, "Parsed response - eventId: ${response.eventId}, attestationDocument: ${response.attestationDocument?.take(50) ?: "NULL"}, enclavePublicKey: ${response.enclavePublicKey?.take(20) ?: "NULL"}")
 
                                 if (response.eventId == requestId || response.eventId == null) {
+                                    // Check for attestation document
+                                    val attestationDoc = response.attestationDocument
+                                    if (attestationDoc == null) {
+                                        Log.e(TAG, "Attestation document is null in response")
+                                        if (continuation.isActive) {
+                                            continuation.resume(
+                                                Result.failure(NatsException("Attestation document missing from response"))
+                                            )
+                                        }
+                                        return@subscribe
+                                    }
+
                                     // Verify the attestation document
                                     val verified = verifyAttestationWithNonce(
-                                        response.attestationDocument,
+                                        attestationDoc,
                                         nonce
                                     )
 
@@ -527,7 +592,7 @@ class NitroEnrollmentClient @Inject constructor(
 
 data class AttestationResponse(
     @SerializedName("event_id") val eventId: String?,
-    @SerializedName("attestation") val attestationDocument: String,
+    @SerializedName("attestation") val attestationDocument: String?,
     @SerializedName("enclave_public_key") val enclavePublicKey: String?
 )
 
