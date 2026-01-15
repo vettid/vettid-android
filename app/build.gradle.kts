@@ -110,6 +110,7 @@ android {
             buildConfigField("Boolean", "AUTO_BIOMETRIC", "false")
             buildConfigField("Boolean", "TEST_MODE", "false")
             buildConfigField("String", "API_BASE_URL", "\"https://api.vettid.dev\"")
+            buildConfigField("String", "PCR_MANIFEST_URL", "\"https://pcr-manifest.vettid.dev/pcr-manifest.json\"")
         }
         create("automation") {
             dimension = "environment"
@@ -120,6 +121,7 @@ android {
             buildConfigField("Boolean", "AUTO_BIOMETRIC", "true")
             buildConfigField("Boolean", "TEST_MODE", "true")
             buildConfigField("String", "API_BASE_URL", "\"https://api.vettid.dev\"")
+            buildConfigField("String", "PCR_MANIFEST_URL", "\"https://pcr-manifest.vettid.dev/pcr-manifest.json\"")
             buildConfigField("String", "TEST_API_KEY", "\"\"")  // Set via environment or test-config.json
         }
     }

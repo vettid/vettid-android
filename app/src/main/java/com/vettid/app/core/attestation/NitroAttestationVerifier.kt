@@ -236,10 +236,10 @@ class NitroAttestationVerifier @Inject constructor(
             )
         }
 
-        // PCRs don't match any known version
-        Log.e(TAG, "API PCRs do not match any known version")
-        Log.e(TAG, "  API PCR0: ${apiPcrs.pcr0}")
-        Log.e(TAG, "  Cached PCR0: ${currentPcrs.pcr0}")
+        // PCRs don't match any known version (truncate values for security - #31)
+        Log.e(TAG, "SECURITY: API PCRs do not match any known version")
+        Log.e(TAG, "  API PCR0 (truncated): ${apiPcrs.pcr0.take(8)}...")
+        Log.e(TAG, "  Cached PCR0 (truncated): ${currentPcrs.pcr0.take(8)}...")
 
         return PcrValidationResult(
             isValid = false,
