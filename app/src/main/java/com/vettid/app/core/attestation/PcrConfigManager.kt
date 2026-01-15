@@ -436,10 +436,10 @@ class PcrConfigManager @Inject constructor(
      * Verify PCRs with fallback to previous version during transition.
      *
      * This allows a grace period when enclave is updated - both old and new
-     * PCRs are accepted until the transition period ends.
+     * PCRs are accepted until the transition period ends (valid_until check).
      *
      * @param actualPcrs The PCR values from the attestation document
-     * @return true if PCRs match current or previous expected values
+     * @return true if PCRs match current or previous expected values within validity window
      */
     fun verifyPcrsWithFallback(actualPcrs: ExpectedPcrs): Boolean {
         val currentPcrs = getCurrentPcrs()
@@ -450,16 +450,52 @@ class PcrConfigManager @Inject constructor(
             return true
         }
 
-        // During transition, try previous version
-        getPreviousPcrs()?.let { previousPcrs ->
-            if (matchesPcrs(actualPcrs, previousPcrs)) {
-                Log.d(TAG, "PCRs match previous version: ${previousPcrs.version} (transition period)")
+        // During transition, try previous version WITH validity check
+        val previousPcrs = getPreviousPcrs()
+        if (previousPcrs != null) {
+            // Check if previous PCRs are still within their validity window
+            val isStillValid = isPcrVersionValid(previousPcrs)
+
+            if (!isStillValid) {
+                Log.w(TAG, "Previous PCR version ${previousPcrs.version} has expired (valid_until: ${previousPcrs.validUntil})")
+                // Don't accept expired PCRs - this prevents downgrade attacks
+            } else if (matchesPcrs(actualPcrs, previousPcrs)) {
+                Log.i(TAG, "PCRs match previous version: ${previousPcrs.version} (transition period, expires: ${previousPcrs.validUntil})")
                 return true
             }
         }
 
-        Log.w(TAG, "PCRs do not match current (${currentPcrs.version}) or previous versions")
+        Log.w(TAG, "PCRs do not match current (${currentPcrs.version}) or valid previous versions")
         return false
+    }
+
+    /**
+     * Check if a PCR version is still valid based on its valid_until timestamp.
+     *
+     * @param pcrs The PCR set to check
+     * @return true if the PCRs are still valid (no valid_until or not yet expired)
+     */
+    private fun isPcrVersionValid(pcrs: ExpectedPcrs): Boolean {
+        val validUntil = pcrs.validUntil ?: return true // No expiration = always valid
+
+        return try {
+            val expirationTime = java.time.Instant.parse(validUntil).toEpochMilli()
+            val now = System.currentTimeMillis()
+
+            if (now >= expirationTime) {
+                Log.d(TAG, "PCR version ${pcrs.version} expired at $validUntil")
+                false
+            } else {
+                val remainingMs = expirationTime - now
+                val remainingHours = remainingMs / (1000 * 60 * 60)
+                Log.d(TAG, "PCR version ${pcrs.version} valid for ~${remainingHours}h more")
+                true
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse valid_until timestamp: $validUntil", e)
+            // If we can't parse the timestamp, be conservative and reject
+            false
+        }
     }
 
     private fun matchesPcrs(actual: ExpectedPcrs, expected: ExpectedPcrs): Boolean {
@@ -565,10 +601,29 @@ data class PcrManifestResponse(
                 pcr2 = currentPcrSet.pcr2,
                 pcr3 = currentPcrSet.pcr3,
                 version = currentPcrSet.id,
-                publishedAt = currentPcrSet.validFrom
+                publishedAt = currentPcrSet.validFrom,
+                validUntil = currentPcrSet.validUntil  // null for current = no expiration
             ),
             signature = signature,
             pcrSetsJson = pcrSetsJson
+        )
+    }
+
+    /**
+     * Get previous PCR set as ExpectedPcrs with validity info.
+     */
+    fun getPreviousPcrsWithValidity(): ExpectedPcrs? {
+        val previousSet = pcrSets.find { !it.isCurrent && it.validUntil != null }
+            ?: return null
+
+        return ExpectedPcrs(
+            pcr0 = previousSet.pcr0,
+            pcr1 = previousSet.pcr1,
+            pcr2 = previousSet.pcr2,
+            pcr3 = previousSet.pcr3,
+            version = previousSet.id,
+            publishedAt = previousSet.validFrom,
+            validUntil = previousSet.validUntil
         )
     }
 

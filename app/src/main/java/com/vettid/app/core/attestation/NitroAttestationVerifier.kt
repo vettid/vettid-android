@@ -788,8 +788,10 @@ data class ExpectedPcrs(
     val pcr3: String? = null,
     /** Version identifier for these PCRs */
     val version: String = "unknown",
-    /** When these PCRs were published */
-    val publishedAt: String? = null
+    /** When these PCRs were published (ISO 8601) */
+    val publishedAt: String? = null,
+    /** When these PCRs expire (ISO 8601), null means no expiration (current version) */
+    val validUntil: String? = null
 )
 
 /**
