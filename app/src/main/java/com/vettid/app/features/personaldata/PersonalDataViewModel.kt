@@ -226,7 +226,7 @@ class PersonalDataViewModel @Inject constructor(
                 id = "system-first-name",
                 name = "First Name",
                 type = DataType.PUBLIC,
-                value = "Al",  // Would come from membership
+                value = "Jane",  // Would come from membership
                 category = DataCategory.IDENTITY,
                 isSystemField = true,
                 createdAt = now,
@@ -236,7 +236,7 @@ class PersonalDataViewModel @Inject constructor(
                 id = "system-last-name",
                 name = "Last Name",
                 type = DataType.PUBLIC,
-                value = "Liebl",  // Would come from membership
+                value = "Doe",  // Would come from membership
                 category = DataCategory.IDENTITY,
                 isSystemField = true,
                 createdAt = now,
@@ -246,7 +246,7 @@ class PersonalDataViewModel @Inject constructor(
                 id = "system-email",
                 name = "Email",
                 type = DataType.PUBLIC,
-                value = "al@liebl.me",  // Would come from membership
+                value = "user@example.com",  // Would come from membership
                 category = DataCategory.CONTACT,
                 isSystemField = true,
                 createdAt = now,
