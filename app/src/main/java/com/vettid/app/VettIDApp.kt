@@ -60,6 +60,9 @@ import com.vettid.app.ui.components.QrCodeScanner
 import com.vettid.app.ui.navigation.*
 import com.vettid.app.ui.recovery.ProteanRecoveryScreen
 import com.vettid.app.features.debug.CredentialDebugScreen
+import com.vettid.app.features.voting.MyVotesScreen
+import com.vettid.app.features.voting.ProposalDetailScreen
+import com.vettid.app.features.voting.ProposalsScreen
 
 private const val TAG = "VettIDApp"
 
@@ -121,6 +124,12 @@ sealed class Screen(val route: String) {
     object ActiveCall : Screen("call/active")
     // Debug
     object CredentialDebug : Screen("debug/credentials")
+    // Voting (Issue #50)
+    object Proposals : Screen("voting/proposals")
+    object ProposalDetail : Screen("voting/proposals/{proposalId}") {
+        fun createRoute(proposalId: String) = "voting/proposals/$proposalId"
+    }
+    object MyVotes : Screen("voting/my-votes")
 }
 
 @Composable
@@ -316,6 +325,12 @@ fun VettIDApp(
                 },
                 onNavigateToCredentialDebug = {
                     navController.navigate(Screen.CredentialDebug.route)
+                },
+                onNavigateToProposals = {
+                    navController.navigate(Screen.Proposals.route)
+                },
+                onNavigateToMyVotes = {
+                    navController.navigate(Screen.MyVotes.route)
                 },
                 onSignOut = {
                     appViewModel.signOut()
@@ -551,6 +566,36 @@ fun VettIDApp(
         composable(Screen.CredentialDebug.route) {
             CredentialDebugScreen(
                 onBack = { navController.popBackStack() }
+            )
+        }
+        // Voting screens (Issue #50)
+        composable(Screen.Proposals.route) {
+            ProposalsScreen(
+                onNavigateToProposal = { proposalId ->
+                    navController.navigate(Screen.ProposalDetail.createRoute(proposalId))
+                },
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+        composable(
+            route = Screen.ProposalDetail.route,
+            arguments = listOf(navArgument("proposalId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val proposalId = backStackEntry.arguments?.getString("proposalId") ?: return@composable
+            ProposalDetailScreen(
+                proposalId = proposalId,
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToMyVotes = {
+                    navController.navigate(Screen.MyVotes.route)
+                }
+            )
+        }
+        composable(Screen.MyVotes.route) {
+            MyVotesScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToProposal = { proposalId ->
+                    navController.navigate(Screen.ProposalDetail.createRoute(proposalId))
+                }
             )
         }
     }
@@ -815,6 +860,8 @@ fun MainScreen(
     onNavigateToDeployVault: () -> Unit = {},
     onNavigateToPinSetup: () -> Unit = {},
     onNavigateToCredentialDebug: () -> Unit = {},
+    onNavigateToProposals: () -> Unit = {},
+    onNavigateToMyVotes: () -> Unit = {},
     onSignOut: () -> Unit = {},
     appViewModel: AppViewModel = hiltViewModel()
 ) {
@@ -877,6 +924,7 @@ fun MainScreen(
         onNavigateToPersonalData = onNavigateToPersonalData,
         onNavigateToSecrets = onNavigateToSecrets,
         onNavigateToArchive = onNavigateToArchive,
+        onNavigateToVoting = onNavigateToProposals,
         onNavigateToPreferences = onNavigateToPreferences,
         // Badge counts - in production these would come from ViewModel/state
         pendingConnectionsCount = 2, // Demo: 2 pending connection requests

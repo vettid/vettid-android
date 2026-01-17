@@ -89,6 +89,3 @@ Base URL: `https://api.vettid.com/`
 - Java 17
 - Supports GrapheneOS and other security-focused ROMs with hardware-backed Keystore
 
-## Reference Documentation
-
-See `API-STATUS.md` for current API status and detailed endpoint specifications.

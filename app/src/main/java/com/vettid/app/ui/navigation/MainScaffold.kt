@@ -40,6 +40,7 @@ fun MainScaffold(
     onNavigateToPersonalData: () -> Unit,
     onNavigateToSecrets: () -> Unit,
     onNavigateToArchive: () -> Unit,
+    onNavigateToVoting: () -> Unit = {},
     onNavigateToPreferences: () -> Unit,
     // Badge counts
     pendingConnectionsCount: Int = 0,
@@ -216,6 +217,7 @@ fun MainScaffold(
                     VaultMoreItem.PERSONAL_DATA -> onNavigateToPersonalData()
                     VaultMoreItem.SECRETS -> onNavigateToSecrets()
                     VaultMoreItem.ARCHIVE -> onNavigateToArchive()
+                    VaultMoreItem.VOTING -> onNavigateToVoting()
                     VaultMoreItem.PREFERENCES -> onNavigateToPreferences()
                 }
             }

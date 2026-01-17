@@ -396,6 +396,101 @@ open class VaultServiceClient @Inject constructor() {
         return safeApiCall { api.getPcrValues() }
     }
 
+    // MARK: - Voting (Issue #50)
+
+    /**
+     * Get list of proposals available for voting.
+     *
+     * @param authToken Member JWT for authorization
+     * @param organizationId Optional filter by organization
+     * @param status Optional filter by proposal status
+     * @param page Page number (default 1)
+     * @param perPage Items per page (default 20)
+     */
+    suspend fun getProposals(
+        authToken: String,
+        organizationId: String? = null,
+        status: List<com.vettid.app.features.voting.ProposalStatus>? = null,
+        page: Int = 1,
+        perPage: Int = 20
+    ): Result<com.vettid.app.features.voting.GetProposalsResponse> {
+        val statusParam = status?.joinToString(",") { it.name.lowercase() }
+        return safeApiCall {
+            api.getProposals("Bearer $authToken", organizationId, statusParam, page, perPage)
+        }
+    }
+
+    /**
+     * Get a single proposal by ID.
+     *
+     * @param authToken Member JWT for authorization
+     * @param proposalId Proposal to retrieve
+     */
+    suspend fun getProposal(
+        authToken: String,
+        proposalId: String
+    ): Result<com.vettid.app.features.voting.Proposal> {
+        return safeApiCall {
+            api.getProposal("Bearer $authToken", proposalId)
+        }
+    }
+
+    /**
+     * Get the user's vote history.
+     *
+     * @param authToken Member JWT for authorization
+     * @param page Page number
+     * @param perPage Items per page
+     */
+    suspend fun getMyVotes(
+        authToken: String,
+        page: Int = 1,
+        perPage: Int = 20
+    ): Result<MyVotesResponse> {
+        return safeApiCall {
+            api.getMyVotes("Bearer $authToken", page, perPage)
+        }
+    }
+
+    /**
+     * Verify a vote receipt against the bulletin board.
+     *
+     * @param authToken Member JWT for authorization
+     * @param receipt Vote receipt to verify
+     */
+    suspend fun verifyVote(
+        authToken: String,
+        receipt: com.vettid.app.features.voting.VoteReceipt
+    ): Result<com.vettid.app.features.voting.VerifyVoteResponse> {
+        val request = VerifyVoteRequest(
+            voteId = receipt.voteId,
+            proposalId = receipt.proposalId,
+            receipt = receipt
+        )
+        return safeApiCall {
+            api.verifyVote("Bearer $authToken", request)
+        }
+    }
+
+    /**
+     * Get the public bulletin board for a proposal.
+     *
+     * @param authToken Member JWT for authorization
+     * @param proposalId Proposal to get bulletin for
+     * @param page Page number
+     * @param perPage Items per page
+     */
+    suspend fun getBulletinBoard(
+        authToken: String,
+        proposalId: String,
+        page: Int = 1,
+        perPage: Int = 100
+    ): Result<BulletinBoardResponse> {
+        return safeApiCall {
+            api.getBulletinBoard("Bearer $authToken", proposalId, page, perPage)
+        }
+    }
+
     // MARK: - Protean Credential Backup
 
     /**
@@ -666,6 +761,59 @@ interface VaultServiceApi {
     suspend fun confirmRestore(
         @Query("recovery_id") recoveryId: String
     ): Response<RestoreConfirmResponse>
+
+    // MARK: - Voting API (Issue #50)
+
+    /**
+     * Get list of proposals available for voting.
+     */
+    @GET("vault/voting/proposals")
+    suspend fun getProposals(
+        @Header("Authorization") authToken: String,
+        @Query("organization_id") organizationId: String? = null,
+        @Query("status") status: String? = null,
+        @Query("page") page: Int = 1,
+        @Query("per_page") perPage: Int = 20
+    ): Response<com.vettid.app.features.voting.GetProposalsResponse>
+
+    /**
+     * Get a single proposal by ID.
+     */
+    @GET("vault/voting/proposals/{proposal_id}")
+    suspend fun getProposal(
+        @Header("Authorization") authToken: String,
+        @Path("proposal_id") proposalId: String
+    ): Response<com.vettid.app.features.voting.Proposal>
+
+    /**
+     * Get the user's votes.
+     */
+    @GET("vault/voting/my-votes")
+    suspend fun getMyVotes(
+        @Header("Authorization") authToken: String,
+        @Query("page") page: Int = 1,
+        @Query("per_page") perPage: Int = 20
+    ): Response<MyVotesResponse>
+
+    /**
+     * Verify a vote receipt.
+     */
+    @POST("vault/voting/verify")
+    suspend fun verifyVote(
+        @Header("Authorization") authToken: String,
+        @Body request: VerifyVoteRequest
+    ): Response<com.vettid.app.features.voting.VerifyVoteResponse>
+
+    /**
+     * Get the public bulletin board for a proposal.
+     */
+    @GET("vault/voting/proposals/{proposal_id}/bulletin")
+    suspend fun getBulletinBoard(
+        @Header("Authorization") authToken: String,
+        @Path("proposal_id") proposalId: String,
+        @Query("page") page: Int = 1,
+        @Query("per_page") perPage: Int = 100
+    ): Response<BulletinBoardResponse>
 }
 
 // MARK: - Request Types
@@ -1309,6 +1457,51 @@ data class PcrValueSet(
     @SerializedName("PCR2") val pcr2: String,
     /** PCR3: Hash of IAM role (optional) */
     @SerializedName("PCR3") val pcr3: String? = null
+)
+
+// MARK: - Voting Request/Response Types (Issue #50)
+
+/**
+ * Request to verify a vote.
+ */
+data class VerifyVoteRequest(
+    @SerializedName("vote_id") val voteId: String,
+    @SerializedName("proposal_id") val proposalId: String,
+    val receipt: com.vettid.app.features.voting.VoteReceipt
+)
+
+/**
+ * Response containing user's votes.
+ */
+data class MyVotesResponse(
+    val votes: List<com.vettid.app.features.voting.Vote>,
+    @SerializedName("total_count") val totalCount: Int,
+    val page: Int,
+    @SerializedName("total_pages") val totalPages: Int
+)
+
+/**
+ * Response containing bulletin board entries.
+ */
+data class BulletinBoardResponse(
+    @SerializedName("proposal_id") val proposalId: String,
+    val entries: List<BulletinBoardEntry>,
+    @SerializedName("total_count") val totalCount: Int,
+    @SerializedName("merkle_root") val merkleRoot: String?,
+    val page: Int,
+    @SerializedName("total_pages") val totalPages: Int
+)
+
+/**
+ * A single entry on the bulletin board.
+ */
+data class BulletinBoardEntry(
+    @SerializedName("vote_id") val voteId: String,
+    @SerializedName("voting_public_key") val votingPublicKey: String,
+    @SerializedName("choice_id") val choiceId: String,
+    val signature: String,
+    val timestamp: String,
+    @SerializedName("merkle_index") val merkleIndex: Int
 )
 
 // MARK: - Exceptions

@@ -518,6 +518,60 @@ class NitroEnrollmentClient @Inject constructor(
     }
 
     /**
+     * Send a generic vault operation via NATS (Issue #50: Voting).
+     *
+     * @param operation Map containing the operation request
+     * @return Response map from the vault, or null on failure
+     */
+    suspend fun sendVaultOperation(operation: Map<String, Any>): Map<String, Any>? {
+        val client = natsClient
+            ?: run {
+                Log.e(TAG, "sendVaultOperation: Not connected to NATS")
+                return null
+            }
+        val space = ownerSpace
+            ?: run {
+                Log.e(TAG, "sendVaultOperation: Owner space not set")
+                return null
+            }
+
+        val operationType = operation["operation"] as? String ?: "unknown"
+        Log.d(TAG, "Sending vault operation: $operationType")
+
+        val requestId = UUID.randomUUID().toString()
+        val request = JsonObject().apply {
+            addProperty("id", requestId)
+            addProperty("type", "vault.$operationType")
+            operation.forEach { (key, value) ->
+                when (value) {
+                    is String -> addProperty(key, value)
+                    is Number -> addProperty(key, value)
+                    is Boolean -> addProperty(key, value)
+                    else -> addProperty(key, gson.toJson(value))
+                }
+            }
+            addProperty("timestamp", java.time.Instant.now().toString())
+        }
+
+        val topic = "$space.forVault.operation"
+        val responseTopic = "$space.forApp.operation.response"
+
+        return try {
+            val result: Result<JsonObject> = sendRequestAndWaitForResponse(
+                client, topic, responseTopic, request, requestId
+            )
+
+            result.getOrNull()?.let { jsonObject ->
+                @Suppress("UNCHECKED_CAST")
+                gson.fromJson(jsonObject, Map::class.java) as? Map<String, Any>
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Vault operation failed: ${e.message}", e)
+            null
+        }
+    }
+
+    /**
      * Disconnect from NATS.
      */
     suspend fun disconnect() {
