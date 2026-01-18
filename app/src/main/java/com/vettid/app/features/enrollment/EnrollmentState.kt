@@ -44,6 +44,11 @@ sealed class EnrollmentState {
         val progress: Float = 0f
     ) : EnrollmentState()
 
+    /** Attestation verified successfully - brief display before PIN setup (Nitro flow) */
+    data class AttestationVerified(
+        val attestationInfo: AttestationInfo
+    ) : EnrollmentState()
+
     /** Performing hardware attestation (legacy flow) */
     data class Attesting(
         val sessionId: String,

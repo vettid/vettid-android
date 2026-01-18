@@ -853,6 +853,10 @@ class EnrollmentViewModel @Inject constructor(
                         pcrDescription = pcrDescription
                     )
 
+                    // Show verified state for 2 seconds before moving to PIN setup
+                    _state.value = EnrollmentState.AttestationVerified(attestationInfo = attestationInfo)
+                    delay(2000)
+
                     // Move to PIN setup
                     _state.value = EnrollmentState.SettingPin(attestationInfo = attestationInfo)
                 },

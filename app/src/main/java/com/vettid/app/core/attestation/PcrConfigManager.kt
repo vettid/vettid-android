@@ -223,10 +223,20 @@ class PcrConfigManager @Inject constructor(
             }
 
             val responseBody = connection.inputStream.bufferedReader().use { it.readText() }
-            val apiResponse = gson.fromJson(responseBody, PcrApiResponse::class.java)
+            Log.d(TAG, "PCR manifest response: ${responseBody.take(200)}...")
 
-            // Convert and update
-            val signedResponse = apiResponse.toSignedResponse()
+            // Parse as manifest format (with pcr_sets array)
+            val manifestResponse = gson.fromJson(responseBody, PcrManifestResponse::class.java)
+
+            // Get the current PCR set
+            val signedResponse = manifestResponse.toSignedResponse()
+            if (signedResponse == null) {
+                Log.e(TAG, "No current PCR set found in manifest")
+                return Result.failure(PcrUpdateException("No current PCR set in manifest"))
+            }
+
+            Log.d(TAG, "Found current PCR set: ${signedResponse.pcrs.version}, PCR0: ${signedResponse.pcrs.pcr0.take(16)}...")
+
             val updated = updatePcrs(signedResponse)
 
             if (updated) {
@@ -275,6 +285,9 @@ class PcrConfigManager @Inject constructor(
 
                     // Convert and update
                     val signedResponse = apiResponse.toSignedResponse()
+                    if (signedResponse == null) {
+                        throw PcrUpdateException("Invalid PCR response format")
+                    }
                     val updated = updatePcrs(signedResponse)
 
                     if (updated) {
@@ -486,20 +499,105 @@ data class SignedPcrResponse(
 )
 
 /**
- * API response for PCR current endpoint.
+ * PCR manifest response from CloudFront.
+ * Contains multiple PCR sets with validity periods.
+ */
+data class PcrManifestResponse(
+    @SerializedName("version")
+    val version: Int,
+
+    @SerializedName("timestamp")
+    val timestamp: String,
+
+    @SerializedName("pcr_sets")
+    val pcrSets: List<PcrSetEntry>,
+
+    @SerializedName("signature")
+    val signature: String,
+
+    @SerializedName("public_key")
+    val publicKey: String? = null
+) {
+    /**
+     * Get the current PCR set (is_current: true).
+     */
+    fun getCurrentPcrSet(): PcrSetEntry? {
+        return pcrSets.find { it.isCurrent }
+    }
+
+    /**
+     * Convert to SignedPcrResponse format using the current PCR set.
+     */
+    fun toSignedResponse(): SignedPcrResponse? {
+        val currentSet = getCurrentPcrSet() ?: return null
+        return SignedPcrResponse(
+            pcrs = ExpectedPcrs(
+                pcr0 = currentSet.pcr0,
+                pcr1 = currentSet.pcr1,
+                pcr2 = currentSet.pcr2,
+                pcr3 = currentSet.pcr3,
+                version = currentSet.id,
+                publishedAt = currentSet.validFrom
+            ),
+            signature = signature,
+            keyId = null,
+            originalPcrs = PcrValues(
+                pcr0 = currentSet.pcr0,
+                pcr1 = currentSet.pcr1,
+                pcr2 = currentSet.pcr2,
+                pcr3 = currentSet.pcr3
+            )
+        )
+    }
+}
+
+/**
+ * Individual PCR set entry in the manifest.
+ */
+data class PcrSetEntry(
+    @SerializedName("id")
+    val id: String,
+
+    @SerializedName("pcr0")
+    val pcr0: String,
+
+    @SerializedName("pcr1")
+    val pcr1: String,
+
+    @SerializedName("pcr2")
+    val pcr2: String,
+
+    @SerializedName("pcr3")
+    val pcr3: String? = null,
+
+    @SerializedName("valid_from")
+    val validFrom: String,
+
+    @SerializedName("valid_until")
+    val validUntil: String? = null,
+
+    @SerializedName("is_current")
+    val isCurrent: Boolean = false,
+
+    @SerializedName("description")
+    val description: String? = null
+)
+
+/**
+ * API response for PCR current endpoint (legacy format).
  */
 data class PcrApiResponse(
     @SerializedName("pcrs")
-    val pcrs: PcrValues,
+    val pcrs: PcrValues?,
 
     @SerializedName("signature")
     val signature: String,
 
     @SerializedName("version")
-    val version: String,
+    val version: String?,
 
     @SerializedName("published_at")
-    val publishedAt: String,
+    val publishedAt: String?,
 
     @SerializedName("key_id")
     val keyId: String? = null
@@ -507,20 +605,20 @@ data class PcrApiResponse(
     /**
      * Convert to SignedPcrResponse format.
      */
-    fun toSignedResponse(): SignedPcrResponse {
+    fun toSignedResponse(): SignedPcrResponse? {
+        val p = pcrs ?: return null
         return SignedPcrResponse(
             pcrs = ExpectedPcrs(
-                pcr0 = pcrs.pcr0,
-                pcr1 = pcrs.pcr1,
-                pcr2 = pcrs.pcr2,
-                pcr3 = pcrs.pcr3,
-                version = version,
-                publishedAt = publishedAt
+                pcr0 = p.pcr0,
+                pcr1 = p.pcr1,
+                pcr2 = p.pcr2,
+                pcr3 = p.pcr3,
+                version = version ?: "unknown",
+                publishedAt = publishedAt ?: ""
             ),
             signature = signature,
             keyId = keyId,
-            // Keep original PCR values for signature verification
-            originalPcrs = pcrs
+            originalPcrs = p
         )
     }
 }
