@@ -1,6 +1,21 @@
 # VettID Android
 
-VettID Android mobile application for secure credential management and vault access.
+Privacy-first digital identity app for Android.
+
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+
+## Overview
+
+VettID gives you complete control over your digital identity through hardware-secured vaults. Your personal data is encrypted and stored in AWS Nitro Enclaves - even VettID cannot access your information.
+
+## Features
+
+- **Secure Enrollment** - QR code-based credential setup
+- **Hardware Security** - Keys stored in Android Keystore (TEE/StrongBox)
+- **Biometric Auth** - Fingerprint and face authentication
+- **E2E Encryption** - X25519 + XChaCha20-Poly1305
+- **Vault Communication** - Real-time NATS messaging
+- **PCR Attestation** - Verify enclave integrity
 
 ## Requirements
 
@@ -8,41 +23,39 @@ VettID Android mobile application for secure credential management and vault acc
 - Kotlin 1.9+
 - Android Studio Hedgehog or later
 
-## Features
-
-- Protean Credential enrollment via QR code
-- Secure credential storage using Android Keystore
-- Hardware Key Attestation (supports GrapheneOS)
-- Vault deployment and management
-- Biometric authentication (Fingerprint / Face)
-- X25519 key exchange + XChaCha20-Poly1305 encryption
-
 ## Project Structure
 
 ```
 app/src/main/java/com/vettid/app/
-├── VettIDApplication.kt       # Application class
-├── MainActivity.kt            # Main activity
 ├── core/
-│   ├── crypto/               # X25519, Ed25519, encryption
-│   ├── storage/              # Keystore, secure storage
-│   ├── network/              # API client
-│   └── attestation/          # Hardware Key Attestation
+│   ├── crypto/           # X25519, Ed25519, encryption
+│   ├── storage/          # Keystore, secure storage
+│   ├── network/          # API client
+│   ├── nats/             # NATS messaging client
+│   └── attestation/      # Hardware Key Attestation
 ├── features/
-│   ├── enrollment/           # QR scanning, credential setup
-│   ├── auth/                 # Login, biometrics
-│   └── vault/                # Vault status, commands
+│   ├── enrollment/       # QR scanning, credential setup
+│   ├── auth/             # Login, biometrics
+│   ├── vault/            # Vault status, commands
+│   ├── transfer/         # Credential transfer
+│   └── voting/           # Vault-based voting
 └── ui/
-    ├── screens/              # Compose screens
-    └── components/           # Reusable UI components
+    ├── screens/          # Compose screens
+    └── components/       # Reusable UI components
 ```
 
-## Setup
+## Build
 
-1. Clone the repository
-2. Open in Android Studio
-3. Sync Gradle files
-4. Build and run
+```bash
+# Debug build
+./gradlew assembleDebug
+
+# Release build
+./gradlew assembleRelease
+
+# Run tests
+./gradlew test
+```
 
 ## Security
 
@@ -56,3 +69,18 @@ app/src/main/java/com/vettid/app/
 - Stock Android with Google attestation
 - GrapheneOS (with hardware attestation support)
 - Other ROMs with hardware-backed Keystore
+
+## Related Repositories
+
+- [vettid-dev](https://github.com/vettid/vettid-dev) - Backend infrastructure
+- [vettid-ios](https://github.com/vettid/vettid-ios) - iOS app
+- [vettid.org](https://github.com/vettid/vettid.org) - Website
+
+## License
+
+AGPL-3.0-or-later - See [LICENSE](LICENSE) for details.
+
+## Links
+
+- Website: [vettid.org](https://vettid.org)
+- Documentation: [docs.vettid.dev](https://docs.vettid.dev)
