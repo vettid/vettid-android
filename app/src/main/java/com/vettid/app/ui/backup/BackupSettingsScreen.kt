@@ -109,6 +109,23 @@ fun BackupSettingsContent(
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
     ) {
+        // Explanatory text about default backup behavior
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer
+            )
+        ) {
+            Text(
+                text = "Backups are enabled by default to protect your credentials. You can disable automatic backups below.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                modifier = Modifier.padding(16.dp)
+            )
+        }
+
         // Auto-backup Section
         SettingsSection(title = "Automatic Backups") {
             SwitchSettingItem(

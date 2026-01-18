@@ -19,6 +19,7 @@ import com.vettid.app.core.network.EnrollmentQRData
 import com.vettid.app.core.network.TransactionKeyPublic
 import com.vettid.app.core.network.VaultServiceClient
 import com.vettid.app.core.storage.CredentialStore
+import com.vettid.app.worker.BackupWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
@@ -590,6 +591,9 @@ class EnrollmentViewModel @Inject constructor(
                     )
 
                     _effects.emit(EnrollmentEffect.NavigateToMain)
+
+                    // Auto-trigger credential backup after enrollment
+                    BackupWorker.triggerNow(context)
                 },
                 onFailure = { error ->
                     _state.value = EnrollmentState.Error(
@@ -1013,6 +1017,9 @@ class EnrollmentViewModel @Inject constructor(
                     )
 
                     _effects.emit(EnrollmentEffect.NavigateToMain)
+
+                    // Auto-trigger credential backup after enrollment
+                    BackupWorker.triggerNow(context)
                 },
                 onFailure = { error ->
                     Log.e(TAG, "Enrollment verification failed", error)
