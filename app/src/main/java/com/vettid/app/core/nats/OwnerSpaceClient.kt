@@ -591,6 +591,21 @@ class OwnerSpaceClient @Inject constructor(
                     handleCallEvent(message)
                     return
                 }
+                // Recovery events (Issue #32, #33)
+                message.subject.contains(".forApp.recovery.") -> {
+                    handleRecoveryEvent(message)
+                    return
+                }
+                // Transfer events (Issue #31)
+                message.subject.contains(".forApp.transfer.") -> {
+                    handleTransferEvent(message)
+                    return
+                }
+                // Security events (Issue #32: fraud detection)
+                message.subject.contains(".forApp.security.") -> {
+                    handleSecurityEvent(message)
+                    return
+                }
             }
 
             // Decrypt if E2E is enabled
@@ -924,6 +939,146 @@ class OwnerSpaceClient @Inject constructor(
         }
     }
 
+    /**
+     * Handle recovery events (Issue #32, #33).
+     *
+     * Events:
+     * - recovery.requested: Someone requested to recover credentials
+     * - recovery.cancelled: Recovery was cancelled (manual or fraud detection)
+     * - recovery.completed: Recovery completed on another device
+     */
+    private fun handleRecoveryEvent(message: NatsMessage) {
+        try {
+            val eventType = message.subject.substringAfterLast(".forApp.recovery.")
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+
+            val event = when (eventType) {
+                "requested" -> VaultEvent.RecoveryRequested(
+                    requestId = payload.getString("request_id"),
+                    email = if (payload.has("email")) payload.getString("email") else null
+                )
+                "cancelled" -> VaultEvent.RecoveryCancelled(
+                    requestId = payload.getString("request_id"),
+                    reason = if (payload.has("reason")) payload.getString("reason") else null
+                )
+                "completed" -> VaultEvent.RecoveryCompleted(
+                    requestId = payload.getString("request_id")
+                )
+                else -> {
+                    android.util.Log.w(TAG, "Unknown recovery event type: $eventType")
+                    null
+                }
+            }
+
+            event?.let {
+                android.util.Log.i(TAG, "Received recovery event: $eventType")
+                _vaultEvents.tryEmit(it)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse recovery event", e)
+        }
+    }
+
+    /**
+     * Handle transfer events (Issue #31: Device-to-device transfer).
+     *
+     * Events:
+     * - transfer.requested: New device requests credential transfer
+     * - transfer.approved: Transfer was approved by old device
+     * - transfer.denied: Transfer was denied by old device
+     * - transfer.completed: Transfer finished successfully
+     * - transfer.expired: Transfer request timed out (15 minutes)
+     */
+    private fun handleTransferEvent(message: NatsMessage) {
+        try {
+            val eventType = message.subject.substringAfterLast(".forApp.transfer.")
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+
+            val event = when (eventType) {
+                "requested" -> {
+                    val deviceInfoJson = payload.optJSONObject("target_device_info")
+                        ?: payload.optJSONObject("device_info")
+                        ?: JSONObject()
+
+                    VaultEvent.TransferRequested(
+                        transferId = payload.getString("transfer_id"),
+                        sourceDeviceId = if (payload.has("source_device_id"))
+                            payload.getString("source_device_id") else null,
+                        targetDeviceInfo = DeviceInfo(
+                            deviceId = deviceInfoJson.optString("device_id", ""),
+                            model = deviceInfoJson.optString("model", "Unknown Device"),
+                            osVersion = deviceInfoJson.optString("os_version", ""),
+                            location = if (deviceInfoJson.has("location"))
+                                deviceInfoJson.getString("location") else null
+                        )
+                    )
+                }
+                "approved" -> VaultEvent.TransferApproved(
+                    transferId = payload.getString("transfer_id")
+                )
+                "denied" -> VaultEvent.TransferDenied(
+                    transferId = payload.getString("transfer_id")
+                )
+                "completed" -> VaultEvent.TransferCompleted(
+                    transferId = payload.getString("transfer_id")
+                )
+                "expired" -> VaultEvent.TransferExpired(
+                    transferId = payload.getString("transfer_id")
+                )
+                else -> {
+                    android.util.Log.w(TAG, "Unknown transfer event type: $eventType")
+                    null
+                }
+            }
+
+            event?.let {
+                android.util.Log.i(TAG, "Received transfer event: $eventType")
+                _vaultEvents.tryEmit(it)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse transfer event", e)
+        }
+    }
+
+    /**
+     * Handle security events (Issue #32: Fraud detection).
+     *
+     * Events:
+     * - security.fraud_detected: Recovery auto-cancelled due to credential usage
+     */
+    private fun handleSecurityEvent(message: NatsMessage) {
+        try {
+            val eventType = message.subject.substringAfterLast(".forApp.security.")
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+
+            val event = when (eventType) {
+                "fraud_detected" -> VaultEvent.RecoveryFraudDetected(
+                    requestId = payload.getString("request_id"),
+                    reason = payload.optString("reason", "credential_used_during_recovery"),
+                    detectedAt = try {
+                        Instant.parse(payload.getString("detected_at"))
+                    } catch (e: Exception) {
+                        Instant.now()
+                    }
+                )
+                else -> {
+                    android.util.Log.w(TAG, "Unknown security event type: $eventType")
+                    null
+                }
+            }
+
+            event?.let {
+                android.util.Log.i(TAG, "Received security event: $eventType")
+                _vaultEvents.tryEmit(it)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse security event", e)
+        }
+    }
+
     companion object {
         private const val TAG = "OwnerSpaceClient"
     }
@@ -1001,11 +1156,39 @@ sealed class VaultEvent {
     data class EventTypesUpdated(val eventTypes: List<EventType>) : VaultEvent()
     data class HandlerTriggered(val handlerId: String, val data: JsonObject) : VaultEvent()
 
-    // Security events
+    // Recovery events
     data class RecoveryRequested(val requestId: String, val email: String?) : VaultEvent()
-    data class RecoveryCancelled(val requestId: String) : VaultEvent()
+    data class RecoveryCancelled(val requestId: String, val reason: String? = null) : VaultEvent()
     data class RecoveryCompleted(val requestId: String) : VaultEvent()
+
+    // Transfer events (Issue #31: Device-to-device transfer)
+    data class TransferRequested(
+        val transferId: String,
+        val sourceDeviceId: String?,
+        val targetDeviceInfo: DeviceInfo
+    ) : VaultEvent()
+    data class TransferApproved(val transferId: String) : VaultEvent()
+    data class TransferDenied(val transferId: String) : VaultEvent()
+    data class TransferCompleted(val transferId: String) : VaultEvent()
+    data class TransferExpired(val transferId: String) : VaultEvent()
+
+    // Fraud detection events (Issue #32: Recovery fraud detection)
+    data class RecoveryFraudDetected(
+        val requestId: String,
+        val reason: String,
+        val detectedAt: Instant
+    ) : VaultEvent()
 }
+
+/**
+ * Device information for transfer requests.
+ */
+data class DeviceInfo(
+    val deviceId: String,
+    val model: String,
+    val osVersion: String,
+    val location: String? = null
+)
 
 /**
  * Vault runtime status.

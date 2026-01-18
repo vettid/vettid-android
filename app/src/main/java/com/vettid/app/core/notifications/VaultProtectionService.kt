@@ -13,6 +13,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.vettid.app.MainActivity
 import com.vettid.app.R
+import com.vettid.app.core.nats.DeviceInfo
 import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.nats.VaultEvent
@@ -24,7 +25,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.filterIsInstance
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -55,14 +55,19 @@ class VaultProtectionService : Service() {
         // Notification IDs
         const val FOREGROUND_NOTIFICATION_ID = 1
         const val RECOVERY_ALERT_NOTIFICATION_ID = 1001
+        const val TRANSFER_ALERT_NOTIFICATION_ID = 1002
+        const val FRAUD_ALERT_NOTIFICATION_ID = 1003
 
         // Intent actions
         const val ACTION_START = "com.vettid.app.START_PROTECTION"
         const val ACTION_STOP = "com.vettid.app.STOP_PROTECTION"
         const val ACTION_CANCEL_RECOVERY = "com.vettid.app.CANCEL_RECOVERY"
+        const val ACTION_APPROVE_TRANSFER = "com.vettid.app.APPROVE_TRANSFER"
+        const val ACTION_DENY_TRANSFER = "com.vettid.app.DENY_TRANSFER"
 
         // Intent extras
         const val EXTRA_REQUEST_ID = "recovery_request_id"
+        const val EXTRA_TRANSFER_ID = "transfer_id"
 
         /**
          * Start the vault protection service.
@@ -121,6 +126,18 @@ class VaultProtectionService : Service() {
                 val requestId = intent.getStringExtra(EXTRA_REQUEST_ID)
                 if (requestId != null) {
                     handleCancelRecovery(requestId)
+                }
+            }
+            ACTION_APPROVE_TRANSFER -> {
+                val transferId = intent.getStringExtra(EXTRA_TRANSFER_ID)
+                if (transferId != null) {
+                    handleApproveTransfer(transferId)
+                }
+            }
+            ACTION_DENY_TRANSFER -> {
+                val transferId = intent.getStringExtra(EXTRA_TRANSFER_ID)
+                if (transferId != null) {
+                    handleDenyTransfer(transferId)
                 }
             }
         }
@@ -208,19 +225,52 @@ class VaultProtectionService : Service() {
      */
     private fun handleVaultEvent(event: VaultEvent) {
         when (event) {
+            // Recovery events
             is VaultEvent.RecoveryRequested -> {
                 Log.i(TAG, "Recovery requested: ${event.requestId}")
                 showRecoveryAlert(event.requestId, event.email)
             }
             is VaultEvent.RecoveryCancelled -> {
-                Log.i(TAG, "Recovery cancelled: ${event.requestId}")
+                Log.i(TAG, "Recovery cancelled: ${event.requestId}, reason: ${event.reason}")
                 dismissRecoveryAlert()
+                // If cancelled due to fraud detection, the fraud alert will be shown separately
             }
             is VaultEvent.RecoveryCompleted -> {
                 Log.w(TAG, "Recovery completed on another device: ${event.requestId}")
                 dismissRecoveryAlert()
-                // TODO: Show warning that credentials were recovered elsewhere
+                showRecoveryCompletedWarning()
             }
+
+            // Transfer events (Issue #31)
+            is VaultEvent.TransferRequested -> {
+                Log.i(TAG, "Transfer requested: ${event.transferId}")
+                showTransferRequestAlert(event.transferId, event.targetDeviceInfo)
+            }
+            is VaultEvent.TransferApproved -> {
+                Log.i(TAG, "Transfer approved: ${event.transferId}")
+                dismissTransferAlert()
+                showTransferApprovedNotification()
+            }
+            is VaultEvent.TransferDenied -> {
+                Log.i(TAG, "Transfer denied: ${event.transferId}")
+                dismissTransferAlert()
+            }
+            is VaultEvent.TransferCompleted -> {
+                Log.i(TAG, "Transfer completed: ${event.transferId}")
+                dismissTransferAlert()
+            }
+            is VaultEvent.TransferExpired -> {
+                Log.i(TAG, "Transfer expired: ${event.transferId}")
+                dismissTransferAlert()
+                showTransferExpiredNotification()
+            }
+
+            // Fraud detection events (Issue #32)
+            is VaultEvent.RecoveryFraudDetected -> {
+                Log.w(TAG, "Recovery fraud detected: ${event.requestId}, reason: ${event.reason}")
+                showFraudDetectedNotification(event.requestId, event.reason)
+            }
+
             else -> {
                 // Ignore other vault events
             }
@@ -340,5 +390,249 @@ class VaultProtectionService : Service() {
             .build()
 
         notificationManager.notify(RECOVERY_ALERT_NOTIFICATION_ID, notification)
+    }
+
+    /**
+     * Show warning that credentials were recovered on another device.
+     */
+    private fun showRecoveryCompletedWarning() {
+        val notification = NotificationCompat.Builder(this, SECURITY_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle("Credentials Recovered Elsewhere")
+            .setContentText("Your credentials were recovered on another device. If this wasn't you, contact support immediately.")
+            .setStyle(NotificationCompat.BigTextStyle().bigText(
+                "Your credentials were recovered on another device. " +
+                "If this wasn't you, your account may be compromised. " +
+                "Contact support immediately."
+            ))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .build()
+
+        notificationManager.notify(RECOVERY_ALERT_NOTIFICATION_ID, notification)
+    }
+
+    // MARK: - Transfer Notifications (Issue #31)
+
+    /**
+     * Show a high-priority notification for transfer request.
+     * This notification appears on the OLD device when a new device requests a transfer.
+     */
+    private fun showTransferRequestAlert(transferId: String, deviceInfo: DeviceInfo) {
+        Log.i(TAG, "Showing transfer alert for: $transferId from ${deviceInfo.model}")
+
+        // Approve action
+        val approveIntent = Intent(this, VaultProtectionService::class.java).apply {
+            action = ACTION_APPROVE_TRANSFER
+            putExtra(EXTRA_TRANSFER_ID, transferId)
+        }
+        val approvePendingIntent = PendingIntent.getService(
+            this,
+            10,
+            approveIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // Deny action
+        val denyIntent = Intent(this, VaultProtectionService::class.java).apply {
+            action = ACTION_DENY_TRANSFER
+            putExtra(EXTRA_TRANSFER_ID, transferId)
+        }
+        val denyPendingIntent = PendingIntent.getService(
+            this,
+            11,
+            denyIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // Open app to transfer approval screen
+        val openIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra("navigate_to", "transfer_approval")
+            putExtra(EXTRA_TRANSFER_ID, transferId)
+        }
+        val openPendingIntent = PendingIntent.getActivity(
+            this,
+            12,
+            openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val deviceDescription = buildString {
+            append(deviceInfo.model)
+            if (deviceInfo.osVersion.isNotEmpty()) {
+                append(" (${deviceInfo.osVersion})")
+            }
+            deviceInfo.location?.let { append(" from $it") }
+        }
+
+        val bodyText = "$deviceDescription is requesting your credentials. " +
+                "This request expires in 15 minutes. " +
+                "Only approve if you initiated this transfer."
+
+        val notification = NotificationCompat.Builder(this, SECURITY_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle("Credential Transfer Request")
+            .setContentText("$deviceDescription is requesting your credentials")
+            .setStyle(NotificationCompat.BigTextStyle().bigText(bodyText))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setAutoCancel(false)
+            .setOngoing(true) // Can't swipe away - must take action
+            .setContentIntent(openPendingIntent)
+            .addAction(
+                android.R.drawable.ic_menu_send,
+                "Approve",
+                approvePendingIntent
+            )
+            .addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                "Deny",
+                denyPendingIntent
+            )
+            .build()
+
+        notificationManager.notify(TRANSFER_ALERT_NOTIFICATION_ID, notification)
+    }
+
+    /**
+     * Dismiss the transfer alert notification.
+     */
+    private fun dismissTransferAlert() {
+        notificationManager.cancel(TRANSFER_ALERT_NOTIFICATION_ID)
+        Log.d(TAG, "Transfer alert dismissed")
+    }
+
+    /**
+     * Show notification that transfer was approved.
+     */
+    private fun showTransferApprovedNotification() {
+        val notification = NotificationCompat.Builder(this, SECURITY_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle("Transfer Approved")
+            .setContentText("Your credentials are being transferred to the new device.")
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .build()
+
+        notificationManager.notify(TRANSFER_ALERT_NOTIFICATION_ID, notification)
+    }
+
+    /**
+     * Show notification that transfer request expired.
+     */
+    private fun showTransferExpiredNotification() {
+        val notification = NotificationCompat.Builder(this, SECURITY_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle("Transfer Request Expired")
+            .setContentText("The credential transfer request has expired. The new device will need to request again.")
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .build()
+
+        notificationManager.notify(TRANSFER_ALERT_NOTIFICATION_ID, notification)
+    }
+
+    /**
+     * Handle approve transfer action from notification.
+     */
+    private fun handleApproveTransfer(transferId: String) {
+        Log.i(TAG, "Approving transfer: $transferId")
+
+        serviceScope.launch {
+            try {
+                // TODO: Require biometric authentication before approving
+                // For now, send approval via NATS
+                val result = ownerSpaceClient.sendToVault(
+                    "transfer.approve",
+                    com.google.gson.JsonObject().apply {
+                        addProperty("transfer_id", transferId)
+                        addProperty("approved", true)
+                    }
+                )
+
+                result.onSuccess {
+                    Log.i(TAG, "Transfer approval sent: $transferId")
+                    dismissTransferAlert()
+                    showTransferApprovedNotification()
+                }.onFailure { error ->
+                    Log.e(TAG, "Failed to approve transfer", error)
+                    // Keep notification visible so user can retry
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error approving transfer", e)
+            }
+        }
+    }
+
+    /**
+     * Handle deny transfer action from notification.
+     */
+    private fun handleDenyTransfer(transferId: String) {
+        Log.i(TAG, "Denying transfer: $transferId")
+
+        serviceScope.launch {
+            try {
+                val result = ownerSpaceClient.sendToVault(
+                    "transfer.deny",
+                    com.google.gson.JsonObject().apply {
+                        addProperty("transfer_id", transferId)
+                    }
+                )
+
+                result.onSuccess {
+                    Log.i(TAG, "Transfer denial sent: $transferId")
+                    dismissTransferAlert()
+                }.onFailure { error ->
+                    Log.e(TAG, "Failed to deny transfer", error)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error denying transfer", e)
+            }
+        }
+    }
+
+    // MARK: - Fraud Detection Notifications (Issue #32)
+
+    /**
+     * Show notification when recovery was auto-cancelled due to credential usage.
+     */
+    @Suppress("UNUSED_PARAMETER") // reason may be used for more detailed messaging in future
+    private fun showFraudDetectedNotification(requestId: String, reason: String) {
+        Log.i(TAG, "Showing fraud detection alert for: $requestId")
+
+        val openIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra("navigate_to", "security")
+            putExtra(EXTRA_REQUEST_ID, requestId)
+        }
+        val openPendingIntent = PendingIntent.getActivity(
+            this,
+            20,
+            openIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val bodyText = "A recovery request was automatically cancelled because your credential " +
+                "was used from this device. This may indicate someone tried to recover your " +
+                "credentials without your knowledge. Your credentials remain secure."
+
+        val notification = NotificationCompat.Builder(this, SECURITY_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle("Recovery Auto-Cancelled")
+            .setContentText("A suspicious recovery attempt was blocked.")
+            .setStyle(NotificationCompat.BigTextStyle().bigText(bodyText))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setAutoCancel(true)
+            .setContentIntent(openPendingIntent)
+            .addAction(
+                android.R.drawable.ic_menu_view,
+                "View Details",
+                openPendingIntent
+            )
+            .build()
+
+        notificationManager.notify(FRAUD_ALERT_NOTIFICATION_ID, notification)
     }
 }

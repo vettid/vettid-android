@@ -63,6 +63,8 @@ import com.vettid.app.features.debug.CredentialDebugScreen
 import com.vettid.app.features.voting.MyVotesScreen
 import com.vettid.app.features.voting.ProposalDetailScreen
 import com.vettid.app.features.voting.ProposalsScreen
+import com.vettid.app.features.transfer.TransferRequestScreen
+import com.vettid.app.features.transfer.TransferApprovalScreen
 
 private const val TAG = "VettIDApp"
 
@@ -130,6 +132,11 @@ sealed class Screen(val route: String) {
         fun createRoute(proposalId: String) = "voting/proposals/$proposalId"
     }
     object MyVotes : Screen("voting/my-votes")
+    // Transfer (Issue #31: Device-to-device credential transfer)
+    object TransferRequest : Screen("transfer/request")
+    object TransferApproval : Screen("transfer/approve/{transferId}") {
+        fun createRoute(transferId: String) = "transfer/approve/$transferId"
+    }
 }
 
 @Composable
@@ -172,6 +179,7 @@ fun VettIDApp(
     // Store pending deep links to process after app state is ready
     var pendingConnectData by remember { mutableStateOf<String?>(null) }
     var pendingEnrollData by remember { mutableStateOf<String?>(null) }
+    var pendingTransferApprovalId by remember { mutableStateOf<String?>(null) }
 
     // Handle deep links - store data for processing in appState effect
     LaunchedEffect(deepLinkData) {
@@ -190,12 +198,19 @@ fun VettIDApp(
                 }
                 onDeepLinkConsumed()
             }
+            DeepLinkType.TRANSFER_APPROVE -> {
+                val transferId = deepLinkData.code
+                if (transferId != null) {
+                    pendingTransferApprovalId = transferId
+                }
+                onDeepLinkConsumed()
+            }
             DeepLinkType.NONE -> { /* No deep link */ }
         }
     }
 
     // Handle navigation based on app state and pending deep links
-    LaunchedEffect(appState, pendingEnrollData, pendingConnectData) {
+    LaunchedEffect(appState, pendingEnrollData, pendingConnectData, pendingTransferApprovalId) {
         // Handle pending enrollment - takes priority
         if (pendingEnrollData != null) {
             val code = pendingEnrollData
@@ -214,8 +229,20 @@ fun VettIDApp(
                 popUpTo(0) { inclusive = true }
             }
             else -> {
+                // Check for pending transfer approval (Issue #31: Device-to-device transfer)
+                if (pendingTransferApprovalId != null) {
+                    val transferId = pendingTransferApprovalId
+                    pendingTransferApprovalId = null
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                    // Then navigate to TransferApproval
+                    if (transferId != null) {
+                        navController.navigate(Screen.TransferApproval.createRoute(transferId))
+                    }
+                }
                 // Check for pending connect data before going to Main
-                if (pendingConnectData != null) {
+                else if (pendingConnectData != null) {
                     val data = pendingConnectData
                     pendingConnectData = null
                     navController.navigate(Screen.Main.route) {
@@ -596,6 +623,27 @@ fun VettIDApp(
                 onNavigateToProposal = { proposalId ->
                     navController.navigate(Screen.ProposalDetail.createRoute(proposalId))
                 }
+            )
+        }
+        // Transfer screens (Issue #31: Device-to-device credential transfer)
+        composable(Screen.TransferRequest.route) {
+            TransferRequestScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToMain = {
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
+            )
+        }
+        composable(
+            route = Screen.TransferApproval.route,
+            arguments = listOf(navArgument("transferId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val transferId = backStackEntry.arguments?.getString("transferId") ?: return@composable
+            TransferApprovalScreen(
+                transferId = transferId,
+                onNavigateBack = { navController.popBackStack() }
             )
         }
     }

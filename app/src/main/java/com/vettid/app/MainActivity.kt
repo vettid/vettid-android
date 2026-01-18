@@ -28,6 +28,7 @@ data class DeepLinkData(
 enum class DeepLinkType {
     ENROLL,
     CONNECT,
+    TRANSFER_APPROVE,
     NONE
 }
 
@@ -112,6 +113,14 @@ class MainActivity : ComponentActivity() {
                 DeepLinkData(
                     type = DeepLinkType.CONNECT,
                     code = data?.let { decodeBase64IfNeeded(it) } ?: code
+                )
+            }
+            // Custom scheme: vettid://transfer/approve?id=xxx (Issue #31: Device-to-device transfer)
+            uri.scheme == "vettid" && uri.host == "transfer" && uri.pathSegments.firstOrNull() == "approve" -> {
+                val transferId = uri.getQueryParameter("id")
+                DeepLinkData(
+                    type = DeepLinkType.TRANSFER_APPROVE,
+                    code = transferId
                 )
             }
             // HTTPS: https://vettid.dev/enroll/xxx or https://vettid.dev/enroll?data=xxx
