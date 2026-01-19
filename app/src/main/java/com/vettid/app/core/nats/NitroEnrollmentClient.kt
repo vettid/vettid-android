@@ -816,10 +816,19 @@ data class AttestationResponse(
     @SerializedName("enclave_public_key") val enclavePublicKey: String?
 )
 
+/**
+ * PIN setup response from Nitro enclave.
+ * Returns vault_ready status with UTKs for the credential creation phase.
+ */
 data class PinSetupResponse(
-    val success: Boolean,
-    val message: String?
-)
+    val status: String,
+    val utks: List<UtkInfo>? = null,
+    val message: String? = null
+) {
+    /** Returns true if vault is ready */
+    val isSuccess: Boolean
+        get() = status == "vault_ready"
+}
 
 data class VaultReadyResponse(
     val status: String,

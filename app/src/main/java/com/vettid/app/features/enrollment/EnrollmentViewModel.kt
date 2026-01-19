@@ -668,8 +668,10 @@ class EnrollmentViewModel @Inject constructor(
 
             result.fold(
                 onSuccess = { response ->
-                    if (response.success) {
-                        Log.i(TAG, "PIN setup complete, waiting for vault ready")
+                    if (response.isSuccess) {
+                        Log.i(TAG, "PIN setup complete, vault ready with ${response.utks?.size ?: 0} UTKs")
+                        // Store UTKs from PIN response for credential creation
+                        response.utks?.let { nitroUtks = it }
                         waitForVaultReady()
                     } else {
                         _state.value = currentState.copy(
