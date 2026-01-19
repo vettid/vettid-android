@@ -526,6 +526,9 @@ class NitroEnrollmentClient @Inject constructor(
      *
      * Uses JetStream for reliable delivery.
      *
+     * The request format uses a single encrypted_payload field containing
+     * ECIES-encrypted JSON with password_hash and password_salt.
+     *
      * @param password User's chosen credential password (NOT the PIN)
      * @param passwordSalt Salt for Argon2id hashing
      * @param utk UTK to encrypt password hash with
@@ -541,23 +544,44 @@ class NitroEnrollmentClient @Inject constructor(
 
         Log.d(TAG, "Creating credential via JetStream...")
 
-        // Hash password with Argon2id and encrypt with UTK
-        val encryptedPassword = cryptoManager.encryptPasswordForServer(
-            password = password,
-            salt = passwordSalt,
-            utkPublicKeyBase64 = utk.publicKey
+        // 1. Hash password with Argon2id
+        val passwordHash = cryptoManager.hashPassword(password, passwordSalt)
+
+        // 2. Create JSON payload with hash and salt
+        val payloadJson = JsonObject().apply {
+            addProperty("password_hash", Base64.encodeToString(passwordHash, Base64.NO_WRAP))
+            addProperty("password_salt", Base64.encodeToString(passwordSalt, Base64.NO_WRAP))
+        }
+
+        // 3. Encrypt the JSON payload with UTK public key
+        val encrypted = cryptoManager.encryptToPublicKey(
+            plaintext = gson.toJson(payloadJson).toByteArray(Charsets.UTF_8),
+            publicKeyBase64 = utk.publicKey,
+            context = "credential-encryption-v1"
         )
+
+        // 4. Concatenate ECIES components into single blob: ephemeral_key (32) + nonce (12) + ciphertext
+        val ephemeralKeyBytes = Base64.decode(encrypted.ephemeralPublicKey, Base64.NO_WRAP)
+        val nonceBytes = Base64.decode(encrypted.nonce, Base64.NO_WRAP)
+        val ciphertextBytes = Base64.decode(encrypted.ciphertext, Base64.NO_WRAP)
+
+        val combinedBlob = ByteArray(ephemeralKeyBytes.size + nonceBytes.size + ciphertextBytes.size)
+        System.arraycopy(ephemeralKeyBytes, 0, combinedBlob, 0, ephemeralKeyBytes.size)
+        System.arraycopy(nonceBytes, 0, combinedBlob, ephemeralKeyBytes.size, nonceBytes.size)
+        System.arraycopy(ciphertextBytes, 0, combinedBlob, ephemeralKeyBytes.size + nonceBytes.size, ciphertextBytes.size)
+
+        val encryptedPayload = Base64.encodeToString(combinedBlob, Base64.NO_WRAP)
+
+        // Clear sensitive data
+        passwordHash.fill(0)
 
         val requestId = UUID.randomUUID().toString()
         val request = JsonObject().apply {
             addProperty("id", requestId)
             addProperty("type", "credential.create")
             add("payload", JsonObject().apply {
-                addProperty("encrypted_password_hash", encryptedPassword.encryptedPasswordHash)
-                addProperty("ephemeral_public_key", encryptedPassword.ephemeralPublicKey)
-                addProperty("nonce", encryptedPassword.nonce)
                 addProperty("utk_id", utk.utkId)
-                addProperty("salt", Base64.encodeToString(passwordSalt, Base64.NO_WRAP))
+                addProperty("encrypted_payload", encryptedPayload)
             })
             addProperty("timestamp", java.time.Instant.now().toString())
         }
