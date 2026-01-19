@@ -971,15 +971,12 @@ class EnrollmentViewModel @Inject constructor(
 
             result.fold(
                 onSuccess = { response ->
-                    Log.i(TAG, "Credential created: ${response.credentialGuid}")
+                    Log.i(TAG, "Credential created, status: ${response.status}")
 
-                    // Validate required fields
+                    // Validate required field - only encrypted_credential is required
                     val encryptedCred = response.encryptedCredential
-                    val credGuid = response.credentialGuid
-                    val newUtks = response.newUtks
-
-                    if (encryptedCred == null || credGuid == null || newUtks == null) {
-                        Log.e(TAG, "Credential response missing required fields")
+                    if (encryptedCred == null) {
+                        Log.e(TAG, "Credential response missing encrypted_credential")
                         _state.value = EnrollmentState.Error(
                             message = "Invalid credential response from server",
                             retryable = true
@@ -987,8 +984,14 @@ class EnrollmentViewModel @Inject constructor(
                         return@fold
                     }
 
-                    // Update UTKs with new ones
-                    nitroUtks = newUtks
+                    // Use provided values or defaults
+                    val credGuid = response.credentialGuid ?: java.util.UUID.randomUUID().toString()
+                    val utksToStore = response.newUtks ?: nitroUtks
+
+                    // Update UTKs if new ones provided
+                    if (response.newUtks != null) {
+                        nitroUtks = response.newUtks
+                    }
 
                     // Store credential locally with PCR version for enclave update compatibility
                     val currentPcrs = pcrConfigManager.getCurrentPcrs()
@@ -997,7 +1000,7 @@ class EnrollmentViewModel @Inject constructor(
                         credentialGuid = credGuid,
                         userGuid = response.userGuid ?: userGuid ?: "",
                         passwordSalt = salt,
-                        utks = newUtks,
+                        utks = utksToStore,
                         pcrVersion = currentPcrs.version,
                         pcr0Hash = currentPcrs.pcr0
                     )

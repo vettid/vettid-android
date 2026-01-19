@@ -577,7 +577,7 @@ class NitroEnrollmentClient @Inject constructor(
         }
 
         val topic = "$space.forVault.credential.create"
-        val responseTopic = "$space.forApp.credential.response"
+        val responseTopic = "$space.forApp.credential.create.response"
 
         // Use JetStream for reliable delivery
         val jsResult = ensureJetStreamInitialized()
