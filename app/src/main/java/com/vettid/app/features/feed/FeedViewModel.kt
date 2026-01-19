@@ -14,7 +14,8 @@ private const val TAG = "FeedViewModel"
 
 @HiltViewModel
 class FeedViewModel @Inject constructor(
-    private val feedClient: FeedClient
+    private val feedClient: FeedClient,
+    private val feedNotificationService: FeedNotificationService
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<FeedState>(FeedState.Loading)
@@ -29,8 +30,67 @@ class FeedViewModel @Inject constructor(
     // Track last sync sequence for incremental updates
     private var lastSyncSequence: Long = 0
 
+    // In-app notifications for snackbar display
+    private val _inAppNotification = MutableSharedFlow<InAppFeedNotification>()
+    val inAppNotification: SharedFlow<InAppFeedNotification> = _inAppNotification.asSharedFlow()
+
     init {
         loadFeed()
+        observeFeedUpdates()
+    }
+
+    /**
+     * Observe real-time feed updates from NATS.
+     */
+    private fun observeFeedUpdates() {
+        // Real-time feed updates (new events, status changes)
+        viewModelScope.launch {
+            feedNotificationService.feedUpdates.collect { update ->
+                when (update) {
+                    is FeedUpdate.NewEvent -> {
+                        Log.d(TAG, "New feed event: ${update.eventId}")
+                        refresh() // Refresh to get new event
+                    }
+                    is FeedUpdate.StatusChanged -> {
+                        Log.d(TAG, "Event status changed: ${update.eventId} -> ${update.newStatus}")
+                        handleStatusChange(update.eventId, update.newStatus)
+                    }
+                }
+            }
+        }
+
+        // In-app notifications (when app is in foreground)
+        viewModelScope.launch {
+            feedNotificationService.inAppNotifications.collect { notification ->
+                _inAppNotification.emit(notification)
+            }
+        }
+    }
+
+    private fun handleStatusChange(eventId: String, newStatus: String) {
+        val currentState = _state.value
+        if (currentState is FeedState.Loaded) {
+            when (newStatus) {
+                "archived", "deleted" -> {
+                    // Remove from list
+                    val updatedEvents = currentState.events.filter { it.eventId != eventId }
+                    _state.value = if (updatedEvents.isEmpty()) {
+                        FeedState.Empty
+                    } else {
+                        currentState.copy(
+                            events = updatedEvents,
+                            unreadCount = updatedEvents.count { it.isUnread }
+                        )
+                    }
+                }
+                "read" -> {
+                    // Update unread count
+                    _state.value = currentState.copy(
+                        unreadCount = currentState.events.count { it.isUnread && it.eventId != eventId }
+                    )
+                }
+            }
+        }
     }
 
     fun loadFeed() {

@@ -61,6 +61,17 @@ fun FeedContent(
         }
     }
 
+    // Handle in-app notifications (real-time from NATS)
+    LaunchedEffect(Unit) {
+        viewModel.inAppNotification.collect { notification ->
+            snackbarHostState.showSnackbar(
+                message = notification.title + (notification.message?.let { ": $it" } ?: ""),
+                actionLabel = if (notification.hasAction) "View" else null,
+                duration = if (notification.priority >= 1) SnackbarDuration.Long else SnackbarDuration.Short
+            )
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         when (val currentState = state) {
             is FeedState.Loading -> LoadingContent()
@@ -87,6 +98,7 @@ fun FeedContent(
     }
 }
 
+@Suppress("UNUSED_PARAMETER")
 @Composable
 private fun FeedList(
     events: List<FeedEvent>,

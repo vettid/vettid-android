@@ -73,6 +73,11 @@ class OwnerSpaceClient @Inject constructor(
     /** Flow of call signaling events (vault-routed). */
     val callEvents: SharedFlow<CallSignalEvent> = _callEvents.asSharedFlow()
 
+    // Feed notification events (Issue #15)
+    private val _feedNotifications = MutableSharedFlow<FeedNotification>(extraBufferCapacity = 64)
+    /** Flow of feed notifications (new events, status updates). */
+    val feedNotifications: SharedFlow<FeedNotification> = _feedNotifications.asSharedFlow()
+
     private var appSubscription: NatsSubscription? = null
     private var eventTypesSubscription: NatsSubscription? = null
 
@@ -606,6 +611,11 @@ class OwnerSpaceClient @Inject constructor(
                     handleSecurityEvent(message)
                     return
                 }
+                // Feed notification events (Issue #15)
+                message.subject.contains(".forApp.feed.") -> {
+                    handleFeedNotification(message)
+                    return
+                }
             }
 
             // Decrypt if E2E is enabled
@@ -1079,6 +1089,49 @@ class OwnerSpaceClient @Inject constructor(
         }
     }
 
+    /**
+     * Handle feed notification events (Issue #15: Push notifications).
+     *
+     * Events:
+     * - feed.new: New actionable feed event created
+     * - feed.updated: Feed event status changed
+     */
+    private fun handleFeedNotification(message: NatsMessage) {
+        try {
+            val eventType = message.subject.substringAfterLast(".forApp.feed.")
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+
+            val notification = when (eventType) {
+                "new" -> FeedNotification.NewEvent(
+                    eventId = payload.getString("event_id"),
+                    eventType = payload.getString("event_type"),
+                    title = payload.getString("title"),
+                    message = payload.optString("message").takeIf { it.isNotEmpty() },
+                    priority = payload.optInt("priority", 0),
+                    actionType = payload.optString("action").takeIf { it.isNotEmpty() },
+                    createdAt = payload.optLong("created_at", System.currentTimeMillis())
+                )
+                "updated" -> FeedNotification.EventUpdated(
+                    eventId = payload.getString("event_id"),
+                    newStatus = payload.getString("new_status"),
+                    updatedAt = payload.optLong("updated_at", System.currentTimeMillis())
+                )
+                else -> {
+                    android.util.Log.w(TAG, "Unknown feed event type: $eventType")
+                    null
+                }
+            }
+
+            notification?.let {
+                android.util.Log.i(TAG, "Received feed notification: $eventType - ${it.eventId}")
+                _feedNotifications.tryEmit(it)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse feed notification", e)
+        }
+    }
+
     companion object {
         private const val TAG = "OwnerSpaceClient"
     }
@@ -1489,4 +1542,61 @@ sealed class CallSignalEvent {
     data class Busy(
         override val callId: String
     ) : CallSignalEvent()
+}
+
+// MARK: - Feed Notifications (Issue #15)
+
+/**
+ * Feed notification events from the vault.
+ * Used for real-time push notifications when new feed events arrive or status changes.
+ */
+sealed class FeedNotification {
+    abstract val eventId: String
+
+    /**
+     * New actionable feed event created.
+     * Published to {space}.forApp.feed.new
+     */
+    data class NewEvent(
+        override val eventId: String,
+        val eventType: String,
+        val title: String,
+        val message: String?,
+        val priority: Int,
+        val actionType: String?,
+        val createdAt: Long
+    ) : FeedNotification() {
+        /** Convert priority to notification importance level */
+        val importance: NotificationImportance get() = when (priority) {
+            2 -> NotificationImportance.URGENT
+            1 -> NotificationImportance.HIGH
+            0 -> NotificationImportance.DEFAULT
+            else -> NotificationImportance.LOW
+        }
+    }
+
+    /**
+     * Feed event status changed (read, archived, deleted, etc.)
+     * Published to {space}.forApp.feed.updated
+     */
+    data class EventUpdated(
+        override val eventId: String,
+        val newStatus: String,
+        val updatedAt: Long
+    ) : FeedNotification()
+}
+
+/**
+ * Notification importance levels for feed events.
+ * Maps to Android NotificationManager.IMPORTANCE_* constants.
+ */
+enum class NotificationImportance {
+    /** Priority 2 (urgent): Heads-up notification, makes sound */
+    URGENT,
+    /** Priority 1 (high): Default importance, makes sound */
+    HIGH,
+    /** Priority 0 (normal): Low importance, no sound */
+    DEFAULT,
+    /** Priority -1 (low): Min importance, silent */
+    LOW
 }

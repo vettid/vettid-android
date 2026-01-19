@@ -93,6 +93,15 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- Feed notification action receiver -->
+        <receiver
+            android:name=".features.feed.FeedActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.vettid.app.FEED_ACTION" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>
