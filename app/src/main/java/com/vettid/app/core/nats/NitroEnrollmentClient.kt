@@ -44,11 +44,16 @@ class NitroEnrollmentClient @Inject constructor(
 
     private val gson = Gson()
     private var natsClient: AndroidNatsClient? = null
+    private var jetStreamClient: JetStreamNatsClient? = null
     private var ownerSpace: String? = null
 
     // Store verified attestation data during enrollment
     private var verifiedAttestation: VerifiedAttestation? = null
     private var attestationNonce: ByteArray? = null
+
+    // Store credentials for JetStream connection
+    private var currentEndpoint: String? = null
+    private var currentCredentials: String? = null
 
     /**
      * Connect to NATS with bootstrap credentials from enrollment finalize.
@@ -58,6 +63,10 @@ class NitroEnrollmentClient @Inject constructor(
         credentials: String
     ): Result<Unit> {
         Log.i(TAG, "Connecting to NATS at $natsEndpoint")
+
+        // Store for JetStream connection
+        currentEndpoint = natsEndpoint
+        currentCredentials = credentials
 
         val client = AndroidNatsClient()
         natsClient = client
@@ -73,6 +82,39 @@ class NitroEnrollmentClient @Inject constructor(
         )
 
         return result.map { Unit }
+    }
+
+    /**
+     * Initialize JetStream client for reliable message delivery.
+     * This creates a separate connection using the official jnats library.
+     */
+    private suspend fun ensureJetStreamConnected(): Result<JetStreamNatsClient> {
+        // Return existing client if connected
+        jetStreamClient?.let { client ->
+            if (client.isConnected) return Result.success(client)
+        }
+
+        val endpoint = currentEndpoint
+            ?: return Result.failure(NatsException("No endpoint stored"))
+        val credentials = currentCredentials
+            ?: return Result.failure(NatsException("No credentials stored"))
+
+        val parsedCreds = parseCredentials(credentials)
+            ?: return Result.failure(NatsException("Failed to parse credentials"))
+
+        Log.i(TAG, "Initializing JetStream client...")
+
+        val client = JetStreamNatsClient()
+        val result = client.connect(
+            endpoint = endpoint,
+            jwt = parsedCreds.first,
+            seed = parsedCreds.second
+        )
+
+        return result.map {
+            jetStreamClient = client
+            client
+        }
     }
 
     /**
@@ -249,6 +291,11 @@ class NitroEnrollmentClient @Inject constructor(
                             }
                         }
 
+                        // Flush to ensure subscription is acknowledged before publishing
+                        client.flush()
+                        // Additional delay to ensure subscription propagates to server
+                        kotlinx.coroutines.delay(500)
+
                         // Publish request
                         val pubResult = client.publish(
                             topic,
@@ -301,12 +348,13 @@ class NitroEnrollmentClient @Inject constructor(
     /**
      * Phase 4: Send encrypted PIN to the supervisor.
      *
+     * Uses JetStream for reliable message delivery, solving the timing issue
+     * where responses were published before subscriptions were ready.
+     *
      * @param pin 6-digit PIN entered by user
      * @return Result indicating success or failure
      */
     suspend fun setupPin(pin: String): Result<PinSetupResponse> {
-        val client = natsClient
-            ?: return Result.failure(NatsException("Not connected to NATS"))
         val space = ownerSpace
             ?: return Result.failure(NatsException("Owner space not set"))
         val attestation = verifiedAttestation
@@ -316,14 +364,16 @@ class NitroEnrollmentClient @Inject constructor(
             return Result.failure(NatsException("PIN must be exactly 6 digits"))
         }
 
-        Log.d(TAG, "Setting up PIN...")
+        Log.d(TAG, "Setting up PIN via JetStream...")
 
         // Encrypt PIN to the attested enclave public key
         val enclavePublicKey = attestation.enclavePublicKeyBase64()
             ?: return Result.failure(NatsException("No enclave public key in attestation"))
 
+        // Encrypt PIN as JSON object per enclave protocol
+        val pinPayload = """{"pin": "$pin"}"""
         val encryptedPin = cryptoManager.encryptToPublicKey(
-            plaintext = pin.toByteArray(Charsets.UTF_8),
+            plaintext = pinPayload.toByteArray(Charsets.UTF_8),
             publicKeyBase64 = enclavePublicKey
         )
 
@@ -341,6 +391,58 @@ class NitroEnrollmentClient @Inject constructor(
 
         val topic = "$space.forVault.pin"
         val responseTopic = "$space.forApp.pin.response"
+
+        // Try JetStream first for reliable delivery
+        val jsResult = ensureJetStreamConnected()
+        if (jsResult.isSuccess) {
+            val jsClient = jsResult.getOrThrow()
+            Log.d(TAG, "Using JetStream for PIN setup")
+
+            return try {
+                val response = jsClient.requestWithJetStream(
+                    requestSubject = topic,
+                    responseSubject = responseTopic,
+                    payload = gson.toJson(request).toByteArray(Charsets.UTF_8),
+                    timeoutSeconds = 30
+                )
+
+                response.map { msg ->
+                    Log.d(TAG, "PIN response received: ${msg.dataString.take(200)}")
+
+                    // Parse and validate response
+                    val jsonObject = gson.fromJson(msg.dataString, JsonObject::class.java)
+
+                    val eventId = if (jsonObject.has("event_id") && !jsonObject.get("event_id").isJsonNull) {
+                        jsonObject.get("event_id").asString
+                    } else UUID.randomUUID().toString()
+
+                    val timestamp = if (jsonObject.has("timestamp") && !jsonObject.get("timestamp").isJsonNull) {
+                        jsonObject.get("timestamp").asString
+                    } else null
+
+                    // Validate message for replay attacks
+                    val validationResult = replayProtection.validateMessage(
+                        eventId = eventId,
+                        timestamp = timestamp,
+                        sessionKey = responseTopic
+                    )
+                    if (!validationResult.isValid) {
+                        Log.w(TAG, "SECURITY: PIN response rejected - $validationResult")
+                        throw NatsException("Response validation failed")
+                    }
+
+                    gson.fromJson(msg.dataString, PinSetupResponse::class.java)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "JetStream PIN setup failed: ${e.message}", e)
+                Result.failure(e)
+            }
+        }
+
+        // Fallback to regular NATS (should not happen in production)
+        Log.w(TAG, "JetStream unavailable, falling back to regular NATS")
+        val client = natsClient
+            ?: return Result.failure(NatsException("Not connected to NATS"))
 
         return sendRequestAndWaitForResponse(client, topic, responseTopic, request, requestId)
     }
@@ -580,10 +682,18 @@ class NitroEnrollmentClient @Inject constructor(
         } catch (e: Exception) {
             Log.e(TAG, "Error disconnecting from NATS", e)
         }
+        try {
+            jetStreamClient?.disconnect()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error disconnecting JetStream", e)
+        }
         natsClient = null
+        jetStreamClient = null
         ownerSpace = null
         verifiedAttestation = null
         attestationNonce = null
+        currentEndpoint = null
+        currentCredentials = null
         // Clear replay protection state (#47)
         replayProtection.reset()
     }
@@ -650,6 +760,11 @@ class NitroEnrollmentClient @Inject constructor(
                                 continuation.resume(Result.failure(e))
                             }
                         }
+
+                        // Flush to ensure subscription is acknowledged before publishing
+                        client.flush()
+                        // Additional delay to ensure subscription propagates to server
+                        kotlinx.coroutines.delay(500)
 
                         val pubResult = client.publish(
                             topic,
