@@ -522,32 +522,30 @@ class NitroEnrollmentClient @Inject constructor(
     }
 
     /**
-     * Phase 6: Send encrypted password hash to vault-manager.
+     * Phase 2 (Nitro): Create Protean Credential with password hash.
      *
-     * @param password User's chosen password
+     * Uses JetStream for reliable delivery.
+     *
+     * @param password User's chosen credential password (NOT the PIN)
      * @param passwordSalt Salt for Argon2id hashing
-     * @param utkPublicKey Public key from UTK to encrypt password hash
-     * @param utkKeyId Key ID of the UTK used
+     * @param utk UTK to encrypt password hash with
      * @return CredentialResponse containing encrypted credential and new UTKs
      */
     suspend fun createCredential(
         password: String,
         passwordSalt: ByteArray,
-        utkPublicKey: String,
-        utkKeyId: String
+        utk: UtkInfo
     ): Result<CredentialResponse> {
-        val client = natsClient
-            ?: return Result.failure(NatsException("Not connected to NATS"))
         val space = ownerSpace
             ?: return Result.failure(NatsException("Owner space not set"))
 
-        Log.d(TAG, "Creating credential...")
+        Log.d(TAG, "Creating credential via JetStream...")
 
         // Hash password with Argon2id and encrypt with UTK
         val encryptedPassword = cryptoManager.encryptPasswordForServer(
             password = password,
             salt = passwordSalt,
-            utkPublicKeyBase64 = utkPublicKey
+            utkPublicKeyBase64 = utk.publicKey
         )
 
         val requestId = UUID.randomUUID().toString()
@@ -558,14 +556,66 @@ class NitroEnrollmentClient @Inject constructor(
                 addProperty("encrypted_password_hash", encryptedPassword.encryptedPasswordHash)
                 addProperty("ephemeral_public_key", encryptedPassword.ephemeralPublicKey)
                 addProperty("nonce", encryptedPassword.nonce)
-                addProperty("key_id", utkKeyId)
+                addProperty("utk_id", utk.utkId)
                 addProperty("salt", Base64.encodeToString(passwordSalt, Base64.NO_WRAP))
             })
             addProperty("timestamp", java.time.Instant.now().toString())
         }
 
-        val topic = "$space.forVault.credential"
+        val topic = "$space.forVault.credential.create"
         val responseTopic = "$space.forApp.credential.response"
+
+        // Use JetStream for reliable delivery
+        val jsResult = ensureJetStreamInitialized()
+        if (jsResult.isSuccess) {
+            val jsClient = jsResult.getOrThrow()
+            Log.d(TAG, "Using JetStream for credential create")
+
+            return try {
+                val response = jsClient.requestWithJetStream(
+                    requestSubject = topic,
+                    responseSubject = responseTopic,
+                    payload = gson.toJson(request).toByteArray(Charsets.UTF_8),
+                    timeoutMs = 30_000
+                )
+
+                response.map { msg ->
+                    Log.d(TAG, "Credential response received: ${msg.dataString.take(200)}")
+
+                    // Parse and validate response
+                    val jsonObject = gson.fromJson(msg.dataString, JsonObject::class.java)
+
+                    val eventId = if (jsonObject.has("event_id") && !jsonObject.get("event_id").isJsonNull) {
+                        jsonObject.get("event_id").asString
+                    } else UUID.randomUUID().toString()
+
+                    val timestamp = if (jsonObject.has("timestamp") && !jsonObject.get("timestamp").isJsonNull) {
+                        jsonObject.get("timestamp").asString
+                    } else null
+
+                    // Validate message for replay attacks
+                    val validationResult = replayProtection.validateMessage(
+                        eventId = eventId,
+                        timestamp = timestamp,
+                        sessionKey = responseTopic
+                    )
+                    if (!validationResult.isValid) {
+                        Log.w(TAG, "SECURITY: Credential response rejected - $validationResult")
+                        throw NatsException("Response validation failed")
+                    }
+
+                    gson.fromJson(msg.dataString, CredentialResponse::class.java)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "JetStream credential create failed: ${e.message}", e)
+                Result.failure(e)
+            }
+        }
+
+        // Fallback to regular NATS
+        Log.w(TAG, "JetStream unavailable, falling back to regular NATS")
+        val client = natsClient
+            ?: return Result.failure(NatsException("Not connected to NATS"))
 
         return sendRequestAndWaitForResponse(client, topic, responseTopic, request, requestId)
     }
@@ -837,14 +887,31 @@ data class VaultReadyResponse(
 )
 
 data class UtkInfo(
-    @SerializedName("key_id") val keyId: String,
+    // Support both "id" (new spec) and "key_id" (legacy) formats
+    @SerializedName("id") val id: String? = null,
+    @SerializedName("key_id") val keyId: String? = null,
     @SerializedName("public_key") val publicKey: String
-)
+) {
+    /** Get the UTK ID (supports both new and legacy formats) */
+    val utkId: String
+        get() = id ?: keyId ?: throw IllegalStateException("UTK has no ID")
+}
 
+/**
+ * Credential creation response from Nitro enclave.
+ * Returns the encrypted Protean Credential and fresh UTKs.
+ */
 data class CredentialResponse(
-    val success: Boolean,
-    @SerializedName("encrypted_credential") val encryptedCredential: String,
-    @SerializedName("credential_guid") val credentialGuid: String,
-    @SerializedName("new_utks") val newUtks: List<UtkInfo>,
-    @SerializedName("user_guid") val userGuid: String?
-)
+    val status: String,
+    @SerializedName("encrypted_credential") val encryptedCredential: String? = null,
+    @SerializedName("new_utks") val newUtks: List<UtkInfo>? = null,
+    // Legacy fields for backwards compatibility
+    val success: Boolean? = null,
+    @SerializedName("credential_guid") val credentialGuid: String? = null,
+    @SerializedName("user_guid") val userGuid: String? = null,
+    val message: String? = null
+) {
+    /** Returns true if credential was created successfully */
+    val isSuccess: Boolean
+        get() = status == "created" || success == true
+}

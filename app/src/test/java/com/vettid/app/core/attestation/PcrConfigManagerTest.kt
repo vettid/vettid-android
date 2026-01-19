@@ -428,7 +428,8 @@ class PcrConfigManagerTest {
 
         val signedResponse = apiResponse.toSignedResponse()
 
-        assertEquals("aa".repeat(48), signedResponse.pcrs.pcr0)
+        assertNotNull(signedResponse)
+        assertEquals("aa".repeat(48), signedResponse!!.pcrs.pcr0)
         assertEquals("bb".repeat(48), signedResponse.pcrs.pcr1)
         assertEquals("cc".repeat(48), signedResponse.pcrs.pcr2)
         assertEquals("dd".repeat(48), signedResponse.pcrs.pcr3)
@@ -449,7 +450,8 @@ class PcrConfigManagerTest {
 
         val signedResponse = apiResponse.toSignedResponse()
 
-        assertNull(signedResponse.pcrs.pcr3)
+        assertNotNull(signedResponse)
+        assertNull(signedResponse!!.pcrs.pcr3)
     }
 
     // MARK: - PcrUpdateException Tests

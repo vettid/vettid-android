@@ -672,7 +672,18 @@ class EnrollmentViewModel @Inject constructor(
                         Log.i(TAG, "PIN setup complete, vault ready with ${response.utks?.size ?: 0} UTKs")
                         // Store UTKs from PIN response for credential creation
                         response.utks?.let { nitroUtks = it }
-                        waitForVaultReady()
+
+                        // Generate password salt for credential creation
+                        passwordSalt = cryptoManager.generateSalt()
+
+                        // Go directly to password setup (vault is already ready from PIN response)
+                        _state.value = EnrollmentState.SettingPassword(
+                            sessionId = "",
+                            transactionKeys = emptyList(),
+                            passwordKeyId = response.utks?.firstOrNull()?.utkId ?: "",
+                            utks = nitroUtks,
+                            isNitroFlow = true
+                        )
                     } else {
                         _state.value = currentState.copy(
                             isSubmitting = false,
@@ -955,24 +966,37 @@ class EnrollmentViewModel @Inject constructor(
             val result = nitroEnrollmentClient.createCredential(
                 password = currentState.password,
                 passwordSalt = salt,
-                utkPublicKey = utk.publicKey,
-                utkKeyId = utk.keyId
+                utk = utk
             )
 
             result.fold(
                 onSuccess = { response ->
                     Log.i(TAG, "Credential created: ${response.credentialGuid}")
 
+                    // Validate required fields
+                    val encryptedCred = response.encryptedCredential
+                    val credGuid = response.credentialGuid
+                    val newUtks = response.newUtks
+
+                    if (encryptedCred == null || credGuid == null || newUtks == null) {
+                        Log.e(TAG, "Credential response missing required fields")
+                        _state.value = EnrollmentState.Error(
+                            message = "Invalid credential response from server",
+                            retryable = true
+                        )
+                        return@fold
+                    }
+
                     // Update UTKs with new ones
-                    nitroUtks = response.newUtks
+                    nitroUtks = newUtks
 
                     // Store credential locally
                     credentialStore.storeNitroCredential(
-                        encryptedCredential = response.encryptedCredential,
-                        credentialGuid = response.credentialGuid,
+                        encryptedCredential = encryptedCred,
+                        credentialGuid = credGuid,
                         userGuid = response.userGuid ?: userGuid ?: "",
                         passwordSalt = salt,
-                        utks = response.newUtks
+                        utks = newUtks
                     )
 
                     _state.value = EnrollmentState.CreatingCredential(progress = 0.8f)

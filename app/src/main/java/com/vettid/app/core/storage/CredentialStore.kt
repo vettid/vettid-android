@@ -667,7 +667,7 @@ class CredentialStore @Inject constructor(
         // Convert UtkInfo to TransactionKeyInfo for storage
         val keyInfoList = utks.map { utk ->
             TransactionKeyInfo(
-                keyId = utk.keyId,
+                keyId = utk.utkId,  // Use utkId which handles both id and key_id formats
                 publicKey = utk.publicKey,
                 algorithm = "X25519"
             )
