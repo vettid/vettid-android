@@ -65,6 +65,7 @@ import com.vettid.app.features.voting.ProposalDetailScreen
 import com.vettid.app.features.voting.ProposalsScreen
 import com.vettid.app.features.transfer.TransferRequestScreen
 import com.vettid.app.features.transfer.TransferApprovalScreen
+import com.vettid.app.features.postenrollment.PostEnrollmentScreen
 
 private const val TAG = "VettIDApp"
 
@@ -137,6 +138,8 @@ sealed class Screen(val route: String) {
     object TransferApproval : Screen("transfer/approve/{transferId}") {
         fun createRoute(transferId: String) = "transfer/approve/$transferId"
     }
+    // Post-Enrollment verification (Phase 1 of post-enrollment flow)
+    object PostEnrollment : Screen("post-enrollment")
 }
 
 @Composable
@@ -295,6 +298,10 @@ fun VettIDApp(
                     // User just completed enrollment (proved identity with PIN), so skip biometric prompt
                     appViewModel.refreshCredentialStatus()
                     appViewModel.setAuthenticated(true)
+                    // Navigate to post-enrollment verification
+                    navController.navigate(Screen.PostEnrollment.route) {
+                        popUpTo(Screen.Enrollment.route) { inclusive = true }
+                    }
                 },
                 onCancel = { navController.popBackStack() },
                 startWithManualEntry = startWithManualEntry,
@@ -650,6 +657,27 @@ fun VettIDApp(
             TransferApprovalScreen(
                 transferId = transferId,
                 onNavigateBack = { navController.popBackStack() }
+            )
+        }
+        // Post-Enrollment verification screen
+        composable(Screen.PostEnrollment.route) {
+            PostEnrollmentScreen(
+                onVerificationComplete = {
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(Screen.PostEnrollment.route) { inclusive = true }
+                    }
+                },
+                onNavigateToPersonalData = {
+                    // TODO: Navigate to personal data collection (Phase 2)
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(Screen.PostEnrollment.route) { inclusive = true }
+                    }
+                },
+                onNavigateToMain = {
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(Screen.PostEnrollment.route) { inclusive = true }
+                    }
+                }
             )
         }
     }
