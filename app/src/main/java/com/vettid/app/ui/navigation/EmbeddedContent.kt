@@ -514,7 +514,9 @@ fun AppSettingsGeneralContent(
 }
 
 @Composable
-fun AppSettingsSecurityContent() {
+fun AppSettingsSecurityContent(
+    onNavigateToSecurityAuditLog: () -> Unit = {}
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -567,6 +569,12 @@ fun AppSettingsSecurityContent() {
                 icon = Icons.Default.Devices,
                 title = "Active Sessions",
                 subtitle = "1 device"
+            )
+            SettingsItem(
+                icon = Icons.Default.Security,
+                title = "Security Audit Log",
+                subtitle = "View security events and migrations",
+                onClick = onNavigateToSecurityAuditLog
             )
         }
     }

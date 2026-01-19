@@ -67,6 +67,8 @@ import com.vettid.app.features.transfer.TransferRequestScreen
 import com.vettid.app.features.transfer.TransferApprovalScreen
 import com.vettid.app.features.postenrollment.PostEnrollmentScreen
 import com.vettid.app.features.postenrollment.PersonalDataCollectionScreen
+import com.vettid.app.features.migration.EmergencyRecoveryScreen
+import com.vettid.app.features.migration.SecurityAuditLogScreen
 
 private const val TAG = "VettIDApp"
 
@@ -143,6 +145,9 @@ sealed class Screen(val route: String) {
     object PostEnrollment : Screen("post-enrollment")
     // Personal data collection (Phase 2 of post-enrollment flow)
     object PersonalDataCollection : Screen("personal-data-collection")
+    // Migration screens (Issue #18: Enclave migration support)
+    object SecurityAuditLog : Screen("security-audit-log")
+    object EmergencyRecovery : Screen("emergency-recovery")
 }
 
 @Composable
@@ -374,6 +379,9 @@ fun VettIDApp(
                 },
                 onNavigateToMyVotes = {
                     navController.navigate(Screen.MyVotes.route)
+                },
+                onNavigateToSecurityAuditLog = {
+                    navController.navigate(Screen.SecurityAuditLog.route)
                 },
                 onSignOut = {
                     appViewModel.signOut()
@@ -692,6 +700,22 @@ fun VettIDApp(
                 }
             )
         }
+        // Security Audit Log screen (Issue #18: Enclave migration)
+        composable(Screen.SecurityAuditLog.route) {
+            SecurityAuditLogScreen(
+                onBack = { navController.popBackStack() }
+            )
+        }
+        // Emergency Recovery screen (Issue #18: Enclave migration - disaster scenario)
+        composable(Screen.EmergencyRecovery.route) {
+            EmergencyRecoveryScreen(
+                onRecoveryComplete = {
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
+            )
+        }
     }
 }
 
@@ -966,6 +990,7 @@ fun MainScreen(
     onNavigateToCredentialDebug: () -> Unit = {},
     onNavigateToProposals: () -> Unit = {},
     onNavigateToMyVotes: () -> Unit = {},
+    onNavigateToSecurityAuditLog: () -> Unit = {},
     onSignOut: () -> Unit = {},
     appViewModel: AppViewModel = hiltViewModel()
 ) {
@@ -1065,7 +1090,9 @@ fun MainScreen(
             )
         },
         appSettingsSecurityContent = {
-            AppSettingsSecurityContent()
+            AppSettingsSecurityContent(
+                onNavigateToSecurityAuditLog = onNavigateToSecurityAuditLog
+            )
         },
         appSettingsBackupContent = {
             AppSettingsBackupContent()
