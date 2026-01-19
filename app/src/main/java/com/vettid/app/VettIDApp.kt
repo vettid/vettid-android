@@ -290,7 +290,12 @@ fun VettIDApp(
                 if (it.isNotEmpty()) java.net.URLDecoder.decode(it, "UTF-8") else null
             }
             EnrollmentScreen(
-                onEnrollmentComplete = { appViewModel.refreshCredentialStatus() },
+                onEnrollmentComplete = {
+                    // Refresh credential status and mark as authenticated
+                    // User just completed enrollment (proved identity with PIN), so skip biometric prompt
+                    appViewModel.refreshCredentialStatus()
+                    appViewModel.setAuthenticated(true)
+                },
                 onCancel = { navController.popBackStack() },
                 startWithManualEntry = startWithManualEntry,
                 initialCode = initialCode

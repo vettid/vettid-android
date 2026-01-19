@@ -134,12 +134,14 @@ class PcrConfigManager @Inject constructor(
             Log.w(TAG, "PCR signature verification failed - continuing with API PCRs")
         }
 
-        // Check version is newer
-        val currentVersion = prefs.getString(KEY_PCR_VERSION, "")
-        if (signedResponse.pcrs.version == currentVersion) {
-            Log.d(TAG, "PCRs already at version ${signedResponse.pcrs.version}")
+        // Check if PCRs actually changed (compare PCR0 hash, not just version)
+        val currentPcrs = getCurrentPcrs()
+        if (signedResponse.pcrs.pcr0 == currentPcrs.pcr0) {
+            Log.d(TAG, "PCRs already up to date (PCR0 matches)")
             return false
         }
+
+        Log.i(TAG, "PCR0 changed - updating from ${currentPcrs.version} to ${signedResponse.pcrs.version}")
 
         // Save current PCRs as previous (for transition period fallback)
         val currentPcrsJson = prefs.getString(KEY_CURRENT_PCRS, null)
