@@ -79,6 +79,10 @@ class CryptoManager @Inject constructor() {
         private const val GCM_TAG_LENGTH = 128
         private const val GCM_NONCE_LENGTH = 12
         private const val CHACHA_NONCE_LENGTH = 12
+        private const val XCHACHA_NONCE_LENGTH = 24
+
+        /** Domain for UTK encryption HKDF (used as salt, no info) */
+        const val UTK_DOMAIN = "vettid-utk-v1"
 
         /**
          * Argon2id parameters (OWASP 2024 recommendations)
@@ -208,6 +212,206 @@ class CryptoManager @Inject constructor() {
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(key, "AES"), gcmSpec)
             cipher.doFinal(ciphertext)
         }
+    }
+
+    /**
+     * Derive encryption key using HKDF with domain as salt (no info).
+     *
+     * This matches the vault-manager's HKDF configuration:
+     * - Algorithm: HKDF-SHA256
+     * - Salt: domain string (e.g., "vettid-utk-v1")
+     * - Info: nil/empty
+     * - Key length: 32 bytes
+     */
+    fun deriveKeyWithDomain(sharedSecret: ByteArray, domain: String): ByteArray {
+        return Hkdf.computeHkdf(
+            "HMACSHA256",
+            sharedSecret,
+            domain.toByteArray(Charsets.UTF_8),  // Domain as salt
+            ByteArray(0),  // No info
+            32  // 256-bit key
+        )
+    }
+
+    // MARK: - PHC String Format
+
+    /**
+     * Generate PHC (Password Hashing Competition) format string for Argon2id.
+     *
+     * Format: $argon2id$v=19$m=65536,t=3,p=4$<base64-salt>$<base64-hash>
+     *
+     * Note: PHC format uses base64 without padding for salt and hash.
+     */
+    fun hashPasswordPHC(password: String, salt: ByteArray): String {
+        val hash = hashPassword(password, salt)
+
+        // Base64 encode without padding (PHC format requirement)
+        val saltB64 = Base64.encodeToString(salt, Base64.NO_WRAP or Base64.NO_PADDING)
+        val hashB64 = Base64.encodeToString(hash, Base64.NO_WRAP or Base64.NO_PADDING)
+
+        return "\$argon2id\$v=19\$m=$ARGON2_MEMORY_KB,t=$ARGON2_ITERATIONS,p=$ARGON2_PARALLELISM\$$saltB64\$$hashB64"
+    }
+
+    // MARK: - XChaCha20-Poly1305 Encryption
+
+    /**
+     * HChaCha20 - derives a 256-bit subkey from a 256-bit key and 128-bit nonce.
+     *
+     * This is the first step of XChaCha20 which extends ChaCha20's nonce from 96 to 192 bits.
+     * The output is used as the key for regular ChaCha20.
+     */
+    private fun hChaCha20(key: ByteArray, nonce: ByteArray): ByteArray {
+        require(key.size == 32) { "Key must be 32 bytes" }
+        require(nonce.size == 16) { "Nonce must be 16 bytes" }
+
+        // ChaCha20 constants: "expand 32-byte k"
+        val state = IntArray(16)
+        state[0] = 0x61707865
+        state[1] = 0x3320646e
+        state[2] = 0x79622d32
+        state[3] = 0x6b206574
+
+        // Key (8 words)
+        for (i in 0..7) {
+            state[4 + i] = littleEndianToInt(key, i * 4)
+        }
+
+        // Nonce (4 words) - in HChaCha20, nonce goes in positions 12-15
+        for (i in 0..3) {
+            state[12 + i] = littleEndianToInt(nonce, i * 4)
+        }
+
+        // 20 rounds (10 double rounds)
+        val working = state.copyOf()
+        repeat(10) {
+            // Column rounds
+            quarterRound(working, 0, 4, 8, 12)
+            quarterRound(working, 1, 5, 9, 13)
+            quarterRound(working, 2, 6, 10, 14)
+            quarterRound(working, 3, 7, 11, 15)
+            // Diagonal rounds
+            quarterRound(working, 0, 5, 10, 15)
+            quarterRound(working, 1, 6, 11, 12)
+            quarterRound(working, 2, 7, 8, 13)
+            quarterRound(working, 3, 4, 9, 14)
+        }
+
+        // Extract subkey: first 4 words and last 4 words of the state
+        val subkey = ByteArray(32)
+        intToLittleEndian(working[0], subkey, 0)
+        intToLittleEndian(working[1], subkey, 4)
+        intToLittleEndian(working[2], subkey, 8)
+        intToLittleEndian(working[3], subkey, 12)
+        intToLittleEndian(working[12], subkey, 16)
+        intToLittleEndian(working[13], subkey, 20)
+        intToLittleEndian(working[14], subkey, 24)
+        intToLittleEndian(working[15], subkey, 28)
+
+        return subkey
+    }
+
+    private fun quarterRound(state: IntArray, a: Int, b: Int, c: Int, d: Int) {
+        state[a] += state[b]; state[d] = (state[d] xor state[a]).rotateLeft(16)
+        state[c] += state[d]; state[b] = (state[b] xor state[c]).rotateLeft(12)
+        state[a] += state[b]; state[d] = (state[d] xor state[a]).rotateLeft(8)
+        state[c] += state[d]; state[b] = (state[b] xor state[c]).rotateLeft(4)
+    }
+
+    private fun littleEndianToInt(bs: ByteArray, off: Int): Int {
+        return (bs[off].toInt() and 0xff) or
+                ((bs[off + 1].toInt() and 0xff) shl 8) or
+                ((bs[off + 2].toInt() and 0xff) shl 16) or
+                ((bs[off + 3].toInt() and 0xff) shl 24)
+    }
+
+    private fun intToLittleEndian(n: Int, bs: ByteArray, off: Int) {
+        bs[off] = n.toByte()
+        bs[off + 1] = (n ushr 8).toByte()
+        bs[off + 2] = (n ushr 16).toByte()
+        bs[off + 3] = (n ushr 24).toByte()
+    }
+
+    /**
+     * Encrypt data using XChaCha20-Poly1305 (24-byte nonce).
+     *
+     * XChaCha20 extends ChaCha20's nonce from 96 to 192 bits:
+     * 1. Use HChaCha20 to derive subkey from key and first 16 bytes of nonce
+     * 2. Use ChaCha20-Poly1305 with subkey and nonce = [0,0,0,0] + last 8 bytes of original nonce
+     *
+     * @return (ciphertext with auth tag, 24-byte nonce)
+     */
+    fun xChaChaEncrypt(plaintext: ByteArray, key: ByteArray): Pair<ByteArray, ByteArray> {
+        val nonce = randomBytes(XCHACHA_NONCE_LENGTH)
+
+        // Derive subkey using HChaCha20 with first 16 bytes of nonce
+        val subkey = hChaCha20(key, nonce.copyOfRange(0, 16))
+
+        // Create ChaCha20-Poly1305 nonce: 4 zero bytes + last 8 bytes of XChaCha20 nonce
+        val chaChaNonce = ByteArray(12)
+        System.arraycopy(nonce, 16, chaChaNonce, 4, 8)
+
+        // Encrypt with standard ChaCha20-Poly1305 using derived subkey
+        val ciphertext = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            val cipher = Cipher.getInstance("ChaCha20-Poly1305")
+            cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(subkey, "ChaCha20"), IvParameterSpec(chaChaNonce))
+            cipher.doFinal(plaintext)
+        } else {
+            // Fallback to AES-GCM on older Android
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            val gcmSpec = GCMParameterSpec(GCM_TAG_LENGTH, chaChaNonce)
+            cipher.init(Cipher.ENCRYPT_MODE, SecretKeySpec(subkey, "AES"), gcmSpec)
+            cipher.doFinal(plaintext)
+        }
+
+        // Clear subkey
+        subkey.fill(0)
+
+        return Pair(ciphertext, nonce)
+    }
+
+    /**
+     * Encrypt data to UTK public key using XChaCha20-Poly1305 with domain-based HKDF.
+     *
+     * This method matches the vault-manager's expected format:
+     * - X25519 key exchange
+     * - HKDF with domain as salt, no info
+     * - XChaCha20-Poly1305 encryption (24-byte nonce)
+     *
+     * @param plaintext Data to encrypt
+     * @param utkPublicKeyBase64 UTK public key (Base64)
+     * @param domain HKDF domain string (default: "vettid-utk-v1")
+     * @return Concatenated blob: ephemeral_pubkey (32) + nonce (24) + ciphertext
+     */
+    fun encryptToUTK(
+        plaintext: ByteArray,
+        utkPublicKeyBase64: String,
+        domain: String = UTK_DOMAIN
+    ): ByteArray {
+        // 1. Generate ephemeral X25519 keypair
+        val (ephemeralPrivate, ephemeralPublic) = generateX25519KeyPair()
+
+        // 2. Compute shared secret with UTK public key
+        val utkPublicKey = Base64.decode(utkPublicKeyBase64, Base64.NO_WRAP)
+        val sharedSecret = x25519SharedSecret(ephemeralPrivate, utkPublicKey)
+
+        // 3. Derive encryption key using domain-based HKDF
+        val encryptionKey = deriveKeyWithDomain(sharedSecret, domain)
+
+        // 4. Encrypt with XChaCha20-Poly1305 (24-byte nonce)
+        val (ciphertext, nonce) = xChaChaEncrypt(plaintext, encryptionKey)
+
+        // 5. Concatenate: ephemeral_pubkey (32) + nonce (24) + ciphertext
+        val result = ByteArray(ephemeralPublic.size + nonce.size + ciphertext.size)
+        System.arraycopy(ephemeralPublic, 0, result, 0, ephemeralPublic.size)
+        System.arraycopy(nonce, 0, result, ephemeralPublic.size, nonce.size)
+        System.arraycopy(ciphertext, 0, result, ephemeralPublic.size + nonce.size, ciphertext.size)
+
+        // Clear sensitive data
+        ephemeralPrivate.fill(0)
+        sharedSecret.fill(0)
+        encryptionKey.fill(0)
+
+        return result
     }
 
     // MARK: - Password Encryption Flow

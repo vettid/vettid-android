@@ -91,6 +91,10 @@ class CredentialStore @Inject constructor(
         private const val KEY_ENCLAVE_PUBLIC_KEY = "enclave_public_key"
         private const val KEY_BACKUP_KEY = "backup_key"
         private const val KEY_IS_ENCLAVE_FORMAT = "is_enclave_format"
+        // PCR version tracking (for enclave update compatibility)
+        private const val KEY_PCR_VERSION = "pcr_version"
+        private const val KEY_PCR0_HASH = "pcr0_hash"
+        private const val KEY_ENROLLMENT_PCR_VERSION = "enrollment_pcr_version"
     }
 
     // MARK: - Credential Storage
@@ -137,7 +141,10 @@ class CredentialStore @Inject constructor(
             latVersion = encryptedPrefs.getInt(KEY_LAT_VERSION, 0),
             passwordSalt = encryptedPrefs.getString(KEY_PASSWORD_SALT, "") ?: "",
             createdAt = encryptedPrefs.getLong(KEY_CREATED_AT, 0),
-            lastUsedAt = encryptedPrefs.getLong(KEY_LAST_USED_AT, 0)
+            lastUsedAt = encryptedPrefs.getLong(KEY_LAST_USED_AT, 0),
+            pcrVersion = getCurrentPcrVersion(),
+            pcr0Hash = encryptedPrefs.getString(KEY_PCR0_HASH, null),
+            isNitroCredential = encryptedPrefs.getBoolean("is_nitro_credential", false)
         )
     }
 
@@ -649,20 +656,24 @@ class CredentialStore @Inject constructor(
 
     /**
      * Store credential from Nitro Enclave enrollment flow.
-     * This stores the encrypted credential blob, user info, and UTKs.
+     * This stores the encrypted credential blob, user info, UTKs, and PCR version.
      *
      * @param encryptedCredential Encrypted credential blob from vault-manager
      * @param credentialGuid Unique identifier for the credential
      * @param userGuid User's GUID
      * @param passwordSalt Salt used for password hashing
      * @param utks User Transaction Keys for future operations
+     * @param pcrVersion PCR version used during enrollment (for enclave update compatibility)
+     * @param pcr0Hash PCR0 hash at time of enrollment (for verification)
      */
     fun storeNitroCredential(
         encryptedCredential: String,
         credentialGuid: String,
         userGuid: String,
         passwordSalt: ByteArray,
-        utks: List<com.vettid.app.core.nats.UtkInfo>
+        utks: List<com.vettid.app.core.nats.UtkInfo>,
+        pcrVersion: String? = null,
+        pcr0Hash: String? = null
     ) {
         // Convert UtkInfo to TransactionKeyInfo for storage
         val keyInfoList = utks.map { utk ->
@@ -682,9 +693,12 @@ class CredentialStore @Inject constructor(
             putLong(KEY_LAST_USED_AT, System.currentTimeMillis())
             // Mark as Nitro enrollment
             putBoolean("is_nitro_credential", true)
+            // Store PCR version for enclave update compatibility
+            pcrVersion?.let { putString(KEY_ENROLLMENT_PCR_VERSION, it) }
+            pcr0Hash?.let { putString(KEY_PCR0_HASH, it) }
         }.apply()
 
-        android.util.Log.i("CredentialStore", "Stored Nitro credential: $credentialGuid for user $userGuid with ${utks.size} UTKs")
+        android.util.Log.i("CredentialStore", "Stored Nitro credential: $credentialGuid for user $userGuid with ${utks.size} UTKs, PCR version: $pcrVersion")
     }
 
     /**
@@ -967,6 +981,55 @@ class CredentialStore @Inject constructor(
         }.apply()
     }
 
+    // MARK: - PCR Version Tracking
+
+    /**
+     * Get the PCR version used during enrollment.
+     * This is stored to ensure compatibility during enclave updates.
+     */
+    fun getEnrollmentPcrVersion(): String? {
+        return encryptedPrefs.getString(KEY_ENROLLMENT_PCR_VERSION, null)
+    }
+
+    /**
+     * Get the PCR0 hash stored during enrollment.
+     * This can be used for verification during auth operations.
+     */
+    fun getEnrollmentPcr0Hash(): String? {
+        return encryptedPrefs.getString(KEY_PCR0_HASH, null)
+    }
+
+    /**
+     * Update PCR version after successful operation with new enclave.
+     * Call this when auth succeeds with a newer PCR version.
+     *
+     * @param pcrVersion New PCR version that was successfully used
+     * @param pcr0Hash New PCR0 hash (optional)
+     */
+    fun updatePcrVersion(pcrVersion: String, pcr0Hash: String? = null) {
+        encryptedPrefs.edit().apply {
+            putString(KEY_PCR_VERSION, pcrVersion)
+            pcr0Hash?.let { putString(KEY_PCR0_HASH, it) }
+        }.apply()
+        android.util.Log.i("CredentialStore", "Updated PCR version to: $pcrVersion")
+    }
+
+    /**
+     * Get the current PCR version (may differ from enrollment version after updates).
+     * Returns enrollment version if no updates have occurred.
+     */
+    fun getCurrentPcrVersion(): String? {
+        return encryptedPrefs.getString(KEY_PCR_VERSION, null)
+            ?: encryptedPrefs.getString(KEY_ENROLLMENT_PCR_VERSION, null)
+    }
+
+    /**
+     * Check if credential was enrolled with Nitro Enclave.
+     */
+    fun isNitroCredential(): Boolean {
+        return encryptedPrefs.getBoolean("is_nitro_credential", false)
+    }
+
     // MARK: - Cleanup
 
     /**
@@ -991,5 +1054,8 @@ data class StoredCredential(
     val latVersion: Int,
     val passwordSalt: String,
     val createdAt: Long,
-    val lastUsedAt: Long
+    val lastUsedAt: Long,
+    val pcrVersion: String? = null,
+    val pcr0Hash: String? = null,
+    val isNitroCredential: Boolean = false
 )

@@ -990,13 +990,16 @@ class EnrollmentViewModel @Inject constructor(
                     // Update UTKs with new ones
                     nitroUtks = newUtks
 
-                    // Store credential locally
+                    // Store credential locally with PCR version for enclave update compatibility
+                    val currentPcrs = pcrConfigManager.getCurrentPcrs()
                     credentialStore.storeNitroCredential(
                         encryptedCredential = encryptedCred,
                         credentialGuid = credGuid,
                         userGuid = response.userGuid ?: userGuid ?: "",
                         passwordSalt = salt,
-                        utks = newUtks
+                        utks = newUtks,
+                        pcrVersion = currentPcrs.version,
+                        pcr0Hash = currentPcrs.pcr0
                     )
 
                     _state.value = EnrollmentState.CreatingCredential(progress = 0.8f)

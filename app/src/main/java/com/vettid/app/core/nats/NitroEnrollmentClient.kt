@@ -526,8 +526,11 @@ class NitroEnrollmentClient @Inject constructor(
      *
      * Uses JetStream for reliable delivery.
      *
-     * The request format uses a single encrypted_payload field containing
-     * ECIES-encrypted JSON with password_hash and password_salt.
+     * Crypto parameters (must match vault-manager):
+     * - Password hash: PHC format ($argon2id$v=19$m=65536,t=3,p=4$<salt>$<hash>)
+     * - Encryption: XChaCha20-Poly1305 (24-byte nonce)
+     * - HKDF: Domain "vettid-utk-v1" as salt, no info
+     * - Blob format: ephemeral_pubkey (32) + nonce (24) + ciphertext
      *
      * @param password User's chosen credential password (NOT the PIN)
      * @param passwordSalt Salt for Argon2id hashing
@@ -544,45 +547,32 @@ class NitroEnrollmentClient @Inject constructor(
 
         Log.d(TAG, "Creating credential via JetStream...")
 
-        // 1. Hash password with Argon2id
-        val passwordHash = cryptoManager.hashPassword(password, passwordSalt)
+        // 1. Generate PHC format password hash
+        val phcHash = cryptoManager.hashPasswordPHC(password, passwordSalt)
+        Log.d(TAG, "Generated PHC hash: ${phcHash.take(50)}...")
 
-        // 2. Create JSON payload with hash and salt
+        // 2. Create JSON payload with PHC hash
         val payloadJson = JsonObject().apply {
-            addProperty("password_hash", Base64.encodeToString(passwordHash, Base64.NO_WRAP))
-            addProperty("password_salt", Base64.encodeToString(passwordSalt, Base64.NO_WRAP))
+            addProperty("password_hash", phcHash)
         }
 
-        // 3. Encrypt the JSON payload with UTK public key
-        val encrypted = cryptoManager.encryptToPublicKey(
+        // 3. Encrypt with XChaCha20-Poly1305 using UTK
+        // Uses domain "vettid-utk-v1" as HKDF salt, no info
+        val encryptedBlob = cryptoManager.encryptToUTK(
             plaintext = gson.toJson(payloadJson).toByteArray(Charsets.UTF_8),
-            publicKeyBase64 = utk.publicKey,
-            context = "credential-encryption-v1"
+            utkPublicKeyBase64 = utk.publicKey
         )
 
-        // 4. Concatenate ECIES components into single blob: ephemeral_key (32) + nonce (12) + ciphertext
-        val ephemeralKeyBytes = Base64.decode(encrypted.ephemeralPublicKey, Base64.NO_WRAP)
-        val nonceBytes = Base64.decode(encrypted.nonce, Base64.NO_WRAP)
-        val ciphertextBytes = Base64.decode(encrypted.ciphertext, Base64.NO_WRAP)
+        val encryptedPayload = Base64.encodeToString(encryptedBlob, Base64.NO_WRAP)
+        Log.d(TAG, "Encrypted payload size: ${encryptedBlob.size} bytes (32 pubkey + 24 nonce + ciphertext)")
 
-        val combinedBlob = ByteArray(ephemeralKeyBytes.size + nonceBytes.size + ciphertextBytes.size)
-        System.arraycopy(ephemeralKeyBytes, 0, combinedBlob, 0, ephemeralKeyBytes.size)
-        System.arraycopy(nonceBytes, 0, combinedBlob, ephemeralKeyBytes.size, nonceBytes.size)
-        System.arraycopy(ciphertextBytes, 0, combinedBlob, ephemeralKeyBytes.size + nonceBytes.size, ciphertextBytes.size)
-
-        val encryptedPayload = Base64.encodeToString(combinedBlob, Base64.NO_WRAP)
-
-        // Clear sensitive data
-        passwordHash.fill(0)
-
+        // 4. Build request with wrapper format
         val requestId = UUID.randomUUID().toString()
         val request = JsonObject().apply {
             addProperty("id", requestId)
             addProperty("type", "credential.create")
-            add("payload", JsonObject().apply {
-                addProperty("utk_id", utk.utkId)
-                addProperty("encrypted_payload", encryptedPayload)
-            })
+            addProperty("utk_id", utk.utkId)
+            addProperty("encrypted_payload", encryptedPayload)
             addProperty("timestamp", java.time.Instant.now().toString())
         }
 
