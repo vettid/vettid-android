@@ -76,17 +76,10 @@ class PcrInitializationService @Inject constructor(
     }
 
     private suspend fun initializeAsync() {
-        Log.i(TAG, "Starting PCR initialization")
+        Log.i(TAG, "Starting PCR initialization - always fetching fresh PCRs")
 
-        // Check if we need to update
-        if (!pcrConfigManager.shouldCheckForUpdates()) {
-            Log.d(TAG, "PCRs are up to date (last update within 24h)")
-            val currentPcrs = pcrConfigManager.getCurrentPcrs()
-            Log.i(TAG, "Using cached PCRs version: ${currentPcrs.version}")
-            return
-        }
-
-        Log.d(TAG, "PCRs need to be refreshed")
+        // Always fetch fresh PCRs on startup to handle enclave updates
+        // Don't rely on cached values which may be stale after deployments
 
         // Get the API base URL from build config
         val baseUrl = BuildConfig.API_BASE_URL

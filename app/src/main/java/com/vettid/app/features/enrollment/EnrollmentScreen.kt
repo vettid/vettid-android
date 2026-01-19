@@ -22,9 +22,11 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.vettid.app.R
 import com.vettid.app.ui.components.QrCodeScanner
 
 /**
@@ -160,7 +162,10 @@ fun EnrollmentScreen(
                     LoadingContent(currentState.message, currentState.progress)
                 }
                 is EnrollmentState.CreatingCredential -> {
-                    LoadingContent(currentState.message, currentState.progress)
+                    CreatingCredentialContent(
+                        message = currentState.message,
+                        progress = currentState.progress
+                    )
                 }
                 is EnrollmentState.VerifyingEnrollment -> {
                     LoadingContent(currentState.message, currentState.progress)
@@ -970,17 +975,27 @@ private fun PasswordSetupContent(
 
         Spacer(modifier = Modifier.height(32.dp))
 
+        // Tower logo
         Icon(
-            imageVector = Icons.Default.Lock,
-            contentDescription = null,
-            modifier = Modifier.size(64.dp),
-            tint = MaterialTheme.colorScheme.primary
+            painter = painterResource(id = R.drawable.vettid_logo_gold),
+            contentDescription = "VettID Vault",
+            modifier = Modifier.size(80.dp),
+            tint = Color.Unspecified  // Use original colors from vector
         )
 
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = "Create a password for managing Vault Services",
+            text = "Protean Credential Password",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = "This password protects your Protean Credential and is required for secure operations.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
@@ -1290,6 +1305,66 @@ private fun LoadingContent(message: String, progress: Float? = null) {
         Text(
             text = message,
             style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+// MARK: - Creating Credential Content
+
+@Composable
+private fun CreatingCredentialContent(
+    message: String,
+    progress: Float
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        // Tower logo
+        Icon(
+            painter = painterResource(id = R.drawable.vettid_logo_gold),
+            contentDescription = "VettID Vault",
+            modifier = Modifier.size(100.dp),
+            tint = Color.Unspecified
+        )
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Text(
+            text = "Creating Your Protean Credential",
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = "Your credential is being securely generated inside the hardware-protected enclave.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        // Progress indicator
+        LinearProgressIndicator(
+            progress = progress,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 32.dp)
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }

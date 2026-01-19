@@ -50,16 +50,16 @@ class PcrConfigManager @Inject constructor(
         // Updated: 2026-01-06
         private const val VETTID_SIGNING_KEY_BASE64 = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEzSr2U/RxJRP7dWKMASJSs6fURsEzdn59XSvp3TitMaw3bMBIj8slPXJhJF7d2/DS4UnzMhxEdQHLq2NdoKaVUw=="
 
-        // Default bundled PCRs (updated with each app release)
-        // These are used when the app is first installed or if updates fail
-        // PCR values from VettID vault enclave build 2026-01-18-v1
+        // Fallback PCRs - ONLY used if network fetch completely fails on first launch
+        // These should never be relied upon in production - always fetch fresh from API
+        // WARNING: These values will become stale after enclave deployments
         private val DEFAULT_PCRS = ExpectedPcrs(
-            pcr0 = "9b03797f32414ba67d3fd6dee843b45c8324069b658c5812917b727b3959cfd78f46f1ef69c35668034871b86c929a3b",
-            pcr1 = "4b4d5b3661b3efc12920900c80e126e4ce783c522de6c02a2a5bf7af3a2b9327b86776f188e4be1c1c404a129dbda493",
-            pcr2 = "9875f4b83a151162c03dd37c8b023828cd15aa12f6c3d115556c8e036cbdcf2302f1a27e7576c017e3a084060399d189",
+            pcr0 = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            pcr1 = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            pcr2 = "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
             pcr3 = null,
-            version = "2026-01-18-v1",
-            publishedAt = "2026-01-18T02:09:48Z"
+            version = "fallback-invalid",
+            publishedAt = ""
         )
 
         // How often to check for PCR updates (24 hours)
