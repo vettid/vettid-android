@@ -66,6 +66,7 @@ import com.vettid.app.features.voting.ProposalsScreen
 import com.vettid.app.features.transfer.TransferRequestScreen
 import com.vettid.app.features.transfer.TransferApprovalScreen
 import com.vettid.app.features.postenrollment.PostEnrollmentScreen
+import com.vettid.app.features.postenrollment.PersonalDataCollectionScreen
 
 private const val TAG = "VettIDApp"
 
@@ -140,6 +141,8 @@ sealed class Screen(val route: String) {
     }
     // Post-Enrollment verification (Phase 1 of post-enrollment flow)
     object PostEnrollment : Screen("post-enrollment")
+    // Personal data collection (Phase 2 of post-enrollment flow)
+    object PersonalDataCollection : Screen("personal-data-collection")
 }
 
 @Composable
@@ -663,19 +666,28 @@ fun VettIDApp(
         composable(Screen.PostEnrollment.route) {
             PostEnrollmentScreen(
                 onVerificationComplete = {
-                    navController.navigate(Screen.Main.route) {
+                    navController.navigate(Screen.PersonalDataCollection.route) {
                         popUpTo(Screen.PostEnrollment.route) { inclusive = true }
                     }
                 },
                 onNavigateToPersonalData = {
-                    // TODO: Navigate to personal data collection (Phase 2)
-                    navController.navigate(Screen.Main.route) {
+                    navController.navigate(Screen.PersonalDataCollection.route) {
                         popUpTo(Screen.PostEnrollment.route) { inclusive = true }
                     }
                 },
                 onNavigateToMain = {
                     navController.navigate(Screen.Main.route) {
                         popUpTo(Screen.PostEnrollment.route) { inclusive = true }
+                    }
+                }
+            )
+        }
+        // Personal data collection screen (Phase 2)
+        composable(Screen.PersonalDataCollection.route) {
+            PersonalDataCollectionScreen(
+                onNavigateToMain = {
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(Screen.PersonalDataCollection.route) { inclusive = true }
                     }
                 }
             )
