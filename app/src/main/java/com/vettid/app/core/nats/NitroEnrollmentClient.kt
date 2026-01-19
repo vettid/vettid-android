@@ -86,35 +86,24 @@ class NitroEnrollmentClient @Inject constructor(
 
     /**
      * Initialize JetStream client for reliable message delivery.
-     * This creates a separate connection using the official jnats library.
+     * Reuses the existing AndroidNatsClient connection.
      */
-    private suspend fun ensureJetStreamConnected(): Result<JetStreamNatsClient> {
-        // Return existing client if connected
+    private fun ensureJetStreamInitialized(): Result<JetStreamNatsClient> {
+        // Return existing client if initialized
         jetStreamClient?.let { client ->
             if (client.isConnected) return Result.success(client)
         }
 
-        val endpoint = currentEndpoint
-            ?: return Result.failure(NatsException("No endpoint stored"))
-        val credentials = currentCredentials
-            ?: return Result.failure(NatsException("No credentials stored"))
+        val client = natsClient
+            ?: return Result.failure(NatsException("NATS client not connected"))
 
-        val parsedCreds = parseCredentials(credentials)
-            ?: return Result.failure(NatsException("Failed to parse credentials"))
+        Log.i(TAG, "Initializing JetStream with existing connection...")
 
-        Log.i(TAG, "Initializing JetStream client...")
+        val jsClient = JetStreamNatsClient()
+        jsClient.initialize(client)
+        jetStreamClient = jsClient
 
-        val client = JetStreamNatsClient()
-        val result = client.connect(
-            endpoint = endpoint,
-            jwt = parsedCreds.first,
-            seed = parsedCreds.second
-        )
-
-        return result.map {
-            jetStreamClient = client
-            client
-        }
+        return Result.success(jsClient)
     }
 
     /**
@@ -393,7 +382,7 @@ class NitroEnrollmentClient @Inject constructor(
         val responseTopic = "$space.forApp.pin.response"
 
         // Try JetStream first for reliable delivery
-        val jsResult = ensureJetStreamConnected()
+        val jsResult = ensureJetStreamInitialized()
         if (jsResult.isSuccess) {
             val jsClient = jsResult.getOrThrow()
             Log.d(TAG, "Using JetStream for PIN setup")
@@ -403,7 +392,7 @@ class NitroEnrollmentClient @Inject constructor(
                     requestSubject = topic,
                     responseSubject = responseTopic,
                     payload = gson.toJson(request).toByteArray(Charsets.UTF_8),
-                    timeoutSeconds = 30
+                    timeoutMs = 30_000
                 )
 
                 response.map { msg ->
