@@ -975,12 +975,12 @@ private fun PasswordSetupContent(
 
         Spacer(modifier = Modifier.height(32.dp))
 
-        // Tower logo
+        // App icon
         Icon(
-            painter = painterResource(id = R.drawable.vettid_logo_gold),
-            contentDescription = "VettID Vault",
-            modifier = Modifier.size(80.dp),
-            tint = Color.Unspecified  // Use original colors from vector
+            painter = painterResource(id = R.drawable.ic_launcher_foreground),
+            contentDescription = "VettID",
+            modifier = Modifier.size(100.dp),
+            tint = Color.Unspecified
         )
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -995,7 +995,7 @@ private fun PasswordSetupContent(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "This password protects your Protean Credential and is required for secure operations.",
+            text = "This password protects your Protean Credential and is required for sensitive operations.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
@@ -1324,15 +1324,15 @@ private fun CreatingCredentialContent(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        // Tower logo
+        // App icon
         Icon(
-            painter = painterResource(id = R.drawable.vettid_logo_gold),
-            contentDescription = "VettID Vault",
-            modifier = Modifier.size(100.dp),
+            painter = painterResource(id = R.drawable.ic_launcher_foreground),
+            contentDescription = "VettID",
+            modifier = Modifier.size(120.dp),
             tint = Color.Unspecified
         )
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
         Text(
             text = "Creating Your Protean Credential",
