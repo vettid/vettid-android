@@ -10,7 +10,8 @@ sealed class FeedState {
     data class Loaded(
         val events: List<ApiFeedEvent>,
         val hasMore: Boolean = false,
-        val unreadCount: Int = 0
+        val unreadCount: Int = 0,
+        val isOffline: Boolean = false
     ) : FeedState()
     data class Error(val message: String) : FeedState()
     object Empty : FeedState()

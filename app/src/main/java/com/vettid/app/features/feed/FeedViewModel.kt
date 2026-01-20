@@ -15,6 +15,7 @@ private const val TAG = "FeedViewModel"
 @HiltViewModel
 class FeedViewModel @Inject constructor(
     private val feedClient: FeedClient,
+    private val feedRepository: FeedRepository,
     private val feedNotificationService: FeedNotificationService
 ) : ViewModel() {
 
@@ -27,8 +28,9 @@ class FeedViewModel @Inject constructor(
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
-    // Track last sync sequence for incremental updates
-    private var lastSyncSequence: Long = 0
+    // Expose sync state for UI
+    val syncState: StateFlow<SyncState> = feedRepository.syncState
+    val isOnline: StateFlow<Boolean> = feedRepository.isOnline
 
     // In-app notifications for snackbar display
     private val _inAppNotification = MutableSharedFlow<InAppFeedNotification>()
@@ -68,6 +70,12 @@ class FeedViewModel @Inject constructor(
     }
 
     private fun handleStatusChange(eventId: String, newStatus: String) {
+        // Update repository cache
+        when (newStatus) {
+            "archived", "deleted" -> feedRepository.removeEventLocally(eventId)
+        }
+
+        // Update UI state
         val currentState = _state.value
         if (currentState is FeedState.Loaded) {
             when (newStatus) {
@@ -97,28 +105,34 @@ class FeedViewModel @Inject constructor(
         viewModelScope.launch {
             _state.value = FeedState.Loading
             try {
-                feedClient.listFeed(status = null, limit = 50)
-                    .onSuccess { response ->
-                        if (response.events.isEmpty()) {
+                // Use repository which provides offline caching
+                feedRepository.getFeed(forceRefresh = false)
+                    .onSuccess { events ->
+                        if (events.isEmpty()) {
                             _state.value = FeedState.Empty
                         } else {
-                            // Sort by priority (desc) then created_at (desc)
-                            val sortedEvents = response.events.sortedWith(
-                                compareByDescending<FeedEvent> { it.priority }
-                                    .thenByDescending { it.createdAt }
-                            )
                             _state.value = FeedState.Loaded(
-                                events = sortedEvents,
-                                hasMore = response.total > response.events.size,
-                                unreadCount = sortedEvents.count { it.isUnread }
+                                events = events,
+                                hasMore = false, // Repository handles pagination
+                                unreadCount = events.count { it.isUnread },
+                                isOffline = !feedRepository.isOnline.value
                             )
-                            // Update sync sequence
-                            lastSyncSequence = sortedEvents.maxOfOrNull { it.syncSequence } ?: 0
                         }
                     }
                     .onFailure { error ->
                         Log.e(TAG, "Failed to load feed", error)
-                        _state.value = FeedState.Error(error.message ?: "Failed to load feed")
+                        // Try to show cached data even on error
+                        val cached = feedRepository.getCachedEvents()
+                        if (cached.isNotEmpty()) {
+                            _state.value = FeedState.Loaded(
+                                events = cached,
+                                hasMore = false,
+                                unreadCount = cached.count { it.isUnread },
+                                isOffline = true
+                            )
+                        } else {
+                            _state.value = FeedState.Error(error.message ?: "Failed to load feed")
+                        }
                     }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load feed", e)
@@ -131,30 +145,29 @@ class FeedViewModel @Inject constructor(
         viewModelScope.launch {
             _isRefreshing.value = true
             try {
-                // Use sync for incremental updates
-                feedClient.sync(sinceSequence = lastSyncSequence)
-                    .onSuccess { response ->
-                        val currentState = _state.value
-                        if (currentState is FeedState.Loaded && response.events.isNotEmpty()) {
-                            // Merge new events with existing
-                            val existingIds = currentState.events.map { it.eventId }.toSet()
-                            val newEvents = response.events.filter { it.eventId !in existingIds }
-                            val updatedEvents = (newEvents + currentState.events).sortedWith(
-                                compareByDescending<FeedEvent> { it.priority }
-                                    .thenByDescending { it.createdAt }
+                // Use repository sync for incremental updates
+                feedRepository.sync()
+                    .onSuccess { result ->
+                        Log.d(TAG, "Sync complete: +${result.newEvents} new, ${result.updatedEvents} updated")
+                        val events = feedRepository.getCachedEvents()
+                        if (events.isEmpty()) {
+                            _state.value = FeedState.Empty
+                        } else {
+                            _state.value = FeedState.Loaded(
+                                events = events,
+                                hasMore = result.hasMore,
+                                unreadCount = events.count { it.isUnread },
+                                isOffline = false
                             )
-                            _state.value = currentState.copy(
-                                events = updatedEvents,
-                                unreadCount = updatedEvents.count { it.isUnread }
-                            )
-                            lastSyncSequence = response.latestSequence
-                        } else if (response.events.isEmpty() && currentState !is FeedState.Loaded) {
-                            loadFeed() // Full reload if no state
                         }
                     }
                     .onFailure {
-                        Log.e(TAG, "Sync failed, doing full reload", it)
-                        loadFeed() // Fallback to full reload
+                        Log.e(TAG, "Sync failed", it)
+                        // Keep current state but mark as potentially offline
+                        val currentState = _state.value
+                        if (currentState is FeedState.Loaded) {
+                            _state.value = currentState.copy(isOffline = true)
+                        }
                     }
             } finally {
                 _isRefreshing.value = false
@@ -254,7 +267,10 @@ class FeedViewModel @Inject constructor(
         viewModelScope.launch {
             feedClient.archiveEvent(eventId)
                 .onSuccess {
-                    // Remove from local state
+                    // Update local repository cache
+                    feedRepository.removeEventLocally(eventId)
+
+                    // Update UI state
                     val currentState = _state.value
                     if (currentState is FeedState.Loaded) {
                         val updatedEvents = currentState.events.filter { it.eventId != eventId }
@@ -280,7 +296,10 @@ class FeedViewModel @Inject constructor(
         viewModelScope.launch {
             feedClient.deleteEvent(eventId)
                 .onSuccess {
-                    // Remove from local state
+                    // Update local repository cache
+                    feedRepository.removeEventLocally(eventId)
+
+                    // Update UI state
                     val currentState = _state.value
                     if (currentState is FeedState.Loaded) {
                         val updatedEvents = currentState.events.filter { it.eventId != eventId }

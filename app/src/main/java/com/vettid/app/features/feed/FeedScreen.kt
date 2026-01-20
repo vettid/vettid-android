@@ -42,6 +42,8 @@ fun FeedContent(
 ) {
     val state by viewModel.state.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val syncState by viewModel.syncState.collectAsState()
+    val isOnline by viewModel.isOnline.collectAsState()
 
     // Snackbar state for action feedback
     val snackbarHostState = remember { SnackbarHostState() }
@@ -72,29 +74,81 @@ fun FeedContent(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        when (val currentState = state) {
-            is FeedState.Loading -> LoadingContent()
-            is FeedState.Empty -> EmptyContent()
-            is FeedState.Loaded -> FeedList(
-                events = currentState.events,
-                isRefreshing = isRefreshing,
-                onRefresh = { viewModel.refresh() },
-                onEventClick = { viewModel.onEventClick(it) },
-                onArchive = { viewModel.archiveEvent(it.eventId) },
-                onDelete = { viewModel.deleteEvent(it.eventId) },
-                onAction = { event, action -> viewModel.executeAction(event.eventId, action) }
-            )
-            is FeedState.Error -> ErrorContent(
-                message = currentState.message,
-                onRetry = { viewModel.loadFeed() }
+    Column(modifier = Modifier.fillMaxSize()) {
+        // Offline banner
+        val showOffline = !isOnline || (state as? FeedState.Loaded)?.isOffline == true
+        if (showOffline) {
+            OfflineBanner(
+                isSyncing = syncState == SyncState.SYNCING,
+                onRetry = { viewModel.refresh() }
             )
         }
 
-        SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier.align(Alignment.BottomCenter)
-        )
+        Box(modifier = Modifier.weight(1f)) {
+            when (val currentState = state) {
+                is FeedState.Loading -> LoadingContent()
+                is FeedState.Empty -> EmptyContent()
+                is FeedState.Loaded -> FeedList(
+                    events = currentState.events,
+                    isRefreshing = isRefreshing,
+                    onRefresh = { viewModel.refresh() },
+                    onEventClick = { viewModel.onEventClick(it) },
+                    onArchive = { viewModel.archiveEvent(it.eventId) },
+                    onDelete = { viewModel.deleteEvent(it.eventId) },
+                    onAction = { event, action -> viewModel.executeAction(event.eventId, action) }
+                )
+                is FeedState.Error -> ErrorContent(
+                    message = currentState.message,
+                    onRetry = { viewModel.loadFeed() }
+                )
+            }
+
+            SnackbarHost(
+                hostState = snackbarHostState,
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
+        }
+    }
+}
+
+@Composable
+private fun OfflineBanner(
+    isSyncing: Boolean,
+    onRetry: () -> Unit
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.errorContainer,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = if (isSyncing) Icons.Default.Sync else Icons.Default.CloudOff,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onErrorContainer
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = if (isSyncing) "Syncing..." else "Offline - Showing cached data",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.weight(1f)
+            )
+            if (!isSyncing) {
+                TextButton(
+                    onClick = onRetry,
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                ) {
+                    Text("Retry")
+                }
+            }
+        }
     }
 }
 
