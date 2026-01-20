@@ -17,6 +17,10 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.vettid.app.features.connections.components.ConnectionPreviewCard
+import com.vettid.app.features.connections.components.PeerProfilePreview
+import com.vettid.app.features.connections.components.CapabilityInfo
+import com.vettid.app.features.connections.components.SharedDataType
 import com.vettid.app.ui.components.QrCodeScanner
 
 /**
@@ -135,9 +139,8 @@ fun ScanInvitationScreen(
                 }
 
                 is ScanInvitationState.Preview -> {
-                    PreviewContent(
-                        creatorName = currentState.creatorName,
-                        creatorAvatarUrl = currentState.creatorAvatarUrl,
+                    EnhancedPreviewContent(
+                        state = currentState,
                         onAccept = { viewModel.acceptInvitation() },
                         onDecline = { viewModel.declineInvitation() }
                     )
@@ -277,6 +280,64 @@ private fun ProcessingContent() {
                 style = MaterialTheme.typography.bodyLarge
             )
         }
+    }
+}
+
+@Composable
+private fun EnhancedPreviewContent(
+    state: ScanInvitationState.Preview,
+    onAccept: () -> Unit,
+    onDecline: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        ConnectionPreviewCard(
+            profile = PeerProfilePreview(
+                displayName = state.creatorName,
+                email = state.creatorEmail,
+                avatarUrl = state.creatorAvatarUrl,
+                publicKeyFingerprint = state.publicKeyFingerprint,
+                isEmailVerified = state.isEmailVerified,
+                trustLevel = state.trustLevel,
+                capabilities = state.capabilities.map { capability ->
+                    CapabilityInfo(
+                        name = capability,
+                        description = getCapabilityDescription(capability),
+                        icon = getCapabilityIcon(capability)
+                    )
+                },
+                sharedDataTypes = state.sharedDataCategories.map { category ->
+                    SharedDataType(category = category)
+                }
+            ),
+            onAccept = onAccept,
+            onDecline = onDecline,
+            isProcessing = false
+        )
+    }
+}
+
+private fun getCapabilityDescription(capability: String): String {
+    return when (capability.lowercase()) {
+        "messaging" -> "Send and receive secure messages"
+        "file_sharing" -> "Share documents and files"
+        "credential_sharing" -> "Share verifiable credentials"
+        "payment" -> "Send and receive payments"
+        else -> "Additional capability"
+    }
+}
+
+private fun getCapabilityIcon(capability: String): String {
+    return when (capability.lowercase()) {
+        "messaging" -> "messaging"
+        "file_sharing" -> "sharing"
+        "credential_sharing" -> "credentials"
+        "payment" -> "payments"
+        else -> "default"
     }
 }
 

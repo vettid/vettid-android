@@ -319,7 +319,13 @@ sealed class ScanInvitationState {
 
     data class Preview(
         val creatorName: String,
-        val creatorAvatarUrl: String?
+        val creatorAvatarUrl: String?,
+        val creatorEmail: String? = null,
+        val isEmailVerified: Boolean = false,
+        val publicKeyFingerprint: String? = null,
+        val trustLevel: String = "New",
+        val capabilities: List<String> = emptyList(),
+        val sharedDataCategories: List<String> = emptyList()
     ) : ScanInvitationState()
 
     data class Success(

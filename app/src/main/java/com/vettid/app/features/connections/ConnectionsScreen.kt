@@ -52,6 +52,12 @@ fun ConnectionsScreen(
                 is ConnectionsEffect.NavigateToScanInvitation -> {
                     onScanInvitation()
                 }
+                is ConnectionsEffect.ShowFilterSheet -> {
+                    // TODO: Show filter bottom sheet
+                }
+                is ConnectionsEffect.ShowSnackbar -> {
+                    // TODO: Show snackbar with effect.message
+                }
             }
         }
     }

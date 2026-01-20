@@ -49,6 +49,8 @@ fun ConnectionsContentEmbedded(
                 is ConnectionsEffect.NavigateToConnection -> onConnectionClick(effect.connectionId)
                 is ConnectionsEffect.NavigateToCreateInvitation -> onCreateInvitation()
                 is ConnectionsEffect.NavigateToScanInvitation -> onScanInvitation()
+                is ConnectionsEffect.ShowFilterSheet -> { /* TODO: Show filter bottom sheet */ }
+                is ConnectionsEffect.ShowSnackbar -> { /* TODO: Show snackbar */ }
             }
         }
     }
