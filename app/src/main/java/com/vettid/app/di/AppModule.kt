@@ -30,8 +30,12 @@ import com.vettid.app.features.calling.CallManager
 import com.vettid.app.core.network.ApiClient
 import com.vettid.app.core.network.VaultLifecycleClient
 import com.vettid.app.core.network.VaultServiceClient
+import com.vettid.app.core.storage.ContractStore
 import com.vettid.app.core.storage.CredentialStore
 import com.vettid.app.core.storage.ProteanCredentialManager
+import com.vettid.app.core.crypto.ContractSigner
+import com.vettid.app.core.crypto.ServiceMessageCrypto
+import com.vettid.app.core.nats.ServiceNatsManager
 import com.vettid.app.features.auth.BiometricAuthManager
 import dagger.Module
 import dagger.Provides
@@ -265,5 +269,37 @@ object AppModule {
     @Singleton
     fun provideApiSecurity(): ApiSecurity {
         return ApiSecurity()
+    }
+
+    // Service Vault Dependencies (Phase 1)
+
+    @Provides
+    @Singleton
+    fun provideContractStore(@ApplicationContext context: Context): ContractStore {
+        return ContractStore(context)
+    }
+
+    @Provides
+    @Singleton
+    fun provideServiceMessageCrypto(cryptoManager: CryptoManager): ServiceMessageCrypto {
+        return ServiceMessageCrypto(cryptoManager)
+    }
+
+    @Provides
+    @Singleton
+    fun provideContractSigner(
+        cryptoManager: CryptoManager,
+        contractStore: ContractStore
+    ): ContractSigner {
+        return ContractSigner(cryptoManager, contractStore)
+    }
+
+    @Provides
+    @Singleton
+    fun provideServiceNatsManager(
+        contractStore: ContractStore,
+        serviceCrypto: ServiceMessageCrypto
+    ): ServiceNatsManager {
+        return ServiceNatsManager(contractStore, serviceCrypto)
     }
 }

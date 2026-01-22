@@ -370,6 +370,48 @@ class CryptoManager @Inject constructor() {
     }
 
     /**
+     * Decrypt data using XChaCha20-Poly1305 (24-byte nonce).
+     *
+     * Reverses xChaChaEncrypt:
+     * 1. Use HChaCha20 to derive subkey from key and first 16 bytes of nonce
+     * 2. Use ChaCha20-Poly1305 with subkey and constructed nonce
+     *
+     * @param ciphertext Encrypted data with auth tag
+     * @param nonce 24-byte XChaCha20 nonce
+     * @param key 32-byte encryption key
+     * @return Decrypted plaintext
+     */
+    fun xChaChaDecrypt(ciphertext: ByteArray, nonce: ByteArray, key: ByteArray): ByteArray {
+        require(nonce.size == XCHACHA_NONCE_LENGTH) { "Nonce must be 24 bytes" }
+        require(key.size == 32) { "Key must be 32 bytes" }
+
+        // Derive subkey using HChaCha20 with first 16 bytes of nonce
+        val subkey = hChaCha20(key, nonce.copyOfRange(0, 16))
+
+        // Create ChaCha20-Poly1305 nonce: 4 zero bytes + last 8 bytes of XChaCha20 nonce
+        val chaChaNonce = ByteArray(12)
+        System.arraycopy(nonce, 16, chaChaNonce, 4, 8)
+
+        // Decrypt with standard ChaCha20-Poly1305 using derived subkey
+        val plaintext = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            val cipher = Cipher.getInstance("ChaCha20-Poly1305")
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(subkey, "ChaCha20"), IvParameterSpec(chaChaNonce))
+            cipher.doFinal(ciphertext)
+        } else {
+            // Fallback to AES-GCM on older Android
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            val gcmSpec = GCMParameterSpec(GCM_TAG_LENGTH, chaChaNonce)
+            cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(subkey, "AES"), gcmSpec)
+            cipher.doFinal(ciphertext)
+        }
+
+        // Clear subkey
+        subkey.fill(0)
+
+        return plaintext
+    }
+
+    /**
      * Encrypt data to UTK public key using XChaCha20-Poly1305 with domain-based HKDF.
      *
      * This method matches the vault-manager's expected format:
