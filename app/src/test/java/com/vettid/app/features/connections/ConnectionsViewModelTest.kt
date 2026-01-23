@@ -4,8 +4,12 @@ import com.vettid.app.core.nats.ConnectionListResult
 import com.vettid.app.core.nats.ConnectionRecord
 import com.vettid.app.core.nats.ConnectionsClient
 import com.vettid.app.core.nats.NatsAutoConnector
+import com.vettid.app.core.network.NetworkMonitor
+import com.vettid.app.features.connections.offline.OfflineQueueManager
+import com.vettid.app.features.connections.offline.SyncStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.*
 import org.junit.After
@@ -20,6 +24,8 @@ class ConnectionsViewModelTest {
 
     private lateinit var connectionsClient: ConnectionsClient
     private lateinit var natsAutoConnector: NatsAutoConnector
+    private lateinit var networkMonitor: NetworkMonitor
+    private lateinit var offlineQueueManager: OfflineQueueManager
     private lateinit var viewModel: ConnectionsViewModel
     private val testDispatcher = StandardTestDispatcher()
 
@@ -51,7 +57,14 @@ class ConnectionsViewModelTest {
         Dispatchers.setMain(testDispatcher)
         connectionsClient = mock()
         natsAutoConnector = mock()
+        networkMonitor = mock()
+        offlineQueueManager = mock()
         whenever(natsAutoConnector.isConnected()).thenReturn(true)
+        whenever(networkMonitor.isOnline).thenReturn(MutableStateFlow(true))
+        whenever(networkMonitor.connectivityFlow).thenReturn(MutableStateFlow(true))
+        whenever(offlineQueueManager.syncStatus).thenReturn(MutableStateFlow(SyncStatus.IDLE))
+        whenever(offlineQueueManager.pendingCount()).thenReturn(0)
+        whenever(offlineQueueManager.hasPendingOperations()).thenReturn(false)
     }
 
     @After
@@ -67,7 +80,7 @@ class ConnectionsViewModelTest {
                 nextCursor = null
             )))
 
-        viewModel = ConnectionsViewModel(connectionsClient, natsAutoConnector)
+        viewModel = ConnectionsViewModel(connectionsClient, natsAutoConnector, networkMonitor, offlineQueueManager)
 
         // Initial state before loading completes
         val initialState = viewModel.state.first()
@@ -82,7 +95,7 @@ class ConnectionsViewModelTest {
                 nextCursor = null
             )))
 
-        viewModel = ConnectionsViewModel(connectionsClient, natsAutoConnector)
+        viewModel = ConnectionsViewModel(connectionsClient, natsAutoConnector, networkMonitor, offlineQueueManager)
         testScheduler.advanceUntilIdle()
 
         val state = viewModel.state.first()
@@ -99,7 +112,7 @@ class ConnectionsViewModelTest {
                 nextCursor = null
             )))
 
-        viewModel = ConnectionsViewModel(connectionsClient, natsAutoConnector)
+        viewModel = ConnectionsViewModel(connectionsClient, natsAutoConnector, networkMonitor, offlineQueueManager)
         testScheduler.advanceUntilIdle()
 
         val state = viewModel.state.first()
@@ -111,7 +124,7 @@ class ConnectionsViewModelTest {
         whenever(connectionsClient.list(anyOrNull(), any(), anyOrNull()))
             .thenReturn(Result.failure(Exception("Network error")))
 
-        viewModel = ConnectionsViewModel(connectionsClient, natsAutoConnector)
+        viewModel = ConnectionsViewModel(connectionsClient, natsAutoConnector, networkMonitor, offlineQueueManager)
         testScheduler.advanceUntilIdle()
 
         val state = viewModel.state.first()
@@ -123,7 +136,7 @@ class ConnectionsViewModelTest {
     fun `loadConnections shows empty state when not connected to NATS`() = runTest {
         whenever(natsAutoConnector.isConnected()).thenReturn(false)
 
-        viewModel = ConnectionsViewModel(connectionsClient, natsAutoConnector)
+        viewModel = ConnectionsViewModel(connectionsClient, natsAutoConnector, networkMonitor, offlineQueueManager)
         testScheduler.advanceUntilIdle()
 
         val state = viewModel.state.first()
@@ -140,7 +153,7 @@ class ConnectionsViewModelTest {
                 nextCursor = null
             )))
 
-        viewModel = ConnectionsViewModel(connectionsClient, natsAutoConnector)
+        viewModel = ConnectionsViewModel(connectionsClient, natsAutoConnector, networkMonitor, offlineQueueManager)
         testScheduler.advanceUntilIdle()
 
         viewModel.onSearchQueryChanged("Alice")
@@ -161,7 +174,7 @@ class ConnectionsViewModelTest {
                 nextCursor = null
             )))
 
-        viewModel = ConnectionsViewModel(connectionsClient, natsAutoConnector)
+        viewModel = ConnectionsViewModel(connectionsClient, natsAutoConnector, networkMonitor, offlineQueueManager)
         testScheduler.advanceUntilIdle()
 
         viewModel.onSearchQueryChanged("alice")
