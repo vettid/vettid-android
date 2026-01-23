@@ -615,10 +615,14 @@ class CryptoManager @Inject constructor() {
             ANDROID_KEYSTORE
         )
 
-        val parameterSpec = KeyGenParameterSpec.Builder(
-            keyAlias,
+        // PURPOSE_AGREE_KEY requires API 31+
+        val purposes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_AGREE_KEY
-        )
+        } else {
+            KeyProperties.PURPOSE_SIGN
+        }
+
+        val parameterSpec = KeyGenParameterSpec.Builder(keyAlias, purposes)
             .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
             .setDigests(KeyProperties.DIGEST_SHA256)
             .setUserAuthenticationRequired(false)
@@ -648,16 +652,28 @@ class CryptoManager @Inject constructor() {
             ANDROID_KEYSTORE
         )
 
-        val parameterSpec = KeyGenParameterSpec.Builder(
-            keyAlias,
+        // PURPOSE_AGREE_KEY requires API 31+
+        val purposes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_AGREE_KEY
-        )
+        } else {
+            KeyProperties.PURPOSE_SIGN
+        }
+
+        val builder = KeyGenParameterSpec.Builder(keyAlias, purposes)
             .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
             .setDigests(KeyProperties.DIGEST_SHA256)
             .setUserAuthenticationRequired(true)
-            .setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)
             .setInvalidatedByBiometricEnrollment(true)
-            .build()
+
+        // setUserAuthenticationParameters requires API 30+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            builder.setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)
+        } else {
+            @Suppress("DEPRECATION")
+            builder.setUserAuthenticationValidityDurationSeconds(-1)
+        }
+
+        val parameterSpec = builder.build()
 
         keyPairGenerator.initialize(parameterSpec)
         val javaKeyPair = keyPairGenerator.generateKeyPair()
