@@ -415,3 +415,181 @@ enum class CancellationReason(val displayName: String) {
     POOR_EXPERIENCE("Poor experience"),
     OTHER("Other")
 }
+
+// ============================================================================
+// Payment Models - Issue #37 [AND-024] Payment request prompt
+// ============================================================================
+
+/**
+ * Payment request from a service.
+ */
+data class PaymentRequest(
+    val requestId: String,
+    val serviceId: String,
+    val serviceName: String,
+    val serviceLogoUrl: String?,
+    val amount: Money,
+    val description: String,
+    val reference: String? = null,
+    val subscriptionDetails: SubscriptionDetails? = null,
+    val expiresAt: Instant,
+    val createdAt: Instant
+) {
+    val formattedAmount: String
+        get() = amount.formatted()
+}
+
+/**
+ * Subscription details for recurring payments.
+ */
+data class SubscriptionDetails(
+    val billingCycle: BillingPeriod,
+    val autoRenew: Boolean = true,
+    val trialDays: Int = 0,
+    val nextBillingDate: Instant? = null,
+    val cancellationPolicy: String? = null
+)
+
+/**
+ * Payment method available to user.
+ */
+data class PaymentMethod(
+    val id: String,
+    val type: PaymentMethodType,
+    val displayName: String,
+    val lastFour: String? = null,
+    val expiryMonth: Int? = null,
+    val expiryYear: Int? = null,
+    val network: CardNetwork? = null,
+    val cryptoAddress: String? = null,
+    val cryptoCurrency: CryptoCurrency? = null,
+    val isDefault: Boolean = false
+) {
+    val maskedNumber: String?
+        get() = lastFour?.let { "•••• $it" }
+
+    val expiryDisplay: String?
+        get() = if (expiryMonth != null && expiryYear != null) {
+            String.format("%02d/%02d", expiryMonth, expiryYear % 100)
+        } else null
+}
+
+enum class PaymentMethodType(val displayName: String) {
+    CARD("Card"),
+    BANK_ACCOUNT("Bank Account"),
+    CRYPTO("Cryptocurrency"),
+    APPLE_PAY("Apple Pay"),
+    GOOGLE_PAY("Google Pay")
+}
+
+enum class CardNetwork(val displayName: String) {
+    VISA("Visa"),
+    MASTERCARD("Mastercard"),
+    AMEX("American Express"),
+    DISCOVER("Discover")
+}
+
+enum class CryptoCurrency(val symbol: String, val displayName: String) {
+    BTC("BTC", "Bitcoin"),
+    ETH("ETH", "Ethereum"),
+    USDC("USDC", "USD Coin"),
+    USDT("USDT", "Tether")
+}
+
+/**
+ * Result of a payment attempt.
+ */
+data class PaymentResult(
+    val requestId: String,
+    val status: PaymentResultStatus,
+    val transactionId: String? = null,
+    val errorMessage: String? = null,
+    val confirmedAt: Instant? = null
+)
+
+enum class PaymentResultStatus {
+    SUCCESS,
+    PENDING,
+    FAILED,
+    CANCELLED,
+    REQUIRES_ACTION
+}
+
+// ============================================================================
+// Call Models - Issue #38 [AND-025] Call UI (voice/video)
+// ============================================================================
+
+/**
+ * Incoming call from a service.
+ */
+data class IncomingServiceCall(
+    val callId: String,
+    val serviceId: String,
+    val serviceName: String,
+    val serviceLogoUrl: String?,
+    val serviceVerified: Boolean = false,
+    val callType: CallType,
+    val purpose: String,
+    val agentInfo: AgentInfo? = null,
+    val createdAt: Instant
+)
+
+/**
+ * Type of call.
+ */
+enum class CallType(val displayName: String) {
+    VOICE("Voice Call"),
+    VIDEO("Video Call")
+}
+
+/**
+ * Information about the service agent making the call.
+ */
+data class AgentInfo(
+    val id: String,
+    val name: String,
+    val role: String,
+    val avatarUrl: String? = null
+)
+
+/**
+ * State of an active call.
+ */
+data class ServiceCallState(
+    val callId: String,
+    val serviceId: String,
+    val serviceName: String,
+    val serviceLogoUrl: String?,
+    val serviceVerified: Boolean = false,
+    val callType: CallType,
+    val status: CallStatus,
+    val isMuted: Boolean = false,
+    val isVideoEnabled: Boolean = true,
+    val isSpeakerOn: Boolean = false,
+    val duration: Long = 0, // in seconds
+    val agentInfo: AgentInfo? = null,
+    val quality: CallQuality = CallQuality.GOOD
+) {
+    val durationFormatted: String
+        get() {
+            val minutes = duration / 60
+            val seconds = duration % 60
+            return String.format("%02d:%02d", minutes, seconds)
+        }
+}
+
+enum class CallStatus {
+    CONNECTING,
+    RINGING,
+    CONNECTED,
+    ON_HOLD,
+    RECONNECTING,
+    ENDED
+}
+
+enum class CallQuality {
+    EXCELLENT,
+    GOOD,
+    FAIR,
+    POOR
+}
