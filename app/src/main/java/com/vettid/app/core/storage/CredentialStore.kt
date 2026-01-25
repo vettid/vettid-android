@@ -704,6 +704,37 @@ class CredentialStore @Inject constructor(
     }
 
     /**
+     * Store enclave public key for PIN encryption during unlock.
+     * This is the X25519 public key from attestation, used to encrypt PINs.
+     */
+    fun storeEnclavePublicKey(publicKey: ByteArray) {
+        encryptedPrefs.edit()
+            .putString(KEY_ENCLAVE_PUBLIC_KEY, Base64.encodeToString(publicKey, Base64.NO_WRAP))
+            .apply()
+        android.util.Log.d("CredentialStore", "Stored enclave public key (${publicKey.size} bytes)")
+    }
+
+    /**
+     * Get enclave public key for PIN encryption.
+     */
+    fun getEnclavePublicKey(): ByteArray? {
+        val encoded = encryptedPrefs.getString(KEY_ENCLAVE_PUBLIC_KEY, null) ?: return null
+        return try {
+            Base64.decode(encoded, Base64.NO_WRAP)
+        } catch (e: Exception) {
+            android.util.Log.e("CredentialStore", "Failed to decode enclave public key", e)
+            null
+        }
+    }
+
+    /**
+     * Check if enclave public key is stored.
+     */
+    fun hasEnclavePublicKey(): Boolean {
+        return encryptedPrefs.contains(KEY_ENCLAVE_PUBLIC_KEY)
+    }
+
+    /**
      * Get the bootstrap topic if stored.
      * Presence of this value indicates bootstrap (limited) credentials.
      */

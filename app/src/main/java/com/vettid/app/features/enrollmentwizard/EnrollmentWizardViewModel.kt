@@ -73,7 +73,9 @@ class EnrollmentWizardViewModel @Inject constructor(
     private val _state = MutableStateFlow<WizardState>(WizardState.Loading)
     val state: StateFlow<WizardState> = _state.asStateFlow()
 
-    private val _effects = MutableSharedFlow<WizardEffect>()
+    // replay=1 ensures the last effect is replayed to new collectors (handles recomposition timing)
+    // extraBufferCapacity=1 ensures emit() doesn't suspend if collector is briefly unavailable
+    private val _effects = MutableSharedFlow<WizardEffect>(replay = 1, extraBufferCapacity = 1)
     val effects: SharedFlow<WizardEffect> = _effects.asSharedFlow()
 
     // Enrollment data storage
@@ -403,6 +405,10 @@ class EnrollmentWizardViewModel @Inject constructor(
                 onSuccess = { verifiedAttestation ->
                     Log.i(TAG, "Attestation verified: ${verifiedAttestation.moduleId}")
                     nitroVerifiedAttestation = verifiedAttestation
+
+                    // Store enclave public key for future PIN unlock operations
+                    credentialStore.storeEnclavePublicKey(verifiedAttestation.enclavePublicKey)
+                    Log.d(TAG, "Stored enclave public key for PIN unlock")
 
                     _state.value = WizardState.RequestingAttestation(progress = 1.0f)
                     delay(300)
@@ -771,6 +777,14 @@ class EnrollmentWizardViewModel @Inject constructor(
                     }
 
                     _state.value = WizardState.Authenticating(
+                        progress = 0.95f,
+                        statusMessage = "Loading profile..."
+                    )
+
+                    // Fetch and store registration profile
+                    fetchAndStoreRegistrationProfile()
+
+                    _state.value = WizardState.Authenticating(
                         progress = 1.0f,
                         statusMessage = "Credential verified!"
                     )
@@ -810,6 +824,42 @@ class EnrollmentWizardViewModel @Inject constructor(
                 canRetry = true,
                 previousPhase = WizardPhase.VERIFY_CREDENTIAL
             )
+        }
+    }
+
+    /**
+     * Fetch registration profile from the enrollment finalize endpoint.
+     * This retrieves the user's firstName, lastName, and email from registration.
+     *
+     * The finalize endpoint includes registration_profile in its response.
+     */
+    private suspend fun fetchAndStoreRegistrationProfile() {
+        try {
+            Log.d(TAG, "Fetching registration profile via finalize endpoint")
+            val result = vaultServiceClient.finalizeEnrollmentForProfile()
+
+            result.fold(
+                onSuccess = { response ->
+                    response.registrationProfile?.let { profile ->
+                        Log.i(TAG, "Registration profile fetched: ${profile.firstName} ${profile.lastName}")
+                        personalDataStore.storeSystemFields(
+                            com.vettid.app.core.storage.SystemPersonalData(
+                                firstName = profile.firstName,
+                                lastName = profile.lastName,
+                                email = profile.email
+                            )
+                        )
+                    } ?: run {
+                        Log.w(TAG, "Finalize response did not include registration profile")
+                    }
+                },
+                onFailure = { error ->
+                    // Log but don't fail enrollment if profile fetch fails
+                    Log.w(TAG, "Failed to fetch registration profile: ${error.message}")
+                }
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Error fetching registration profile", e)
         }
     }
 
@@ -1010,7 +1060,16 @@ class EnrollmentWizardViewModel @Inject constructor(
     }
 
     private suspend fun navigateToMain() {
+        Log.i(TAG, "navigateToMain() called - emitting NavigateToMain effect")
+
+        // Update state with shouldNavigate flag as backup for effect collection issues
+        val current = _state.value
+        if (current is WizardState.Complete) {
+            _state.value = current.copy(shouldNavigate = true)
+        }
+
         _effects.emit(WizardEffect.NavigateToMain)
+        Log.i(TAG, "navigateToMain() - effect emitted and shouldNavigate set")
     }
 
     override fun onCleared() {
