@@ -89,3 +89,43 @@ Base URL: `https://api.vettid.com/`
 - Java 17
 - Supports GrapheneOS and other security-focused ROMs with hardware-backed Keystore
 
+## Development Scripts
+
+### Vault Decommission (Reset for Re-enrollment)
+
+Use this to completely reset a user's vault for testing re-enrollment:
+
+```bash
+# Decommission by user_guid
+./scripts/decommission-vault.sh af44310d-2051-46a1-afd8-ee275b53f804
+
+# Decommission and clear app data
+./scripts/decommission-vault.sh af44310d-2051-46a1-afd8-ee275b53f804 --clear-app
+
+# Auto-detect user_guid from device logs and clear app
+./scripts/decommission-vault.sh --from-device --clear-app
+```
+
+This script:
+1. Calls the decommission Lambda to clear backend data (DynamoDB, S3)
+2. Sends NATS message via SSM to clear enclave credential
+3. Optionally clears app data on connected device
+
+**Prerequisites:** AWS CLI configured, Lambda/SSM access, adb for device operations
+
+### Quick Device Commands
+
+```bash
+# Install and launch app
+./gradlew installProductionDebug && adb shell am start -n com.vettid.app/.MainActivity
+
+# Clear app data only (keeps vault on server)
+adb shell pm clear com.vettid.app
+
+# View enrollment logs
+adb logcat -s EnrollmentWizardVM:* NitroEnrollmentClient:* NitroAttestation:*
+
+# Test deep link enrollment
+adb shell am start -d "vettid://enroll/TEST123"
+```
+
