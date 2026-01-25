@@ -9,6 +9,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -86,6 +87,7 @@ fun EnrollmentWizardScreen(
                 contentKey = { targetState ->
                     // Group related states to avoid unnecessary animations
                     when (targetState) {
+                        is WizardState.Loading -> "loading"
                         is WizardState.ScanningQR, is WizardState.ManualEntry -> "start"
                         is WizardState.ProcessingInvite,
                         is WizardState.ConnectingToNats,
@@ -109,6 +111,16 @@ fun EnrollmentWizardScreen(
                         .weight(1f)
                 ) {
                     when (currentState) {
+                        // Loading State (initial)
+                        is WizardState.Loading -> {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator()
+                            }
+                        }
+
                         // Start Phase
                         is WizardState.ScanningQR -> {
                             StartPhaseContent(

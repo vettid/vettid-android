@@ -70,7 +70,7 @@ class EnrollmentWizardViewModel @Inject constructor(
         const val PIN_LENGTH = 6
     }
 
-    private val _state = MutableStateFlow<WizardState>(WizardState.ScanningQR())
+    private val _state = MutableStateFlow<WizardState>(WizardState.Loading)
     val state: StateFlow<WizardState> = _state.asStateFlow()
 
     private val _effects = MutableSharedFlow<WizardEffect>()

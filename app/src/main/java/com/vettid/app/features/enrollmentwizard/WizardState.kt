@@ -34,9 +34,16 @@ sealed class WizardState {
     /** Current wizard phase for step indicator */
     abstract val phase: WizardPhase
 
+    // ============== INITIAL LOADING ==============
+
+    /** Initial loading state - shown before initialize() determines which phase to start */
+    data object Loading : WizardState() {
+        override val phase = WizardPhase.START
+    }
+
     // ============== PHASE 1: START ==============
 
-    /** Initial state - QR scanning */
+    /** QR scanning */
     data class ScanningQR(
         val error: String? = null
     ) : WizardState() {
