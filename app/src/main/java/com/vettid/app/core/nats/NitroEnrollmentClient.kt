@@ -756,6 +756,21 @@ class NitroEnrollmentClient @Inject constructor(
      */
     fun getVerifiedAttestation(): VerifiedAttestation? = verifiedAttestation
 
+    /**
+     * Get the current NATS endpoint.
+     */
+    fun getNatsEndpoint(): String? = currentEndpoint
+
+    /**
+     * Get the current NATS credentials (for storing after enrollment).
+     */
+    fun getNatsCredentials(): String? = currentCredentials
+
+    /**
+     * Get the owner space (for storing after enrollment).
+     */
+    fun getOwnerSpace(): String? = ownerSpace
+
     // Helper to send request and wait for response
     private suspend inline fun <reified T> sendRequestAndWaitForResponse(
         client: AndroidNatsClient,

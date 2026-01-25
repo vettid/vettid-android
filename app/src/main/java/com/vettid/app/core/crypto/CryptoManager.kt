@@ -478,8 +478,9 @@ class CryptoManager @Inject constructor() {
         salt: ByteArray,
         utkPublicKeyBase64: String
     ): PasswordEncryptionResult {
-        // 1. Hash password
-        val passwordHash = hashPassword(password, salt)
+        // 1. Hash password in PHC format (matches what's stored in credential)
+        val passwordHashPHC = hashPasswordPHC(password, salt)
+        val passwordHashBytes = passwordHashPHC.toByteArray(Charsets.UTF_8)
 
         // 2. Generate ephemeral X25519 keypair
         val (ephemeralPrivate, ephemeralPublic) = generateX25519KeyPair()
@@ -488,17 +489,16 @@ class CryptoManager @Inject constructor() {
         val utkPublicKey = Base64.decode(utkPublicKeyBase64, Base64.NO_WRAP)
         val sharedSecret = x25519SharedSecret(ephemeralPrivate, utkPublicKey)
 
-        // 4. Derive encryption key (legacy context)
-        val encryptionKey = deriveEncryptionKey(sharedSecret, "transaction-encryption-v1")
+        // 4. Derive encryption key using domain-based HKDF (matches vault-manager)
+        val encryptionKey = deriveKeyWithDomain(sharedSecret, UTK_DOMAIN)
 
-        // 5. Encrypt password hash
-        val (ciphertext, nonce) = chaChaEncrypt(passwordHash, encryptionKey)
+        // 5. Encrypt password hash with XChaCha20-Poly1305 (24-byte nonce, matches vault-manager)
+        val (ciphertext, nonce) = xChaChaEncrypt(passwordHashBytes, encryptionKey)
 
         // Clear sensitive data
         ephemeralPrivate.fill(0)
         sharedSecret.fill(0)
         encryptionKey.fill(0)
-        passwordHash.fill(0)
 
         return PasswordEncryptionResult(
             encryptedPasswordHash = Base64.encodeToString(ciphertext, Base64.NO_WRAP),

@@ -28,6 +28,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import androidx.navigation.navDeepLink
 import com.vettid.app.features.applock.AppLockScreen
 import com.vettid.app.features.applock.PinSetupScreen
 import com.vettid.app.features.calling.ActiveCallScreen
@@ -69,6 +70,7 @@ import com.vettid.app.features.postenrollment.PostEnrollmentScreen
 import com.vettid.app.features.postenrollment.PersonalDataCollectionScreen
 import com.vettid.app.features.migration.EmergencyRecoveryScreen
 import com.vettid.app.features.migration.SecurityAuditLogScreen
+import com.vettid.app.features.enrollmentwizard.EnrollmentWizardScreen
 
 private const val TAG = "VettIDApp"
 
@@ -78,6 +80,12 @@ sealed class Screen(val route: String) {
         fun createRoute(startWithManualEntry: Boolean = false, initialCode: String? = null): String {
             val encodedCode = initialCode?.let { java.net.URLEncoder.encode(it, "UTF-8") } ?: ""
             return "enrollment?startWithManualEntry=$startWithManualEntry&initialCode=$encodedCode"
+        }
+    }
+    object EnrollmentWizard : Screen("enrollment_wizard?startWithManualEntry={startWithManualEntry}&initialCode={initialCode}") {
+        fun createRoute(startWithManualEntry: Boolean = false, initialCode: String? = null): String {
+            val encodedCode = initialCode?.let { java.net.URLEncoder.encode(it, "UTF-8") } ?: ""
+            return "enrollment_wizard?startWithManualEntry=$startWithManualEntry&initialCode=$encodedCode"
         }
     }
     object Authentication : Screen("authentication")
@@ -226,20 +234,37 @@ fun VettIDApp(
         if (pendingEnrollData != null) {
             val code = pendingEnrollData
             pendingEnrollData = null
-            navController.navigate(Screen.Enrollment.createRoute(startWithManualEntry = true, initialCode = code)) {
+            navController.navigate(Screen.EnrollmentWizard.createRoute(startWithManualEntry = true, initialCode = code)) {
                 popUpTo(0) { inclusive = true }
             }
             return@LaunchedEffect
         }
 
+        // Get current route to avoid interrupting post-enrollment verification
+        val currentRoute = navController.currentBackStackEntry?.destination?.route
+
         when {
             !appState.hasCredential -> navController.navigate(Screen.Welcome.route) {
                 popUpTo(0) { inclusive = true }
             }
-            !appState.isAuthenticated -> navController.navigate(Screen.Authentication.route) {
-                popUpTo(0) { inclusive = true }
+            !appState.isAuthenticated -> {
+                // Don't navigate to Authentication if user is on PostEnrollment or PersonalDataCollection
+                // These screens handle their own authentication flow after enrollment
+                if (currentRoute != Screen.PostEnrollment.route &&
+                    currentRoute != Screen.PersonalDataCollection.route) {
+                    navController.navigate(Screen.Authentication.route) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
             }
             else -> {
+                // Don't navigate away if user is on post-enrollment screens
+                // They need to complete their setup flow first
+                if (currentRoute == Screen.PostEnrollment.route ||
+                    currentRoute == Screen.PersonalDataCollection.route) {
+                    return@LaunchedEffect
+                }
+
                 // Check for pending transfer approval (Issue #31: Device-to-device transfer)
                 if (pendingTransferApprovalId != null) {
                     val transferId = pendingTransferApprovalId
@@ -278,7 +303,7 @@ fun VettIDApp(
     ) {
         composable(Screen.Welcome.route) {
             WelcomeScreen(
-                onScanQR = { navController.navigate(Screen.Enrollment.createRoute(startWithManualEntry = false)) },
+                onScanQR = { navController.navigate(Screen.EnrollmentWizard.createRoute(startWithManualEntry = false)) },
                 onRecoverAccount = { navController.navigate(Screen.ProteanRecovery.route) }
             )
         }
@@ -302,13 +327,50 @@ fun VettIDApp(
             }
             EnrollmentScreen(
                 onEnrollmentComplete = {
-                    // Refresh credential status and mark as authenticated
-                    // User just completed enrollment (proved identity with PIN), so skip biometric prompt
+                    // Refresh credential status but DON'T set authenticated yet
+                    // User needs to verify password on PostEnrollmentScreen first
+                    // This unlocks the vault before NATS auto-connect attempts vault operations
                     appViewModel.refreshCredentialStatus()
-                    appViewModel.setAuthenticated(true)
                     // Navigate to post-enrollment verification
                     navController.navigate(Screen.PostEnrollment.route) {
                         popUpTo(Screen.Enrollment.route) { inclusive = true }
+                    }
+                },
+                onCancel = { navController.popBackStack() },
+                startWithManualEntry = startWithManualEntry,
+                initialCode = initialCode
+            )
+        }
+        // New unified enrollment wizard
+        composable(
+            route = Screen.EnrollmentWizard.route,
+            arguments = listOf(
+                navArgument("startWithManualEntry") {
+                    type = NavType.BoolType
+                    defaultValue = false
+                },
+                navArgument("initialCode") {
+                    type = NavType.StringType
+                    nullable = true
+                    defaultValue = null
+                }
+            ),
+            deepLinks = listOf(
+                navDeepLink { uriPattern = "vettid://enroll/{initialCode}" }
+            )
+        ) { backStackEntry ->
+            val startWithManualEntry = backStackEntry.arguments?.getBoolean("startWithManualEntry") ?: false
+            val initialCode = backStackEntry.arguments?.getString("initialCode")?.let {
+                if (it.isNotEmpty()) java.net.URLDecoder.decode(it, "UTF-8") else null
+            }
+            EnrollmentWizardScreen(
+                onWizardComplete = {
+                    // Wizard handles full flow including verification and personal data
+                    // Set authenticated and go to main
+                    appViewModel.refreshCredentialStatus()
+                    appViewModel.setAuthenticated(true)
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(Screen.EnrollmentWizard.route) { inclusive = true }
                     }
                 },
                 onCancel = { navController.popBackStack() },
@@ -674,16 +736,23 @@ fun VettIDApp(
         composable(Screen.PostEnrollment.route) {
             PostEnrollmentScreen(
                 onVerificationComplete = {
+                    // Password verified - vault is now unlocked, safe to connect to NATS
+                    appViewModel.setAuthenticated(true)
                     navController.navigate(Screen.PersonalDataCollection.route) {
                         popUpTo(Screen.PostEnrollment.route) { inclusive = true }
                     }
                 },
                 onNavigateToPersonalData = {
+                    // Password verified - vault is now unlocked, safe to connect to NATS
+                    appViewModel.setAuthenticated(true)
                     navController.navigate(Screen.PersonalDataCollection.route) {
                         popUpTo(Screen.PostEnrollment.route) { inclusive = true }
                     }
                 },
                 onNavigateToMain = {
+                    // User skipped verification - vault is locked but allow app access
+                    // NATS operations will fail until user authenticates
+                    appViewModel.setAuthenticated(true)
                     navController.navigate(Screen.Main.route) {
                         popUpTo(Screen.PostEnrollment.route) { inclusive = true }
                     }

@@ -94,6 +94,15 @@ class MainActivity : ComponentActivity() {
     private fun extractDeepLinkData(intent: Intent?): DeepLinkData {
         val uri = intent?.data ?: return DeepLinkData(DeepLinkType.NONE)
 
+        // Debug logging for deep link troubleshooting
+        android.util.Log.d("VettID-DeepLink", "Received URI: $uri")
+        android.util.Log.d("VettID-DeepLink", "  scheme: ${uri.scheme}")
+        android.util.Log.d("VettID-DeepLink", "  host: ${uri.host}")
+        android.util.Log.d("VettID-DeepLink", "  path: ${uri.path}")
+        android.util.Log.d("VettID-DeepLink", "  query: ${uri.query}")
+        android.util.Log.d("VettID-DeepLink", "  data param: ${uri.getQueryParameter("data")}")
+        android.util.Log.d("VettID-DeepLink", "  code param: ${uri.getQueryParameter("code")}")
+
         return when {
             // Custom scheme: vettid://enroll?code=xxx or vettid://enroll?data=xxx
             uri.scheme == "vettid" && uri.host == "enroll" -> {

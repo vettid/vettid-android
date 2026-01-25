@@ -1043,6 +1043,25 @@ class EnrollmentViewModel @Inject constructor(
                     _state.value = EnrollmentState.VerifyingEnrollment(progress = 1.0f)
                     delay(300)
 
+                    // Store NATS credentials for post-enrollment authentication
+                    // These are needed for the app to reconnect and authenticate after enrollment
+                    val natsEndpoint = nitroEnrollmentClient.getNatsEndpoint()
+                    val natsCredentials = nitroEnrollmentClient.getNatsCredentials()
+                    val ownerSpace = nitroEnrollmentClient.getOwnerSpace()
+
+                    if (natsEndpoint != null && natsCredentials != null && ownerSpace != null) {
+                        val natsConnectionInfo = com.vettid.app.core.network.NatsConnectionInfo(
+                            endpoint = natsEndpoint,
+                            credentials = natsCredentials,
+                            ownerSpace = ownerSpace,
+                            messageSpace = ownerSpace.replace("OwnerSpace.", "MessageSpace.")
+                        )
+                        credentialStore.storeNatsConnection(natsConnectionInfo)
+                        Log.i(TAG, "NATS credentials stored for post-enrollment auth: $natsEndpoint")
+                    } else {
+                        Log.w(TAG, "Missing NATS credentials - endpoint: ${natsEndpoint != null}, creds: ${natsCredentials != null}, space: ${ownerSpace != null}")
+                    }
+
                     // Disconnect from NATS
                     nitroEnrollmentClient.disconnect()
 
