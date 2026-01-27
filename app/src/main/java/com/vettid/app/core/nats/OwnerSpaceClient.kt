@@ -82,6 +82,11 @@ class OwnerSpaceClient @Inject constructor(
     private var eventTypesSubscription: NatsSubscription? = null
 
     /**
+     * Get the current OwnerSpace ID for constructing topic names.
+     */
+    fun getOwnerSpace(): String? = connectionManager.getOwnerSpaceId()
+
+    /**
      * Subscribe to vault responses and events.
      * Call this after connecting to NATS.
      */
@@ -187,6 +192,71 @@ class OwnerSpaceClient @Inject constructor(
             add("params", payload)
         }
         return sendToVault("execute", requestPayload)
+    }
+
+    /**
+     * Get profile data from vault.
+     *
+     * Fetches all profile fields including system fields (_system_* prefix)
+     * and user-editable fields.
+     *
+     * @return Request ID for correlating response
+     */
+    suspend fun getProfileFromVault(): Result<String> {
+        return sendToVault("profile.get", JsonObject())
+    }
+
+    /**
+     * Publish the public profile to NATS.
+     *
+     * The vault will:
+     * 1. Update the list of fields to include in public profile (if provided)
+     * 2. Build the public profile JSON from system fields + selected fields
+     * 3. Publish to {ownerSpace}.profile.public topic
+     *
+     * @param selectedFields List of field namespaces to include (e.g., "contact.phone.mobile")
+     * @return Request ID for correlating response
+     */
+    suspend fun publishProfile(selectedFields: List<String>? = null): Result<String> {
+        val payload = JsonObject()
+        if (selectedFields != null) {
+            val fieldsArray = com.google.gson.JsonArray()
+            selectedFields.forEach { fieldsArray.add(it) }
+            payload.add("fields", fieldsArray)
+        }
+        return sendToVault("profile.publish", payload)
+    }
+
+    /**
+     * Update public profile settings without publishing.
+     *
+     * @param selectedFields List of field namespaces to include in public profile
+     * @return Request ID for correlating response
+     */
+    suspend fun updatePublicProfileSettings(selectedFields: List<String>): Result<String> {
+        val payload = JsonObject()
+        val fieldsArray = com.google.gson.JsonArray()
+        selectedFields.forEach { fieldsArray.add(it) }
+        payload.add("fields", fieldsArray)
+        return sendToVault("profile.public.update", payload)
+    }
+
+    /**
+     * Get public profile settings (which fields are shared).
+     *
+     * @return Request ID for correlating response
+     */
+    suspend fun getPublicProfileSettings(): Result<String> {
+        return sendToVault("profile.public.get", JsonObject())
+    }
+
+    /**
+     * Get all categories (predefined + custom).
+     *
+     * @return Request ID for correlating response
+     */
+    suspend fun getCategories(): Result<String> {
+        return sendToVault("profile.categories.get", JsonObject())
     }
 
     /**
@@ -612,7 +682,8 @@ class OwnerSpaceClient @Inject constructor(
                     return
                 }
                 // Feed notification events (Issue #15)
-                message.subject.contains(".forApp.feed.") -> {
+                // Exclude .response messages - they should flow through to normal response handling
+                message.subject.contains(".forApp.feed.") && !message.subject.endsWith(".response") -> {
                     handleFeedNotification(message)
                     return
                 }

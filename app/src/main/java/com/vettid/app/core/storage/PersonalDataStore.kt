@@ -47,20 +47,52 @@ class PersonalDataStore @Inject constructor(
         private const val KEY_SYSTEM_FIELDS_SET = "system_fields_set"
 
         // Optional fields (user-editable)
+        // Name fields
+        private const val KEY_PREFIX = "optional_prefix"
+        private const val KEY_OPT_FIRST_NAME = "optional_first_name"
+        private const val KEY_MIDDLE_NAME = "optional_middle_name"
+        private const val KEY_OPT_LAST_NAME = "optional_last_name"
+        private const val KEY_SUFFIX = "optional_suffix"
+        // Contact fields
         private const val KEY_PHONE = "optional_phone"
+        private const val KEY_BIRTHDAY = "optional_birthday"
+        // Address fields
         private const val KEY_STREET = "optional_street"
+        private const val KEY_STREET2 = "optional_street2"
         private const val KEY_CITY = "optional_city"
         private const val KEY_STATE = "optional_state"
         private const val KEY_POSTAL_CODE = "optional_postal_code"
         private const val KEY_COUNTRY = "optional_country"
-        private const val KEY_BIRTHDAY = "optional_birthday"
+        // Social/Web fields
+        private const val KEY_WEBSITE = "optional_website"
+        private const val KEY_LINKEDIN = "optional_linkedin"
+        private const val KEY_TWITTER = "optional_twitter"
+        private const val KEY_INSTAGRAM = "optional_instagram"
+        private const val KEY_GITHUB = "optional_github"
 
         // Custom fields
         private const val KEY_CUSTOM_FIELDS = "custom_fields"
 
+        // Custom categories (user-defined)
+        private const val KEY_CUSTOM_CATEGORIES = "custom_categories"
+
+        // Public profile settings (which fields to share)
+        private const val KEY_PUBLIC_PROFILE_FIELDS = "public_profile_fields"
+        private const val KEY_PUBLIC_PROFILE_VERSION = "public_profile_version"
+
         // Sync status
         private const val KEY_LAST_SYNCED_AT = "last_synced_at"
         private const val KEY_PENDING_SYNC = "pending_sync"
+
+        // Predefined categories matching enclave
+        val PREDEFINED_CATEGORIES = listOf(
+            CategoryInfo("identity", "Identity", "person"),
+            CategoryInfo("contact", "Contact", "phone"),
+            CategoryInfo("address", "Address", "location"),
+            CategoryInfo("financial", "Financial", "account_balance"),
+            CategoryInfo("medical", "Medical", "medical"),
+            CategoryInfo("other", "Other", "more")
+        )
     }
 
     // MARK: - System Fields (Read-Only)
@@ -72,13 +104,19 @@ class PersonalDataStore @Inject constructor(
      * @return SystemPersonalData or null if not yet set
      */
     fun getSystemFields(): SystemPersonalData? {
-        if (!encryptedPrefs.getBoolean(KEY_SYSTEM_FIELDS_SET, false)) {
+        val isSet = encryptedPrefs.getBoolean(KEY_SYSTEM_FIELDS_SET, false)
+        android.util.Log.d("PersonalDataStore", "getSystemFields: isSet=$isSet")
+        if (!isSet) {
             return null
         }
+        val firstName = encryptedPrefs.getString(KEY_FIRST_NAME, "") ?: ""
+        val lastName = encryptedPrefs.getString(KEY_LAST_NAME, "") ?: ""
+        val email = encryptedPrefs.getString(KEY_EMAIL, "") ?: ""
+        android.util.Log.d("PersonalDataStore", "getSystemFields returning: $firstName $lastName <$email>")
         return SystemPersonalData(
-            firstName = encryptedPrefs.getString(KEY_FIRST_NAME, "") ?: "",
-            lastName = encryptedPrefs.getString(KEY_LAST_NAME, "") ?: "",
-            email = encryptedPrefs.getString(KEY_EMAIL, "") ?: ""
+            firstName = firstName,
+            lastName = lastName,
+            email = email
         )
     }
 
@@ -90,13 +128,18 @@ class PersonalDataStore @Inject constructor(
      * @param data System personal data from registration
      */
     fun storeSystemFields(data: SystemPersonalData) {
+        android.util.Log.d("PersonalDataStore", "storeSystemFields called with: ${data.firstName} ${data.lastName} <${data.email}>")
         encryptedPrefs.edit().apply {
             putString(KEY_FIRST_NAME, data.firstName)
             putString(KEY_LAST_NAME, data.lastName)
             putString(KEY_EMAIL, data.email)
             putBoolean(KEY_SYSTEM_FIELDS_SET, true)
-            apply()
+            commit()  // Use commit() instead of apply() to ensure synchronous write
         }
+        // Verify the data was stored correctly
+        val verified = encryptedPrefs.getBoolean(KEY_SYSTEM_FIELDS_SET, false)
+        val storedFirstName = encryptedPrefs.getString(KEY_FIRST_NAME, null)
+        android.util.Log.d("PersonalDataStore", "storeSystemFields verified: flag=$verified, firstName=$storedFirstName")
         markPendingSync()
     }
 
@@ -116,13 +159,28 @@ class PersonalDataStore @Inject constructor(
      */
     fun getOptionalFields(): OptionalPersonalData {
         return OptionalPersonalData(
+            // Name fields
+            prefix = encryptedPrefs.getString(KEY_PREFIX, null),
+            firstName = encryptedPrefs.getString(KEY_OPT_FIRST_NAME, null),
+            middleName = encryptedPrefs.getString(KEY_MIDDLE_NAME, null),
+            lastName = encryptedPrefs.getString(KEY_OPT_LAST_NAME, null),
+            suffix = encryptedPrefs.getString(KEY_SUFFIX, null),
+            // Contact fields
             phone = encryptedPrefs.getString(KEY_PHONE, null),
+            birthday = encryptedPrefs.getString(KEY_BIRTHDAY, null),
+            // Address fields
             street = encryptedPrefs.getString(KEY_STREET, null),
+            street2 = encryptedPrefs.getString(KEY_STREET2, null),
             city = encryptedPrefs.getString(KEY_CITY, null),
             state = encryptedPrefs.getString(KEY_STATE, null),
             postalCode = encryptedPrefs.getString(KEY_POSTAL_CODE, null),
             country = encryptedPrefs.getString(KEY_COUNTRY, null),
-            birthday = encryptedPrefs.getString(KEY_BIRTHDAY, null)
+            // Social/Web fields
+            website = encryptedPrefs.getString(KEY_WEBSITE, null),
+            linkedin = encryptedPrefs.getString(KEY_LINKEDIN, null),
+            twitter = encryptedPrefs.getString(KEY_TWITTER, null),
+            instagram = encryptedPrefs.getString(KEY_INSTAGRAM, null),
+            github = encryptedPrefs.getString(KEY_GITHUB, null)
         )
     }
 
@@ -134,13 +192,28 @@ class PersonalDataStore @Inject constructor(
      */
     fun updateOptionalFields(data: OptionalPersonalData) {
         encryptedPrefs.edit().apply {
+            // Name fields
+            putStringOrRemove(KEY_PREFIX, data.prefix)
+            putStringOrRemove(KEY_OPT_FIRST_NAME, data.firstName)
+            putStringOrRemove(KEY_MIDDLE_NAME, data.middleName)
+            putStringOrRemove(KEY_OPT_LAST_NAME, data.lastName)
+            putStringOrRemove(KEY_SUFFIX, data.suffix)
+            // Contact fields
             putStringOrRemove(KEY_PHONE, data.phone)
+            putStringOrRemove(KEY_BIRTHDAY, data.birthday)
+            // Address fields
             putStringOrRemove(KEY_STREET, data.street)
+            putStringOrRemove(KEY_STREET2, data.street2)
             putStringOrRemove(KEY_CITY, data.city)
             putStringOrRemove(KEY_STATE, data.state)
             putStringOrRemove(KEY_POSTAL_CODE, data.postalCode)
             putStringOrRemove(KEY_COUNTRY, data.country)
-            putStringOrRemove(KEY_BIRTHDAY, data.birthday)
+            // Social/Web fields
+            putStringOrRemove(KEY_WEBSITE, data.website)
+            putStringOrRemove(KEY_LINKEDIN, data.linkedin)
+            putStringOrRemove(KEY_TWITTER, data.twitter)
+            putStringOrRemove(KEY_INSTAGRAM, data.instagram)
+            putStringOrRemove(KEY_GITHUB, data.github)
             apply()
         }
         markPendingSync()
@@ -154,19 +227,77 @@ class PersonalDataStore @Inject constructor(
      */
     fun updateOptionalField(field: OptionalField, value: String?) {
         val key = when (field) {
+            // Name fields
+            OptionalField.PREFIX -> KEY_PREFIX
+            OptionalField.FIRST_NAME -> KEY_OPT_FIRST_NAME
+            OptionalField.MIDDLE_NAME -> KEY_MIDDLE_NAME
+            OptionalField.LAST_NAME -> KEY_OPT_LAST_NAME
+            OptionalField.SUFFIX -> KEY_SUFFIX
+            // Contact fields
             OptionalField.PHONE -> KEY_PHONE
+            OptionalField.BIRTHDAY -> KEY_BIRTHDAY
+            // Address fields
             OptionalField.STREET -> KEY_STREET
+            OptionalField.STREET2 -> KEY_STREET2
             OptionalField.CITY -> KEY_CITY
             OptionalField.STATE -> KEY_STATE
             OptionalField.POSTAL_CODE -> KEY_POSTAL_CODE
             OptionalField.COUNTRY -> KEY_COUNTRY
-            OptionalField.BIRTHDAY -> KEY_BIRTHDAY
+            // Social/Web fields
+            OptionalField.WEBSITE -> KEY_WEBSITE
+            OptionalField.LINKEDIN -> KEY_LINKEDIN
+            OptionalField.TWITTER -> KEY_TWITTER
+            OptionalField.INSTAGRAM -> KEY_INSTAGRAM
+            OptionalField.GITHUB -> KEY_GITHUB
         }
         encryptedPrefs.edit().apply {
             putStringOrRemove(key, value)
             apply()
         }
         markPendingSync()
+    }
+
+    /**
+     * Update an optional field by its key name.
+     * Used for bulk import from vault sync.
+     *
+     * @param keyName The field key name (e.g., "phone", "middleName", "street")
+     * @param value The new value (null to clear)
+     * @return true if the key was recognized and updated
+     */
+    fun updateOptionalFieldByKey(keyName: String, value: String?): Boolean {
+        val field = when (keyName) {
+            // Name fields
+            "prefix" -> OptionalField.PREFIX
+            "firstName", "first_name" -> OptionalField.FIRST_NAME
+            "middleName", "middle_name" -> OptionalField.MIDDLE_NAME
+            "lastName", "last_name" -> OptionalField.LAST_NAME
+            "suffix" -> OptionalField.SUFFIX
+            // Contact fields
+            "phone" -> OptionalField.PHONE
+            "birthday" -> OptionalField.BIRTHDAY
+            // Address fields
+            "street" -> OptionalField.STREET
+            "street2" -> OptionalField.STREET2
+            "city" -> OptionalField.CITY
+            "state" -> OptionalField.STATE
+            "postalCode", "postal_code" -> OptionalField.POSTAL_CODE
+            "country" -> OptionalField.COUNTRY
+            // Social/Web fields
+            "website" -> OptionalField.WEBSITE
+            "linkedin" -> OptionalField.LINKEDIN
+            "twitter" -> OptionalField.TWITTER
+            "instagram" -> OptionalField.INSTAGRAM
+            "github" -> OptionalField.GITHUB
+            else -> null
+        }
+
+        return if (field != null) {
+            updateOptionalField(field, value)
+            true
+        } else {
+            false
+        }
     }
 
     // MARK: - Custom Fields
@@ -192,18 +323,70 @@ class PersonalDataStore @Inject constructor(
      * @param name Field name
      * @param value Field value
      * @param category Optional category
+     * @param fieldType The type of field (determines display/input behavior)
      * @return The created custom field
      */
+    /**
+     * Check if a field name already exists (case-insensitive).
+     *
+     * @param name The field name to check
+     * @param excludeId Optional field ID to exclude (for updates)
+     * @return true if name is already used
+     */
+    fun isFieldNameTaken(name: String, excludeId: String? = null): Boolean {
+        val normalizedName = name.trim().lowercase()
+        return getCustomFields().any {
+            it.id != excludeId && it.name.trim().lowercase() == normalizedName
+        }
+    }
+
+    /**
+     * Normalize a field name to a consistent format.
+     * - Trims whitespace
+     * - Converts to Title Case
+     *
+     * @param name The raw field name
+     * @return Normalized field name
+     */
+    fun normalizeFieldName(name: String): String {
+        return name.trim()
+            .split(" ")
+            .joinToString(" ") { word ->
+                word.lowercase().replaceFirstChar { it.uppercase() }
+            }
+    }
+
+    /**
+     * Validate a field name.
+     *
+     * @param name The field name to validate
+     * @return Error message if invalid, null if valid
+     */
+    fun validateFieldName(name: String): String? {
+        val trimmed = name.trim()
+        return when {
+            trimmed.isEmpty() -> "Field name cannot be empty"
+            trimmed.length < 2 -> "Field name must be at least 2 characters"
+            trimmed.length > 50 -> "Field name cannot exceed 50 characters"
+            !trimmed.matches(Regex("^[a-zA-Z0-9][a-zA-Z0-9 '-]*[a-zA-Z0-9]$|^[a-zA-Z0-9]$")) ->
+                "Field name can only contain letters, numbers, spaces, hyphens, and apostrophes"
+            else -> null
+        }
+    }
+
     fun addCustomField(
         name: String,
         value: String,
-        category: FieldCategory = FieldCategory.OTHER
+        category: FieldCategory = FieldCategory.OTHER,
+        fieldType: FieldType = FieldType.TEXT
     ): CustomField {
+        val normalizedName = normalizeFieldName(name)
         val field = CustomField(
             id = UUID.randomUUID().toString(),
-            name = name,
+            name = normalizedName,
             value = value,
             category = category,
+            fieldType = fieldType,
             createdAt = System.currentTimeMillis(),
             updatedAt = System.currentTimeMillis()
         )
@@ -302,13 +485,26 @@ class PersonalDataStore @Inject constructor(
 
         // Optional fields
         val optional = getOptionalFields()
+        // Name fields
+        data["prefix"] = optional.prefix
+        data["middleName"] = optional.middleName
+        data["suffix"] = optional.suffix
+        // Contact fields
         data["phone"] = optional.phone
+        data["birthday"] = optional.birthday
+        // Address fields
         data["street"] = optional.street
+        data["street2"] = optional.street2
         data["city"] = optional.city
         data["state"] = optional.state
         data["postalCode"] = optional.postalCode
         data["country"] = optional.country
-        data["birthday"] = optional.birthday
+        // Social/Web fields
+        data["website"] = optional.website
+        data["linkedin"] = optional.linkedin
+        data["twitter"] = optional.twitter
+        data["instagram"] = optional.instagram
+        data["github"] = optional.github
 
         // Custom fields
         val customFields = getCustomFields()
@@ -319,6 +515,7 @@ class PersonalDataStore @Inject constructor(
                     "name" to field.name,
                     "value" to field.value,
                     "category" to field.category.name,
+                    "fieldType" to field.fieldType.name,
                     "createdAt" to field.createdAt,
                     "updatedAt" to field.updatedAt
                 )
@@ -344,13 +541,26 @@ class PersonalDataStore @Inject constructor(
 
         // Import optional fields
         updateOptionalFields(OptionalPersonalData(
+            // Name fields
+            prefix = data["prefix"] as? String,
+            middleName = data["middleName"] as? String,
+            suffix = data["suffix"] as? String,
+            // Contact fields
             phone = data["phone"] as? String,
+            birthday = data["birthday"] as? String,
+            // Address fields
             street = data["street"] as? String,
+            street2 = data["street2"] as? String,
             city = data["city"] as? String,
             state = data["state"] as? String,
             postalCode = data["postalCode"] as? String,
             country = data["country"] as? String,
-            birthday = data["birthday"] as? String
+            // Social/Web fields
+            website = data["website"] as? String,
+            linkedin = data["linkedin"] as? String,
+            twitter = data["twitter"] as? String,
+            instagram = data["instagram"] as? String,
+            github = data["github"] as? String
         ))
 
         // Import custom fields
@@ -368,6 +578,11 @@ class PersonalDataStore @Inject constructor(
                         } catch (e: Exception) {
                             FieldCategory.OTHER
                         },
+                        fieldType = try {
+                            FieldType.valueOf(fieldData["fieldType"] as? String ?: "TEXT")
+                        } catch (e: Exception) {
+                            FieldType.TEXT
+                        },
                         createdAt = (fieldData["createdAt"] as Number).toLong(),
                         updatedAt = (fieldData["updatedAt"] as Number).toLong()
                     )
@@ -384,6 +599,235 @@ class PersonalDataStore @Inject constructor(
             putLong(KEY_LAST_SYNCED_AT, System.currentTimeMillis())
             apply()
         }
+    }
+
+    // MARK: - Custom Categories
+
+    /**
+     * Get all categories (predefined + custom).
+     */
+    fun getAllCategories(): List<CategoryInfo> {
+        return PREDEFINED_CATEGORIES + getCustomCategories()
+    }
+
+    /**
+     * Get custom user-defined categories.
+     */
+    fun getCustomCategories(): List<CategoryInfo> {
+        val json = encryptedPrefs.getString(KEY_CUSTOM_CATEGORIES, null) ?: return emptyList()
+        return try {
+            val type = object : TypeToken<List<CategoryInfo>>() {}.type
+            gson.fromJson(json, type)
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
+     * Add a custom category.
+     */
+    fun addCustomCategory(name: String, icon: String? = null): CategoryInfo {
+        val category = CategoryInfo(
+            id = UUID.randomUUID().toString(),
+            name = name,
+            icon = icon ?: "category",
+            createdAt = System.currentTimeMillis()
+        )
+        val categories = getCustomCategories().toMutableList()
+        categories.add(category)
+        saveCustomCategories(categories)
+        return category
+    }
+
+    /**
+     * Remove a custom category by ID.
+     */
+    fun removeCustomCategory(id: String) {
+        val categories = getCustomCategories().filter { it.id != id }
+        saveCustomCategories(categories)
+    }
+
+    private fun saveCustomCategories(categories: List<CategoryInfo>) {
+        val json = gson.toJson(categories)
+        encryptedPrefs.edit().putString(KEY_CUSTOM_CATEGORIES, json).apply()
+    }
+
+    // MARK: - Public Profile Settings
+
+    /**
+     * Get the list of fields selected for public profile sharing.
+     */
+    fun getPublicProfileFields(): List<String> {
+        val json = encryptedPrefs.getString(KEY_PUBLIC_PROFILE_FIELDS, null) ?: return emptyList()
+        return try {
+            val type = object : TypeToken<List<String>>() {}.type
+            gson.fromJson(json, type)
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /**
+     * Update the list of fields to share in public profile.
+     */
+    fun updatePublicProfileFields(fields: List<String>) {
+        val json = gson.toJson(fields)
+        encryptedPrefs.edit()
+            .putString(KEY_PUBLIC_PROFILE_FIELDS, json)
+            .putInt(KEY_PUBLIC_PROFILE_VERSION, getPublicProfileVersion() + 1)
+            .apply()
+        markPendingSync()
+    }
+
+    /**
+     * Get the current public profile version.
+     */
+    fun getPublicProfileVersion(): Int {
+        return encryptedPrefs.getInt(KEY_PUBLIC_PROFILE_VERSION, 0)
+    }
+
+    // MARK: - Namespace Helpers
+
+    /**
+     * Convert a dotted namespace to display name.
+     * e.g., "contact.phone.mobile" → "Mobile Phone"
+     */
+    fun namespaceToDisplayName(namespace: String): String {
+        val parts = namespace.split(".")
+        return when {
+            parts.size >= 2 -> {
+                val lastPart = parts.last()
+                    .replace("_", " ")
+                    .split(" ")
+                    .joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+                lastPart
+            }
+            else -> namespace.replaceFirstChar { it.uppercase() }
+        }
+    }
+
+    /**
+     * Generate a dotted namespace from category and field name.
+     * e.g., category="contact", name="Mobile Phone" → "contact.phone.mobile"
+     */
+    fun generateNamespace(categoryId: String, fieldName: String): String {
+        val normalizedName = fieldName
+            .lowercase()
+            .trim()
+            .replace(Regex("[^a-z0-9]+"), "_")
+            .trim('_')
+        return "$categoryId.$normalizedName"
+    }
+
+    /**
+     * Get the category from a namespace.
+     * e.g., "contact.phone.mobile" → "contact"
+     */
+    fun getNamespaceCategory(namespace: String): String {
+        return namespace.split(".").firstOrNull() ?: "other"
+    }
+
+    // MARK: - Enhanced Export for Enclave
+
+    /**
+     * Export personal data in the format expected by the enclave.
+     * Uses the new PersonalDataField structure with dotted namespaces.
+     */
+    fun exportForEnclaveSync(): Map<String, Any?> {
+        val data = mutableMapOf<String, Any?>()
+
+        // System fields with _system_ prefix
+        getSystemFields()?.let { system ->
+            data["_system_first_name"] = system.firstName
+            data["_system_last_name"] = system.lastName
+            data["_system_email"] = system.email
+            data["_system_stored_at"] = System.currentTimeMillis()
+        }
+
+        // Optional fields as PersonalDataField format
+        val optional = getOptionalFields()
+        val optionalFieldsData = mutableListOf<Map<String, Any?>>()
+
+        // Helper to add optional field if not null
+        fun addOptionalField(namespace: String, displayName: String, value: String?, fieldType: String, category: String) {
+            if (value != null) {
+                optionalFieldsData.add(mapOf(
+                    "id" to UUID.randomUUID().toString(),
+                    "name" to namespace,
+                    "display_name" to displayName,
+                    "value" to value,
+                    "field_type" to fieldType,
+                    "category" to category,
+                    "is_sensitive" to false,
+                    "created_at" to System.currentTimeMillis(),
+                    "updated_at" to System.currentTimeMillis()
+                ))
+            }
+        }
+
+        // Map optional fields to namespaces
+        addOptionalField("personal.legal.prefix", "Name Prefix", optional.prefix, "text", "identity")
+        addOptionalField("personal.legal.first_name", "Legal First Name", optional.firstName, "text", "identity")
+        addOptionalField("personal.legal.middle_name", "Middle Name", optional.middleName, "text", "identity")
+        addOptionalField("personal.legal.last_name", "Legal Last Name", optional.lastName, "text", "identity")
+        addOptionalField("personal.legal.suffix", "Name Suffix", optional.suffix, "text", "identity")
+        addOptionalField("contact.phone.mobile", "Mobile Phone", optional.phone, "phone", "contact")
+        addOptionalField("personal.info.birthday", "Birthday", optional.birthday, "date", "identity")
+        addOptionalField("address.home.street", "Street Address", optional.street, "text", "address")
+        addOptionalField("address.home.street2", "Street Address 2", optional.street2, "text", "address")
+        addOptionalField("address.home.city", "City", optional.city, "text", "address")
+        addOptionalField("address.home.state", "State", optional.state, "text", "address")
+        addOptionalField("address.home.postal_code", "Postal Code", optional.postalCode, "text", "address")
+        addOptionalField("address.home.country", "Country", optional.country, "text", "address")
+        addOptionalField("social.website.personal", "Personal Website", optional.website, "url", "contact")
+        addOptionalField("social.linkedin.url", "LinkedIn", optional.linkedin, "url", "contact")
+        addOptionalField("social.twitter.handle", "X/Twitter", optional.twitter, "text", "contact")
+        addOptionalField("social.instagram.handle", "Instagram", optional.instagram, "text", "contact")
+        addOptionalField("social.github.username", "GitHub", optional.github, "url", "contact")
+
+        // Add custom fields
+        getCustomFields().forEach { field ->
+            val namespace = generateNamespace(field.category.name.lowercase(), field.name)
+            optionalFieldsData.add(mapOf(
+                "id" to field.id,
+                "name" to namespace,
+                "display_name" to field.name,
+                "value" to field.value,
+                "field_type" to field.fieldType.name.lowercase(),
+                "category" to field.category.name.lowercase(),
+                "is_sensitive" to (field.fieldType == FieldType.PASSWORD),
+                "created_at" to field.createdAt,
+                "updated_at" to field.updatedAt
+            ))
+        }
+
+        if (optionalFieldsData.isNotEmpty()) {
+            data["fields"] = optionalFieldsData
+        }
+
+        // Include custom categories
+        val customCategories = getCustomCategories()
+        if (customCategories.isNotEmpty()) {
+            data["categories"] = customCategories.map { cat ->
+                mapOf(
+                    "id" to cat.id,
+                    "name" to cat.name,
+                    "icon" to cat.icon,
+                    "created_at" to cat.createdAt
+                )
+            }
+        }
+
+        // Include public profile settings
+        val publicFields = getPublicProfileFields()
+        if (publicFields.isNotEmpty()) {
+            data["public_profile"] = mapOf(
+                "version" to getPublicProfileVersion(),
+                "fields" to publicFields
+            )
+        }
+
+        return data
     }
 
     // MARK: - Clear
@@ -426,26 +870,56 @@ data class SystemPersonalData(
  * Optional personal data that users can edit.
  */
 data class OptionalPersonalData(
+    // Name fields (legal name components)
+    val prefix: String? = null,       // Mr, Ms, Mrs, Dr, etc.
+    val firstName: String? = null,    // Editable first name (legal name)
+    val middleName: String? = null,
+    val lastName: String? = null,     // Editable last name (legal name)
+    val suffix: String? = null,       // Jr, Sr, III, etc.
+    // Contact fields
     val phone: String? = null,
-    val street: String? = null,
+    val birthday: String? = null,     // ISO date format (YYYY-MM-DD)
+    // Address fields
+    val street: String? = null,       // Street address line 1
+    val street2: String? = null,      // Street address line 2 (apartment, suite, etc.)
     val city: String? = null,
     val state: String? = null,
     val postalCode: String? = null,
     val country: String? = null,
-    val birthday: String? = null  // ISO date format (YYYY-MM-DD)
+    // Social/Web fields
+    val website: String? = null,      // Personal website URL
+    val linkedin: String? = null,     // LinkedIn profile URL or username
+    val twitter: String? = null,      // X/Twitter handle (without @)
+    val instagram: String? = null,    // Instagram handle (without @)
+    val github: String? = null        // GitHub username
 )
 
 /**
  * Enum for optional fields.
  */
 enum class OptionalField {
+    // Name fields
+    PREFIX,
+    FIRST_NAME,
+    MIDDLE_NAME,
+    LAST_NAME,
+    SUFFIX,
+    // Contact fields
     PHONE,
+    BIRTHDAY,
+    // Address fields
     STREET,
+    STREET2,
     CITY,
     STATE,
     POSTAL_CODE,
     COUNTRY,
-    BIRTHDAY
+    // Social/Web fields
+    WEBSITE,
+    LINKEDIN,
+    TWITTER,
+    INSTAGRAM,
+    GITHUB
 }
 
 /**
@@ -456,9 +930,25 @@ data class CustomField(
     val name: String,
     val value: String,
     val category: FieldCategory = FieldCategory.OTHER,
+    val fieldType: FieldType = FieldType.TEXT,
     val createdAt: Long,
     val updatedAt: Long
 )
+
+/**
+ * Types of custom fields.
+ * Determines how the value is displayed and input.
+ */
+enum class FieldType(val displayName: String, val description: String) {
+    TEXT("Text", "General text field"),
+    PASSWORD("Password", "Hidden/masked value"),
+    NUMBER("Number", "Numeric value"),
+    DATE("Date", "Date value (YYYY-MM-DD)"),
+    EMAIL("Email", "Email address"),
+    PHONE("Phone", "Phone number"),
+    URL("URL", "Website address"),
+    NOTE("Note", "Multi-line text")
+}
 
 /**
  * Categories for custom fields.
@@ -470,4 +960,26 @@ enum class FieldCategory {
     FINANCIAL,  // Bank accounts, credit cards
     MEDICAL,    // Health info, allergies
     OTHER       // Miscellaneous
+}
+
+/**
+ * Category information for display and sync.
+ * Supports both predefined and custom categories.
+ */
+data class CategoryInfo(
+    val id: String,
+    val name: String,
+    val icon: String,
+    val createdAt: Long = 0
+) {
+    /**
+     * Convert to FieldCategory enum if this is a predefined category.
+     */
+    fun toFieldCategory(): FieldCategory {
+        return try {
+            FieldCategory.valueOf(id.uppercase())
+        } catch (e: Exception) {
+            FieldCategory.OTHER
+        }
+    }
 }

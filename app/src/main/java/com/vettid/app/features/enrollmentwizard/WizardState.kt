@@ -4,8 +4,21 @@ import com.vettid.app.core.nats.UtkInfo
 import com.vettid.app.core.storage.CustomField
 import com.vettid.app.core.storage.OptionalPersonalData
 import com.vettid.app.core.storage.SystemPersonalData
+import com.vettid.app.core.storage.FieldType
 import com.vettid.app.features.enrollment.AttestationInfo
 import com.vettid.app.features.enrollment.PasswordStrength
+
+/**
+ * Represents a field that can be included in the public profile.
+ */
+data class PublicProfileField(
+    val namespace: String,       // Dotted namespace: "contact.phone.mobile"
+    val displayName: String,     // Human-readable: "Mobile Phone"
+    val value: String,           // Current value
+    val fieldType: FieldType,    // Field type for display
+    val category: String,        // Category ID
+    val isSensitive: Boolean = false  // If true, cannot be shared publicly
+)
 
 /**
  * Wizard phase enumeration for step indicator
@@ -13,14 +26,16 @@ import com.vettid.app.features.enrollment.PasswordStrength
 enum class WizardPhase(val stepIndex: Int, val label: String) {
     START(0, "Start"),
     ATTESTATION(1, "Verify"),
-    PIN_SETUP(2, "PIN"),
-    PASSWORD_SETUP(3, "Password"),
-    VERIFY_CREDENTIAL(4, "Confirm"),
-    PERSONAL_DATA(5, "Profile"),
-    COMPLETE(6, "Done");
+    CONFIRM_IDENTITY(2, "Identity"),
+    PIN_SETUP(3, "PIN"),
+    PASSWORD_SETUP(4, "Password"),
+    VERIFY_CREDENTIAL(5, "Confirm"),
+    PERSONAL_DATA(6, "Profile"),
+    PUBLIC_PROFILE(7, "Share"),
+    COMPLETE(8, "Done");
 
     companion object {
-        const val TOTAL_STEPS = 7
+        const val TOTAL_STEPS = 9
 
         fun fromIndex(index: Int): WizardPhase? = entries.find { it.stepIndex == index }
     }
@@ -89,7 +104,19 @@ sealed class WizardState {
         override val phase = WizardPhase.ATTESTATION
     }
 
-    // ============== PHASE 3: PIN SETUP ==============
+    // ============== PHASE 3: CONFIRM IDENTITY ==============
+
+    /** Confirm identity from registration */
+    data class ConfirmIdentity(
+        val firstName: String,
+        val lastName: String,
+        val email: String,
+        val attestationInfo: AttestationInfo? = null
+    ) : WizardState() {
+        override val phase = WizardPhase.CONFIRM_IDENTITY
+    }
+
+    // ============== PHASE 4: PIN SETUP ==============
 
     /** PIN entry and confirmation */
     data class SettingPin(
@@ -102,7 +129,7 @@ sealed class WizardState {
         override val phase = WizardPhase.PIN_SETUP
     }
 
-    // ============== PHASE 4: PASSWORD SETUP ==============
+    // ============== PHASE 5: PASSWORD SETUP ==============
 
     /** Password creation with strength indicator */
     data class SettingPassword(
@@ -124,7 +151,7 @@ sealed class WizardState {
         override val phase = WizardPhase.PASSWORD_SETUP
     }
 
-    // ============== PHASE 5: VERIFY CREDENTIAL ==============
+    // ============== PHASE 6: VERIFY CREDENTIAL ==============
 
     /** Password verification entry */
     data class VerifyingPassword(
@@ -152,7 +179,7 @@ sealed class WizardState {
         override val phase = WizardPhase.VERIFY_CREDENTIAL
     }
 
-    // ============== PHASE 6: PERSONAL DATA ==============
+    // ============== PHASE 7: PERSONAL DATA ==============
 
     /** Personal data collection */
     data class PersonalData(
@@ -169,11 +196,26 @@ sealed class WizardState {
         override val phase = WizardPhase.PERSONAL_DATA
     }
 
-    // ============== PHASE 7: COMPLETE ==============
+    // ============== PHASE 8: PUBLIC PROFILE ==============
+
+    /** Public profile setup - select fields to share with connections */
+    data class SetupPublicProfile(
+        val isLoading: Boolean = false,
+        val isPublishing: Boolean = false,
+        val systemFields: SystemPersonalData? = null,
+        val availableFields: List<PublicProfileField> = emptyList(),
+        val selectedFields: Set<String> = emptySet(),
+        val error: String? = null
+    ) : WizardState() {
+        override val phase = WizardPhase.PUBLIC_PROFILE
+    }
+
+    // ============== PHASE 9: COMPLETE ==============
 
     /** Enrollment complete */
     data class Complete(
-        val userGuid: String = ""
+        val userGuid: String = "",
+        val shouldNavigate: Boolean = false  // Set to true when ready to navigate to Main
     ) : WizardState() {
         override val phase = WizardPhase.COMPLETE
     }

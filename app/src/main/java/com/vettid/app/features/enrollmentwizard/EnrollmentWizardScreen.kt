@@ -36,16 +36,33 @@ fun EnrollmentWizardScreen(
         viewModel.initialize(startWithManualEntry, initialCode)
     }
 
-    // Handle side effects
+    // Track if we've already handled navigation to prevent double-navigation
+    var hasNavigated by remember { mutableStateOf(false) }
+
+    // Handle side effects - use collectLatest to ensure we always process the latest effect
     LaunchedEffect(Unit) {
         viewModel.effects.collect { effect ->
             when (effect) {
-                is WizardEffect.NavigateToMain -> onWizardComplete()
+                is WizardEffect.NavigateToMain -> {
+                    if (!hasNavigated) {
+                        hasNavigated = true
+                        onWizardComplete()
+                    }
+                }
                 is WizardEffect.CloseWizard -> onCancel()
                 is WizardEffect.ShowToast -> {
                     // Toast can be handled by snackbar if needed
                 }
             }
+        }
+    }
+
+    // Backup navigation trigger: if state is Complete with shouldNavigate, trigger navigation
+    // This handles cases where the effect might be missed due to recomposition timing
+    LaunchedEffect(state) {
+        if (state is WizardState.Complete && (state as WizardState.Complete).shouldNavigate && !hasNavigated) {
+            hasNavigated = true
+            onWizardComplete()
         }
     }
 
@@ -93,12 +110,14 @@ fun EnrollmentWizardScreen(
                         is WizardState.ConnectingToNats,
                         is WizardState.RequestingAttestation,
                         is WizardState.AttestationVerified -> "attestation"
+                        is WizardState.ConfirmIdentity -> "confirm_identity"
                         is WizardState.SettingPin -> "pin"
                         is WizardState.SettingPassword, is WizardState.CreatingCredential -> "password"
                         is WizardState.VerifyingPassword,
                         is WizardState.Authenticating,
                         is WizardState.VerificationSuccess -> "verify"
                         is WizardState.PersonalData -> "personal"
+                        is WizardState.SetupPublicProfile -> "public_profile"
                         is WizardState.Complete -> "complete"
                         is WizardState.Error -> "error_${targetState.previousPhase}"
                     }
@@ -176,6 +195,18 @@ fun EnrollmentWizardScreen(
                             AttestationPhaseContent(
                                 mode = AttestationPhaseMode.VERIFIED,
                                 attestationInfo = currentState.attestationInfo
+                            )
+                        }
+
+                        // Confirm Identity Phase
+                        is WizardState.ConfirmIdentity -> {
+                            ConfirmIdentityPhaseContent(
+                                firstName = currentState.firstName,
+                                lastName = currentState.lastName,
+                                email = currentState.email,
+                                attestationInfo = currentState.attestationInfo,
+                                onConfirm = { viewModel.onEvent(WizardEvent.ConfirmIdentity) },
+                                onCancel = { viewModel.onEvent(WizardEvent.Cancel) }
                             )
                         }
 
@@ -263,8 +294,8 @@ fun EnrollmentWizardScreen(
                                 onUpdateOptionalField = { field, value ->
                                     viewModel.onEvent(WizardEvent.UpdateOptionalField(field, value))
                                 },
-                                onAddCustomField = { name, value, category ->
-                                    viewModel.onEvent(WizardEvent.AddCustomField(name, value, category))
+                                onAddCustomField = { name, value, category, fieldType ->
+                                    viewModel.onEvent(WizardEvent.AddCustomField(name, value, category, fieldType))
                                 },
                                 onUpdateCustomField = { viewModel.onEvent(WizardEvent.UpdateCustomField(it)) },
                                 onRemoveCustomField = { viewModel.onEvent(WizardEvent.RemoveCustomField(it)) },
@@ -276,6 +307,24 @@ fun EnrollmentWizardScreen(
                                 onDismissError = { viewModel.onEvent(WizardEvent.DismissError) },
                                 onSkip = { viewModel.onEvent(WizardEvent.Skip) },
                                 onContinue = { viewModel.onEvent(WizardEvent.NextStep) }
+                            )
+                        }
+
+                        // Public Profile Phase
+                        is WizardState.SetupPublicProfile -> {
+                            PublicProfilePhaseContent(
+                                isLoading = currentState.isLoading,
+                                isPublishing = currentState.isPublishing,
+                                systemFields = currentState.systemFields,
+                                availableFields = currentState.availableFields,
+                                selectedFields = currentState.selectedFields,
+                                error = currentState.error,
+                                onToggleField = { viewModel.onEvent(WizardEvent.TogglePublicProfileField(it)) },
+                                onSelectAll = { viewModel.onEvent(WizardEvent.SelectAllPublicFields) },
+                                onSelectNone = { viewModel.onEvent(WizardEvent.SelectNoPublicFields) },
+                                onDismissError = { viewModel.onEvent(WizardEvent.DismissError) },
+                                onSkip = { viewModel.onEvent(WizardEvent.SkipPublicProfile) },
+                                onPublish = { viewModel.onEvent(WizardEvent.PublishProfile) }
                             )
                         }
 
