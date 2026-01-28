@@ -204,6 +204,12 @@ class NatsClient @Inject constructor() {
         }
     }
 
+    /**
+     * Get the underlying AndroidNatsClient for JetStream operations.
+     * This is needed because JetStream requires direct access to the low-level client.
+     */
+    fun getAndroidClient(): AndroidNatsClient = androidClient
+
     companion object {
         private const val TAG = "NatsClient"
 

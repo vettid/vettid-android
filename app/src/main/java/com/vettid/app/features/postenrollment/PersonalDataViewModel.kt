@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.nats.VaultResponse
+import com.vettid.app.core.network.VaultServiceClient
+import com.vettid.app.core.storage.CredentialStore
 import com.vettid.app.core.storage.CustomField
 import com.vettid.app.core.storage.FieldCategory
 import com.vettid.app.core.storage.OptionalField
@@ -37,7 +39,9 @@ import javax.inject.Inject
 class PersonalDataViewModel @Inject constructor(
     private val personalDataStore: PersonalDataStore,
     private val ownerSpaceClient: OwnerSpaceClient,
-    private val connectionManager: NatsConnectionManager
+    private val connectionManager: NatsConnectionManager,
+    private val vaultServiceClient: VaultServiceClient,
+    private val credentialStore: CredentialStore
 ) : ViewModel() {
 
     companion object {
@@ -56,6 +60,7 @@ class PersonalDataViewModel @Inject constructor(
 
     /**
      * Load all personal data from local storage.
+     * If system fields are missing, automatically tries to fetch from API.
      */
     private fun loadPersonalData() {
         viewModelScope.launch {
@@ -78,6 +83,12 @@ class PersonalDataViewModel @Inject constructor(
                         lastSyncedAt = lastSyncedAt
                     )
                 }
+
+                // If system fields are missing, try to fetch from API
+                if (systemFields == null) {
+                    Log.i(TAG, "System fields missing, attempting to fetch from API")
+                    refreshSystemFields()
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load personal data", e)
                 _state.update {
@@ -87,6 +98,58 @@ class PersonalDataViewModel @Inject constructor(
                     )
                 }
             }
+        }
+    }
+
+    /**
+     * Refresh system fields from the registration profile API.
+     * Used when system fields are missing (e.g., enrollment happened before API fix).
+     *
+     * Note: This requires authentication. If no auth token is available,
+     * the system fields will remain empty but the app continues to work.
+     */
+    private suspend fun refreshSystemFields() {
+        Log.d(TAG, "Refreshing system fields from API")
+        _state.update { it.copy(isLoading = true) }
+
+        try {
+            val authToken = credentialStore.getAuthToken()
+            if (authToken == null) {
+                // No auth token - this is expected if user hasn't set up Cognito auth
+                // Just log and continue without showing error to user
+                Log.w(TAG, "No auth token available for profile refresh - skipping")
+                _state.update { it.copy(isLoading = false) }
+                return
+            }
+
+            val result = vaultServiceClient.getRegistrationProfileWithToken(authToken)
+            result.fold(
+                onSuccess = { profile ->
+                    Log.i(TAG, "Profile fetched: ${profile.firstName} ${profile.lastName}")
+                    val systemFields = SystemPersonalData(
+                        firstName = profile.firstName,
+                        lastName = profile.lastName,
+                        email = profile.email
+                    )
+                    personalDataStore.storeSystemFields(systemFields)
+                    _state.update {
+                        it.copy(
+                            isLoading = false,
+                            systemFields = systemFields
+                        )
+                    }
+                    _effects.emit(PersonalDataEffect.ShowMessage("Registration info loaded"))
+                },
+                onFailure = { error ->
+                    Log.e(TAG, "Failed to fetch profile", error)
+                    // Don't show error to user - registration info is optional
+                    _state.update { it.copy(isLoading = false) }
+                }
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Error refreshing system fields", e)
+            // Don't show error to user - registration info is optional
+            _state.update { it.copy(isLoading = false) }
         }
     }
 
@@ -108,6 +171,7 @@ class PersonalDataViewModel @Inject constructor(
                 is PersonalDataEvent.HideAddFieldDialog -> hideAddFieldDialog()
                 is PersonalDataEvent.ShowEditFieldDialog -> showEditFieldDialog(event.field)
                 is PersonalDataEvent.HideEditFieldDialog -> hideEditFieldDialog()
+                is PersonalDataEvent.RefreshSystemFields -> refreshSystemFields()
             }
         }
     }
@@ -305,6 +369,7 @@ sealed class PersonalDataEvent {
     object HideAddFieldDialog : PersonalDataEvent()
     data class ShowEditFieldDialog(val field: CustomField) : PersonalDataEvent()
     object HideEditFieldDialog : PersonalDataEvent()
+    object RefreshSystemFields : PersonalDataEvent()
 }
 
 /**

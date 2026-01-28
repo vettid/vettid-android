@@ -19,9 +19,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.vettid.app.core.storage.CustomField
 import com.vettid.app.core.storage.FieldCategory
+import com.vettid.app.core.storage.FieldType
 import com.vettid.app.core.storage.OptionalField
 import com.vettid.app.core.storage.OptionalPersonalData
 import com.vettid.app.core.storage.SystemPersonalData
+import com.vettid.app.ui.components.PhoneNumberInput
+import com.vettid.app.ui.components.WheelBirthdayPicker
 
 /**
  * Personal data collection phase content.
@@ -38,7 +41,7 @@ fun PersonalDataPhaseContent(
     showAddFieldDialog: Boolean,
     editingField: CustomField?,
     onUpdateOptionalField: (OptionalField, String?) -> Unit,
-    onAddCustomField: (name: String, value: String, category: FieldCategory) -> Unit,
+    onAddCustomField: (name: String, value: String, category: FieldCategory, fieldType: FieldType) -> Unit,
     onUpdateCustomField: (CustomField) -> Unit,
     onRemoveCustomField: (String) -> Unit,
     onSyncNow: () -> Unit,
@@ -276,6 +279,7 @@ private fun ReadOnlyField(label: String, value: String) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun OptionalFieldsSection(
     optionalFields: OptionalPersonalData,
@@ -283,6 +287,149 @@ private fun OptionalFieldsSection(
 ) {
     val focusManager = LocalFocusManager.current
 
+    // Legal Name Section
+    Text(
+        text = "LEGAL NAME",
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary
+    )
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    Card {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            // Prefix dropdown
+            var prefixExpanded by remember { mutableStateOf(false) }
+            val prefixes = listOf("", "Mr.", "Ms.", "Mrs.", "Dr.", "Prof.")
+            ExposedDropdownMenuBox(
+                expanded = prefixExpanded,
+                onExpandedChange = { prefixExpanded = it }
+            ) {
+                OutlinedTextField(
+                    value = optionalFields.prefix ?: "",
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Prefix") },
+                    placeholder = { Text("Select prefix") },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = prefixExpanded) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor()
+                )
+                ExposedDropdownMenu(
+                    expanded = prefixExpanded,
+                    onDismissRequest = { prefixExpanded = false }
+                ) {
+                    prefixes.forEach { prefix ->
+                        DropdownMenuItem(
+                            text = { Text(if (prefix.isEmpty()) "None" else prefix) },
+                            onClick = {
+                                onFieldUpdate(OptionalField.PREFIX, prefix.ifBlank { null })
+                                prefixExpanded = false
+                            }
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // First name
+            OutlinedTextField(
+                value = optionalFields.firstName ?: "",
+                onValueChange = { onFieldUpdate(OptionalField.FIRST_NAME, it.ifBlank { null }) },
+                label = { Text("First Name") },
+                placeholder = { Text("Enter first name") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Words,
+                    imeAction = ImeAction.Next
+                ),
+                keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Middle name
+            OutlinedTextField(
+                value = optionalFields.middleName ?: "",
+                onValueChange = { onFieldUpdate(OptionalField.MIDDLE_NAME, it.ifBlank { null }) },
+                label = { Text("Middle Name") },
+                placeholder = { Text("Enter middle name") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Words,
+                    imeAction = ImeAction.Next
+                ),
+                keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Last name
+            OutlinedTextField(
+                value = optionalFields.lastName ?: "",
+                onValueChange = { onFieldUpdate(OptionalField.LAST_NAME, it.ifBlank { null }) },
+                label = { Text("Last Name") },
+                placeholder = { Text("Enter last name") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Words,
+                    imeAction = ImeAction.Next
+                ),
+                keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Suffix dropdown
+            var suffixExpanded by remember { mutableStateOf(false) }
+            val suffixes = listOf("", "Jr.", "Sr.", "II", "III", "IV", "Ph.D.", "M.D.", "Esq.")
+            ExposedDropdownMenuBox(
+                expanded = suffixExpanded,
+                onExpandedChange = { suffixExpanded = it }
+            ) {
+                OutlinedTextField(
+                    value = optionalFields.suffix ?: "",
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Suffix") },
+                    placeholder = { Text("Select suffix") },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = suffixExpanded) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor()
+                )
+                ExposedDropdownMenu(
+                    expanded = suffixExpanded,
+                    onDismissRequest = { suffixExpanded = false }
+                ) {
+                    suffixes.forEach { suffix ->
+                        DropdownMenuItem(
+                            text = { Text(if (suffix.isEmpty()) "None" else suffix) },
+                            onClick = {
+                                onFieldUpdate(OptionalField.SUFFIX, suffix.ifBlank { null })
+                                suffixExpanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    Spacer(modifier = Modifier.height(24.dp))
+
+    // Contact Info Section
     Text(
         text = "CONTACT INFO",
         style = MaterialTheme.typography.labelLarge,
@@ -297,39 +444,350 @@ private fun OptionalFieldsSection(
                 .fillMaxWidth()
                 .padding(16.dp)
         ) {
-            OutlinedTextField(
+            // Phone number with country selector and formatting
+            PhoneNumberInput(
                 value = optionalFields.phone ?: "",
-                onValueChange = { onFieldUpdate(OptionalField.PHONE, it) },
-                label = { Text("Phone") },
-                placeholder = { Text("+1 (555) 123-4567") },
-                leadingIcon = { Icon(Icons.Default.Phone, contentDescription = null) },
+                onValueChange = { onFieldUpdate(OptionalField.PHONE, it.ifBlank { null }) },
+                modifier = Modifier.fillMaxWidth(),
+                label = "Phone",
+                imeAction = ImeAction.Done,
+                onImeAction = { focusManager.clearFocus() }
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Birthday with wheel picker
+            WheelBirthdayPicker(
+                value = optionalFields.birthday ?: "",
+                onValueChange = { onFieldUpdate(OptionalField.BIRTHDAY, it.ifBlank { null }) },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+
+    Spacer(modifier = Modifier.height(24.dp))
+
+    // Address Section
+    Text(
+        text = "ADDRESS",
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary
+    )
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    Card {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            // Street address line 1
+            OutlinedTextField(
+                value = optionalFields.street ?: "",
+                onValueChange = { onFieldUpdate(OptionalField.STREET, it.ifBlank { null }) },
+                label = { Text("Street Address") },
+                placeholder = { Text("123 Main St") },
+                singleLine = true,
                 keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Phone,
+                    capitalization = KeyboardCapitalization.Words,
                     imeAction = ImeAction.Next
                 ),
-                keyboardActions = KeyboardActions(
-                    onNext = { focusManager.moveFocus(FocusDirection.Down) }
-                ),
-                singleLine = true,
+                keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
                 modifier = Modifier.fillMaxWidth()
             )
 
             Spacer(modifier = Modifier.height(12.dp))
 
+            // Street address line 2
             OutlinedTextField(
-                value = optionalFields.birthday ?: "",
-                onValueChange = { onFieldUpdate(OptionalField.BIRTHDAY, it) },
-                label = { Text("Birthday") },
-                placeholder = { Text("YYYY-MM-DD") },
-                leadingIcon = { Icon(Icons.Default.CalendarMonth, contentDescription = null) },
+                value = optionalFields.street2 ?: "",
+                onValueChange = { onFieldUpdate(OptionalField.STREET2, it.ifBlank { null }) },
+                label = { Text("Address Line 2") },
+                placeholder = { Text("Apt, Suite, Unit, etc.") },
+                singleLine = true,
                 keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Number,
+                    capitalization = KeyboardCapitalization.Words,
+                    imeAction = ImeAction.Next
+                ),
+                keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // City
+            OutlinedTextField(
+                value = optionalFields.city ?: "",
+                onValueChange = { onFieldUpdate(OptionalField.CITY, it.ifBlank { null }) },
+                label = { Text("City") },
+                placeholder = { Text("City") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Words,
+                    imeAction = ImeAction.Next
+                ),
+                keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // State dropdown and Postal Code
+            Row(modifier = Modifier.fillMaxWidth()) {
+                // State dropdown
+                var stateExpanded by remember { mutableStateOf(false) }
+                val usStates = listOf(
+                    "" to "Select State",
+                    "AL" to "Alabama", "AK" to "Alaska", "AZ" to "Arizona", "AR" to "Arkansas",
+                    "CA" to "California", "CO" to "Colorado", "CT" to "Connecticut", "DE" to "Delaware",
+                    "FL" to "Florida", "GA" to "Georgia", "HI" to "Hawaii", "ID" to "Idaho",
+                    "IL" to "Illinois", "IN" to "Indiana", "IA" to "Iowa", "KS" to "Kansas",
+                    "KY" to "Kentucky", "LA" to "Louisiana", "ME" to "Maine", "MD" to "Maryland",
+                    "MA" to "Massachusetts", "MI" to "Michigan", "MN" to "Minnesota", "MS" to "Mississippi",
+                    "MO" to "Missouri", "MT" to "Montana", "NE" to "Nebraska", "NV" to "Nevada",
+                    "NH" to "New Hampshire", "NJ" to "New Jersey", "NM" to "New Mexico", "NY" to "New York",
+                    "NC" to "North Carolina", "ND" to "North Dakota", "OH" to "Ohio", "OK" to "Oklahoma",
+                    "OR" to "Oregon", "PA" to "Pennsylvania", "RI" to "Rhode Island", "SC" to "South Carolina",
+                    "SD" to "South Dakota", "TN" to "Tennessee", "TX" to "Texas", "UT" to "Utah",
+                    "VT" to "Vermont", "VA" to "Virginia", "WA" to "Washington", "WV" to "West Virginia",
+                    "WI" to "Wisconsin", "WY" to "Wyoming", "DC" to "District of Columbia",
+                    "PR" to "Puerto Rico", "VI" to "Virgin Islands", "GU" to "Guam"
+                )
+                ExposedDropdownMenuBox(
+                    expanded = stateExpanded,
+                    onExpandedChange = { stateExpanded = it },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    OutlinedTextField(
+                        value = optionalFields.state ?: "",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("State") },
+                        placeholder = { Text("Select") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = stateExpanded) },
+                        singleLine = true,
+                        modifier = Modifier.menuAnchor()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = stateExpanded,
+                        onDismissRequest = { stateExpanded = false }
+                    ) {
+                        usStates.forEach { (code, name) ->
+                            DropdownMenuItem(
+                                text = { Text(if (code.isEmpty()) name else "$code - $name") },
+                                onClick = {
+                                    onFieldUpdate(OptionalField.STATE, code.ifBlank { null })
+                                    stateExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                OutlinedTextField(
+                    value = optionalFields.postalCode ?: "",
+                    onValueChange = { onFieldUpdate(OptionalField.POSTAL_CODE, it.ifBlank { null }) },
+                    label = { Text("ZIP Code") },
+                    placeholder = { Text("ZIP") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Number,
+                        imeAction = ImeAction.Next
+                    ),
+                    keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Country dropdown
+            var countryExpanded by remember { mutableStateOf(false) }
+            val countries = listOf(
+                "" to "Select Country",
+                "US" to "United States",
+                "CA" to "Canada",
+                "MX" to "Mexico",
+                "GB" to "United Kingdom",
+                "DE" to "Germany",
+                "FR" to "France",
+                "IT" to "Italy",
+                "ES" to "Spain",
+                "AU" to "Australia",
+                "NZ" to "New Zealand",
+                "JP" to "Japan",
+                "KR" to "South Korea",
+                "CN" to "China",
+                "IN" to "India",
+                "BR" to "Brazil",
+                "AR" to "Argentina",
+                "ZA" to "South Africa",
+                "NG" to "Nigeria",
+                "EG" to "Egypt",
+                "AE" to "United Arab Emirates",
+                "SG" to "Singapore",
+                "HK" to "Hong Kong",
+                "TW" to "Taiwan",
+                "PH" to "Philippines",
+                "TH" to "Thailand",
+                "VN" to "Vietnam",
+                "ID" to "Indonesia",
+                "MY" to "Malaysia",
+                "NL" to "Netherlands",
+                "BE" to "Belgium",
+                "CH" to "Switzerland",
+                "AT" to "Austria",
+                "SE" to "Sweden",
+                "NO" to "Norway",
+                "DK" to "Denmark",
+                "FI" to "Finland",
+                "IE" to "Ireland",
+                "PT" to "Portugal",
+                "PL" to "Poland",
+                "CZ" to "Czech Republic",
+                "GR" to "Greece",
+                "TR" to "Turkey",
+                "RU" to "Russia",
+                "IL" to "Israel",
+                "SA" to "Saudi Arabia"
+            )
+            ExposedDropdownMenuBox(
+                expanded = countryExpanded,
+                onExpandedChange = { countryExpanded = it }
+            ) {
+                OutlinedTextField(
+                    value = countries.find { it.first == optionalFields.country }?.second
+                        ?: optionalFields.country ?: "",
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Country") },
+                    placeholder = { Text("Select country") },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = countryExpanded) },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor()
+                )
+                ExposedDropdownMenu(
+                    expanded = countryExpanded,
+                    onDismissRequest = { countryExpanded = false }
+                ) {
+                    countries.forEach { (code, name) ->
+                        DropdownMenuItem(
+                            text = { Text(name) },
+                            onClick = {
+                                onFieldUpdate(OptionalField.COUNTRY, code.ifBlank { null })
+                                countryExpanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    Spacer(modifier = Modifier.height(24.dp))
+
+    // Social & Web Section
+    Text(
+        text = "SOCIAL & WEB",
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary
+    )
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    Card {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            // Website
+            OutlinedTextField(
+                value = optionalFields.website ?: "",
+                onValueChange = { onFieldUpdate(OptionalField.WEBSITE, it.ifBlank { null }) },
+                label = { Text("Website") },
+                placeholder = { Text("https://yourwebsite.com") },
+                leadingIcon = { Icon(Icons.Default.Language, contentDescription = null) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Uri,
+                    imeAction = ImeAction.Next
+                ),
+                keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // LinkedIn
+            OutlinedTextField(
+                value = optionalFields.linkedin ?: "",
+                onValueChange = { onFieldUpdate(OptionalField.LINKEDIN, it.ifBlank { null }) },
+                label = { Text("LinkedIn") },
+                placeholder = { Text("linkedin.com/in/username or username") },
+                leadingIcon = { Icon(Icons.Default.Work, contentDescription = null) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Uri,
+                    imeAction = ImeAction.Next
+                ),
+                keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Twitter/X
+            OutlinedTextField(
+                value = optionalFields.twitter ?: "",
+                onValueChange = { onFieldUpdate(OptionalField.TWITTER, it.ifBlank { null }) },
+                label = { Text("X (Twitter)") },
+                placeholder = { Text("username (without @)") },
+                leadingIcon = { Text("𝕏", style = MaterialTheme.typography.titleMedium) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    imeAction = ImeAction.Next
+                ),
+                keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Instagram
+            OutlinedTextField(
+                value = optionalFields.instagram ?: "",
+                onValueChange = { onFieldUpdate(OptionalField.INSTAGRAM, it.ifBlank { null }) },
+                label = { Text("Instagram") },
+                placeholder = { Text("username (without @)") },
+                leadingIcon = { Icon(Icons.Default.CameraAlt, contentDescription = null) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    imeAction = ImeAction.Next
+                ),
+                keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // GitHub
+            OutlinedTextField(
+                value = optionalFields.github ?: "",
+                onValueChange = { onFieldUpdate(OptionalField.GITHUB, it.ifBlank { null }) },
+                label = { Text("GitHub") },
+                placeholder = { Text("username") },
+                leadingIcon = { Icon(Icons.Default.Code, contentDescription = null) },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
                     imeAction = ImeAction.Done
                 ),
-                keyboardActions = KeyboardActions(
-                    onDone = { focusManager.clearFocus() }
-                ),
-                singleLine = true,
+                keyboardActions = KeyboardActions(onDone = { focusManager.clearFocus() }),
                 modifier = Modifier.fillMaxWidth()
             )
         }
@@ -435,9 +893,28 @@ private fun CustomFieldItem(
             )
             Spacer(modifier = Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text(text = field.name, style = MaterialTheme.typography.bodyLarge)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = field.name, style = MaterialTheme.typography.bodyLarge)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    // Show field type badge
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = MaterialTheme.shapes.small
+                    ) {
+                        Text(
+                            text = field.fieldType.displayName,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+                // Display value based on field type
                 Text(
-                    text = field.value,
+                    text = when (field.fieldType) {
+                        FieldType.PASSWORD -> "••••••••"
+                        else -> field.value.ifEmpty { "(empty)" }
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -485,18 +962,22 @@ private fun BottomButtons(
 @Composable
 private fun AddCustomFieldDialog(
     onDismiss: () -> Unit,
-    onAdd: (name: String, value: String, category: FieldCategory) -> Unit
+    onAdd: (name: String, value: String, category: FieldCategory, fieldType: FieldType) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
     var value by remember { mutableStateOf("") }
     var category by remember { mutableStateOf(FieldCategory.OTHER) }
-    var expanded by remember { mutableStateOf(false) }
+    var fieldType by remember { mutableStateOf(FieldType.TEXT) }
+    var categoryExpanded by remember { mutableStateOf(false) }
+    var typeExpanded by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Add Custom Field") },
         text = {
-            Column {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState())
+            ) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
@@ -508,51 +989,162 @@ private fun AddCustomFieldDialog(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                OutlinedTextField(
-                    value = value,
-                    onValueChange = { value = it },
-                    label = { Text("Value") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
+                // Field Type dropdown
                 ExposedDropdownMenuBox(
-                    expanded = expanded,
-                    onExpandedChange = { expanded = it }
+                    expanded = typeExpanded,
+                    onExpandedChange = { typeExpanded = it }
                 ) {
                     OutlinedTextField(
-                        value = category.name.lowercase().replaceFirstChar { it.uppercase() },
+                        value = fieldType.displayName,
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("Category") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                        label = { Text("Field Type") },
+                        supportingText = { Text(fieldType.description) },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = typeExpanded) },
                         modifier = Modifier
                             .fillMaxWidth()
                             .menuAnchor()
                     )
 
                     ExposedDropdownMenu(
-                        expanded = expanded,
-                        onDismissRequest = { expanded = false }
+                        expanded = typeExpanded,
+                        onDismissRequest = { typeExpanded = false }
+                    ) {
+                        FieldType.entries.forEach { type ->
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text(type.displayName)
+                                        Text(
+                                            text = type.description,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    fieldType = type
+                                    typeExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Category dropdown
+                ExposedDropdownMenuBox(
+                    expanded = categoryExpanded,
+                    onExpandedChange = { categoryExpanded = it }
+                ) {
+                    OutlinedTextField(
+                        value = category.name.lowercase().replaceFirstChar { it.uppercase() },
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Category") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = categoryExpanded) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor()
+                    )
+
+                    ExposedDropdownMenu(
+                        expanded = categoryExpanded,
+                        onDismissRequest = { categoryExpanded = false }
                     ) {
                         FieldCategory.entries.forEach { cat ->
                             DropdownMenuItem(
                                 text = { Text(cat.name.lowercase().replaceFirstChar { it.uppercase() }) },
                                 onClick = {
                                     category = cat
-                                    expanded = false
+                                    categoryExpanded = false
                                 }
                             )
                         }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Value input - varies based on field type
+                when (fieldType) {
+                    FieldType.NOTE -> {
+                        OutlinedTextField(
+                            value = value,
+                            onValueChange = { value = it },
+                            label = { Text("Value") },
+                            minLines = 3,
+                            maxLines = 5,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    FieldType.PASSWORD -> {
+                        OutlinedTextField(
+                            value = value,
+                            onValueChange = { value = it },
+                            label = { Text("Value") },
+                            singleLine = true,
+                            visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    FieldType.NUMBER -> {
+                        OutlinedTextField(
+                            value = value,
+                            onValueChange = { value = it },
+                            label = { Text("Value") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    FieldType.EMAIL -> {
+                        OutlinedTextField(
+                            value = value,
+                            onValueChange = { value = it },
+                            label = { Text("Value") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    FieldType.PHONE -> {
+                        OutlinedTextField(
+                            value = value,
+                            onValueChange = { value = it },
+                            label = { Text("Value") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    FieldType.URL -> {
+                        OutlinedTextField(
+                            value = value,
+                            onValueChange = { value = it },
+                            label = { Text("Value") },
+                            placeholder = { Text("https://...") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                    else -> {
+                        OutlinedTextField(
+                            value = value,
+                            onValueChange = { value = it },
+                            label = { Text("Value") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
                 }
             }
         },
         confirmButton = {
             Button(
-                onClick = { onAdd(name, value, category) },
+                onClick = { onAdd(name, value, category, fieldType) },
                 enabled = name.isNotBlank()
             ) {
                 Text("Add")
@@ -577,7 +1169,9 @@ private fun EditCustomFieldDialog(
     var name by remember { mutableStateOf(field.name) }
     var value by remember { mutableStateOf(field.value) }
     var category by remember { mutableStateOf(field.category) }
-    var expanded by remember { mutableStateOf(false) }
+    var fieldType by remember { mutableStateOf(field.fieldType) }
+    var categoryExpanded by remember { mutableStateOf(false) }
+    var typeExpanded by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
     if (showDeleteConfirm) {
@@ -609,7 +1203,9 @@ private fun EditCustomFieldDialog(
             onDismissRequest = onDismiss,
             title = { Text("Edit Field") },
             text = {
-                Column {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState())
+                ) {
                     OutlinedTextField(
                         value = name,
                         onValueChange = { name = it },
@@ -620,44 +1216,155 @@ private fun EditCustomFieldDialog(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    OutlinedTextField(
-                        value = value,
-                        onValueChange = { value = it },
-                        label = { Text("Value") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
+                    // Field Type dropdown
                     ExposedDropdownMenuBox(
-                        expanded = expanded,
-                        onExpandedChange = { expanded = it }
+                        expanded = typeExpanded,
+                        onExpandedChange = { typeExpanded = it }
                     ) {
                         OutlinedTextField(
-                            value = category.name.lowercase().replaceFirstChar { it.uppercase() },
+                            value = fieldType.displayName,
                             onValueChange = {},
                             readOnly = true,
-                            label = { Text("Category") },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                            label = { Text("Field Type") },
+                            supportingText = { Text(fieldType.description) },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = typeExpanded) },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .menuAnchor()
                         )
 
                         ExposedDropdownMenu(
-                            expanded = expanded,
-                            onDismissRequest = { expanded = false }
+                            expanded = typeExpanded,
+                            onDismissRequest = { typeExpanded = false }
+                        ) {
+                            FieldType.entries.forEach { type ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Column {
+                                            Text(type.displayName)
+                                            Text(
+                                                text = type.description,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    },
+                                    onClick = {
+                                        fieldType = type
+                                        typeExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Category dropdown
+                    ExposedDropdownMenuBox(
+                        expanded = categoryExpanded,
+                        onExpandedChange = { categoryExpanded = it }
+                    ) {
+                        OutlinedTextField(
+                            value = category.name.lowercase().replaceFirstChar { it.uppercase() },
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Category") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = categoryExpanded) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .menuAnchor()
+                        )
+
+                        ExposedDropdownMenu(
+                            expanded = categoryExpanded,
+                            onDismissRequest = { categoryExpanded = false }
                         ) {
                             FieldCategory.entries.forEach { cat ->
                                 DropdownMenuItem(
                                     text = { Text(cat.name.lowercase().replaceFirstChar { it.uppercase() }) },
                                     onClick = {
                                         category = cat
-                                        expanded = false
+                                        categoryExpanded = false
                                     }
                                 )
                             }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Value input - varies based on field type
+                    when (fieldType) {
+                        FieldType.NOTE -> {
+                            OutlinedTextField(
+                                value = value,
+                                onValueChange = { value = it },
+                                label = { Text("Value") },
+                                minLines = 3,
+                                maxLines = 5,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        FieldType.PASSWORD -> {
+                            OutlinedTextField(
+                                value = value,
+                                onValueChange = { value = it },
+                                label = { Text("Value") },
+                                singleLine = true,
+                                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        FieldType.NUMBER -> {
+                            OutlinedTextField(
+                                value = value,
+                                onValueChange = { value = it },
+                                label = { Text("Value") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        FieldType.EMAIL -> {
+                            OutlinedTextField(
+                                value = value,
+                                onValueChange = { value = it },
+                                label = { Text("Value") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        FieldType.PHONE -> {
+                            OutlinedTextField(
+                                value = value,
+                                onValueChange = { value = it },
+                                label = { Text("Value") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        FieldType.URL -> {
+                            OutlinedTextField(
+                                value = value,
+                                onValueChange = { value = it },
+                                label = { Text("Value") },
+                                placeholder = { Text("https://...") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        else -> {
+                            OutlinedTextField(
+                                value = value,
+                                onValueChange = { value = it },
+                                label = { Text("Value") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
                         }
                     }
 
@@ -678,7 +1385,7 @@ private fun EditCustomFieldDialog(
             confirmButton = {
                 Button(
                     onClick = {
-                        onSave(field.copy(name = name, value = value, category = category))
+                        onSave(field.copy(name = name, value = value, category = category, fieldType = fieldType))
                     },
                     enabled = name.isNotBlank()
                 ) {

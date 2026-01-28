@@ -35,7 +35,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun SecretsScreenFull(
     viewModel: SecretsViewModel = hiltViewModel(),
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onNavigateToAddSecret: () -> Unit = {}
 ) {
     val listState by viewModel.listState.collectAsState()
     val valueState by viewModel.valueState.collectAsState()
@@ -64,7 +65,9 @@ fun SecretsScreenFull(
                 is SecretsEffect.SecretCopied -> {
                     snackbarHostState.showSnackbar("Copied to clipboard (auto-clears in 30s)")
                 }
-                else -> { }
+                is SecretsEffect.NavigateToEdit -> {
+                    onNavigateToAddSecret()
+                }
             }
         }
     }

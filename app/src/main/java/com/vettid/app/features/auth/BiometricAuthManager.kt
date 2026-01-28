@@ -256,6 +256,23 @@ class BiometricAuthManager @Inject constructor(
         return getBiometricCapability() == BiometricCapability.AVAILABLE
     }
 
+    /**
+     * Check if authentication with fallback (biometric OR device credential) is available.
+     * Returns true if either biometrics are enrolled OR device credentials (PIN/pattern/password) are set.
+     * This should be used when calling authenticateWithFallback().
+     */
+    fun isAuthenticationAvailable(): Boolean {
+        if (BuildConfig.AUTO_BIOMETRIC) {
+            return true
+        }
+        // Check if either biometric or device credential can be used
+        val canAuth = biometricManager.canAuthenticate(
+            BiometricManager.Authenticators.BIOMETRIC_STRONG or
+            BiometricManager.Authenticators.DEVICE_CREDENTIAL
+        )
+        return canAuth == BiometricManager.BIOMETRIC_SUCCESS
+    }
+
     // MARK: - Authentication
 
     /**

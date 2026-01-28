@@ -75,7 +75,7 @@ data class NavigationState(
     val currentSection: AppSection = AppSection.VAULT,
     val isDrawerOpen: Boolean = false,
     val isMoreSheetOpen: Boolean = false,
-    val vaultTab: VaultTab = VaultTab.CONNECTIONS,
+    val vaultTab: VaultTab = VaultTab.FEED,
     val vaultServicesTab: VaultServicesTab = VaultServicesTab.STATUS,
     val appSettingsTab: AppSettingsTab = AppSettingsTab.GENERAL
 )

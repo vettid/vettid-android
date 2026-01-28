@@ -8,7 +8,11 @@ import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.vettid.app.core.crypto.CryptoManager
 import com.vettid.app.core.nats.JetStreamNatsClient
+import com.vettid.app.core.nats.NatsConnectionManager
+import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.storage.CredentialStore
+import com.vettid.app.core.storage.PersonalDataStore
+import com.vettid.app.core.storage.SystemPersonalData
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -18,8 +22,10 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 import javax.inject.Inject
 
@@ -65,7 +71,10 @@ sealed class PinUnlockEffect {
 class PinUnlockViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val credentialStore: CredentialStore,
-    private val cryptoManager: CryptoManager
+    private val cryptoManager: CryptoManager,
+    private val ownerSpaceClient: OwnerSpaceClient,
+    private val connectionManager: NatsConnectionManager,
+    private val personalDataStore: PersonalDataStore
 ) : ViewModel() {
 
     companion object {
@@ -146,6 +155,10 @@ class PinUnlockViewModel @Inject constructor(
 
             if (result) {
                 Log.i(TAG, "PIN verification successful")
+
+                // Load profile from vault in background
+                loadProfileFromVault()
+
                 _state.value = PinUnlockState.Success
                 _effects.emit(PinUnlockEffect.UnlockSuccess)
             } else {
@@ -312,6 +325,108 @@ class PinUnlockViewModel @Inject constructor(
         } catch (e: Exception) {
             Log.e(TAG, "PIN verification error", e)
             return@withContext false
+        }
+    }
+
+    /**
+     * Load profile data from vault after successful PIN unlock.
+     * Populates PersonalDataStore with system and optional fields from vault.
+     */
+    private fun loadProfileFromVault() {
+        viewModelScope.launch {
+            try {
+                if (!connectionManager.isConnected()) {
+                    Log.d(TAG, "Not connected to vault, skipping profile load")
+                    return@launch
+                }
+
+                Log.d(TAG, "Loading profile from vault after PIN unlock")
+
+                // Subscribe to vault responses
+                ownerSpaceClient.subscribeToVault()
+
+                // Send profile.get request
+                val requestResult = ownerSpaceClient.getProfileFromVault()
+                if (requestResult.isFailure) {
+                    Log.e(TAG, "Failed to request profile from vault: ${requestResult.exceptionOrNull()?.message}")
+                    return@launch
+                }
+
+                val requestId = requestResult.getOrThrow()
+                Log.d(TAG, "Profile request sent, waiting for response: $requestId")
+
+                // Wait for response with timeout
+                val response = withTimeoutOrNull(10000L) {
+                    ownerSpaceClient.vaultResponses.first { it.requestId == requestId }
+                }
+
+                if (response == null) {
+                    Log.w(TAG, "Profile request timed out")
+                    return@launch
+                }
+
+                when (response) {
+                    is com.vettid.app.core.nats.VaultResponse.HandlerResult -> {
+                        if (response.success && response.result != null) {
+                            processVaultProfileResponse(response.result)
+                        } else {
+                            Log.w(TAG, "Profile request failed: ${response.error}")
+                        }
+                    }
+                    is com.vettid.app.core.nats.VaultResponse.Error -> {
+                        Log.e(TAG, "Profile request error: ${response.code} - ${response.message}")
+                    }
+                    else -> {
+                        Log.w(TAG, "Unexpected response type for profile request")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading profile from vault", e)
+            }
+        }
+    }
+
+    /**
+     * Process profile data from vault response and store in PersonalDataStore.
+     */
+    private fun processVaultProfileResponse(result: JsonObject) {
+        try {
+            Log.d(TAG, "Processing vault profile response: ${result.keySet()}")
+
+            // Extract system fields (_system_* prefix)
+            val systemFirstName = result.get("_system_first_name")?.asString
+            val systemLastName = result.get("_system_last_name")?.asString
+            val systemEmail = result.get("_system_email")?.asString
+
+            if (systemFirstName != null && systemLastName != null && systemEmail != null) {
+                Log.d(TAG, "Storing system fields from vault: $systemFirstName $systemLastName")
+                personalDataStore.storeSystemFields(
+                    SystemPersonalData(
+                        firstName = systemFirstName,
+                        lastName = systemLastName,
+                        email = systemEmail
+                    )
+                )
+            }
+
+            // Extract optional fields (non-system fields)
+            result.entrySet().forEach { (key, value) ->
+                if (!key.startsWith("_") && value.isJsonPrimitive) {
+                    val stringValue = value.asString
+                    if (stringValue.isNotEmpty()) {
+                        val updated = personalDataStore.updateOptionalFieldByKey(key, stringValue)
+                        if (updated) {
+                            Log.d(TAG, "Updated optional field from vault: $key")
+                        }
+                    }
+                }
+            }
+
+            // Mark sync as complete since we just synced from vault
+            personalDataStore.markSyncComplete()
+            Log.i(TAG, "Profile loaded from vault successfully")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error processing vault profile response", e)
         }
     }
 

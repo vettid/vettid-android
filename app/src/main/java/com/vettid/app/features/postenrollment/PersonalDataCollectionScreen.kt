@@ -21,6 +21,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.vettid.app.core.storage.CustomField
 import com.vettid.app.core.storage.FieldCategory
 import com.vettid.app.core.storage.OptionalField
+import com.vettid.app.ui.components.BirthdayPickerInput
+import com.vettid.app.ui.components.PhoneNumberInput
 import kotlinx.coroutines.flow.collectLatest
 
 /**
@@ -238,7 +240,7 @@ private fun SystemFieldsSection(systemFields: com.vettid.app.core.storage.System
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Text(
-                        text = "Registration data will sync from your vault",
+                        text = "Registration info will be available after re-enrollment",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -321,39 +323,22 @@ private fun OptionalFieldsSection(
                 .fillMaxWidth()
                 .padding(16.dp)
         ) {
-            OutlinedTextField(
+            // Phone number with country selector and formatting
+            PhoneNumberInput(
                 value = optionalFields.phone ?: "",
-                onValueChange = { onFieldUpdate(OptionalField.PHONE, it) },
-                label = { Text("Phone") },
-                placeholder = { Text("+1 (555) 123-4567") },
-                leadingIcon = { Icon(Icons.Default.Phone, contentDescription = null) },
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Phone,
-                    imeAction = ImeAction.Next
-                ),
-                keyboardActions = KeyboardActions(
-                    onNext = { focusManager.moveFocus(FocusDirection.Down) }
-                ),
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
+                onValueChange = { onFieldUpdate(OptionalField.PHONE, it.ifBlank { null }) },
+                modifier = Modifier.fillMaxWidth(),
+                label = "Phone",
+                imeAction = ImeAction.Next,
+                onImeAction = { focusManager.moveFocus(FocusDirection.Down) }
             )
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            OutlinedTextField(
+            // Birthday with date picker
+            BirthdayPickerInput(
                 value = optionalFields.birthday ?: "",
-                onValueChange = { onFieldUpdate(OptionalField.BIRTHDAY, it) },
-                label = { Text("Birthday") },
-                placeholder = { Text("YYYY-MM-DD") },
-                leadingIcon = { Icon(Icons.Default.CalendarMonth, contentDescription = null) },
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Number,
-                    imeAction = ImeAction.Next
-                ),
-                keyboardActions = KeyboardActions(
-                    onNext = { focusManager.moveFocus(FocusDirection.Down) }
-                ),
-                singleLine = true,
+                onValueChange = { onFieldUpdate(OptionalField.BIRTHDAY, it.ifBlank { null }) },
                 modifier = Modifier.fillMaxWidth()
             )
         }

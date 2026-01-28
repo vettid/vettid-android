@@ -346,6 +346,7 @@ private fun FilterDialog(
     onApply: (ProposalFilter) -> Unit
 ) {
     var selectedStatuses by remember { mutableStateOf(currentFilter.status) }
+    val allSelected = selectedStatuses.size == ProposalStatus.entries.size
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -358,7 +359,40 @@ private fun FilterDialog(
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
 
-                ProposalStatus.values().forEach { status ->
+                // All / None toggle
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            selectedStatuses = if (allSelected) {
+                                emptySet()
+                            } else {
+                                ProposalStatus.entries.toSet()
+                            }
+                        }
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Checkbox(
+                        checked = allSelected,
+                        onCheckedChange = { checked ->
+                            selectedStatuses = if (checked) {
+                                ProposalStatus.entries.toSet()
+                            } else {
+                                emptySet()
+                            }
+                        }
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "All",
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
+                Divider(modifier = Modifier.padding(vertical = 4.dp))
+
+                ProposalStatus.entries.forEach { status ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()

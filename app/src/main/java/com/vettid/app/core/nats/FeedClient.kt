@@ -6,6 +6,7 @@ import com.google.gson.JsonObject
 import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -19,13 +20,36 @@ import javax.inject.Singleton
  */
 @Singleton
 class FeedClient @Inject constructor(
-    private val ownerSpaceClient: OwnerSpaceClient
+    private val ownerSpaceClient: OwnerSpaceClient,
+    private val connectionManager: NatsConnectionManager
 ) {
     private val gson = Gson()
+    private var jetStreamClient: JetStreamNatsClient? = null
 
     companion object {
         private const val TAG = "FeedClient"
         private const val REQUEST_TIMEOUT_MS = 30_000L
+    }
+
+    /**
+     * Initialize JetStream client for reliable message delivery.
+     */
+    private fun ensureJetStreamInitialized(): Result<JetStreamNatsClient> {
+        jetStreamClient?.let { client ->
+            if (client.isConnected) return Result.success(client)
+        }
+
+        val natsClient = connectionManager.getNatsClient()
+        if (!natsClient.isConnected) {
+            return Result.failure(NatsException("NATS not connected"))
+        }
+
+        val androidClient = natsClient.getAndroidClient()
+        val jsClient = JetStreamNatsClient()
+        jsClient.initialize(androidClient)
+        jetStreamClient = jsClient
+
+        return Result.success(jsClient)
     }
 
     // MARK: - Feed Operations
@@ -249,6 +273,83 @@ class FeedClient @Inject constructor(
     ): Result<T> {
         Log.d(TAG, "Sending $messageType request")
 
+        val ownerSpace = ownerSpaceClient.getOwnerSpace()
+        if (ownerSpace == null) {
+            Log.e(TAG, "OwnerSpace not set")
+            return Result.failure(NatsException("OwnerSpace not set"))
+        }
+
+        // Use JetStream for reliable delivery (enclave publishes to JetStream)
+        val jsResult = ensureJetStreamInitialized()
+        if (jsResult.isSuccess) {
+            val jsClient = jsResult.getOrThrow()
+            Log.d(TAG, "Using JetStream for $messageType")
+
+            val requestId = UUID.randomUUID().toString()
+            val request = JsonObject().apply {
+                addProperty("id", requestId)
+                addProperty("type", messageType)
+                addProperty("timestamp", java.time.Instant.now().toString())
+                // Merge the payload fields
+                payload.entrySet().forEach { (key, value) ->
+                    add(key, value)
+                }
+            }
+
+            val topic = "$ownerSpace.forVault.$messageType"
+            val responseTopic = "$ownerSpace.forApp.$messageType.response"
+
+            return try {
+                val response = jsClient.requestWithJetStream(
+                    requestSubject = topic,
+                    responseSubject = responseTopic,
+                    payload = gson.toJson(request).toByteArray(Charsets.UTF_8),
+                    timeoutMs = REQUEST_TIMEOUT_MS
+                )
+
+                response.fold(
+                    onSuccess = { msg ->
+                        Log.d(TAG, "$messageType response received: ${msg.dataString.take(200)}")
+                        val jsonResponse = gson.fromJson(msg.dataString, JsonObject::class.java)
+
+                        // Check for error response
+                        if (jsonResponse.has("error") && !jsonResponse.get("error").isJsonNull) {
+                            val error = jsonResponse.get("error").asString
+                            Log.w(TAG, "$messageType failed: $error")
+                            Result.failure(NatsException(error))
+                        } else if (jsonResponse.has("success") && jsonResponse.get("success").asBoolean == false) {
+                            val error = jsonResponse.get("error")?.asString ?: "Request failed"
+                            Log.w(TAG, "$messageType failed: $error")
+                            Result.failure(NatsException(error))
+                        } else {
+                            // Extract result field or use whole response
+                            val resultObj = if (jsonResponse.has("result")) {
+                                jsonResponse.getAsJsonObject("result")
+                            } else {
+                                jsonResponse
+                            }
+                            try {
+                                val parsed = parser(resultObj)
+                                Result.success(parsed)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to parse $messageType response", e)
+                                Result.failure(e)
+                            }
+                        }
+                    },
+                    onFailure = { e ->
+                        Log.e(TAG, "$messageType request failed: ${e.message}", e)
+                        Result.failure(e)
+                    }
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "JetStream $messageType failed: ${e.message}", e)
+                Result.failure(e)
+            }
+        }
+
+        // Fallback to regular approach if JetStream not available
+        Log.w(TAG, "JetStream not available, using regular subscription")
         val requestIdResult = ownerSpaceClient.sendToVault(messageType, payload)
         if (requestIdResult.isFailure) {
             Log.e(TAG, "Failed to send $messageType request", requestIdResult.exceptionOrNull())

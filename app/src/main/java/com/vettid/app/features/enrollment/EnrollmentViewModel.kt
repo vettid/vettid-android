@@ -673,6 +673,17 @@ class EnrollmentViewModel @Inject constructor(
                         // Store UTKs from PIN response for credential creation
                         response.utks?.let { nitroUtks = it }
 
+                        // Store ECIES public key for PIN unlock (this is different from attestation key!)
+                        response.eciesPublicKey?.let { eciesKeyB64 ->
+                            try {
+                                val eciesKeyBytes = Base64.decode(eciesKeyB64, Base64.NO_WRAP)
+                                credentialStore.storeEnclavePublicKey(eciesKeyBytes)
+                                Log.i(TAG, "Stored ECIES public key for PIN unlock (${eciesKeyBytes.size} bytes)")
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to decode ECIES public key", e)
+                            }
+                        } ?: Log.w(TAG, "No ECIES public key in PIN setup response")
+
                         // Generate password salt for credential creation
                         passwordSalt = cryptoManager.generateSalt()
 
@@ -1131,5 +1142,6 @@ data class NatsBootstrapInfo(
     val credentials: String,
     val ownerSpace: String,
     val natsEndpoint: String,
-    val userGuid: String?
+    val userGuid: String?,
+    val registrationProfile: com.vettid.app.core.nats.RegistrationProfile? = null
 )

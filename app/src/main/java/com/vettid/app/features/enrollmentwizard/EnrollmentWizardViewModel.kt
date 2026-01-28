@@ -1025,43 +1025,49 @@ class EnrollmentWizardViewModel @Inject constructor(
     }
 
     /**
-     * Fetch registration profile if not already stored.
-     * Profile data is normally fetched via NATS during enrollment verification.
-     * This method serves as a fallback if that fails.
+     * Finalize enrollment and optionally fetch registration profile.
+     *
+     * IMPORTANT: This method MUST always call the finalize endpoint to mark the
+     * enrollment session as COMPLETED in the backend. The profile data storage
+     * is optional and only done if not already present.
      */
     private suspend fun fetchAndStoreRegistrationProfile() {
-        // Skip if profile data already exists (fetched via NATS during enrollment)
-        if (personalDataStore.hasSystemFields()) {
-            Log.d(TAG, "Profile data already stored, skipping fetch")
-            return
-        }
+        val hasExistingProfile = personalDataStore.hasSystemFields()
 
         try {
-            Log.d(TAG, "Attempting to fetch registration profile via finalize endpoint")
+            Log.d(TAG, "Calling finalize endpoint to complete enrollment session")
             val result = vaultServiceClient.finalizeEnrollmentForProfile()
 
             result.fold(
                 onSuccess = { response ->
-                    response.registrationProfile?.let { profile ->
-                        Log.i(TAG, "Registration profile fetched: ${profile.firstName} ${profile.lastName}")
-                        personalDataStore.storeSystemFields(
-                            com.vettid.app.core.storage.SystemPersonalData(
-                                firstName = profile.firstName,
-                                lastName = profile.lastName,
-                                email = profile.email
+                    Log.i(TAG, "Enrollment finalized successfully")
+
+                    // Only store profile data if we don't already have it
+                    if (!hasExistingProfile) {
+                        response.registrationProfile?.let { profile ->
+                            Log.i(TAG, "Storing registration profile: ${profile.firstName} ${profile.lastName}")
+                            personalDataStore.storeSystemFields(
+                                com.vettid.app.core.storage.SystemPersonalData(
+                                    firstName = profile.firstName,
+                                    lastName = profile.lastName,
+                                    email = profile.email
+                                )
                             )
-                        )
-                    } ?: run {
-                        Log.w(TAG, "Finalize response did not include registration profile")
+                        } ?: run {
+                            Log.w(TAG, "Finalize response did not include registration profile")
+                        }
+                    } else {
+                        Log.d(TAG, "Profile data already stored, skipping storage")
                     }
                 },
                 onFailure = { error ->
-                    // Log but don't fail enrollment if profile fetch fails
-                    Log.w(TAG, "Failed to fetch registration profile: ${error.message}")
+                    // Log but don't fail enrollment if finalize fails
+                    // This can happen if session was already finalized (409 Conflict)
+                    Log.w(TAG, "Failed to finalize enrollment: ${error.message}")
                 }
             )
         } catch (e: Exception) {
-            Log.w(TAG, "Error fetching registration profile", e)
+            Log.w(TAG, "Error finalizing enrollment", e)
         }
     }
 

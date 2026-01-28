@@ -341,9 +341,10 @@ class NitroEnrollmentClient @Inject constructor(
      * where responses were published before subscriptions were ready.
      *
      * @param pin 6-digit PIN entered by user
+     * @param profile Optional registration profile to store in the vault
      * @return Result indicating success or failure
      */
-    suspend fun setupPin(pin: String): Result<PinSetupResponse> {
+    suspend fun setupPin(pin: String, profile: RegistrationProfile? = null): Result<PinSetupResponse> {
         val space = ownerSpace
             ?: return Result.failure(NatsException("Owner space not set"))
         val attestation = verifiedAttestation
@@ -359,8 +360,13 @@ class NitroEnrollmentClient @Inject constructor(
         val enclavePublicKey = attestation.enclavePublicKeyBase64()
             ?: return Result.failure(NatsException("No enclave public key in attestation"))
 
-        // Encrypt PIN as JSON object per enclave protocol
-        val pinPayload = """{"pin": "$pin"}"""
+        // Build PIN payload with optional profile
+        // The profile is sent to the vault during initialization so it's stored securely
+        val pinPayload = if (profile != null) {
+            """{"pin": "$pin", "profile": {"first_name": "${profile.firstName}", "last_name": "${profile.lastName}", "email": "${profile.email}"}}"""
+        } else {
+            """{"pin": "$pin"}"""
+        }
         val encryptedPin = cryptoManager.encryptToPublicKey(
             plaintext = pinPayload.toByteArray(Charsets.UTF_8),
             publicKeyBase64 = enclavePublicKey
@@ -727,6 +733,57 @@ class NitroEnrollmentClient @Inject constructor(
     }
 
     /**
+     * Request profile data from the vault.
+     *
+     * The vault returns the registration profile containing firstName, lastName, email
+     * that were collected during member registration.
+     *
+     * @return RegistrationProfile or null if not available
+     */
+    suspend fun requestProfileData(): RegistrationProfile? {
+        val client = natsClient
+            ?: return null
+        val space = ownerSpace
+            ?: return null
+
+        Log.d(TAG, "Requesting profile data from vault...")
+
+        val requestId = UUID.randomUUID().toString()
+        val request = JsonObject().apply {
+            addProperty("id", requestId)
+            addProperty("type", "profile.get")
+            add("payload", JsonObject())
+            addProperty("timestamp", java.time.Instant.now().toString())
+        }
+
+        val topic = "$space.forVault.profile.get"
+        val responseTopic = "$space.forApp.profile.get.response"
+
+        return try {
+            val result: Result<ProfileGetResponse> = sendRequestAndWaitForResponse(
+                client, topic, responseTopic, request, requestId
+            )
+
+            result.getOrNull()?.let { response ->
+                if (response.success) {
+                    Log.i(TAG, "Profile data received: ${response.firstName} ${response.lastName}")
+                    RegistrationProfile(
+                        firstName = response.firstName ?: "",
+                        lastName = response.lastName ?: "",
+                        email = response.email ?: ""
+                    )
+                } else {
+                    Log.w(TAG, "Profile request unsuccessful: ${response.error}")
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to request profile data: ${e.message}", e)
+            null
+        }
+    }
+
+    /**
      * Disconnect from NATS.
      */
     suspend fun disconnect() {
@@ -898,11 +955,13 @@ data class AttestationResponse(
 /**
  * PIN setup response from Nitro enclave.
  * Returns vault_ready status with UTKs for the credential creation phase.
+ * Also returns the ECIES public key for PIN unlock (different from attestation key!).
  */
 data class PinSetupResponse(
     val status: String,
     val utks: List<UtkInfo>? = null,
-    val message: String? = null
+    val message: String? = null,
+    @SerializedName("ecies_public_key") val eciesPublicKey: String? = null
 ) {
     /** Returns true if vault is ready */
     val isSuccess: Boolean
@@ -944,3 +1003,17 @@ data class CredentialResponse(
     val isSuccess: Boolean
         get() = status == "created" || success == true
 }
+
+/**
+ * Profile get response from vault.
+ * Contains registration profile data (firstName, lastName, email).
+ */
+data class ProfileGetResponse(
+    val success: Boolean,
+    @SerializedName("first_name") val firstName: String? = null,
+    @SerializedName("last_name") val lastName: String? = null,
+    val email: String? = null,
+    val error: String? = null
+)
+
+// Use RegistrationProfile from ProfileClient.kt

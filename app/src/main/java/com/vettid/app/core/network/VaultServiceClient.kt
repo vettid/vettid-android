@@ -220,6 +220,16 @@ open class VaultServiceClient @Inject constructor() {
     }
 
     /**
+     * Finalize enrollment and get registration profile.
+     * This endpoint returns registration_profile with firstName, lastName, email.
+     */
+    suspend fun finalizeEnrollmentForProfile(): Result<FinalizeWithProfileResponse> {
+        return safeApiCall {
+            getEnrollmentApi().finalizeWithProfile(getEnrollmentAuthHeader())
+        }
+    }
+
+    /**
      * Finalize enrollment for Nitro flow.
      * Returns NATS bootstrap credentials for connecting to the enclave.
      * @deprecated Use getNatsBootstrapCredentials() instead
@@ -255,7 +265,14 @@ open class VaultServiceClient @Inject constructor() {
                 credentials = response.natsCreds,
                 ownerSpace = response.ownerSpace,
                 natsEndpoint = response.natsEndpoint,
-                userGuid = response.userGuid
+                userGuid = response.userGuid,
+                registrationProfile = response.registrationProfile?.let { profile ->
+                    com.vettid.app.core.nats.RegistrationProfile(
+                        firstName = profile.firstName,
+                        lastName = profile.lastName,
+                        email = profile.email
+                    )
+                }
             )
         }
     }
@@ -577,6 +594,32 @@ open class VaultServiceClient @Inject constructor() {
         return safeApiCall { api.confirmRestore(recoveryId) }
     }
 
+    // MARK: - Profile
+
+    /**
+     * Get registration profile for the authenticated user.
+     * Returns the system fields (firstName, lastName, email) from registration.
+     *
+     * Uses the enrollment token from authentication.
+     */
+    suspend fun getRegistrationProfile(): Result<RegistrationProfileResponse> {
+        return safeApiCall {
+            getEnrollmentApi().getRegistrationProfile(getEnrollmentAuthHeader())
+        }
+    }
+
+    /**
+     * Get registration profile using a member auth token.
+     * Used after enrollment to refresh system fields in Personal Data screen.
+     *
+     * @param authToken Member JWT token from Cognito
+     */
+    suspend fun getRegistrationProfileWithToken(authToken: String): Result<RegistrationProfileResponse> {
+        return safeApiCall {
+            defaultApi.getRegistrationProfile("Bearer $authToken")
+        }
+    }
+
     // MARK: - Helper
 
     private suspend fun <T> safeApiCall(call: suspend () -> Response<T>): Result<T> {
@@ -637,6 +680,12 @@ interface VaultServiceApi {
     suspend fun finalize(
         @Header("Authorization") authToken: String
     ): Response<FinalizeResponse>
+
+    // Enrollment - Finalize with registration profile (requires Bearer token)
+    @POST("vault/enroll/finalize")
+    suspend fun finalizeWithProfile(
+        @Header("Authorization") authToken: String
+    ): Response<FinalizeWithProfileResponse>
 
     // Enrollment - Step 5 (Nitro): Finalize for NATS (requires Bearer token)
     @POST("vault/enroll/finalize")
@@ -761,6 +810,12 @@ interface VaultServiceApi {
     suspend fun confirmRestore(
         @Query("recovery_id") recoveryId: String
     ): Response<RestoreConfirmResponse>
+
+    // Registration Profile
+    @GET("profile/registration")
+    suspend fun getRegistrationProfile(
+        @Header("Authorization") authToken: String
+    ): Response<RegistrationProfileResponse>
 
     // MARK: - Voting API (Issue #50)
 
@@ -1005,6 +1060,26 @@ data class NatsFinalizeResponse(
 )
 
 /**
+ * Response from /vault/enroll/finalize with registration profile.
+ * Used to get the user's registration data (firstName, lastName, email).
+ */
+data class FinalizeWithProfileResponse(
+    val status: String,
+    @SerializedName("vault_status") val vaultStatus: String,
+    @SerializedName("registration_profile") val registrationProfile: RegistrationProfileData?,
+    @SerializedName("vault_bootstrap") val vaultBootstrap: VaultBootstrap? = null
+)
+
+/**
+ * Registration profile data embedded in finalize response.
+ */
+data class RegistrationProfileData(
+    val firstName: String,
+    val lastName: String,
+    val email: String
+)
+
+/**
  * Request for /vault/enroll/nats-bootstrap endpoint (#132).
  * Includes device attestation for session binding.
  */
@@ -1027,7 +1102,8 @@ data class NatsBootstrapResponse(
     @SerializedName("message_space") val messageSpace: String,
     @SerializedName("user_guid") val userGuid: String,
     @SerializedName("token_id") val tokenId: String,
-    @SerializedName("expires_at") val expiresAt: String
+    @SerializedName("expires_at") val expiresAt: String,
+    @SerializedName("registration_profile") val registrationProfile: RegistrationProfileResponse? = null
 )
 
 /**
@@ -1424,6 +1500,19 @@ data class RestoreVaultBootstrap(
     @SerializedName("auth_topic") val authTopic: String,
     @SerializedName("response_topic") val responseTopic: String,
     @SerializedName("credentials_ttl_seconds") val credentialsTtlSeconds: Int
+)
+
+// MARK: - Registration Profile Response
+
+/**
+ * Response from /profile/registration endpoint.
+ * Contains user's registration data (system fields).
+ */
+data class RegistrationProfileResponse(
+    @SerializedName("first_name") val firstName: String,
+    @SerializedName("last_name") val lastName: String,
+    val email: String,
+    @SerializedName("user_guid") val userGuid: String? = null
 )
 
 // MARK: - PCR Response Types

@@ -42,6 +42,7 @@ import com.vettid.app.features.enrollment.EnrollmentScreen
 import com.vettid.app.features.feed.FeedContent
 import com.vettid.app.features.archive.ArchiveScreenFull
 import com.vettid.app.features.secrets.SecretsScreenFull
+import com.vettid.app.features.secrets.AddSecretScreen
 import com.vettid.app.features.setup.FirstTimeSetupScreen
 import com.vettid.app.features.vault.DeployVaultScreen
 import com.vettid.app.features.vault.VaultPreferencesScreenFull
@@ -59,6 +60,7 @@ import com.vettid.app.ui.components.NatsConnectionDetails
 import com.vettid.app.ui.components.NatsConnectionDetailsDialog
 import com.vettid.app.ui.components.QrCodeScanner
 import com.vettid.app.ui.navigation.*
+import com.vettid.app.ui.navigation.BadgeCountsViewModel
 import com.vettid.app.ui.recovery.ProteanRecoveryScreen
 import com.vettid.app.features.debug.CredentialDebugScreen
 import com.vettid.app.features.voting.MyVotesScreen
@@ -71,6 +73,7 @@ import com.vettid.app.features.postenrollment.PersonalDataCollectionScreen
 import com.vettid.app.features.migration.EmergencyRecoveryScreen
 import com.vettid.app.features.migration.SecurityAuditLogScreen
 import com.vettid.app.features.enrollmentwizard.EnrollmentWizardScreen
+import com.vettid.app.features.unlock.PinUnlockScreen
 
 private const val TAG = "VettIDApp"
 
@@ -118,6 +121,9 @@ sealed class Screen(val route: String) {
     // Vault More items
     object PersonalData : Screen("personal-data")
     object Secrets : Screen("secrets")
+    object AddSecret : Screen("secrets/add?isCritical={isCritical}") {
+        fun createRoute(isCritical: Boolean = false) = "secrets/add?isCritical=$isCritical"
+    }
     object Archive : Screen("archive")
     object VaultPreferences : Screen("vault-preferences")
     // Backup
@@ -379,8 +385,9 @@ fun VettIDApp(
             )
         }
         composable(Screen.Authentication.route) {
-            AuthenticationScreen(
-                onAuthenticated = { appViewModel.setAuthenticated(true) }
+            // Use PIN unlock instead of biometric authentication
+            PinUnlockScreen(
+                onUnlocked = { appViewModel.setAuthenticated(true) }
             )
         }
         composable(Screen.Main.route) {
@@ -416,7 +423,7 @@ fun VettIDApp(
                     navController.navigate(Screen.HandlerDetail.createRoute(handlerId))
                 },
                 onNavigateToPersonalData = {
-                    navController.navigate(Screen.PersonalData.route)
+                    navController.navigate(Screen.PersonalDataCollection.route)
                 },
                 onNavigateToSecrets = {
                     navController.navigate(Screen.Secrets.route)
@@ -606,6 +613,22 @@ fun VettIDApp(
         }
         composable(Screen.Secrets.route) {
             SecretsScreenFull(
+                onBack = { navController.popBackStack() },
+                onNavigateToAddSecret = {
+                    navController.navigate(Screen.AddSecret.createRoute(isCritical = false))
+                }
+            )
+        }
+        composable(
+            route = Screen.AddSecret.route,
+            arguments = listOf(navArgument("isCritical") {
+                type = NavType.BoolType
+                defaultValue = false
+            })
+        ) { backStackEntry ->
+            val isCritical = backStackEntry.arguments?.getBoolean("isCritical") ?: false
+            AddSecretScreen(
+                isCritical = isCritical,
                 onBack = { navController.popBackStack() }
             )
         }
@@ -876,7 +899,7 @@ fun AuthenticationScreen(
 
     // Attempt biometric auth on screen load
     LaunchedEffect(Unit) {
-        if (activity != null && biometricAuthManager.isBiometricAvailable()) {
+        if (activity != null && biometricAuthManager.isAuthenticationAvailable()) {
             authState = UnlockAuthState.Authenticating
             val result = biometricAuthManager.authenticateWithFallback(
                 activity = activity,
@@ -986,8 +1009,8 @@ fun AuthenticationScreen(
             }
         }
 
-        // Biometric availability warning
-        if (!biometricAuthManager.isBiometricAvailable()) {
+        // Authentication availability warning (biometric or device credential)
+        if (!biometricAuthManager.isAuthenticationAvailable()) {
             Spacer(modifier = Modifier.height(16.dp))
             Card(
                 colors = CardDefaults.cardColors(
@@ -1061,11 +1084,16 @@ fun MainScreen(
     onNavigateToMyVotes: () -> Unit = {},
     onNavigateToSecurityAuditLog: () -> Unit = {},
     onSignOut: () -> Unit = {},
-    appViewModel: AppViewModel = hiltViewModel()
+    appViewModel: AppViewModel = hiltViewModel(),
+    badgeCountsViewModel: BadgeCountsViewModel = hiltViewModel()
 ) {
     var navigationState by remember { mutableStateOf(NavigationState()) }
     val snackbarHostState = remember { SnackbarHostState() }
     val appState by appViewModel.appState.collectAsState()
+
+    // Badge counts from real data
+    val unreadFeedCount by badgeCountsViewModel.unreadFeedCount.collectAsState()
+    val pendingConnectionsCount by badgeCountsViewModel.pendingConnectionsCount.collectAsState()
 
     // Connection details dialog state
     var showConnectionDetailsDialog by remember { mutableStateOf(false) }
@@ -1124,9 +1152,9 @@ fun MainScreen(
         onNavigateToArchive = onNavigateToArchive,
         onNavigateToVoting = onNavigateToProposals,
         onNavigateToPreferences = onNavigateToPreferences,
-        // Badge counts - in production these would come from ViewModel/state
-        pendingConnectionsCount = 2, // Demo: 2 pending connection requests
-        unreadFeedCount = 5, // Demo: 5 unread feed items
+        // Badge counts from real data
+        pendingConnectionsCount = pendingConnectionsCount,
+        unreadFeedCount = unreadFeedCount,
         // Vault section content
         vaultConnectionsContent = {
             ConnectionsContentEmbedded(
