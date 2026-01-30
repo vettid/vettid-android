@@ -215,7 +215,7 @@ class PersonalDataViewModel @Inject constructor(
 
             // Extract optional fields from the nested "fields" object
             // Vault returns: { "fields": { "personal.legal.first_name": { "value": "...", "updated_at": "..." }, ... } }
-            val fieldsObject = result.getAsJsonObject("fields")
+            // fieldsObject already defined above
             if (fieldsObject != null) {
                 Log.d(TAG, "Processing ${fieldsObject.size()} fields from vault")
                 fieldsObject.entrySet().forEach { (key, value) ->
