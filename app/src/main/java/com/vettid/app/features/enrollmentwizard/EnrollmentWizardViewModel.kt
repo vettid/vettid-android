@@ -839,9 +839,9 @@ class EnrollmentWizardViewModel @Inject constructor(
                 onSuccess = {
                     Log.i(TAG, "Enrollment verified successfully")
 
-                    // Request profile data from vault via NATS (before disconnecting)
+                    // Fetch registration info from vault via NATS (before disconnecting)
                     _state.value = WizardState.CreatingCredential(
-                        message = "Loading profile...",
+                        message = "Finalizing setup...",
                         progress = 0.95f
                     )
                     val profileData = nitroEnrollmentClient.requestProfileData()
@@ -975,10 +975,10 @@ class EnrollmentWizardViewModel @Inject constructor(
 
                     _state.value = WizardState.Authenticating(
                         progress = 0.95f,
-                        statusMessage = "Loading profile..."
+                        statusMessage = "Completing setup..."
                     )
 
-                    // Fetch and store registration profile
+                    // Finalize enrollment and store registration profile
                     fetchAndStoreRegistrationProfile()
 
                     _state.value = WizardState.Authenticating(
