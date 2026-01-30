@@ -10,6 +10,7 @@ import com.vettid.app.features.feed.FeedNotificationService
 import com.vettid.app.features.feed.FeedRepository
 import com.vettid.app.features.feed.FeedUpdate
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -55,8 +56,10 @@ class BadgeCountsViewModel @Inject constructor(
             connectionManager.connectionState.collect { state ->
                 if (state is NatsConnectionState.Connected) {
                     Log.d(TAG, "NATS connected, refreshing badge counts")
-                    // Small delay to let things settle
-                    delay(500)
+                    // Delay to let PIN unlock and other initial requests complete first.
+                    // JetStream requests are serialized, so this avoids queueing up
+                    // behind PIN unlock request.
+                    delay(2000)
                     refreshCounts()
                 }
             }
@@ -113,9 +116,14 @@ class BadgeCountsViewModel @Inject constructor(
                         Log.d(TAG, "Feed unread count: $freshCount")
                     }
                     .onFailure { error ->
+                        // Don't log cancellation as error
+                        if (error is CancellationException) throw error
                         Log.w(TAG, "Failed to sync feed for count: ${error.message}")
                         // Keep cached count
                     }
+            } catch (e: CancellationException) {
+                Log.d(TAG, "Feed count refresh cancelled")
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Error refreshing feed count", e)
             }
@@ -139,8 +147,13 @@ class BadgeCountsViewModel @Inject constructor(
                         Log.d(TAG, "Pending connections count: $pendingCount (total: ${result.items.size})")
                     }
                     .onFailure { error ->
+                        // Don't log cancellation as error
+                        if (error is CancellationException) throw error
                         Log.w(TAG, "Failed to load connections for count: ${error.message}")
                     }
+            } catch (e: CancellationException) {
+                Log.d(TAG, "Connections count refresh cancelled")
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Error refreshing connections count", e)
             }

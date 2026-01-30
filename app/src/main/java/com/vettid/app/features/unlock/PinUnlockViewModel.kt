@@ -149,27 +149,59 @@ class PinUnlockViewModel @Inject constructor(
                 return
             }
 
-            // Verify PIN with enclave
+            // Verify PIN with enclave - with automatic retry on race condition
             _state.value = PinUnlockState.Verifying
 
-            val result = verifyPinWithEnclave(pin)
+            var attempts = 0
+            val maxAttempts = 3
+            var result: PinVerificationResult
 
-            if (result) {
-                Log.i(TAG, "PIN verification successful")
+            do {
+                attempts++
+                result = verifyPinWithEnclave(pin)
+                if (result == PinVerificationResult.RaceCondition && attempts < maxAttempts) {
+                    Log.w(TAG, "Race condition detected, retrying (attempt $attempts/$maxAttempts)...")
+                    kotlinx.coroutines.delay(500) // Small delay before retry
+                }
+            } while (result == PinVerificationResult.RaceCondition && attempts < maxAttempts)
 
-                // Load profile from vault in background
-                loadProfileFromVault()
+            when (result) {
+                PinVerificationResult.Success -> {
+                    Log.i(TAG, "PIN verification successful")
 
-                _state.value = PinUnlockState.Success
-                _effects.emit(PinUnlockEffect.UnlockSuccess)
-            } else {
-                Log.w(TAG, "PIN verification failed")
-                _state.value = PinUnlockState.EnteringPin(pin = "", error = "Invalid PIN")
+                    // Load profile from vault in background
+                    loadProfileFromVault()
+
+                    _state.value = PinUnlockState.Success
+                    _effects.emit(PinUnlockEffect.UnlockSuccess)
+                }
+                PinVerificationResult.InvalidPin -> {
+                    Log.w(TAG, "PIN verification failed - invalid PIN")
+                    _state.value = PinUnlockState.EnteringPin(pin = "", error = "Invalid PIN")
+                }
+                PinVerificationResult.RaceCondition -> {
+                    Log.e(TAG, "PIN verification failed - race condition persisted after $attempts attempts")
+                    _state.value = PinUnlockState.EnteringPin(pin = "", error = "Verification error. Please try again.")
+                }
+                PinVerificationResult.Error -> {
+                    Log.e(TAG, "PIN verification failed - error")
+                    _state.value = PinUnlockState.Error("Verification error")
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "PIN unlock error", e)
             _state.value = PinUnlockState.Error(e.message ?: "Unknown error")
         }
+    }
+
+    /**
+     * Result of PIN verification attempt.
+     */
+    private enum class PinVerificationResult {
+        Success,
+        InvalidPin,
+        RaceCondition,  // Wrong response received due to JetStream race condition
+        Error
     }
 
     private fun retry() {
@@ -219,16 +251,16 @@ class PinUnlockViewModel @Inject constructor(
         }
     }
 
-    private suspend fun verifyPinWithEnclave(pin: String): Boolean = withContext(Dispatchers.IO) {
-        val client = natsClient ?: return@withContext false
-        val space = ownerSpace ?: return@withContext false
+    private suspend fun verifyPinWithEnclave(pin: String): PinVerificationResult = withContext(Dispatchers.IO) {
+        val client = natsClient ?: return@withContext PinVerificationResult.Error
+        val space = ownerSpace ?: return@withContext PinVerificationResult.Error
 
         try {
             // Get enclave public key
             val enclavePublicKey = credentialStore.getEnclavePublicKey()
             if (enclavePublicKey == null) {
                 Log.e(TAG, "Missing enclave public key")
-                return@withContext false
+                return@withContext PinVerificationResult.Error
             }
 
             // Get an available UTK
@@ -237,7 +269,7 @@ class PinUnlockViewModel @Inject constructor(
 
             if (availableUtk == null) {
                 Log.e(TAG, "No available UTKs")
-                return@withContext false
+                return@withContext PinVerificationResult.Error
             }
 
             Log.d(TAG, "Using UTK: ${availableUtk.keyId}")
@@ -263,7 +295,7 @@ class PinUnlockViewModel @Inject constructor(
             val encryptedCredential = credentialStore.getEncryptedBlob()
             if (encryptedCredential == null) {
                 Log.e(TAG, "Missing encrypted credential")
-                return@withContext false
+                return@withContext PinVerificationResult.Error
             }
 
             // Build request
@@ -291,17 +323,59 @@ class PinUnlockViewModel @Inject constructor(
 
             if (result.isFailure) {
                 Log.e(TAG, "PIN unlock request failed: ${result.exceptionOrNull()?.message}")
-                return@withContext false
+                return@withContext PinVerificationResult.Error
             }
 
             val response = result.getOrNull()
             if (response == null) {
                 Log.e(TAG, "PIN unlock request returned null")
-                return@withContext false
+                return@withContext PinVerificationResult.Error
             }
 
             // Parse response
-            val responseJson = gson.fromJson(String(response.data), JsonObject::class.java)
+            val responseStr = String(response.data)
+            Log.d(TAG, "Raw PIN response: ${responseStr.take(200)}")
+
+            val responseJson = try {
+                gson.fromJson(responseStr, JsonObject::class.java)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to parse PIN unlock response as JSON: ${e.message}")
+                return@withContext PinVerificationResult.Error
+            }
+
+            // Validate this is actually a PIN unlock response, not a response from another request
+            // (race condition protection - JetStream consumer sometimes receives wrong message)
+
+            // Check 1: If response has a "type" field that doesn't match pin.unlock
+            val responseType = responseJson.get("type")?.asString
+            if (responseType != null && responseType != "pin.unlock" && !responseType.contains("pin")) {
+                Log.e(TAG, "RACE CONDITION: Wrong response type: $responseType (expected pin.unlock)")
+                Log.e(TAG, "Response content: ${responseStr.take(500)}")
+                return@withContext PinVerificationResult.RaceCondition
+            }
+
+            // Check 2: Response has list-type fields (connections, events, items)
+            if (responseJson.has("connections")) {
+                Log.e(TAG, "RACE CONDITION: Received connections list instead of PIN unlock response")
+                Log.e(TAG, "Response content: ${responseStr.take(500)}")
+                return@withContext PinVerificationResult.RaceCondition
+            }
+            if (responseJson.has("events")) {
+                Log.e(TAG, "RACE CONDITION: Received events list instead of PIN unlock response")
+                return@withContext PinVerificationResult.RaceCondition
+            }
+            if (responseJson.has("items")) {
+                Log.e(TAG, "RACE CONDITION: Received items list instead of PIN unlock response")
+                return@withContext PinVerificationResult.RaceCondition
+            }
+
+            // Check 3: Verify request_id matches (if present in response)
+            val responseRequestId = responseJson.get("request_id")?.asString
+            if (responseRequestId != null && responseRequestId != requestId) {
+                Log.e(TAG, "RACE CONDITION: Response request_id mismatch. Expected: $requestId, Got: $responseRequestId")
+                return@withContext PinVerificationResult.RaceCondition
+            }
+
             val status = responseJson.get("status")?.asString
 
             Log.d(TAG, "PIN unlock response status: $status")
@@ -332,15 +406,15 @@ class PinUnlockViewModel @Inject constructor(
                     }
                 }
 
-                return@withContext true
+                return@withContext PinVerificationResult.Success
             } else {
                 val error = responseJson.get("error")?.asString
                 Log.w(TAG, "PIN unlock failed: $error")
-                return@withContext false
+                return@withContext PinVerificationResult.InvalidPin
             }
         } catch (e: Exception) {
             Log.e(TAG, "PIN verification error", e)
-            return@withContext false
+            return@withContext PinVerificationResult.Error
         }
     }
 

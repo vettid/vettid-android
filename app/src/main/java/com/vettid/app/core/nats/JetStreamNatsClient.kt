@@ -6,6 +6,8 @@ import com.google.gson.JsonObject
 import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import java.util.UUID
@@ -27,6 +29,11 @@ class JetStreamNatsClient {
         private const val TAG = "JetStreamNatsClient"
         private const val DEFAULT_TIMEOUT_MS = 30_000L
         private const val ENROLLMENT_STREAM = "ENROLLMENT"
+
+        // Global mutex to serialize JetStream requests across all instances.
+        // This prevents race conditions where multiple consumers fetch from the
+        // same stream simultaneously and receive each other's responses.
+        private val globalRequestMutex = Mutex()
     }
 
     private var natsClient: AndroidNatsClient? = null
@@ -75,6 +82,20 @@ class JetStreamNatsClient {
         val client = natsClient
             ?: return@withContext Result.failure(NatsException("Not connected"))
 
+        // Use global mutex to serialize requests and prevent race conditions
+        // where multiple consumers might receive each other's responses
+        globalRequestMutex.withLock {
+            requestWithJetStreamInternal(client, requestSubject, responseSubject, payload, timeoutMs)
+        }
+    }
+
+    private suspend fun requestWithJetStreamInternal(
+        client: AndroidNatsClient,
+        requestSubject: String,
+        responseSubject: String,
+        payload: ByteArray,
+        timeoutMs: Long
+    ): Result<NatsMessage> {
         try {
             // Generate unique consumer name
             val consumerName = "app-${UUID.randomUUID().toString().take(8)}"
@@ -106,7 +127,7 @@ class JetStreamNatsClient {
 
             if (createResult.isFailure) {
                 Log.e(TAG, "Failed to create consumer: ${createResult.exceptionOrNull()?.message}")
-                return@withContext Result.failure(createResult.exceptionOrNull()!!)
+                return Result.failure(createResult.exceptionOrNull()!!)
             }
 
             val createResponse = createResult.getOrThrow()
@@ -118,7 +139,7 @@ class JetStreamNatsClient {
                 val error = responseJson.getAsJsonObject("error")
                 val errMsg = error.get("description")?.asString ?: "Unknown error"
                 Log.e(TAG, "JetStream error creating consumer: $errMsg")
-                return@withContext Result.failure(NatsException("JetStream: $errMsg"))
+                return Result.failure(NatsException("JetStream: $errMsg"))
             }
 
             Log.d(TAG, "Consumer created, publishing request to $requestSubject")
@@ -126,7 +147,7 @@ class JetStreamNatsClient {
             // Step 2: Publish the request
             val pubResult = client.publish(requestSubject, payload)
             if (pubResult.isFailure) {
-                return@withContext Result.failure(pubResult.exceptionOrNull()!!)
+                return Result.failure(pubResult.exceptionOrNull()!!)
             }
             client.flush()
 
@@ -155,16 +176,16 @@ class JetStreamNatsClient {
 
             if (fetchResult.isFailure) {
                 Log.e(TAG, "Failed to fetch from consumer: ${fetchResult.exceptionOrNull()?.message}")
-                return@withContext Result.failure(NatsException("Request timed out"))
+                return Result.failure(NatsException("Request timed out"))
             }
 
             val fetchResponse = fetchResult.getOrThrow()
             Log.d(TAG, "Received response: ${fetchResponse.dataString.take(100)}")
 
-            Result.success(fetchResponse)
+            return Result.success(fetchResponse)
         } catch (e: Exception) {
             Log.e(TAG, "JetStream request failed: ${e.message}", e)
-            Result.failure(e)
+            return Result.failure(e)
         }
     }
 

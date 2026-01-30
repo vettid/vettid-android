@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.nats.FeedClient
 import com.vettid.app.core.nats.FeedEvent
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.isActive
@@ -138,6 +139,9 @@ class FeedViewModel @Inject constructor(
                         }
                     }
                     .onFailure { error ->
+                        // Don't log cancellation as error - it's expected during navigation
+                        if (error is CancellationException) throw error
+
                         Log.e(TAG, "Failed to load feed", error)
                         // Try to show cached data even on error
                         val cached = feedRepository.getCachedEvents()
@@ -152,6 +156,10 @@ class FeedViewModel @Inject constructor(
                             _state.value = FeedState.Error(error.message ?: "Failed to load feed")
                         }
                     }
+            } catch (e: CancellationException) {
+                // Cancellation is expected during navigation - don't treat as error
+                Log.d(TAG, "Feed load cancelled")
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load feed", e)
                 _state.value = FeedState.Error(e.message ?: "Failed to load feed")
@@ -179,14 +187,21 @@ class FeedViewModel @Inject constructor(
                             )
                         }
                     }
-                    .onFailure {
-                        Log.e(TAG, "Sync failed", it)
+                    .onFailure { error ->
+                        // Don't log cancellation as error - it's expected
+                        if (error is CancellationException) throw error
+
+                        Log.e(TAG, "Sync failed", error)
                         // Keep current state but mark as potentially offline
                         val currentState = _state.value
                         if (currentState is FeedState.Loaded) {
                             _state.value = currentState.copy(isOffline = true)
                         }
                     }
+            } catch (e: CancellationException) {
+                // Cancellation is expected - don't treat as error
+                Log.d(TAG, "Feed refresh cancelled")
+                throw e
             } finally {
                 _isRefreshing.value = false
             }

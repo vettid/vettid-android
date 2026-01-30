@@ -9,6 +9,7 @@ import com.google.gson.reflect.TypeToken
 import com.vettid.app.core.nats.FeedClient
 import com.vettid.app.core.nats.FeedEvent
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -136,76 +137,87 @@ class FeedRepository @Inject constructor(
      * Perform incremental sync using sequence numbers.
      * Call this from background worker or pull-to-refresh.
      */
-    suspend fun sync(): Result<SyncResult> = syncMutex.withLock {
-        _syncState.value = SyncState.SYNCING
+    suspend fun sync(): Result<SyncResult> {
+        // Don't use mutex if job is already cancelled
+        return try {
+            syncMutex.withLock {
+                _syncState.value = SyncState.SYNCING
 
-        val lastSequence = getLastSequence()
-        val result = feedClient.sync(sinceSequence = lastSequence)
+                val lastSequence = getLastSequence()
+                val result = feedClient.sync(sinceSequence = lastSequence)
 
-        return result.fold(
-            onSuccess = { response ->
-                val cachedEvents = getCachedEvents().toMutableList()
-                val existingIds = cachedEvents.map { it.eventId }.toSet()
+                result.fold(
+                    onSuccess = { response ->
+                        val cachedEvents = getCachedEvents().toMutableList()
+                        val existingIds = cachedEvents.map { it.eventId }.toSet()
 
-                var newCount = 0
-                var updatedCount = 0
-                var deletedCount = 0
+                        var newCount = 0
+                        var updatedCount = 0
+                        var deletedCount = 0
 
-                for (event in response.events) {
-                    when {
-                        event.feedStatus == "deleted" -> {
-                            cachedEvents.removeAll { it.eventId == event.eventId }
-                            deletedCount++
-                        }
-                        event.eventId in existingIds -> {
-                            // Update existing event
-                            val index = cachedEvents.indexOfFirst { it.eventId == event.eventId }
-                            if (index >= 0) {
-                                cachedEvents[index] = event
-                                updatedCount++
+                        for (event in response.events) {
+                            when {
+                                event.feedStatus == "deleted" -> {
+                                    cachedEvents.removeAll { it.eventId == event.eventId }
+                                    deletedCount++
+                                }
+                                event.eventId in existingIds -> {
+                                    // Update existing event
+                                    val index = cachedEvents.indexOfFirst { it.eventId == event.eventId }
+                                    if (index >= 0) {
+                                        cachedEvents[index] = event
+                                        updatedCount++
+                                    }
+                                }
+                                else -> {
+                                    // New event
+                                    cachedEvents.add(event)
+                                    newCount++
+                                }
                             }
                         }
-                        else -> {
-                            // New event
-                            cachedEvents.add(event)
-                            newCount++
-                        }
+
+                        // Sort by priority (desc) then created_at (desc)
+                        val sortedEvents = cachedEvents.sortedWith(
+                            compareByDescending<FeedEvent> { it.priority }
+                                .thenByDescending { it.createdAt }
+                        )
+
+                        // Limit cache size
+                        val trimmedEvents = sortedEvents.take(MAX_CACHED_EVENTS)
+
+                        // Save updated cache
+                        saveEvents(trimmedEvents)
+                        setLastSequence(response.latestSequence)
+                        setLastSyncTime(System.currentTimeMillis())
+
+                        _syncState.value = SyncState.IDLE
+                        _isOnline.value = true
+
+                        Log.i(TAG, "Sync complete: +$newCount new, $updatedCount updated, -$deletedCount deleted")
+                        Result.success(SyncResult(
+                            newEvents = newCount,
+                            updatedEvents = updatedCount,
+                            deletedEvents = deletedCount,
+                            totalEvents = trimmedEvents.size,
+                            hasMore = response.hasMore
+                        ))
+                    },
+                    onFailure = { error ->
+                        // Rethrow cancellation exceptions
+                        if (error is CancellationException) throw error
+                        Log.e(TAG, "Sync failed", error)
+                        _syncState.value = SyncState.ERROR
+                        _isOnline.value = false
+                        Result.failure(error)
                     }
-                }
-
-                // Sort by priority (desc) then created_at (desc)
-                val sortedEvents = cachedEvents.sortedWith(
-                    compareByDescending<FeedEvent> { it.priority }
-                        .thenByDescending { it.createdAt }
                 )
-
-                // Limit cache size
-                val trimmedEvents = sortedEvents.take(MAX_CACHED_EVENTS)
-
-                // Save updated cache
-                saveEvents(trimmedEvents)
-                setLastSequence(response.latestSequence)
-                setLastSyncTime(System.currentTimeMillis())
-
-                _syncState.value = SyncState.IDLE
-                _isOnline.value = true
-
-                Log.i(TAG, "Sync complete: +$newCount new, $updatedCount updated, -$deletedCount deleted")
-                Result.success(SyncResult(
-                    newEvents = newCount,
-                    updatedEvents = updatedCount,
-                    deletedEvents = deletedCount,
-                    totalEvents = trimmedEvents.size,
-                    hasMore = response.hasMore
-                ))
-            },
-            onFailure = { error ->
-                Log.e(TAG, "Sync failed", error)
-                _syncState.value = SyncState.ERROR
-                _isOnline.value = false
-                Result.failure(error)
             }
-        )
+        } catch (e: CancellationException) {
+            // Let cancellation propagate normally
+            Log.d(TAG, "Sync cancelled")
+            throw e
+        }
     }
 
     /**
