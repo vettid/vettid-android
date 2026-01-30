@@ -65,6 +65,7 @@ sealed class PersonalDataState {
 
 /**
  * Grouped personal data by type for display.
+ * @deprecated Use GroupedByCategory instead
  */
 data class GroupedPersonalData(
     val publicData: List<PersonalDataItem>,
@@ -72,6 +73,36 @@ data class GroupedPersonalData(
     val keys: List<PersonalDataItem>,
     val minorSecrets: List<PersonalDataItem>
 )
+
+/**
+ * Grouped personal data by category for display.
+ * Each category section shows all data items regardless of type,
+ * with a toggle to include/exclude from public profile.
+ */
+data class GroupedByCategory(
+    val categories: Map<DataCategory, List<PersonalDataItem>>
+) {
+    companion object {
+        fun fromItems(items: List<PersonalDataItem>): GroupedByCategory {
+            val grouped = items.groupBy { it.category ?: DataCategory.OTHER }
+            // Sort categories in a logical order
+            val orderedCategories = linkedMapOf<DataCategory, List<PersonalDataItem>>()
+            listOf(
+                DataCategory.IDENTITY,
+                DataCategory.CONTACT,
+                DataCategory.ADDRESS,
+                DataCategory.FINANCIAL,
+                DataCategory.MEDICAL,
+                DataCategory.CRYPTO,
+                DataCategory.DOCUMENT,
+                DataCategory.OTHER
+            ).forEach { category ->
+                grouped[category]?.let { orderedCategories[category] = it }
+            }
+            return GroupedByCategory(orderedCategories)
+        }
+    }
+}
 
 /**
  * Effects emitted by the personal data view model.
@@ -91,6 +122,7 @@ sealed class PersonalDataEvent {
     data class ItemClicked(val itemId: String) : PersonalDataEvent()
     object AddItem : PersonalDataEvent()
     data class DeleteItem(val itemId: String) : PersonalDataEvent()
+    data class TogglePublicProfile(val itemId: String) : PersonalDataEvent()
     object Refresh : PersonalDataEvent()
 }
 
@@ -103,6 +135,7 @@ data class EditDataItemState(
     val value: String = "",
     val type: DataType = DataType.PRIVATE,
     val category: DataCategory? = null,
+    val isInPublicProfile: Boolean = false,
     val isEditing: Boolean = false,
     val isSaving: Boolean = false,
     val nameError: String? = null,

@@ -69,10 +69,10 @@ fun PersonalDataContent(
 
             is PersonalDataState.Loaded -> {
                 PersonalDataList(
-                    items = currentState.items,
-                    groupedData = viewModel.getGroupedData(),
+                    groupedByCategory = viewModel.getDataByCategory(),
                     onItemClick = { viewModel.onEvent(PersonalDataEvent.ItemClicked(it)) },
-                    onDeleteClick = { viewModel.onEvent(PersonalDataEvent.DeleteItem(it)) }
+                    onDeleteClick = { viewModel.onEvent(PersonalDataEvent.DeleteItem(it)) },
+                    onTogglePublicProfile = { viewModel.onEvent(PersonalDataEvent.TogglePublicProfile(it)) }
                 )
             }
         }
@@ -100,89 +100,53 @@ fun PersonalDataContent(
 
 @Composable
 private fun PersonalDataList(
-    items: List<PersonalDataItem>,
-    groupedData: GroupedPersonalData,
+    groupedByCategory: GroupedByCategory,
     onItemClick: (String) -> Unit,
-    onDeleteClick: (String) -> Unit
+    onDeleteClick: (String) -> Unit,
+    onTogglePublicProfile: (String) -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // Public Data Section
-        if (groupedData.publicData.isNotEmpty()) {
+        // Group data by category
+        groupedByCategory.categories.forEach { (category, categoryItems) ->
             item {
                 SectionHeader(
-                    title = "PUBLIC DATA",
-                    subtitle = "Shared with all connections"
+                    title = category.displayName.uppercase(),
+                    subtitle = getCategorySubtitle(category)
                 )
             }
-            items(groupedData.publicData, key = { it.id }) { item ->
-                PersonalDataCard(
-                    item = item,
-                    onClick = { onItemClick(item.id) },
-                    onDelete = { onDeleteClick(item.id) }
-                )
-            }
-            item { Spacer(modifier = Modifier.height(16.dp)) }
-        }
-
-        // Private Data Section
-        if (groupedData.privateData.isNotEmpty()) {
-            item {
-                SectionHeader(
-                    title = "PRIVATE DATA",
-                    subtitle = "Shared only with consent"
-                )
-            }
-            items(groupedData.privateData, key = { it.id }) { item ->
+            items(categoryItems, key = { it.id }) { item ->
                 PersonalDataCard(
                     item = item,
                     onClick = { onItemClick(item.id) },
                     onDelete = { onDeleteClick(item.id) },
-                    maskValue = true
+                    onTogglePublicProfile = { onTogglePublicProfile(item.id) },
+                    maskValue = item.type == DataType.PRIVATE ||
+                               item.type == DataType.KEY ||
+                               item.type == DataType.MINOR_SECRET
                 )
             }
             item { Spacer(modifier = Modifier.height(16.dp)) }
         }
+    }
+}
 
-        // Keys Section
-        if (groupedData.keys.isNotEmpty()) {
-            item {
-                SectionHeader(
-                    title = "KEYS",
-                    subtitle = "Cryptographic keys"
-                )
-            }
-            items(groupedData.keys, key = { it.id }) { item ->
-                PersonalDataCard(
-                    item = item,
-                    onClick = { onItemClick(item.id) },
-                    onDelete = { onDeleteClick(item.id) },
-                    maskValue = true
-                )
-            }
-            item { Spacer(modifier = Modifier.height(16.dp)) }
-        }
-
-        // Minor Secrets Section
-        if (groupedData.minorSecrets.isNotEmpty()) {
-            item {
-                SectionHeader(
-                    title = "MINOR SECRETS",
-                    subtitle = "Never shared"
-                )
-            }
-            items(groupedData.minorSecrets, key = { it.id }) { item ->
-                PersonalDataCard(
-                    item = item,
-                    onClick = { onItemClick(item.id) },
-                    onDelete = { onDeleteClick(item.id) },
-                    maskValue = true
-                )
-            }
-        }
+/**
+ * Get subtitle for a category.
+ */
+private fun getCategorySubtitle(category: DataCategory): String {
+    return when (category) {
+        DataCategory.IDENTITY -> "Name, birthdate, and identification"
+        DataCategory.CONTACT -> "Phone, email, and social profiles"
+        DataCategory.ADDRESS -> "Physical and mailing addresses"
+        DataCategory.FINANCIAL -> "Bank accounts and payment info"
+        DataCategory.MEDICAL -> "Health and medical information"
+        DataCategory.CRYPTO -> "Cryptocurrency addresses and keys"
+        DataCategory.DOCUMENT -> "Documents and files"
+        DataCategory.OTHER -> "Other personal information"
     }
 }
 
@@ -210,6 +174,7 @@ private fun PersonalDataCard(
     item: PersonalDataItem,
     onClick: () -> Unit,
     onDelete: () -> Unit,
+    onTogglePublicProfile: () -> Unit,
     maskValue: Boolean = false
 ) {
     var showMenu by remember { mutableStateOf(false) }
@@ -219,93 +184,135 @@ private fun PersonalDataCard(
             .fillMaxWidth()
             .clickable(onClick = onClick)
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(16.dp)
         ) {
-            // Icon based on category or type
-            Icon(
-                imageVector = when (item.category) {
-                    DataCategory.IDENTITY -> Icons.Default.Person
-                    DataCategory.CONTACT -> Icons.Default.Phone
-                    DataCategory.ADDRESS -> Icons.Default.LocationOn
-                    DataCategory.FINANCIAL -> Icons.Default.AccountBalance
-                    DataCategory.MEDICAL -> Icons.Default.MedicalServices
-                    DataCategory.CRYPTO -> Icons.Default.CurrencyBitcoin
-                    DataCategory.DOCUMENT -> Icons.Default.Description
-                    DataCategory.OTHER, null -> Icons.Default.Category
-                },
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(24.dp)
-            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Icon based on category or type
+                Icon(
+                    imageVector = when (item.category) {
+                        DataCategory.IDENTITY -> Icons.Default.Person
+                        DataCategory.CONTACT -> Icons.Default.Phone
+                        DataCategory.ADDRESS -> Icons.Default.LocationOn
+                        DataCategory.FINANCIAL -> Icons.Default.AccountBalance
+                        DataCategory.MEDICAL -> Icons.Default.MedicalServices
+                        DataCategory.CRYPTO -> Icons.Default.CurrencyBitcoin
+                        DataCategory.DOCUMENT -> Icons.Default.Description
+                        DataCategory.OTHER, null -> Icons.Default.Category
+                    },
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
 
-            Spacer(modifier = Modifier.width(16.dp))
+                Spacer(modifier = Modifier.width(16.dp))
 
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = item.name,
-                        style = MaterialTheme.typography.titleMedium
-                    )
-                    if (item.isSystemField) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Icon(
-                            imageVector = Icons.Default.Lock,
-                            contentDescription = "System field",
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = item.name,
+                            style = MaterialTheme.typography.titleMedium
                         )
+                        if (item.isSystemField) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Icon(
+                                imageVector = Icons.Default.Lock,
+                                contentDescription = "System field",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Text(
+                        text = if (maskValue) maskString(item.value) else item.value,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                if (!item.isSystemField) {
+                    Box {
+                        IconButton(onClick = { showMenu = true }) {
+                            Icon(
+                                imageVector = Icons.Default.MoreVert,
+                                contentDescription = "More options"
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showMenu,
+                            onDismissRequest = { showMenu = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Edit") },
+                                onClick = {
+                                    showMenu = false
+                                    onClick()
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Edit, contentDescription = null)
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Delete") },
+                                onClick = {
+                                    showMenu = false
+                                    onDelete()
+                                },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            )
+                        }
                     }
                 }
-                Text(
-                    text = if (maskValue) maskString(item.value) else item.value,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
             }
 
-            if (!item.isSystemField) {
-                Box {
-                    IconButton(onClick = { showMenu = true }) {
-                        Icon(
-                            imageVector = Icons.Default.MoreVert,
-                            contentDescription = "More options"
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = showMenu,
-                        onDismissRequest = { showMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Edit") },
-                            onClick = {
-                                showMenu = false
-                                onClick()
-                            },
-                            leadingIcon = {
-                                Icon(Icons.Default.Edit, contentDescription = null)
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Delete") },
-                            onClick = {
-                                showMenu = false
-                                onDelete()
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Default.Delete,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.error
-                                )
-                            }
-                        )
-                    }
+            // Public Profile Toggle - only show for non-MINOR_SECRET types
+            if (item.type != DataType.MINOR_SECRET) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Divider()
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onTogglePublicProfile() }
+                        .padding(top = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (item.isInPublicProfile) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = if (item.isInPublicProfile)
+                            MaterialTheme.colorScheme.primary
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = if (item.isInPublicProfile) "Visible in public profile" else "Hidden from public profile",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (item.isInPublicProfile)
+                            MaterialTheme.colorScheme.primary
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.weight(1f))
+                    Switch(
+                        checked = item.isInPublicProfile,
+                        onCheckedChange = { onTogglePublicProfile() },
+                        modifier = Modifier.height(24.dp)
+                    )
                 }
             }
         }

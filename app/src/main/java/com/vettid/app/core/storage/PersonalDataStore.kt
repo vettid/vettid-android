@@ -732,6 +732,34 @@ class PersonalDataStore @Inject constructor(
     }
 
     /**
+     * Set whether a specific field is included in the public profile.
+     *
+     * @param fieldId The field ID to update
+     * @param isInPublicProfile Whether to include in public profile
+     */
+    fun setPublicProfileStatus(fieldId: String, isInPublicProfile: Boolean) {
+        val currentFields = getPublicProfileFields().toMutableList()
+        if (isInPublicProfile) {
+            if (!currentFields.contains(fieldId)) {
+                currentFields.add(fieldId)
+            }
+        } else {
+            currentFields.remove(fieldId)
+        }
+        updatePublicProfileFields(currentFields)
+    }
+
+    /**
+     * Check if a field is in the public profile.
+     *
+     * @param fieldId The field ID to check
+     * @return true if the field is included in public profile
+     */
+    fun isFieldInPublicProfile(fieldId: String): Boolean {
+        return getPublicProfileFields().contains(fieldId)
+    }
+
+    /**
      * Get the current public profile version.
      */
     fun getPublicProfileVersion(): Int {

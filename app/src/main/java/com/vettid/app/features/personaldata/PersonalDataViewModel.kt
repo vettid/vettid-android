@@ -58,6 +58,7 @@ class PersonalDataViewModel @Inject constructor(
             is PersonalDataEvent.ItemClicked -> selectItem(event.itemId)
             is PersonalDataEvent.AddItem -> showAddDialog()
             is PersonalDataEvent.DeleteItem -> deleteItem(event.itemId)
+            is PersonalDataEvent.TogglePublicProfile -> togglePublicProfile(event.itemId)
             is PersonalDataEvent.Refresh -> loadPersonalData()
         }
     }
@@ -263,6 +264,7 @@ class PersonalDataViewModel @Inject constructor(
                 value = item.value,
                 type = item.type,
                 category = item.category,
+                isInPublicProfile = item.isInPublicProfile,
                 isEditing = true
             )
             _showAddDialog.value = true
@@ -458,6 +460,7 @@ class PersonalDataViewModel @Inject constructor(
 
     /**
      * Get personal data grouped by type.
+     * @deprecated Use getDataByCategory instead
      */
     fun getGroupedData(): GroupedPersonalData {
         return GroupedPersonalData(
@@ -469,12 +472,54 @@ class PersonalDataViewModel @Inject constructor(
     }
 
     /**
+     * Get personal data grouped by category.
+     */
+    fun getDataByCategory(): GroupedByCategory {
+        return GroupedByCategory.fromItems(dataItems)
+    }
+
+    /**
+     * Toggle whether an item is included in the public profile.
+     */
+    private fun togglePublicProfile(itemId: String) {
+        viewModelScope.launch {
+            try {
+                val index = dataItems.indexOfFirst { it.id == itemId }
+                if (index >= 0) {
+                    val item = dataItems[index]
+                    val newValue = !item.isInPublicProfile
+
+                    // Update in-memory
+                    dataItems[index] = item.copy(isInPublicProfile = newValue)
+
+                    // Persist to storage
+                    personalDataStore.setPublicProfileStatus(itemId, newValue)
+
+                    // Refresh state
+                    _state.value = PersonalDataState.Loaded(items = dataItems.toList())
+
+                    val statusText = if (newValue) "added to" else "removed from"
+                    _effects.emit(PersonalDataEffect.ShowSuccess("${item.name} $statusText public profile"))
+
+                    Log.d(TAG, "Toggled public profile for $itemId: $newValue")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to toggle public profile", e)
+                _effects.emit(PersonalDataEffect.ShowError("Failed to update public profile"))
+            }
+        }
+    }
+
+    /**
      * Load all personal data from the PersonalDataStore.
      * Converts system fields, optional fields, and custom fields to PersonalDataItem objects.
      */
     private fun loadAllPersonalData(): List<PersonalDataItem> {
         val now = Instant.now()
         val items = mutableListOf<PersonalDataItem>()
+
+        // Get public profile fields set for checking isInPublicProfile
+        val publicProfileFields = personalDataStore.getPublicProfileFields().toSet()
 
         // Load system fields (read-only from registration)
         val systemFields = personalDataStore.getSystemFields()
@@ -487,6 +532,7 @@ class PersonalDataViewModel @Inject constructor(
                 value = system.firstName,
                 category = DataCategory.IDENTITY,
                 isSystemField = true,
+                isInPublicProfile = publicProfileFields.contains("system-first-name"),
                 createdAt = now,
                 updatedAt = now
             ))
@@ -497,6 +543,7 @@ class PersonalDataViewModel @Inject constructor(
                 value = system.lastName,
                 category = DataCategory.IDENTITY,
                 isSystemField = true,
+                isInPublicProfile = publicProfileFields.contains("system-last-name"),
                 createdAt = now,
                 updatedAt = now
             ))
@@ -507,6 +554,7 @@ class PersonalDataViewModel @Inject constructor(
                 value = system.email,
                 category = DataCategory.CONTACT,
                 isSystemField = true,
+                isInPublicProfile = publicProfileFields.contains("system-email"),
                 createdAt = now,
                 updatedAt = now
             ))
@@ -516,229 +564,46 @@ class PersonalDataViewModel @Inject constructor(
         val optional = personalDataStore.getOptionalFields()
         android.util.Log.d("PersonalDataVM", "Optional fields: prefix=${optional.prefix}, firstName=${optional.firstName}, middleName=${optional.middleName}, lastName=${optional.lastName}")
 
+        // Helper function to create optional field item
+        fun addOptionalItem(id: String, name: String, value: String, type: DataType, category: DataCategory) {
+            items.add(PersonalDataItem(
+                id = id,
+                name = name,
+                type = type,
+                value = value,
+                category = category,
+                isSystemField = false,
+                isInPublicProfile = publicProfileFields.contains(id),
+                createdAt = now,
+                updatedAt = now
+            ))
+        }
+
         // Legal name fields
-        optional.prefix?.let { value ->
-            items.add(PersonalDataItem(
-                id = "optional-prefix",
-                name = "Name Prefix",
-                type = DataType.PRIVATE,
-                value = value,
-                category = DataCategory.IDENTITY,
-                isSystemField = false,
-                createdAt = now,
-                updatedAt = now
-            ))
-        }
-        optional.firstName?.let { value ->
-            items.add(PersonalDataItem(
-                id = "optional-first-name",
-                name = "Legal First Name",
-                type = DataType.PRIVATE,
-                value = value,
-                category = DataCategory.IDENTITY,
-                isSystemField = false,
-                createdAt = now,
-                updatedAt = now
-            ))
-        }
-        optional.middleName?.let { value ->
-            items.add(PersonalDataItem(
-                id = "optional-middle-name",
-                name = "Middle Name",
-                type = DataType.PRIVATE,
-                value = value,
-                category = DataCategory.IDENTITY,
-                isSystemField = false,
-                createdAt = now,
-                updatedAt = now
-            ))
-        }
-        optional.lastName?.let { value ->
-            items.add(PersonalDataItem(
-                id = "optional-last-name",
-                name = "Legal Last Name",
-                type = DataType.PRIVATE,
-                value = value,
-                category = DataCategory.IDENTITY,
-                isSystemField = false,
-                createdAt = now,
-                updatedAt = now
-            ))
-        }
-        optional.suffix?.let { value ->
-            items.add(PersonalDataItem(
-                id = "optional-suffix",
-                name = "Name Suffix",
-                type = DataType.PRIVATE,
-                value = value,
-                category = DataCategory.IDENTITY,
-                isSystemField = false,
-                createdAt = now,
-                updatedAt = now
-            ))
-        }
+        optional.prefix?.let { addOptionalItem("optional-prefix", "Name Prefix", it, DataType.PRIVATE, DataCategory.IDENTITY) }
+        optional.firstName?.let { addOptionalItem("optional-first-name", "Legal First Name", it, DataType.PRIVATE, DataCategory.IDENTITY) }
+        optional.middleName?.let { addOptionalItem("optional-middle-name", "Middle Name", it, DataType.PRIVATE, DataCategory.IDENTITY) }
+        optional.lastName?.let { addOptionalItem("optional-last-name", "Legal Last Name", it, DataType.PRIVATE, DataCategory.IDENTITY) }
+        optional.suffix?.let { addOptionalItem("optional-suffix", "Name Suffix", it, DataType.PRIVATE, DataCategory.IDENTITY) }
 
         // Contact fields
-        optional.phone?.let { value ->
-            items.add(PersonalDataItem(
-                id = "optional-phone",
-                name = "Phone",
-                type = DataType.PRIVATE,
-                value = value,
-                category = DataCategory.CONTACT,
-                isSystemField = false,
-                createdAt = now,
-                updatedAt = now
-            ))
-        }
-        optional.birthday?.let { value ->
-            items.add(PersonalDataItem(
-                id = "optional-birthday",
-                name = "Birthday",
-                type = DataType.PRIVATE,
-                value = value,
-                category = DataCategory.IDENTITY,
-                isSystemField = false,
-                createdAt = now,
-                updatedAt = now
-            ))
-        }
+        optional.phone?.let { addOptionalItem("optional-phone", "Phone", it, DataType.PRIVATE, DataCategory.CONTACT) }
+        optional.birthday?.let { addOptionalItem("optional-birthday", "Birthday", it, DataType.PRIVATE, DataCategory.IDENTITY) }
 
         // Address fields
-        optional.street?.let { value ->
-            items.add(PersonalDataItem(
-                id = "optional-street",
-                name = "Street Address",
-                type = DataType.PRIVATE,
-                value = value,
-                category = DataCategory.ADDRESS,
-                isSystemField = false,
-                createdAt = now,
-                updatedAt = now
-            ))
-        }
-        optional.street2?.let { value ->
-            items.add(PersonalDataItem(
-                id = "optional-street2",
-                name = "Address Line 2",
-                type = DataType.PRIVATE,
-                value = value,
-                category = DataCategory.ADDRESS,
-                isSystemField = false,
-                createdAt = now,
-                updatedAt = now
-            ))
-        }
-        optional.city?.let { value ->
-            items.add(PersonalDataItem(
-                id = "optional-city",
-                name = "City",
-                type = DataType.PRIVATE,
-                value = value,
-                category = DataCategory.ADDRESS,
-                isSystemField = false,
-                createdAt = now,
-                updatedAt = now
-            ))
-        }
-        optional.state?.let { value ->
-            items.add(PersonalDataItem(
-                id = "optional-state",
-                name = "State",
-                type = DataType.PRIVATE,
-                value = value,
-                category = DataCategory.ADDRESS,
-                isSystemField = false,
-                createdAt = now,
-                updatedAt = now
-            ))
-        }
-        optional.postalCode?.let { value ->
-            items.add(PersonalDataItem(
-                id = "optional-postal-code",
-                name = "Postal Code",
-                type = DataType.PRIVATE,
-                value = value,
-                category = DataCategory.ADDRESS,
-                isSystemField = false,
-                createdAt = now,
-                updatedAt = now
-            ))
-        }
-        optional.country?.let { value ->
-            items.add(PersonalDataItem(
-                id = "optional-country",
-                name = "Country",
-                type = DataType.PRIVATE,
-                value = value,
-                category = DataCategory.ADDRESS,
-                isSystemField = false,
-                createdAt = now,
-                updatedAt = now
-            ))
-        }
+        optional.street?.let { addOptionalItem("optional-street", "Street Address", it, DataType.PRIVATE, DataCategory.ADDRESS) }
+        optional.street2?.let { addOptionalItem("optional-street2", "Address Line 2", it, DataType.PRIVATE, DataCategory.ADDRESS) }
+        optional.city?.let { addOptionalItem("optional-city", "City", it, DataType.PRIVATE, DataCategory.ADDRESS) }
+        optional.state?.let { addOptionalItem("optional-state", "State", it, DataType.PRIVATE, DataCategory.ADDRESS) }
+        optional.postalCode?.let { addOptionalItem("optional-postal-code", "Postal Code", it, DataType.PRIVATE, DataCategory.ADDRESS) }
+        optional.country?.let { addOptionalItem("optional-country", "Country", it, DataType.PRIVATE, DataCategory.ADDRESS) }
 
         // Social/Web fields
-        optional.website?.let { value ->
-            items.add(PersonalDataItem(
-                id = "optional-website",
-                name = "Website",
-                type = DataType.PUBLIC,
-                value = value,
-                category = DataCategory.CONTACT,
-                isSystemField = false,
-                createdAt = now,
-                updatedAt = now
-            ))
-        }
-        optional.linkedin?.let { value ->
-            items.add(PersonalDataItem(
-                id = "optional-linkedin",
-                name = "LinkedIn",
-                type = DataType.PUBLIC,
-                value = value,
-                category = DataCategory.CONTACT,
-                isSystemField = false,
-                createdAt = now,
-                updatedAt = now
-            ))
-        }
-        optional.twitter?.let { value ->
-            items.add(PersonalDataItem(
-                id = "optional-twitter",
-                name = "X (Twitter)",
-                type = DataType.PUBLIC,
-                value = value,
-                category = DataCategory.CONTACT,
-                isSystemField = false,
-                createdAt = now,
-                updatedAt = now
-            ))
-        }
-        optional.instagram?.let { value ->
-            items.add(PersonalDataItem(
-                id = "optional-instagram",
-                name = "Instagram",
-                type = DataType.PUBLIC,
-                value = value,
-                category = DataCategory.CONTACT,
-                isSystemField = false,
-                createdAt = now,
-                updatedAt = now
-            ))
-        }
-        optional.github?.let { value ->
-            items.add(PersonalDataItem(
-                id = "optional-github",
-                name = "GitHub",
-                type = DataType.PUBLIC,
-                value = value,
-                category = DataCategory.CONTACT,
-                isSystemField = false,
-                createdAt = now,
-                updatedAt = now
-            ))
-        }
+        optional.website?.let { addOptionalItem("optional-website", "Website", it, DataType.PUBLIC, DataCategory.CONTACT) }
+        optional.linkedin?.let { addOptionalItem("optional-linkedin", "LinkedIn", it, DataType.PUBLIC, DataCategory.CONTACT) }
+        optional.twitter?.let { addOptionalItem("optional-twitter", "X (Twitter)", it, DataType.PUBLIC, DataCategory.CONTACT) }
+        optional.instagram?.let { addOptionalItem("optional-instagram", "Instagram", it, DataType.PUBLIC, DataCategory.CONTACT) }
+        optional.github?.let { addOptionalItem("optional-github", "GitHub", it, DataType.PUBLIC, DataCategory.CONTACT) }
 
         // Load custom fields
         val customFields = personalDataStore.getCustomFields()
@@ -757,13 +622,15 @@ class PersonalDataViewModel @Inject constructor(
                 FieldType.NOTE -> DataType.PRIVATE
                 else -> DataType.PRIVATE
             }
+            val itemId = "custom-${customField.id}"
             items.add(PersonalDataItem(
-                id = "custom-${customField.id}",
+                id = itemId,
                 name = customField.name,
                 type = dataType,
                 value = customField.value,
                 category = category,
                 isSystemField = false,
+                isInPublicProfile = publicProfileFields.contains(itemId),
                 createdAt = Instant.ofEpochMilli(customField.createdAt),
                 updatedAt = Instant.ofEpochMilli(customField.updatedAt)
             ))
