@@ -11,6 +11,7 @@ import com.vettid.app.core.nats.JetStreamNatsClient
 import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.storage.CredentialStore
+import com.vettid.app.core.network.TransactionKeyInfo
 import com.vettid.app.core.storage.PersonalDataStore
 import com.vettid.app.core.storage.SystemPersonalData
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -309,11 +310,26 @@ class PinUnlockViewModel @Inject constructor(
                 // Remove used UTK from pool
                 credentialStore.removeUtk(availableUtk.keyId)
 
-                // Store any new UTKs from response
-                val newUtks = responseJson.getAsJsonArray("utks")
-                if (newUtks != null && newUtks.size() > 0) {
-                    Log.d(TAG, "Received ${newUtks.size()} new UTKs")
-                    // TODO: Parse and store new UTKs
+                // Store any new UTKs from response (format: "ID:base64PublicKey")
+                val newUtksArray = responseJson.getAsJsonArray("new_utks")
+                if (newUtksArray != null && newUtksArray.size() > 0) {
+                    Log.d(TAG, "Received ${newUtksArray.size()} new UTKs")
+                    val newKeys = mutableListOf<TransactionKeyInfo>()
+                    for (i in 0 until newUtksArray.size()) {
+                        val utkString = newUtksArray.get(i).asString
+                        val parts = utkString.split(":", limit = 2)
+                        if (parts.size == 2) {
+                            newKeys.add(TransactionKeyInfo(
+                                keyId = parts[0],
+                                publicKey = parts[1],
+                                algorithm = "X25519"
+                            ))
+                        }
+                    }
+                    if (newKeys.isNotEmpty()) {
+                        credentialStore.addUtks(newKeys)
+                        Log.i(TAG, "Added ${newKeys.size} new UTKs to pool. Total: ${credentialStore.getUtkCount()}")
+                    }
                 }
 
                 return@withContext true

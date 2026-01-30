@@ -123,11 +123,13 @@ class PersonalDataSyncWorker @AssistedInject constructor(
         }
 
         return try {
-            val data = personalDataStore.exportForSync()
+            // Get fields map in format expected by enclave: { "fields": { "name": "value" } }
+            val fieldsMap = personalDataStore.exportFieldsMapForProfileUpdate()
 
-            // Build payload for profile.update
-            val payload = buildPayload(data)
+            // Build payload with correct structure for profile.update
+            val payload = buildProfileUpdatePayload(fieldsMap)
 
+            Log.d(TAG, "Syncing ${fieldsMap.size} fields to vault")
             val result = ownerSpaceClient.sendToVault("profile.update", payload)
 
             result.fold(
@@ -158,34 +160,18 @@ class PersonalDataSyncWorker @AssistedInject constructor(
         }
     }
 
-    private fun buildPayload(data: Map<String, Any?>): JsonObject {
-        return JsonObject().apply {
-            data.forEach { (key, value) ->
-                when (value) {
-                    is String -> addProperty(key, value)
-                    is Number -> addProperty(key, value)
-                    is Boolean -> addProperty(key, value)
-                    is List<*> -> {
-                        val jsonArray = JsonArray()
-                        @Suppress("UNCHECKED_CAST")
-                        (value as? List<Map<String, Any?>>)?.forEach { item ->
-                            val jsonObj = JsonObject()
-                            item.forEach { (k, v) ->
-                                when (v) {
-                                    is String -> jsonObj.addProperty(k, v)
-                                    is Number -> jsonObj.addProperty(k, v)
-                                    is Boolean -> jsonObj.addProperty(k, v)
-                                    else -> jsonObj.addProperty(k, v?.toString())
-                                }
-                            }
-                            jsonArray.add(jsonObj)
-                        }
-                        add(key, jsonArray)
-                    }
-                    null -> {} // Skip null values
-                    else -> addProperty(key, value.toString())
-                }
+    /**
+     * Build payload for profile.update in the format expected by enclave:
+     * { "fields": { "field_name": "value", ... } }
+     */
+    private fun buildProfileUpdatePayload(fieldsMap: Map<String, String>): JsonObject {
+        val fieldsObject = JsonObject().apply {
+            fieldsMap.forEach { (key, value) ->
+                addProperty(key, value)
             }
+        }
+        return JsonObject().apply {
+            add("fields", fieldsObject)
         }
     }
 }

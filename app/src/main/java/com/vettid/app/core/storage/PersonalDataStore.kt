@@ -40,6 +40,8 @@ class PersonalDataStore @Inject constructor(
     )
 
     companion object {
+        private const val TAG = "PersonalDataStore"
+
         // System fields (read-only from registration)
         private const val KEY_FIRST_NAME = "system_first_name"
         private const val KEY_LAST_NAME = "system_last_name"
@@ -158,12 +160,16 @@ class PersonalDataStore @Inject constructor(
      * @return OptionalPersonalData with current values
      */
     fun getOptionalFields(): OptionalPersonalData {
+        val firstName = encryptedPrefs.getString(KEY_OPT_FIRST_NAME, null)
+        val middleName = encryptedPrefs.getString(KEY_MIDDLE_NAME, null)
+        val lastName = encryptedPrefs.getString(KEY_OPT_LAST_NAME, null)
+        android.util.Log.d(TAG, "getOptionalFields: firstName=$firstName, middleName=$middleName, lastName=$lastName")
         return OptionalPersonalData(
             // Name fields
             prefix = encryptedPrefs.getString(KEY_PREFIX, null),
-            firstName = encryptedPrefs.getString(KEY_OPT_FIRST_NAME, null),
-            middleName = encryptedPrefs.getString(KEY_MIDDLE_NAME, null),
-            lastName = encryptedPrefs.getString(KEY_OPT_LAST_NAME, null),
+            firstName = firstName,
+            middleName = middleName,
+            lastName = lastName,
             suffix = encryptedPrefs.getString(KEY_SUFFIX, null),
             // Contact fields
             phone = encryptedPrefs.getString(KEY_PHONE, null),
@@ -226,6 +232,7 @@ class PersonalDataStore @Inject constructor(
      * @param value The new value (null to clear)
      */
     fun updateOptionalField(field: OptionalField, value: String?) {
+        android.util.Log.d(TAG, "updateOptionalField: field=$field, value=$value")
         val key = when (field) {
             // Name fields
             OptionalField.PREFIX -> KEY_PREFIX
@@ -250,6 +257,7 @@ class PersonalDataStore @Inject constructor(
             OptionalField.INSTAGRAM -> KEY_INSTAGRAM
             OptionalField.GITHUB -> KEY_GITHUB
         }
+        android.util.Log.d(TAG, "updateOptionalField: storing to key=$key")
         encryptedPrefs.edit().apply {
             putStringOrRemove(key, value)
             apply()
@@ -296,6 +304,50 @@ class PersonalDataStore @Inject constructor(
             updateOptionalField(field, value)
             true
         } else {
+            false
+        }
+    }
+
+    /**
+     * Update an optional field by its dotted namespace.
+     * Used for importing data from vault which uses namespace format.
+     *
+     * @param namespace The dotted namespace (e.g., "personal.legal.first_name", "contact.phone.mobile")
+     * @param value The new value (null to clear)
+     * @return true if the namespace was recognized and updated
+     */
+    fun updateOptionalFieldByNamespace(namespace: String, value: String?): Boolean {
+        val field = when (namespace) {
+            // Name fields (personal.legal.*)
+            "personal.legal.prefix" -> OptionalField.PREFIX
+            "personal.legal.first_name" -> OptionalField.FIRST_NAME
+            "personal.legal.middle_name" -> OptionalField.MIDDLE_NAME
+            "personal.legal.last_name" -> OptionalField.LAST_NAME
+            "personal.legal.suffix" -> OptionalField.SUFFIX
+            // Contact fields
+            "contact.phone.mobile" -> OptionalField.PHONE
+            "personal.info.birthday" -> OptionalField.BIRTHDAY
+            // Address fields (address.home.*)
+            "address.home.street" -> OptionalField.STREET
+            "address.home.street2" -> OptionalField.STREET2
+            "address.home.city" -> OptionalField.CITY
+            "address.home.state" -> OptionalField.STATE
+            "address.home.postal_code" -> OptionalField.POSTAL_CODE
+            "address.home.country" -> OptionalField.COUNTRY
+            // Social/Web fields (social.*)
+            "social.website.personal" -> OptionalField.WEBSITE
+            "social.linkedin.url" -> OptionalField.LINKEDIN
+            "social.twitter.handle" -> OptionalField.TWITTER
+            "social.instagram.handle" -> OptionalField.INSTAGRAM
+            "social.github.username" -> OptionalField.GITHUB
+            else -> null
+        }
+
+        return if (field != null) {
+            updateOptionalField(field, value)
+            true
+        } else {
+            // Not a known optional field - might be a custom field
             false
         }
     }
@@ -828,6 +880,63 @@ class PersonalDataStore @Inject constructor(
         }
 
         return data
+    }
+
+    /**
+     * Export personal data as a simple field map for profile.update.
+     * The enclave expects: { "fields": { "field_name": "value" } }
+     *
+     * This produces the flat fields map with dotted namespaces:
+     * - _system_first_name, _system_last_name, _system_email (registration info)
+     * - personal.legal.first_name, contact.phone.mobile, etc. (optional fields)
+     */
+    fun exportFieldsMapForProfileUpdate(): Map<String, String> {
+        val fields = mutableMapOf<String, String>()
+
+        // System fields (registration info) - these use _system_ prefix
+        getSystemFields()?.let { system ->
+            fields["_system_first_name"] = system.firstName
+            fields["_system_last_name"] = system.lastName
+            fields["_system_email"] = system.email
+            fields["_system_stored_at"] = System.currentTimeMillis().toString()
+        }
+
+        // Optional fields - use dotted namespace format
+        val optional = getOptionalFields()
+
+        // Name fields
+        optional.prefix?.let { fields["personal.legal.prefix"] = it }
+        optional.firstName?.let { fields["personal.legal.first_name"] = it }
+        optional.middleName?.let { fields["personal.legal.middle_name"] = it }
+        optional.lastName?.let { fields["personal.legal.last_name"] = it }
+        optional.suffix?.let { fields["personal.legal.suffix"] = it }
+
+        // Contact fields
+        optional.phone?.let { fields["contact.phone.mobile"] = it }
+        optional.birthday?.let { fields["personal.info.birthday"] = it }
+
+        // Address fields
+        optional.street?.let { fields["address.home.street"] = it }
+        optional.street2?.let { fields["address.home.street2"] = it }
+        optional.city?.let { fields["address.home.city"] = it }
+        optional.state?.let { fields["address.home.state"] = it }
+        optional.postalCode?.let { fields["address.home.postal_code"] = it }
+        optional.country?.let { fields["address.home.country"] = it }
+
+        // Social/Web fields
+        optional.website?.let { fields["social.website.personal"] = it }
+        optional.linkedin?.let { fields["social.linkedin.url"] = it }
+        optional.twitter?.let { fields["social.twitter.handle"] = it }
+        optional.instagram?.let { fields["social.instagram.handle"] = it }
+        optional.github?.let { fields["social.github.username"] = it }
+
+        // Custom fields - generate namespace from category and name
+        getCustomFields().forEach { field ->
+            val namespace = generateNamespace(field.category.name.lowercase(), field.name)
+            fields[namespace] = field.value
+        }
+
+        return fields
     }
 
     // MARK: - Clear

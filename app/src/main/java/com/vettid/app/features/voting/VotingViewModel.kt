@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.crypto.CryptoManager
 import com.vettid.app.core.nats.NitroEnrollmentClient
 import com.vettid.app.core.network.VaultServiceClient
+import com.vettid.app.core.network.TransactionKeyInfo
 import com.vettid.app.core.storage.CredentialStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
@@ -260,6 +261,30 @@ class VotingViewModel @Inject constructor(
 
         // Parse response
         return response?.let { resp ->
+            // Remove used UTK
+            credentialStore.removeUtk(utk.keyId)
+
+            // Store any new UTKs from response (format: "ID:base64PublicKey")
+            @Suppress("UNCHECKED_CAST")
+            val newUtks = resp["new_utks"] as? List<String>
+            if (newUtks != null && newUtks.isNotEmpty()) {
+                Log.d(TAG, "Received ${newUtks.size} new UTKs from vote response")
+                val newKeys = newUtks.mapNotNull { utkString ->
+                    val parts = utkString.split(":", limit = 2)
+                    if (parts.size == 2) {
+                        TransactionKeyInfo(
+                            keyId = parts[0],
+                            publicKey = parts[1],
+                            algorithm = "X25519"
+                        )
+                    } else null
+                }
+                if (newKeys.isNotEmpty()) {
+                    credentialStore.addUtks(newKeys)
+                    Log.i(TAG, "Added ${newKeys.size} new UTKs to pool")
+                }
+            }
+
             @Suppress("UNCHECKED_CAST")
             val receiptData = resp["receipt"] as? Map<String, Any>
             receiptData?.let {
@@ -274,9 +299,6 @@ class VotingViewModel @Inject constructor(
                     merkleProof = null
                 )
             }
-        }.also {
-            // Remove used UTK after attempting vote
-            credentialStore.removeUtk(utk.keyId)
         }
     }
 

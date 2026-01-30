@@ -154,10 +154,10 @@ class PersonalDataViewModel @Inject constructor(
         try {
             Log.d(TAG, "Processing vault profile response: ${result.keySet()}")
 
-            // Extract system fields (_system_* prefix)
-            val systemFirstName = result.get("_system_first_name")?.asString
-            val systemLastName = result.get("_system_last_name")?.asString
-            val systemEmail = result.get("_system_email")?.asString
+            // Extract system fields - vault returns these at top level (first_name, last_name, email)
+            val systemFirstName = result.get("first_name")?.asString
+            val systemLastName = result.get("last_name")?.asString
+            val systemEmail = result.get("email")?.asString
 
             if (systemFirstName != null && systemLastName != null && systemEmail != null) {
                 Log.d(TAG, "Storing system fields from vault: $systemFirstName $systemLastName")
@@ -177,17 +177,35 @@ class PersonalDataViewModel @Inject constructor(
                 }
             }
 
-            // Extract optional fields (non-system fields, non-underscore prefix)
-            result.entrySet().forEach { (key, value) ->
-                if (!key.startsWith("_") && value.isJsonPrimitive) {
-                    val stringValue = value.asString
-                    if (stringValue.isNotEmpty()) {
-                        val updated = personalDataStore.updateOptionalFieldByKey(key, stringValue)
-                        if (updated) {
-                            Log.d(TAG, "Updated optional field from vault: $key")
+            // Extract optional fields from the nested "fields" object
+            // Vault returns: { "fields": { "personal.legal.first_name": { "value": "...", "updated_at": "..." }, ... } }
+            val fieldsObject = result.getAsJsonObject("fields")
+            if (fieldsObject != null) {
+                Log.d(TAG, "Processing ${fieldsObject.size()} fields from vault")
+                fieldsObject.entrySet().forEach { (key, value) ->
+                    try {
+                        // Each field is an object with "value" and "updated_at"
+                        val fieldValue = if (value.isJsonObject) {
+                            value.asJsonObject.get("value")?.asString
+                        } else if (value.isJsonPrimitive) {
+                            value.asString
+                        } else null
+
+                        if (fieldValue != null && fieldValue.isNotEmpty()) {
+                            // Map dotted namespace to local storage
+                            val updated = personalDataStore.updateOptionalFieldByNamespace(key, fieldValue)
+                            if (updated) {
+                                Log.d(TAG, "Updated optional field from vault: $key = $fieldValue")
+                            } else {
+                                Log.d(TAG, "Field not mapped to optional field: $key")
+                            }
                         }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Error processing field $key: ${e.message}")
                     }
                 }
+            } else {
+                Log.d(TAG, "No fields object in vault response")
             }
 
             // Mark sync as complete
@@ -496,6 +514,7 @@ class PersonalDataViewModel @Inject constructor(
 
         // Load optional fields
         val optional = personalDataStore.getOptionalFields()
+        android.util.Log.d("PersonalDataVM", "Optional fields: prefix=${optional.prefix}, firstName=${optional.firstName}, middleName=${optional.middleName}, lastName=${optional.lastName}")
 
         // Legal name fields
         optional.prefix?.let { value ->
@@ -722,7 +741,9 @@ class PersonalDataViewModel @Inject constructor(
         }
 
         // Load custom fields
-        personalDataStore.getCustomFields().forEach { customField ->
+        val customFields = personalDataStore.getCustomFields()
+        android.util.Log.d("PersonalDataVM", "Custom fields count: ${customFields.size}")
+        customFields.forEach { customField ->
             val category = when (customField.category) {
                 FieldCategory.IDENTITY -> DataCategory.IDENTITY
                 FieldCategory.CONTACT -> DataCategory.CONTACT
@@ -748,6 +769,7 @@ class PersonalDataViewModel @Inject constructor(
             ))
         }
 
+        android.util.Log.d("PersonalDataVM", "Total items loaded: ${items.size}, IDs: ${items.map { it.id }}")
         return items
     }
 }

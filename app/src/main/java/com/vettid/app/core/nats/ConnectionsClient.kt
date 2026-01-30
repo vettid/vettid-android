@@ -1,5 +1,6 @@
 package com.vettid.app.core.nats
 
+import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.annotations.SerializedName
@@ -8,6 +9,7 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -21,12 +23,38 @@ import javax.inject.Singleton
  *
  * All operations go through the vault-manager NATS handlers and require
  * the vault EC2 instance to be online.
+ *
+ * Uses JetStream for reliable message delivery since the enclave publishes
+ * responses to the ENROLLMENT stream.
  */
 @Singleton
 class ConnectionsClient @Inject constructor(
-    private val ownerSpaceClient: OwnerSpaceClient
+    private val ownerSpaceClient: OwnerSpaceClient,
+    private val connectionManager: NatsConnectionManager
 ) {
     private val gson = Gson()
+    private var jetStreamClient: JetStreamNatsClient? = null
+
+    /**
+     * Initialize JetStream client for reliable message delivery.
+     */
+    private fun ensureJetStreamInitialized(): Result<JetStreamNatsClient> {
+        jetStreamClient?.let { client ->
+            if (client.isConnected) return Result.success(client)
+        }
+
+        val natsClient = connectionManager.getNatsClient()
+        if (!natsClient.isConnected) {
+            return Result.failure(NatsException("NATS not connected"))
+        }
+
+        val androidClient = natsClient.getAndroidClient()
+        val jsClient = JetStreamNatsClient()
+        jsClient.initialize(androidClient)
+        jetStreamClient = jsClient
+
+        return Result.success(jsClient)
+    }
 
     /**
      * Create an invitation for a peer to connect to this vault.
@@ -202,44 +230,86 @@ class ConnectionsClient @Inject constructor(
         }
     }
 
-    // Helper to send message and await response
+    // Helper to send message and await response using JetStream
     private suspend fun <T> sendAndAwait(
         messageType: String,
         payload: JsonObject,
         timeoutMs: Long = 30_000,
         transform: (JsonObject) -> T
     ): Result<T> {
-        val sendResult = ownerSpaceClient.sendToVault(messageType, payload)
-        if (sendResult.isFailure) {
-            return Result.failure(sendResult.exceptionOrNull() ?: NatsException("Send failed"))
+        val ownerSpace = connectionManager.getOwnerSpaceId()
+            ?: return Result.failure(NatsException("No OwnerSpace ID available"))
+
+        // Use JetStream for reliable delivery (enclave publishes to JetStream)
+        val jsResult = ensureJetStreamInitialized()
+        if (jsResult.isFailure) {
+            Log.e(TAG, "JetStream not available: ${jsResult.exceptionOrNull()?.message}")
+            return Result.failure(jsResult.exceptionOrNull() ?: NatsException("JetStream not available"))
         }
 
-        val requestId = sendResult.getOrThrow()
+        val jsClient = jsResult.getOrThrow()
+        Log.d(TAG, "Using JetStream for $messageType")
 
-        // Wait for matching response
-        val response = withTimeoutOrNull(timeoutMs) {
-            ownerSpaceClient.vaultResponses
-                .filter { it.requestId == requestId }
-                .first()
+        val requestId = UUID.randomUUID().toString()
+        val request = JsonObject().apply {
+            addProperty("id", requestId)
+            addProperty("type", messageType)
+            addProperty("timestamp", java.time.Instant.now().toString())
+            // Merge the payload fields
+            payload.entrySet().forEach { (key, value) ->
+                add(key, value)
+            }
         }
 
-        return when (response) {
-            null -> Result.failure(NatsException("Request timed out"))
-            is VaultResponse.HandlerResult -> {
-                if (response.success && response.result != null) {
-                    try {
-                        Result.success(transform(response.result))
-                    } catch (e: Exception) {
-                        Result.failure(NatsException("Failed to parse response: ${e.message}"))
+        val topic = "OwnerSpace.$ownerSpace.forVault.$messageType"
+        val responseTopic = "OwnerSpace.$ownerSpace.forApp.$messageType.response"
+
+        return try {
+            val response = jsClient.requestWithJetStream(
+                requestSubject = topic,
+                responseSubject = responseTopic,
+                payload = gson.toJson(request).toByteArray(Charsets.UTF_8),
+                timeoutMs = timeoutMs
+            )
+
+            response.fold(
+                onSuccess = { msg ->
+                    Log.d(TAG, "$messageType response received: ${msg.dataString.take(200)}")
+                    val jsonResponse = gson.fromJson(msg.dataString, JsonObject::class.java)
+
+                    // Check for error response
+                    if (jsonResponse.has("error") && !jsonResponse.get("error").isJsonNull) {
+                        val error = jsonResponse.get("error").asString
+                        Log.w(TAG, "$messageType failed: $error")
+                        Result.failure(NatsException(error))
+                    } else if (jsonResponse.has("success") && jsonResponse.get("success").asBoolean == false) {
+                        val error = jsonResponse.get("error")?.asString ?: "Request failed"
+                        Log.w(TAG, "$messageType failed: $error")
+                        Result.failure(NatsException(error))
+                    } else {
+                        // Extract result field or use whole response
+                        val resultObj = if (jsonResponse.has("result")) {
+                            jsonResponse.getAsJsonObject("result")
+                        } else {
+                            jsonResponse
+                        }
+                        try {
+                            val parsed = transform(resultObj)
+                            Result.success(parsed)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to parse $messageType response", e)
+                            Result.failure(e)
+                        }
                     }
-                } else {
-                    Result.failure(NatsException(response.error ?: "Handler failed"))
+                },
+                onFailure = { e ->
+                    Log.e(TAG, "$messageType request failed: ${e.message}", e)
+                    Result.failure(e)
                 }
-            }
-            is VaultResponse.Error -> {
-                Result.failure(NatsException("${response.code}: ${response.message}"))
-            }
-            else -> Result.failure(NatsException("Unexpected response type"))
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "JetStream $messageType failed: ${e.message}", e)
+            Result.failure(e)
         }
     }
 

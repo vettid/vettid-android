@@ -8,6 +8,7 @@ import com.vettid.app.core.crypto.EncryptedSessionMessage
 import com.vettid.app.core.crypto.SessionCrypto
 import com.vettid.app.core.crypto.SessionInfo
 import com.vettid.app.core.crypto.SessionKeyPair
+import com.vettid.app.core.network.TransactionKeyInfo
 import com.vettid.app.core.storage.CredentialStore
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -696,14 +697,27 @@ class OwnerSpaceClient @Inject constructor(
             val response = gson.fromJson(responseString, VaultResponseJson::class.java)
             val correlationId = response.getCorrelationId()
 
+            // Extract and store any new UTKs from the response (automatic replenishment)
+            extractAndStoreUtks(responseString)
+
             // Handle standard vault-manager response format (success/error with result)
             if (response.success != null) {
                 val vaultResponse = if (response.success) {
+                    // If response.result is null, the enclave may have put data at the top level
+                    // (e.g., profile.get returns first_name, last_name, fields at root)
+                    // In this case, parse the whole response as JsonObject to capture all fields
+                    val resultData = response.result ?: run {
+                        try {
+                            gson.fromJson(responseString, JsonObject::class.java)
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
                     VaultResponse.HandlerResult(
                         requestId = correlationId,
                         handlerId = response.handlerId,
                         success = true,
-                        result = response.result,
+                        result = resultData,
                         error = null
                     )
                 } else {
@@ -766,6 +780,43 @@ class OwnerSpaceClient @Inject constructor(
             timestamp?.let { Instant.parse(it).toEpochMilli() } ?: System.currentTimeMillis()
         } catch (e: Exception) {
             System.currentTimeMillis()
+        }
+    }
+
+    /**
+     * Extract and store any new UTKs from vault response.
+     * The vault automatically includes replacement UTKs when one is consumed.
+     * Format: ["keyId:base64PublicKey", ...]
+     */
+    private fun extractAndStoreUtks(responseString: String) {
+        try {
+            val json = gson.fromJson(responseString, JsonObject::class.java)
+            val newUtksArray = json.getAsJsonArray("new_utks") ?: return
+
+            if (newUtksArray.size() == 0) return
+
+            Log.d(TAG, "Received ${newUtksArray.size()} new UTKs from vault response")
+
+            val newKeys = mutableListOf<TransactionKeyInfo>()
+            for (i in 0 until newUtksArray.size()) {
+                val utkString = newUtksArray.get(i).asString
+                val parts = utkString.split(":", limit = 2)
+                if (parts.size == 2) {
+                    newKeys.add(TransactionKeyInfo(
+                        keyId = parts[0],
+                        publicKey = parts[1],
+                        algorithm = "X25519"
+                    ))
+                }
+            }
+
+            if (newKeys.isNotEmpty()) {
+                credentialStore.addUtks(newKeys)
+                Log.i(TAG, "Added ${newKeys.size} new UTKs to pool. Total: ${credentialStore.getUtkCount()}")
+            }
+        } catch (e: Exception) {
+            // Not all responses have new_utks, so failures are expected
+            Log.v(TAG, "No new_utks in response (expected for most responses)")
         }
     }
 

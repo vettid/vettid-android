@@ -35,6 +35,12 @@ class NatsClient @Inject constructor() {
         get() = if (androidClient.isConnected) ConnectionStatus.CONNECTED else ConnectionStatus.DISCONNECTED
 
     /**
+     * Get the underlying AndroidNatsClient for JetStream operations.
+     * JetStreamNatsClient needs direct access to the client for JetStream API calls.
+     */
+    fun getAndroidClient(): AndroidNatsClient = androidClient
+
+    /**
      * Connect to NATS cluster using the provided credentials.
      *
      * @param credentials NATS credentials from the backend
@@ -203,12 +209,6 @@ class NatsClient @Inject constructor() {
             Result.failure(NatsException("Flush failed: ${e.message}", e))
         }
     }
-
-    /**
-     * Get the underlying AndroidNatsClient for JetStream operations.
-     * This is needed because JetStream requires direct access to the low-level client.
-     */
-    fun getAndroidClient(): AndroidNatsClient = androidClient
 
     companion object {
         private const val TAG = "NatsClient"

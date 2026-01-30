@@ -1191,19 +1191,20 @@ class EnrollmentWizardViewModel @Inject constructor(
         _state.value = current.copy(isSyncing = true)
 
         try {
-            val data = personalDataStore.exportForSync()
-            val payload = com.google.gson.JsonObject().apply {
-                data.forEach { (key, value) ->
-                    when (value) {
-                        is String -> addProperty(key, value)
-                        is Number -> addProperty(key, value)
-                        is Boolean -> addProperty(key, value)
-                        null -> {}
-                        else -> addProperty(key, value.toString())
-                    }
+            // Get fields map in the format expected by enclave: { "fields": { "name": "value" } }
+            val fieldsMap = personalDataStore.exportFieldsMapForProfileUpdate()
+
+            // Build payload with the correct structure for profile.update
+            val fieldsObject = com.google.gson.JsonObject().apply {
+                fieldsMap.forEach { (key, value) ->
+                    addProperty(key, value)
                 }
             }
+            val payload = com.google.gson.JsonObject().apply {
+                add("fields", fieldsObject)
+            }
 
+            Log.d(TAG, "Syncing personal data: ${fieldsMap.size} fields")
             val result = ownerSpaceClient.sendToVault("profile.update", payload)
 
             result.fold(

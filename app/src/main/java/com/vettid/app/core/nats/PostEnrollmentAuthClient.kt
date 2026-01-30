@@ -6,6 +6,7 @@ import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.vettid.app.core.crypto.CryptoManager
+import com.vettid.app.core.network.TransactionKeyInfo
 import com.vettid.app.core.storage.CredentialStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -253,6 +254,9 @@ class PostEnrollmentAuthClient @Inject constructor(
         // Extract result payload
         val result = json.getAsJsonObject("result") ?: json
 
+        // Extract and store any new UTKs from the response (automatic replenishment)
+        extractAndStoreUtks(json)
+
         return Result.success(PostEnrollmentAuthResult(
             success = true,
             userGuid = result.get("user_guid")?.asString
@@ -264,6 +268,41 @@ class PostEnrollmentAuthClient @Inject constructor(
             messageSpace = result.get("message_space")?.asString,
             credentialVersion = result.get("credential_version")?.asInt
         ))
+    }
+
+    /**
+     * Extract and store any new UTKs from vault response.
+     * The vault automatically includes replacement UTKs when one is consumed.
+     * Format: ["keyId:base64PublicKey", ...]
+     */
+    private fun extractAndStoreUtks(json: JsonObject) {
+        try {
+            val newUtksArray = json.getAsJsonArray("new_utks") ?: return
+
+            if (newUtksArray.size() == 0) return
+
+            Log.d(TAG, "Received ${newUtksArray.size()} new UTKs from auth response")
+
+            val newKeys = mutableListOf<TransactionKeyInfo>()
+            for (i in 0 until newUtksArray.size()) {
+                val utkString = newUtksArray.get(i).asString
+                val parts = utkString.split(":", limit = 2)
+                if (parts.size == 2) {
+                    newKeys.add(TransactionKeyInfo(
+                        keyId = parts[0],
+                        publicKey = parts[1],
+                        algorithm = "X25519"
+                    ))
+                }
+            }
+
+            if (newKeys.isNotEmpty()) {
+                credentialStore.addUtks(newKeys)
+                Log.i(TAG, "Added ${newKeys.size} new UTKs to pool. Total: ${credentialStore.getUtkCount()}")
+            }
+        } catch (e: Exception) {
+            Log.v(TAG, "No new_utks in response")
+        }
     }
 
     /**

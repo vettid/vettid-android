@@ -34,9 +34,11 @@ class AndroidNatsClient {
     companion object {
         private const val TAG = "AndroidNatsClient"
         private const val DEFAULT_TIMEOUT_MS = 30000
-        private const val PING_INTERVAL_MS = 30000L
-        private const val RECONNECT_DELAY_MS = 2000L
-        private const val MAX_RECONNECT_ATTEMPTS = 10
+        // Shorter ping interval to prevent NAT/firewall timeouts (mobile networks often timeout at 30-60s)
+        private const val PING_INTERVAL_MS = 20000L
+        private const val RECONNECT_DELAY_MS = 1000L
+        private const val MAX_RECONNECT_ATTEMPTS = 15
+        private const val PONG_TIMEOUT_MS = 10000L
     }
 
     private var socket: SSLSocket? = null
@@ -56,6 +58,10 @@ class AndroidNatsClient {
     private var currentJwt: String? = null
     private var currentSeed: String? = null
 
+    // Track last successful communication for connection health
+    private val lastPongTime = AtomicLong(0)
+    private val reconnecting = AtomicBoolean(false)
+
     val isConnected: Boolean
         get() = connected.get()
 
@@ -68,32 +74,50 @@ class AndroidNatsClient {
         seed: String,
         timeoutMs: Int = DEFAULT_TIMEOUT_MS
     ): Result<Unit> = withContext(Dispatchers.IO) {
+        connectInternal(endpoint, jwt, seed, timeoutMs, isReconnect = false)
+    }
+
+    /**
+     * Internal connect method that handles both initial connect and reconnect.
+     */
+    private suspend fun connectInternal(
+        endpoint: String,
+        jwt: String,
+        seed: String,
+        timeoutMs: Int,
+        isReconnect: Boolean
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        var newSocket: SSLSocket? = null
+        var newReader: BufferedReader? = null
+        var newWriter: BufferedWriter? = null
+
         try {
-            // Store for reconnection
-            currentEndpoint = endpoint
-            currentJwt = jwt
-            currentSeed = seed
+            // Store for reconnection (only on initial connect)
+            if (!isReconnect) {
+                currentEndpoint = endpoint
+                currentJwt = jwt
+                currentSeed = seed
+            }
 
             // Parse endpoint (tls://host:port or nats://host:port)
             val (host, port) = parseEndpoint(endpoint)
 
-            Log.i(TAG, "Connecting to $host:$port...")
+            Log.i(TAG, "Connecting to $host:$port... (reconnect=$isReconnect)")
 
             // Create TLS socket using Android's default factory
             val sslFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
-            val sslSocket = sslFactory.createSocket() as SSLSocket
-            sslSocket.connect(InetSocketAddress(host, port), timeoutMs)
-            sslSocket.soTimeout = timeoutMs
-            sslSocket.startHandshake()
+            newSocket = sslFactory.createSocket() as SSLSocket
+            newSocket.connect(InetSocketAddress(host, port), timeoutMs)
+            newSocket.soTimeout = timeoutMs
+            newSocket.startHandshake()
 
-            socket = sslSocket
-            reader = sslSocket.inputStream.bufferedReader()
-            writer = sslSocket.outputStream.bufferedWriter()
+            newReader = newSocket.inputStream.bufferedReader()
+            newWriter = newSocket.outputStream.bufferedWriter()
 
             Log.i(TAG, "TLS connected, reading INFO...")
 
             // Read INFO message
-            val infoLine = reader!!.readLine()
+            val infoLine = newReader.readLine()
                 ?: throw IOException("Connection closed before INFO received")
 
             if (!infoLine.startsWith("INFO ")) {
@@ -125,16 +149,38 @@ class AndroidNatsClient {
                     put("sig", signature)
                 }
 
-                sendCommand("CONNECT $connectJson")
+                newWriter.write("CONNECT $connectJson\r\n")
+                newWriter.flush()
             }
 
             // Send PING to verify connection
-            sendCommand("PING")
+            newWriter.write("PING\r\n")
+            newWriter.flush()
 
-            val response = reader!!.readLine()
+            val response = newReader.readLine()
             if (response == "PONG") {
+                // Success - atomically swap in the new connection
+                val oldSocket = socket
+                val oldReader = reader
+                val oldWriter = writer
+
+                socket = newSocket
+                reader = newReader
+                writer = newWriter
+
+                // Close old connection (if any)
+                try { oldWriter?.close() } catch (e: Exception) { }
+                try { oldReader?.close() } catch (e: Exception) { }
+                try { oldSocket?.close() } catch (e: Exception) { }
+
                 connected.set(true)
-                startBackgroundTasks()
+
+                // Only start background tasks on initial connect
+                // For reconnect, the existing reader loop will be restarted
+                if (!isReconnect) {
+                    startBackgroundTasks()
+                }
+
                 Log.i(TAG, "Connected successfully!")
                 Result.success(Unit)
             } else if (response?.startsWith("-ERR") == true) {
@@ -144,7 +190,17 @@ class AndroidNatsClient {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Connection failed: ${e.message}", e)
-            disconnect()
+
+            // Clean up the NEW socket only - don't touch existing state or scope
+            try { newWriter?.close() } catch (ex: Exception) { }
+            try { newReader?.close() } catch (ex: Exception) { }
+            try { newSocket?.close() } catch (ex: Exception) { }
+
+            // Only do full disconnect on initial connect failure
+            if (!isReconnect) {
+                disconnect()
+            }
+
             Result.failure(e)
         }
     }
@@ -155,6 +211,7 @@ class AndroidNatsClient {
     suspend fun disconnect() = withContext(Dispatchers.IO) {
         try {
             connected.set(false)
+            reconnecting.set(false)  // Stop any reconnection attempts
 
             // Cancel background tasks
             readerJob?.cancel()
@@ -344,22 +401,38 @@ class AndroidNatsClient {
     private fun startBackgroundTasks() {
         scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
+        // Initialize pong time
+        lastPongTime.set(System.currentTimeMillis())
+
         // Start message reader
         readerJob = scope?.launch {
             readMessages()
         }
 
-        // Start ping task
+        // Start ping task with health monitoring
         pingJob = scope?.launch {
             while (isActive && connected.get()) {
                 delay(PING_INTERVAL_MS)
+
+                if (!connected.get()) break
+
                 try {
+                    // Check if we've received a pong recently
+                    val timeSinceLastPong = System.currentTimeMillis() - lastPongTime.get()
+                    if (timeSinceLastPong > PING_INTERVAL_MS + PONG_TIMEOUT_MS) {
+                        Log.w(TAG, "No PONG received in ${timeSinceLastPong}ms, connection may be stale")
+                        handleDisconnect()
+                        break
+                    }
+
                     synchronized(this@AndroidNatsClient) {
                         sendCommand("PING")
                     }
+                    Log.d(TAG, "Sent PING")
                 } catch (e: Exception) {
                     Log.w(TAG, "Ping failed: ${e.message}")
                     handleDisconnect()
+                    break
                 }
             }
         }
@@ -375,11 +448,16 @@ class AndroidNatsClient {
                         synchronized(this@AndroidNatsClient) {
                             sendCommand("PONG")
                         }
+                        Log.d(TAG, "Received PING, sent PONG")
                     }
                     line == "PONG" -> {
-                        // Ignore pong responses
+                        // Track pong time for connection health monitoring
+                        lastPongTime.set(System.currentTimeMillis())
+                        Log.d(TAG, "Received PONG")
                     }
                     line.startsWith("MSG ") -> {
+                        // Any message means connection is alive
+                        lastPongTime.set(System.currentTimeMillis())
                         handleMessage(line)
                     }
                     line.startsWith("-ERR") -> {
@@ -393,6 +471,7 @@ class AndroidNatsClient {
                     }
                 }
             }
+            Log.w(TAG, "Reader loop exited (connected=${connected.get()})")
         } catch (e: Exception) {
             if (connected.get()) {
                 Log.e(TAG, "Read error: ${e.message}")
@@ -452,45 +531,103 @@ class AndroidNatsClient {
 
     private fun handleDisconnect() {
         if (connected.compareAndSet(true, false)) {
-            Log.w(TAG, "Connection lost, will attempt reconnect...")
+            // Only start reconnection if not already reconnecting
+            if (reconnecting.compareAndSet(false, true)) {
+                Log.w(TAG, "Connection lost, will attempt reconnect...")
 
-            scope?.launch {
-                attemptReconnect()
+                scope?.launch {
+                    try {
+                        attemptReconnect()
+                    } finally {
+                        reconnecting.set(false)
+                    }
+                }
+            } else {
+                Log.d(TAG, "Reconnection already in progress")
             }
         }
     }
 
     private suspend fun attemptReconnect() {
         var attempts = 0
+        var backoffMs = RECONNECT_DELAY_MS
 
         while (attempts < MAX_RECONNECT_ATTEMPTS && !connected.get()) {
             attempts++
-            delay(RECONNECT_DELAY_MS)
+            delay(backoffMs)
 
-            Log.i(TAG, "Reconnect attempt $attempts/$MAX_RECONNECT_ATTEMPTS")
+            Log.i(TAG, "Reconnect attempt $attempts/$MAX_RECONNECT_ATTEMPTS (backoff: ${backoffMs}ms)")
 
             val endpoint = currentEndpoint
             val jwt = currentJwt
             val seed = currentSeed
 
             if (endpoint != null && jwt != null && seed != null) {
-                val result = connect(endpoint, jwt, seed)
+                // Use connectInternal with isReconnect=true to avoid canceling scope on failure
+                val result = connectInternal(endpoint, jwt, seed, DEFAULT_TIMEOUT_MS, isReconnect = true)
                 if (result.isSuccess) {
                     Log.i(TAG, "Reconnected successfully!")
 
-                    // Resubscribe
+                    // Reset pong time for health monitoring
+                    lastPongTime.set(System.currentTimeMillis())
+
+                    // Resubscribe to all active subscriptions
                     subscriptions.forEach { (sid, handler) ->
                         try {
                             synchronized(this@AndroidNatsClient) {
                                 sendCommand("SUB ${handler.subject} $sid")
                             }
+                            Log.d(TAG, "Resubscribed to ${handler.subject} (sid=$sid)")
                         } catch (e: Exception) {
-                            Log.e(TAG, "Failed to resubscribe: ${e.message}")
+                            Log.e(TAG, "Failed to resubscribe to ${handler.subject}: ${e.message}")
                         }
                     }
+
+                    // Cancel old jobs if any
+                    readerJob?.cancel()
+                    pingJob?.cancel()
+
+                    // Start a new reader job (the old one exited due to read error)
+                    readerJob = scope?.launch {
+                        readMessages()
+                    }
+
+                    // Start a new ping job
+                    pingJob = scope?.launch {
+                        while (isActive && connected.get()) {
+                            delay(PING_INTERVAL_MS)
+
+                            if (!connected.get()) break
+
+                            try {
+                                val timeSinceLastPong = System.currentTimeMillis() - lastPongTime.get()
+                                if (timeSinceLastPong > PING_INTERVAL_MS + PONG_TIMEOUT_MS) {
+                                    Log.w(TAG, "No PONG received in ${timeSinceLastPong}ms, connection may be stale")
+                                    handleDisconnect()
+                                    break
+                                }
+
+                                synchronized(this@AndroidNatsClient) {
+                                    sendCommand("PING")
+                                }
+                                Log.d(TAG, "Sent PING")
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Ping failed: ${e.message}")
+                                handleDisconnect()
+                                break
+                            }
+                        }
+                    }
+
                     return
                 }
+            } else {
+                Log.w(TAG, "Cannot reconnect: missing credentials")
+                break
             }
+
+            // Exponential backoff with cap at 30 seconds
+            backoffMs = (backoffMs * 2).coerceAtMost(30000L)
         }
 
         Log.e(TAG, "Failed to reconnect after $MAX_RECONNECT_ATTEMPTS attempts")

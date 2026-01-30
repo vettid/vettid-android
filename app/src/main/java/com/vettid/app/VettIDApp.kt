@@ -74,6 +74,7 @@ import com.vettid.app.features.migration.EmergencyRecoveryScreen
 import com.vettid.app.features.migration.SecurityAuditLogScreen
 import com.vettid.app.features.enrollmentwizard.EnrollmentWizardScreen
 import com.vettid.app.features.unlock.PinUnlockScreen
+import com.vettid.app.features.personaldata.PersonalDataContent
 
 private const val TAG = "VettIDApp"
 
@@ -607,7 +608,7 @@ fun VettIDApp(
         }
         // More menu screens
         composable(Screen.PersonalData.route) {
-            PersonalDataScreen(
+            PersonalDataScreenFull(
                 onBack = { navController.popBackStack() }
             )
         }
@@ -1590,14 +1591,25 @@ private fun PlaceholderSection(
 
 // Placeholder screens for "More" menu items
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PersonalDataScreen(onBack: () -> Unit) {
-    PlaceholderScreenWithBack(
-        title = "Personal Data",
-        icon = Icons.Default.Person,
-        description = "Manage your personal data including public info, private details, and keys.",
-        onBack = onBack
-    )
+fun PersonalDataScreenFull(onBack: () -> Unit) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Personal Data") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Box(modifier = Modifier.padding(padding)) {
+            PersonalDataContent()
+        }
+    }
 }
 
 @Composable

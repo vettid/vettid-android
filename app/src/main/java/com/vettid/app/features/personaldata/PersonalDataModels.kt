@@ -5,11 +5,14 @@ import java.time.Instant
 /**
  * Represents a personal data item stored in the vault.
  *
- * Data types:
- * - public: Shared with all connections automatically
- * - private: Shared only with consent/contract
- * - key: Cryptographic keys (configurable sharing)
- * - minor_secret: Comfortable in NATS, never shared
+ * Data sensitivity types control how data can be shared:
+ * - public: Can be shared freely (text displayed)
+ * - private: Shared only with consent/contract (masked)
+ * - key: Cryptographic keys (masked, configurable sharing)
+ * - minor_secret: Never shared with connections (masked)
+ *
+ * The isInPublicProfile flag independently controls whether this field
+ * appears in the user's public profile visible to connections.
  */
 data class PersonalDataItem(
     val id: String,
@@ -18,6 +21,7 @@ data class PersonalDataItem(
     val value: String,
     val category: DataCategory? = null,
     val isSystemField: Boolean = false,
+    val isInPublicProfile: Boolean = false,  // Whether to include in public profile
     val createdAt: Instant,
     val updatedAt: Instant
 )

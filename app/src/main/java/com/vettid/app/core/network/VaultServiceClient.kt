@@ -879,7 +879,8 @@ interface VaultServiceApi {
 data class EnrollAuthenticateRequest(
     @SerializedName("session_token") val sessionToken: String,
     @SerializedName("device_id") val deviceId: String,
-    @SerializedName("device_type") val deviceType: String = "android"
+    @SerializedName("device_type") val deviceType: String = "android",
+    @SerializedName("device_name") val deviceName: String = android.os.Build.MODEL
 )
 
 /**
@@ -897,6 +898,7 @@ data class EnrollStartDirectRequest(
     @SerializedName("invitation_code") val invitationCode: String,
     @SerializedName("device_id") val deviceId: String,
     @SerializedName("device_type") val deviceType: String = "android",
+    @SerializedName("device_name") val deviceName: String = android.os.Build.MODEL,
     @SerializedName("skip_attestation") val skipAttestation: Boolean = true
 )
 
