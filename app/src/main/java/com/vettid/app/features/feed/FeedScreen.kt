@@ -48,6 +48,9 @@ fun FeedContent(
     // Snackbar state for action feedback
     val snackbarHostState = remember { SnackbarHostState() }
 
+    // Event detail dialog state
+    var selectedEvent by remember { mutableStateOf<FeedEvent?>(null) }
+
     // Handle effects
     LaunchedEffect(Unit) {
         viewModel.effects.collect { effect ->
@@ -56,11 +59,24 @@ fun FeedContent(
                 is FeedEffect.NavigateToConnectionRequest -> onNavigateToConnectionRequest(effect.requestId)
                 is FeedEffect.NavigateToHandler -> onNavigateToHandler(effect.handlerId)
                 is FeedEffect.NavigateToBackup -> onNavigateToBackup(effect.backupId)
+                is FeedEffect.ShowEventDetail -> selectedEvent = effect.event
                 is FeedEffect.ShowError -> snackbarHostState.showSnackbar(effect.message)
                 is FeedEffect.ShowActionSuccess -> snackbarHostState.showSnackbar(effect.message)
                 else -> { /* Handle other effects */ }
             }
         }
+    }
+
+    // Event detail dialog
+    selectedEvent?.let { event ->
+        EventDetailDialog(
+            event = event,
+            onDismiss = { selectedEvent = null },
+            onAction = { action ->
+                viewModel.executeAction(event.eventId, action)
+                selectedEvent = null
+            }
+        )
     }
 
     // Handle in-app notifications (real-time from NATS)
@@ -537,4 +553,146 @@ private fun ErrorContent(
             }
         }
     }
+}
+
+@Composable
+private fun EventDetailDialog(
+    event: FeedEvent,
+    onDismiss: () -> Unit,
+    onAction: (String) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            val (icon, _) = getEventIconAndColor(event.eventType)
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                modifier = Modifier.size(32.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+        },
+        title = {
+            Text(
+                text = event.title,
+                style = MaterialTheme.typography.titleLarge
+            )
+        },
+        text = {
+            Column {
+                // Message
+                event.message?.let { message ->
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+
+                // Event type
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Label,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Type: ${event.eventType}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Timestamp
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Schedule,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = formatTimestamp(event.createdAt),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                // Metadata
+                event.metadata?.let { metadata ->
+                    if (metadata.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Divider()
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "Details",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        metadata.forEach { (key, value) ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = key.replace("_", " ").replaceFirstChar { it.uppercase() },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(0.4f)
+                                )
+                                Text(
+                                    text = value,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(0.6f),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (event.requiresAction && event.actionType != null) {
+                Row {
+                    when (event.actionType) {
+                        ActionTypes.ACCEPT_DECLINE -> {
+                            OutlinedButton(
+                                onClick = { onAction("decline") },
+                                colors = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = MaterialTheme.colorScheme.error
+                                )
+                            ) {
+                                Text("Decline")
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Button(onClick = { onAction("accept") }) {
+                                Text("Accept")
+                            }
+                        }
+                        else -> {
+                            TextButton(onClick = onDismiss) {
+                                Text("Close")
+                            }
+                        }
+                    }
+                }
+            } else {
+                TextButton(onClick = onDismiss) {
+                    Text("Close")
+                }
+            }
+        },
+        dismissButton = if (event.requiresAction && event.actionType == ActionTypes.ACCEPT_DECLINE) null else {
+            { /* No dismiss button for action dialogs */ }
+        }
+    )
 }

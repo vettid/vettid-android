@@ -261,8 +261,9 @@ class ConnectionsClient @Inject constructor(
             }
         }
 
-        val topic = "OwnerSpace.$ownerSpace.forVault.$messageType"
-        val responseTopic = "OwnerSpace.$ownerSpace.forApp.$messageType.response"
+        // ownerSpace already includes "OwnerSpace." prefix (e.g., "OwnerSpace.af44310d-...")
+        val topic = "$ownerSpace.forVault.$messageType"
+        val responseTopic = "$ownerSpace.forApp.$messageType.response"
 
         return try {
             val response = jsClient.requestWithJetStream(

@@ -28,6 +28,7 @@ sealed class FeedEffect {
     data class NavigateToBackup(val backupId: String) : FeedEffect()
     data class NavigateToCall(val callId: String) : FeedEffect()
     data class NavigateToTransfer(val transferId: String) : FeedEffect()
+    data class ShowEventDetail(val event: com.vettid.app.core.nats.FeedEvent) : FeedEffect()
     data class ShowError(val message: String) : FeedEffect()
     data class ShowActionSuccess(val message: String) : FeedEffect()
 }

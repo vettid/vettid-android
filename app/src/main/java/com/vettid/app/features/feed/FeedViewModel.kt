@@ -6,7 +6,9 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.nats.FeedClient
 import com.vettid.app.core.nats.FeedEvent
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -39,6 +41,22 @@ class FeedViewModel @Inject constructor(
     init {
         loadFeed()
         observeFeedUpdates()
+        startPeriodicRefresh()
+    }
+
+    /**
+     * Periodically refresh feed every 30 seconds when online.
+     */
+    private fun startPeriodicRefresh() {
+        viewModelScope.launch {
+            while (isActive) {
+                delay(30_000) // 30 seconds
+                if (isOnline.value && _state.value is FeedState.Loaded) {
+                    Log.d(TAG, "Periodic feed refresh")
+                    refresh()
+                }
+            }
+        }
     }
 
     /**
@@ -184,34 +202,53 @@ class FeedViewModel @Inject constructor(
             val sourceId = event.sourceId
             when (event.eventType) {
                 EventTypes.MESSAGE_RECEIVED -> {
-                    sourceId?.let { _effects.emit(FeedEffect.NavigateToConversation(it)) }
+                    if (sourceId != null) {
+                        _effects.emit(FeedEffect.NavigateToConversation(sourceId))
+                    } else {
+                        _effects.emit(FeedEffect.ShowEventDetail(event))
+                    }
                 }
                 EventTypes.CONNECTION_REQUEST -> {
-                    sourceId?.let { _effects.emit(FeedEffect.NavigateToConnectionRequest(it)) }
+                    if (sourceId != null) {
+                        _effects.emit(FeedEffect.NavigateToConnectionRequest(sourceId))
+                    } else {
+                        _effects.emit(FeedEffect.ShowEventDetail(event))
+                    }
                 }
                 EventTypes.CALL_INCOMING, EventTypes.CALL_MISSED -> {
-                    sourceId?.let { _effects.emit(FeedEffect.NavigateToCall(it)) }
+                    if (sourceId != null) {
+                        _effects.emit(FeedEffect.NavigateToCall(sourceId))
+                    } else {
+                        _effects.emit(FeedEffect.ShowEventDetail(event))
+                    }
                 }
                 EventTypes.HANDLER_COMPLETE -> {
-                    event.metadata?.get("handler_id")?.let {
-                        _effects.emit(FeedEffect.NavigateToHandler(it))
+                    val handlerId = event.metadata?.get("handler_id")
+                    if (handlerId != null) {
+                        _effects.emit(FeedEffect.NavigateToHandler(handlerId))
+                    } else {
+                        _effects.emit(FeedEffect.ShowEventDetail(event))
                     }
                 }
                 EventTypes.BACKUP_COMPLETE -> {
-                    event.metadata?.get("backup_id")?.let {
-                        _effects.emit(FeedEffect.NavigateToBackup(it))
+                    val backupId = event.metadata?.get("backup_id")
+                    if (backupId != null) {
+                        _effects.emit(FeedEffect.NavigateToBackup(backupId))
+                    } else {
+                        _effects.emit(FeedEffect.ShowEventDetail(event))
                     }
                 }
                 EventTypes.TRANSFER_REQUEST -> {
-                    event.metadata?.get("transfer_id")?.let {
-                        _effects.emit(FeedEffect.NavigateToTransfer(it))
+                    val transferId = event.metadata?.get("transfer_id")
+                    if (transferId != null) {
+                        _effects.emit(FeedEffect.NavigateToTransfer(transferId))
+                    } else {
+                        _effects.emit(FeedEffect.ShowEventDetail(event))
                     }
                 }
-                EventTypes.SECURITY_ALERT, EventTypes.SECURITY_MIGRATION -> {
-                    // Security events - navigate to security audit log
-                }
                 else -> {
-                    // Default: just mark as read, no navigation
+                    // Default: show event detail dialog
+                    _effects.emit(FeedEffect.ShowEventDetail(event))
                 }
             }
         }
