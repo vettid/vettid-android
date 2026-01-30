@@ -2,14 +2,18 @@ package com.vettid.app.features.feed
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -103,7 +107,10 @@ fun FeedContent(
         Box(modifier = Modifier.weight(1f)) {
             when (val currentState = state) {
                 is FeedState.Loading -> LoadingContent()
-                is FeedState.Empty -> EmptyContent()
+                is FeedState.Empty -> EmptyContent(
+                    isRefreshing = isRefreshing,
+                    onRefresh = { viewModel.refresh() }
+                )
                 is FeedState.Loaded -> FeedList(
                     events = currentState.events,
                     isRefreshing = isRefreshing,
@@ -154,21 +161,19 @@ private fun OfflineBanner(
                 color = MaterialTheme.colorScheme.onErrorContainer,
                 modifier = Modifier.weight(1f)
             )
-            if (!isSyncing) {
-                TextButton(
-                    onClick = onRetry,
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                ) {
-                    Text("Retry")
-                }
+            // Always show retry button - allows manual refresh even while "syncing"
+            TextButton(
+                onClick = onRetry,
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                )
+            ) {
+                Text(if (isSyncing) "Refresh" else "Retry")
             }
         }
     }
 }
 
-@Suppress("UNUSED_PARAMETER")
 @Composable
 private fun FeedList(
     events: List<FeedEvent>,
@@ -179,8 +184,34 @@ private fun FeedList(
     onDelete: (FeedEvent) -> Unit,
     onAction: (FeedEvent, String) -> Unit
 ) {
-    Box(modifier = Modifier.fillMaxSize()) {
+    val listState = rememberLazyListState()
+    var pullDistance by remember { mutableFloatStateOf(0f) }
+    val pullThreshold = 100f
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(isRefreshing) {
+                if (!isRefreshing) {
+                    detectVerticalDragGestures(
+                        onDragEnd = {
+                            if (pullDistance > pullThreshold && listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0) {
+                                onRefresh()
+                            }
+                            pullDistance = 0f
+                        },
+                        onDragCancel = { pullDistance = 0f },
+                        onVerticalDrag = { _, dragAmount ->
+                            if (listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0 && dragAmount > 0) {
+                                pullDistance += dragAmount
+                            }
+                        }
+                    )
+                }
+            }
+    ) {
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(vertical = 8.dp)
         ) {
@@ -195,13 +226,30 @@ private fun FeedList(
             }
         }
 
-        // Refresh indicator
-        if (isRefreshing) {
-            LinearProgressIndicator(
+        // Pull indicator at top
+        if (pullDistance > 0 || isRefreshing) {
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .align(Alignment.TopCenter)
-            )
+                    .padding(top = 8.dp),
+                contentAlignment = Alignment.TopCenter
+            ) {
+                if (isRefreshing) {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                } else if (pullDistance > pullThreshold) {
+                    Text(
+                        "Release to refresh",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                } else if (pullDistance > 20) {
+                    Text(
+                        "Pull to refresh",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
         }
     }
 }
@@ -470,7 +518,10 @@ private fun LoadingContent() {
 }
 
 @Composable
-private fun EmptyContent() {
+private fun EmptyContent(
+    isRefreshing: Boolean = false,
+    onRefresh: () -> Unit = {}
+) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -480,6 +531,11 @@ private fun EmptyContent() {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            if (isRefreshing) {
+                CircularProgressIndicator(modifier = Modifier.size(48.dp))
+                Spacer(modifier = Modifier.height(16.dp))
+            }
+
             Icon(
                 imageVector = Icons.Default.Inbox,
                 contentDescription = null,
@@ -497,11 +553,19 @@ private fun EmptyContent() {
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Your activity feed is empty. Events will appear here as you use VettID.",
+                text = "Your activity feed is empty.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            OutlinedButton(onClick = onRefresh, enabled = !isRefreshing) {
+                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Refresh")
+            }
         }
     }
 }

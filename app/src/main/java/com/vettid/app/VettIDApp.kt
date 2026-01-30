@@ -255,9 +255,10 @@ fun VettIDApp(
                 popUpTo(0) { inclusive = true }
             }
             !appState.isAuthenticated -> {
-                // Don't navigate to Authentication if user is on PostEnrollment or PersonalDataCollection
-                // These screens handle their own authentication flow after enrollment
-                if (currentRoute != Screen.PostEnrollment.route &&
+                // Don't navigate to Authentication if already there or on special screens
+                // Re-navigating to Authentication would destroy the ViewModel and cancel PIN verification
+                if (currentRoute != Screen.Authentication.route &&
+                    currentRoute != Screen.PostEnrollment.route &&
                     currentRoute != Screen.PersonalDataCollection.route) {
                     navController.navigate(Screen.Authentication.route) {
                         popUpTo(0) { inclusive = true }

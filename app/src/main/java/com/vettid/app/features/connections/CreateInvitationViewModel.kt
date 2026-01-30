@@ -10,6 +10,7 @@ import com.vettid.app.core.crypto.ConnectionKeyPair
 import com.vettid.app.core.nats.ConnectionsClient
 import com.vettid.app.core.security.SecureClipboard
 import com.vettid.app.core.storage.CredentialStore
+import com.vettid.app.features.feed.FeedRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -29,7 +30,8 @@ class CreateInvitationViewModel @Inject constructor(
     private val connectionsClient: ConnectionsClient,
     private val connectionCryptoManager: ConnectionCryptoManager,
     private val credentialStore: CredentialStore,
-    private val secureClipboard: SecureClipboard
+    private val secureClipboard: SecureClipboard,
+    private val feedRepository: FeedRepository
 ) : ViewModel() {
 
     companion object {
@@ -42,8 +44,8 @@ class CreateInvitationViewModel @Inject constructor(
     private val _effects = MutableSharedFlow<CreateInvitationEffect>()
     val effects: SharedFlow<CreateInvitationEffect> = _effects.asSharedFlow()
 
-    // Selected expiration time in minutes
-    private val _expirationMinutes = MutableStateFlow(60)
+    // Selected expiration time in minutes (default: 15 minutes)
+    private val _expirationMinutes = MutableStateFlow(15)
     val expirationMinutes: StateFlow<Int> = _expirationMinutes.asStateFlow()
 
     // Store key pair temporarily until invitation is accepted
@@ -78,17 +80,15 @@ class CreateInvitationViewModel @Inject constructor(
             // Get user's display name from profile (or use a default)
             val displayName = credentialStore.getUserGuid()?.take(8) ?: "VettID User"
 
-            // Convert expiration minutes to hours (minimum 1 hour for vault handler)
-            val expiresInHours = (_expirationMinutes.value / 60).coerceAtLeast(1)
-
-            Log.d(TAG, "Creating invitation via NATS, expires in $expiresInHours hours")
+            val expirationMinutes = _expirationMinutes.value
+            Log.d(TAG, "Creating invitation via NATS, expires in $expirationMinutes minutes")
 
             // Create invitation via vault NATS handler
             // Note: peer_guid is set to "pending" since we don't know who will accept yet
             connectionsClient.createInvite(
                 peerGuid = "pending",
                 label = displayName,
-                expiresInHours = expiresInHours
+                expiresInMinutes = expirationMinutes
             ).fold(
                 onSuccess = { natsInvitation ->
                     Log.d(TAG, "Invitation created: ${natsInvitation.connectionId}")
@@ -121,6 +121,11 @@ class CreateInvitationViewModel @Inject constructor(
                         expiresInSeconds = calculateRemainingSeconds(expiresAtMillis)
                     )
                     startExpirationTimer(expiresAtMillis)
+
+                    // Trigger feed sync so the new invitation appears in activity feed
+                    viewModelScope.launch {
+                        feedRepository.sync()
+                    }
                 },
                 onFailure = { error ->
                     Log.e(TAG, "Failed to create invitation: ${error.message}")

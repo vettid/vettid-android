@@ -154,22 +154,57 @@ class PersonalDataViewModel @Inject constructor(
     private fun processVaultProfileResponse(result: JsonObject) {
         try {
             Log.d(TAG, "Processing vault profile response: ${result.keySet()}")
+            Log.d(TAG, "Full profile response: $result")
 
-            // Extract system fields - vault returns these at top level (first_name, last_name, email)
-            val systemFirstName = result.get("first_name")?.asString
-            val systemLastName = result.get("last_name")?.asString
-            val systemEmail = result.get("email")?.asString
+            // Extract system fields - try multiple possible formats from vault
+            // Format 1: Top-level fields (first_name, last_name, email)
+            // Format 2: Nested under _system (profile/_system/first_name)
+            // Format 3: In fields object with _system prefix
+            var systemFirstName = result.get("first_name")?.takeIf { !it.isJsonNull }?.asString
+            var systemLastName = result.get("last_name")?.takeIf { !it.isJsonNull }?.asString
+            var systemEmail = result.get("email")?.takeIf { !it.isJsonNull }?.asString
 
-            if (systemFirstName != null && systemLastName != null && systemEmail != null) {
+            // Try nested _system format
+            if (systemFirstName == null && result.has("_system")) {
+                val systemObj = result.getAsJsonObject("_system")
+                systemFirstName = systemObj?.get("first_name")?.takeIf { !it.isJsonNull }?.asString
+                systemLastName = systemObj?.get("last_name")?.takeIf { !it.isJsonNull }?.asString
+                systemEmail = systemObj?.get("email")?.takeIf { !it.isJsonNull }?.asString
+                Log.d(TAG, "Found system fields in _system object: $systemFirstName $systemLastName")
+            }
+
+            // Try fields object with _system prefix
+            val fieldsObject = result.getAsJsonObject("fields")
+            if (systemFirstName == null && fieldsObject != null) {
+                fieldsObject.entrySet().forEach { (key, value) ->
+                    val fieldValue = if (value.isJsonObject) {
+                        value.asJsonObject.get("value")?.takeIf { !it.isJsonNull }?.asString
+                    } else if (value.isJsonPrimitive) {
+                        value.asString
+                    } else null
+
+                    when (key) {
+                        "_system_first_name", "profile/_system/first_name" -> systemFirstName = fieldValue
+                        "_system_last_name", "profile/_system/last_name" -> systemLastName = fieldValue
+                        "_system_email", "profile/_system/email" -> systemEmail = fieldValue
+                    }
+                }
+                if (systemFirstName != null) {
+                    Log.d(TAG, "Found system fields in fields object with _system prefix: $systemFirstName $systemLastName")
+                }
+            }
+
+            if (!systemFirstName.isNullOrEmpty() && !systemLastName.isNullOrEmpty() && !systemEmail.isNullOrEmpty()) {
                 Log.d(TAG, "Storing system fields from vault: $systemFirstName $systemLastName")
                 personalDataStore.storeSystemFields(
                     SystemPersonalData(
-                        firstName = systemFirstName,
-                        lastName = systemLastName,
-                        email = systemEmail
+                        firstName = systemFirstName!!,
+                        lastName = systemLastName!!,
+                        email = systemEmail!!
                     )
                 )
             } else {
+                Log.w(TAG, "System fields not found in vault response. firstName=$systemFirstName, lastName=$systemLastName, email=$systemEmail")
                 // Migration: if local system fields exist but not in vault, sync them up
                 val localSystemFields = personalDataStore.getSystemFields()
                 if (localSystemFields != null && systemFirstName == null) {

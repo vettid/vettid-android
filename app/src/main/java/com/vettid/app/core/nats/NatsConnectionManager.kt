@@ -127,6 +127,7 @@ class NatsConnectionManager @Inject constructor(
     suspend fun disconnect() = mutex.withLock {
         natsClient.disconnect()
         currentCredentials = null
+        jetStreamClient = null  // Clear JetStream client on disconnect
         _connectionState.value = NatsConnectionState.Disconnected
         android.util.Log.i(TAG, "Disconnected from NATS")
     }
@@ -202,6 +203,28 @@ class NatsConnectionManager @Inject constructor(
      * Get the underlying NATS client for pub/sub operations.
      */
     fun getNatsClient(): NatsClient = natsClient
+
+    // Shared JetStream client for all components
+    private var jetStreamClient: JetStreamNatsClient? = null
+
+    /**
+     * Get or create a shared JetStreamNatsClient.
+     * Uses the existing NATS connection to avoid race conditions.
+     * All components should use this instead of creating their own JetStreamNatsClient.
+     */
+    fun getJetStreamClient(): JetStreamNatsClient? {
+        if (!natsClient.isConnected) {
+            return null
+        }
+
+        // Lazy initialize JetStream client using the shared AndroidNatsClient
+        return jetStreamClient ?: run {
+            val jsClient = JetStreamNatsClient()
+            jsClient.initialize(natsClient.getAndroidClient())
+            jetStreamClient = jsClient
+            jsClient
+        }
+    }
 
     /**
      * Set account info from stored credentials.

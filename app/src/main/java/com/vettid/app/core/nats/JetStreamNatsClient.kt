@@ -4,12 +4,16 @@ import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.annotations.SerializedName
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import java.util.UUID
 import kotlin.coroutines.resume
 
@@ -102,13 +106,23 @@ class JetStreamNatsClient {
 
             Log.d(TAG, "Creating ephemeral consumer '$consumerName' for $responseSubject")
 
+            // Get current timestamp in RFC3339 format for deliver_policy
+            // This ensures we only receive messages published AFTER this time
+            val startTime = Instant.now()
+                .atOffset(ZoneOffset.UTC)
+                .format(DateTimeFormatter.ISO_INSTANT)
+
             // Step 1: Create ephemeral ordered consumer via JetStream API
+            // Use deliver_policy: "by_start_time" with current time to ensure
+            // we only receive messages published AFTER consumer creation.
+            // This is more reliable than "new" which has shown race condition issues.
             val createConsumerRequest = JsonObject().apply {
                 addProperty("stream_name", ENROLLMENT_STREAM)
                 add("config", JsonObject().apply {
                     addProperty("name", consumerName)
                     addProperty("filter_subject", responseSubject)
-                    addProperty("deliver_policy", "new")  // Only new messages
+                    addProperty("deliver_policy", "by_start_time")
+                    addProperty("opt_start_time", startTime)
                     addProperty("ack_policy", "none")     // Ephemeral, no ack needed
                     addProperty("max_deliver", 1)
                     addProperty("num_replicas", 1)
@@ -180,9 +194,14 @@ class JetStreamNatsClient {
             }
 
             val fetchResponse = fetchResult.getOrThrow()
-            Log.d(TAG, "Received response: ${fetchResponse.dataString.take(100)}")
+            Log.d(TAG, "Received response on subject '${fetchResponse.subject}': ${fetchResponse.dataString.take(100)}")
+            Log.d(TAG, "Expected subject: $responseSubject")
 
             return Result.success(fetchResponse)
+        } catch (e: CancellationException) {
+            // Coroutine cancelled - rethrow to allow proper cancellation
+            Log.d(TAG, "JetStream request cancelled")
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "JetStream request failed: ${e.message}", e)
             return Result.failure(e)

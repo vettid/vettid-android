@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -66,6 +67,7 @@ class FeedRepository @Inject constructor(
         // Sync thresholds
         private const val SYNC_STALE_THRESHOLD_MS = 5 * 60 * 1000L  // 5 minutes
         private const val MAX_CACHED_EVENTS = 500
+        private const val SYNC_TIMEOUT_MS = 15_000L  // 15 seconds max for sync operation
     }
 
     // MARK: - Public API
@@ -91,24 +93,30 @@ class FeedRepository @Inject constructor(
         return syncMutex.withLock {
             _syncState.value = SyncState.SYNCING
 
-            val result = if (getLastSequence() > 0 && !forceRefresh) {
-                // Incremental sync
-                incrementalSync()
-            } else {
-                // Full fetch
-                fullFetch()
+            try {
+                val result = if (getLastSequence() > 0 && !forceRefresh) {
+                    // Incremental sync
+                    incrementalSync()
+                } else {
+                    // Full fetch
+                    fullFetch()
+                }
+
+                _syncState.value = if (result.isSuccess) SyncState.IDLE else SyncState.ERROR
+                _isOnline.value = result.isSuccess
+
+                // If sync failed but we have cache, return cache
+                if (result.isFailure && cachedEvents.isNotEmpty()) {
+                    Log.w(TAG, "Sync failed, returning cached events", result.exceptionOrNull())
+                    return@withLock Result.success(cachedEvents)
+                }
+
+                result
+            } catch (e: CancellationException) {
+                // Reset sync state on cancellation so UI doesn't get stuck
+                _syncState.value = SyncState.IDLE
+                throw e
             }
-
-            _syncState.value = if (result.isSuccess) SyncState.IDLE else SyncState.ERROR
-            _isOnline.value = result.isSuccess
-
-            // If sync failed but we have cache, return cache
-            if (result.isFailure && cachedEvents.isNotEmpty()) {
-                Log.w(TAG, "Sync failed, returning cached events", result.exceptionOrNull())
-                return@withLock Result.success(cachedEvents)
-            }
-
-            result
         }
     }
 
@@ -143,75 +151,94 @@ class FeedRepository @Inject constructor(
             syncMutex.withLock {
                 _syncState.value = SyncState.SYNCING
 
-                val lastSequence = getLastSequence()
-                val result = feedClient.sync(sinceSequence = lastSequence)
+                try {
+                    // Wrap in timeout to prevent indefinite hanging
+                    val syncResult = withTimeoutOrNull(SYNC_TIMEOUT_MS) {
+                        val lastSequence = getLastSequence()
+                        feedClient.sync(sinceSequence = lastSequence)
+                    }
 
-                result.fold(
-                    onSuccess = { response ->
-                        val cachedEvents = getCachedEvents().toMutableList()
-                        val existingIds = cachedEvents.map { it.eventId }.toSet()
-
-                        var newCount = 0
-                        var updatedCount = 0
-                        var deletedCount = 0
-
-                        for (event in response.events) {
-                            when {
-                                event.feedStatus == "deleted" -> {
-                                    cachedEvents.removeAll { it.eventId == event.eventId }
-                                    deletedCount++
-                                }
-                                event.eventId in existingIds -> {
-                                    // Update existing event
-                                    val index = cachedEvents.indexOfFirst { it.eventId == event.eventId }
-                                    if (index >= 0) {
-                                        cachedEvents[index] = event
-                                        updatedCount++
-                                    }
-                                }
-                                else -> {
-                                    // New event
-                                    cachedEvents.add(event)
-                                    newCount++
-                                }
-                            }
-                        }
-
-                        // Sort by priority (desc) then created_at (desc)
-                        val sortedEvents = cachedEvents.sortedWith(
-                            compareByDescending<FeedEvent> { it.priority }
-                                .thenByDescending { it.createdAt }
-                        )
-
-                        // Limit cache size
-                        val trimmedEvents = sortedEvents.take(MAX_CACHED_EVENTS)
-
-                        // Save updated cache
-                        saveEvents(trimmedEvents)
-                        setLastSequence(response.latestSequence)
-                        setLastSyncTime(System.currentTimeMillis())
-
-                        _syncState.value = SyncState.IDLE
-                        _isOnline.value = true
-
-                        Log.i(TAG, "Sync complete: +$newCount new, $updatedCount updated, -$deletedCount deleted")
-                        Result.success(SyncResult(
-                            newEvents = newCount,
-                            updatedEvents = updatedCount,
-                            deletedEvents = deletedCount,
-                            totalEvents = trimmedEvents.size,
-                            hasMore = response.hasMore
-                        ))
-                    },
-                    onFailure = { error ->
-                        // Rethrow cancellation exceptions
-                        if (error is CancellationException) throw error
-                        Log.e(TAG, "Sync failed", error)
+                    // Handle timeout
+                    if (syncResult == null) {
+                        Log.w(TAG, "Sync timed out after ${SYNC_TIMEOUT_MS}ms")
                         _syncState.value = SyncState.ERROR
                         _isOnline.value = false
-                        Result.failure(error)
+                        return@withLock Result.failure(Exception("Sync timed out"))
                     }
-                )
+
+                    val result = syncResult
+
+                    result.fold(
+                        onSuccess = { response ->
+                            val cachedEvents = getCachedEvents().toMutableList()
+                            val existingIds = cachedEvents.map { it.eventId }.toSet()
+
+                            var newCount = 0
+                            var updatedCount = 0
+                            var deletedCount = 0
+
+                            for (event in response.events) {
+                                when {
+                                    event.feedStatus == "deleted" -> {
+                                        cachedEvents.removeAll { it.eventId == event.eventId }
+                                        deletedCount++
+                                    }
+                                    event.eventId in existingIds -> {
+                                        // Update existing event
+                                        val index = cachedEvents.indexOfFirst { it.eventId == event.eventId }
+                                        if (index >= 0) {
+                                            cachedEvents[index] = event
+                                            updatedCount++
+                                        }
+                                    }
+                                    else -> {
+                                        // New event
+                                        cachedEvents.add(event)
+                                        newCount++
+                                    }
+                                }
+                            }
+
+                            // Sort by priority (desc) then created_at (desc)
+                            val sortedEvents = cachedEvents.sortedWith(
+                                compareByDescending<FeedEvent> { it.priority }
+                                    .thenByDescending { it.createdAt }
+                            )
+
+                            // Limit cache size
+                            val trimmedEvents = sortedEvents.take(MAX_CACHED_EVENTS)
+
+                            // Save updated cache
+                            saveEvents(trimmedEvents)
+                            setLastSequence(response.latestSequence)
+                            setLastSyncTime(System.currentTimeMillis())
+
+                            _syncState.value = SyncState.IDLE
+                            _isOnline.value = true
+
+                            Log.i(TAG, "Sync complete: +$newCount new, $updatedCount updated, -$deletedCount deleted")
+                            Result.success(SyncResult(
+                                newEvents = newCount,
+                                updatedEvents = updatedCount,
+                                deletedEvents = deletedCount,
+                                totalEvents = trimmedEvents.size,
+                                hasMore = response.hasMore
+                            ))
+                        },
+                        onFailure = { error ->
+                            // Rethrow cancellation exceptions
+                            if (error is CancellationException) throw error
+                            Log.e(TAG, "Sync failed", error)
+                            _syncState.value = SyncState.ERROR
+                            _isOnline.value = false
+                            Result.failure(error)
+                        }
+                    )
+                } catch (e: CancellationException) {
+                    // Reset sync state on cancellation so UI doesn't get stuck
+                    _syncState.value = SyncState.IDLE
+                    throw e
+                }
             }
         } catch (e: CancellationException) {
             // Let cancellation propagate normally

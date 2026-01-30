@@ -1,13 +1,12 @@
 package com.vettid.app.features.unlock
 
-import android.content.Context
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.vettid.app.core.crypto.CryptoManager
-import com.vettid.app.core.nats.JetStreamNatsClient
+import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.storage.CredentialStore
@@ -15,7 +14,6 @@ import com.vettid.app.core.network.TransactionKeyInfo
 import com.vettid.app.core.storage.PersonalDataStore
 import com.vettid.app.core.storage.SystemPersonalData
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,7 +22,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
@@ -70,11 +71,11 @@ sealed class PinUnlockEffect {
  */
 @HiltViewModel
 class PinUnlockViewModel @Inject constructor(
-    @ApplicationContext private val context: Context,
     private val credentialStore: CredentialStore,
     private val cryptoManager: CryptoManager,
     private val ownerSpaceClient: OwnerSpaceClient,
     private val connectionManager: NatsConnectionManager,
+    private val natsAutoConnector: NatsAutoConnector,
     private val personalDataStore: PersonalDataStore
 ) : ViewModel() {
 
@@ -91,9 +92,11 @@ class PinUnlockViewModel @Inject constructor(
 
     private val gson = Gson()
 
-    // NATS client for PIN verification
-    private var natsClient: JetStreamNatsClient? = null
+    // Use shared JetStream client from connection manager to avoid race conditions
     private var ownerSpace: String? = null
+
+    // Mutex to prevent concurrent PIN submission (e.g., double-tap)
+    private val submitMutex = Mutex()
 
     init {
         // Start in PIN entry mode
@@ -130,17 +133,25 @@ class PinUnlockViewModel @Inject constructor(
     }
 
     private suspend fun submitPin() {
-        val current = _state.value
-        if (current !is PinUnlockState.EnteringPin) return
-
-        if (current.pin.length != PIN_LENGTH) {
-            _state.value = current.copy(error = "PIN must be $PIN_LENGTH digits")
+        // Use tryLock to prevent double-tap / concurrent submission
+        // If already submitting, just return without blocking
+        if (!submitMutex.tryLock()) {
+            Log.d(TAG, "PIN submission already in progress, ignoring")
             return
         }
 
-        val pin = current.pin
-
         try {
+            val current = _state.value
+            if (current !is PinUnlockState.EnteringPin) {
+                return
+            }
+
+            if (current.pin.length != PIN_LENGTH) {
+                _state.value = current.copy(error = "PIN must be $PIN_LENGTH digits")
+                return
+            }
+
+            val pin = current.pin
             // Connect to NATS if not connected
             _state.value = PinUnlockState.Connecting
 
@@ -188,9 +199,15 @@ class PinUnlockViewModel @Inject constructor(
                     _state.value = PinUnlockState.Error("Verification error")
                 }
             }
+        } catch (e: CancellationException) {
+            // Coroutine cancelled - rethrow, don't treat as error
+            Log.d(TAG, "PIN submission cancelled")
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "PIN unlock error", e)
             _state.value = PinUnlockState.Error(e.message ?: "Unknown error")
+        } finally {
+            submitMutex.unlock()
         }
     }
 
@@ -210,41 +227,56 @@ class PinUnlockViewModel @Inject constructor(
 
     private suspend fun connectToNats(): Boolean = withContext(Dispatchers.IO) {
         try {
-            // Get stored NATS credentials
-            val natsUrl = credentialStore.getNatsEndpoint()
-            val natsCredentials = credentialStore.getNatsCredentials()
+            // Get user GUID for owner space
             val userGuid = credentialStore.getUserGuid()
-
-            if (natsUrl == null || natsCredentials == null || userGuid == null) {
-                Log.e(TAG, "Missing NATS credentials - url: ${natsUrl != null}, creds: ${natsCredentials != null}, guid: ${userGuid != null}")
+            if (userGuid == null) {
+                Log.e(TAG, "Missing user GUID")
                 return@withContext false
             }
 
             ownerSpace = "OwnerSpace.$userGuid"
 
-            // Parse credentials file to get JWT and seed
-            val parsed = credentialStore.parseNatsCredentialFile(natsCredentials)
-            if (parsed == null) {
-                Log.e(TAG, "Failed to parse NATS credentials")
-                return@withContext false
+            // Check if already connected
+            if (connectionManager.isConnected()) {
+                val jsClient = connectionManager.getJetStreamClient()
+                if (jsClient != null && jsClient.isConnected) {
+                    Log.i(TAG, "Using existing NATS connection for PIN verification")
+                    return@withContext true
+                }
             }
 
-            val (jwt, seed) = parsed
+            // Trigger NATS auto-connect to establish the shared connection
+            // This uses stored credentials and handles all the connection setup
+            Log.i(TAG, "Triggering NATS auto-connect for PIN verification")
+            val result = natsAutoConnector.autoConnect(autoStartVault = true)
 
-            Log.d(TAG, "Connecting to NATS: $natsUrl")
-
-            // Create and connect NATS client
-            val client = JetStreamNatsClient()
-            val result = client.connect(natsUrl, jwt, seed)
-
-            if (result.isFailure) {
-                Log.e(TAG, "Failed to connect to NATS: ${result.exceptionOrNull()?.message}")
-                return@withContext false
+            when (result) {
+                is NatsAutoConnector.ConnectionResult.Success -> {
+                    Log.i(TAG, "NATS auto-connect successful for PIN verification")
+                    val jsClient = connectionManager.getJetStreamClient()
+                    if (jsClient != null && jsClient.isConnected) {
+                        return@withContext true
+                    }
+                    Log.e(TAG, "NATS connected but JetStream client not available")
+                    return@withContext false
+                }
+                is NatsAutoConnector.ConnectionResult.NotEnrolled -> {
+                    Log.e(TAG, "NATS auto-connect: Not enrolled")
+                    return@withContext false
+                }
+                is NatsAutoConnector.ConnectionResult.CredentialsExpired -> {
+                    Log.e(TAG, "NATS auto-connect: Credentials expired")
+                    return@withContext false
+                }
+                is NatsAutoConnector.ConnectionResult.MissingData -> {
+                    Log.e(TAG, "NATS auto-connect: Missing ${result.field}")
+                    return@withContext false
+                }
+                is NatsAutoConnector.ConnectionResult.Error -> {
+                    Log.e(TAG, "NATS auto-connect failed: ${result.message}")
+                    return@withContext false
+                }
             }
-
-            natsClient = client
-            Log.i(TAG, "Connected to NATS successfully")
-            return@withContext true
         } catch (e: Exception) {
             Log.e(TAG, "NATS connection error", e)
             return@withContext false
@@ -252,7 +284,7 @@ class PinUnlockViewModel @Inject constructor(
     }
 
     private suspend fun verifyPinWithEnclave(pin: String): PinVerificationResult = withContext(Dispatchers.IO) {
-        val client = natsClient ?: return@withContext PinVerificationResult.Error
+        val client = connectionManager.getJetStreamClient() ?: return@withContext PinVerificationResult.Error
         val space = ownerSpace ?: return@withContext PinVerificationResult.Error
 
         try {
@@ -346,10 +378,14 @@ class PinUnlockViewModel @Inject constructor(
             // Validate this is actually a PIN unlock response, not a response from another request
             // (race condition protection - JetStream consumer sometimes receives wrong message)
 
-            // Check 1: If response has a "type" field that doesn't match pin.unlock
+            // Check 1: If response has a "type" field that doesn't match pin.unlock or error
+            // Note: "error" type is a legitimate response when PIN is wrong, not a race condition
             val responseType = responseJson.get("type")?.asString
-            if (responseType != null && responseType != "pin.unlock" && !responseType.contains("pin")) {
-                Log.e(TAG, "RACE CONDITION: Wrong response type: $responseType (expected pin.unlock)")
+            if (responseType != null &&
+                responseType != "pin.unlock" &&
+                responseType != "error" &&
+                !responseType.contains("pin")) {
+                Log.e(TAG, "RACE CONDITION: Wrong response type: $responseType (expected pin.unlock or error)")
                 Log.e(TAG, "Response content: ${responseStr.take(500)}")
                 return@withContext PinVerificationResult.RaceCondition
             }
@@ -369,7 +405,27 @@ class PinUnlockViewModel @Inject constructor(
                 return@withContext PinVerificationResult.RaceCondition
             }
 
-            // Check 3: Verify request_id matches (if present in response)
+            // Check 3: Response has event_id (feed event response, not PIN)
+            if (responseJson.has("event_id")) {
+                Log.e(TAG, "RACE CONDITION: Received feed event response instead of PIN unlock response")
+                Log.e(TAG, "Response content: ${responseStr.take(500)}")
+                return@withContext PinVerificationResult.RaceCondition
+            }
+
+            // Check 3b: Response has profile fields (profile.get response, not PIN)
+            if (responseJson.has("first_name") || responseJson.has("last_name") || responseJson.has("fields")) {
+                Log.e(TAG, "RACE CONDITION: Received profile response instead of PIN unlock response")
+                Log.e(TAG, "Response content: ${responseStr.take(500)}")
+                return@withContext PinVerificationResult.RaceCondition
+            }
+
+            // Check 4: Response has sync-related fields (feed sync response)
+            if (responseJson.has("latest_sequence") || responseJson.has("has_more")) {
+                Log.e(TAG, "RACE CONDITION: Received feed sync response instead of PIN unlock response")
+                return@withContext PinVerificationResult.RaceCondition
+            }
+
+            // Check 5: Verify request_id matches (if present in response)
             val responseRequestId = responseJson.get("request_id")?.asString
             if (responseRequestId != null && responseRequestId != requestId) {
                 Log.e(TAG, "RACE CONDITION: Response request_id mismatch. Expected: $requestId, Got: $responseRequestId")
@@ -520,14 +576,4 @@ class PinUnlockViewModel @Inject constructor(
         }
     }
 
-    override fun onCleared() {
-        super.onCleared()
-        viewModelScope.launch {
-            try {
-                natsClient?.disconnect()
-            } catch (e: Exception) {
-                Log.e(TAG, "Error closing NATS connection", e)
-            }
-        }
-    }
 }

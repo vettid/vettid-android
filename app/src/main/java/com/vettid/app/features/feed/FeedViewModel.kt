@@ -5,8 +5,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.nats.FeedClient
 import com.vettid.app.core.nats.FeedEvent
+import com.vettid.app.core.nats.NatsConnectionManager
+import com.vettid.app.core.nats.NatsConnectionState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.isActive
@@ -19,7 +22,8 @@ private const val TAG = "FeedViewModel"
 class FeedViewModel @Inject constructor(
     private val feedClient: FeedClient,
     private val feedRepository: FeedRepository,
-    private val feedNotificationService: FeedNotificationService
+    private val feedNotificationService: FeedNotificationService,
+    private val connectionManager: NatsConnectionManager
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<FeedState>(FeedState.Loading)
@@ -39,10 +43,53 @@ class FeedViewModel @Inject constructor(
     private val _inAppNotification = MutableSharedFlow<InAppFeedNotification>()
     val inAppNotification: SharedFlow<InAppFeedNotification> = _inAppNotification.asSharedFlow()
 
+    // Track current refresh job to prevent multiple concurrent refreshes
+    private var refreshJob: Job? = null
+
     init {
-        loadFeed()
+        // Show cached data immediately while waiting for connection
+        showCachedFeed()
+        // Wait for NATS connection before syncing
+        observeConnectionAndLoad()
         observeFeedUpdates()
         startPeriodicRefresh()
+    }
+
+    /**
+     * Show cached feed data immediately without network request.
+     */
+    private fun showCachedFeed() {
+        val cached = feedRepository.getCachedEvents()
+        if (cached.isNotEmpty()) {
+            _state.value = FeedState.Loaded(
+                events = cached,
+                hasMore = false,
+                unreadCount = cached.count { it.isUnread },
+                isOffline = true
+            )
+            Log.d(TAG, "Showing ${cached.size} cached feed events")
+        }
+    }
+
+    // Track if we've done initial load
+    private var hasLoadedInitially = false
+
+    /**
+     * Wait for NATS connection before loading feed from server.
+     * Only loads once when first connected.
+     */
+    private fun observeConnectionAndLoad() {
+        viewModelScope.launch {
+            connectionManager.connectionState.collect { state ->
+                if (state is NatsConnectionState.Connected && !hasLoadedInitially) {
+                    hasLoadedInitially = true
+                    Log.d(TAG, "NATS connected, loading feed (initial)")
+                    // Small delay to let connection stabilize
+                    delay(1000)
+                    loadFeed()
+                }
+            }
+        }
     }
 
     /**
@@ -122,7 +169,11 @@ class FeedViewModel @Inject constructor(
 
     fun loadFeed() {
         viewModelScope.launch {
-            _state.value = FeedState.Loading
+            // Only show loading if we don't have cached data
+            val currentState = _state.value
+            if (currentState !is FeedState.Loaded) {
+                _state.value = FeedState.Loading
+            }
             try {
                 // Use repository which provides offline caching
                 feedRepository.getFeed(forceRefresh = false)
@@ -168,7 +219,10 @@ class FeedViewModel @Inject constructor(
     }
 
     fun refresh() {
-        viewModelScope.launch {
+        // Cancel any existing refresh job to prevent queueing
+        refreshJob?.cancel()
+
+        refreshJob = viewModelScope.launch {
             _isRefreshing.value = true
             try {
                 // Use repository sync for incremental updates

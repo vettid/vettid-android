@@ -21,7 +21,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.vettid.app.core.storage.CustomField
 import com.vettid.app.core.storage.FieldCategory
 import com.vettid.app.core.storage.OptionalField
-import com.vettid.app.ui.components.BirthdayPickerInput
+import com.vettid.app.ui.components.WheelBirthdayPicker
 import com.vettid.app.ui.components.PhoneNumberInput
 import kotlinx.coroutines.flow.collectLatest
 
@@ -335,8 +335,8 @@ private fun OptionalFieldsSection(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            // Birthday with date picker
-            BirthdayPickerInput(
+            // Birthday with wheel picker
+            WheelBirthdayPicker(
                 value = optionalFields.birthday ?: "",
                 onValueChange = { onFieldUpdate(OptionalField.BIRTHDAY, it.ifBlank { null }) },
                 modifier = Modifier.fillMaxWidth()

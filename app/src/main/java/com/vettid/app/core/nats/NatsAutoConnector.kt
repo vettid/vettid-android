@@ -101,6 +101,14 @@ class NatsAutoConnector @Inject constructor(
      * @return [ConnectionResult] indicating success or the type of failure
      */
     suspend fun autoConnect(autoStartVault: Boolean = true): ConnectionResult {
+        // Quick check: if already connected, just return success
+        // This prevents reconnection when called multiple times (e.g., from both PinUnlockViewModel and AppViewModel)
+        if (natsClient.isConnected) {
+            Log.i(TAG, "Already connected to NATS, skipping reconnect")
+            _connectionState.value = AutoConnectState.Connected
+            return ConnectionResult.Success
+        }
+
         _connectionState.value = AutoConnectState.Checking
 
         // Step 1: Check if credentials exist

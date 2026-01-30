@@ -43,6 +43,9 @@ class BadgeCountsViewModel @Inject constructor(
     private val _pendingConnectionsCount = MutableStateFlow(0)
     val pendingConnectionsCount: StateFlow<Int> = _pendingConnectionsCount.asStateFlow()
 
+    // Track if we've done initial refresh to avoid duplicate refreshes
+    private var hasRefreshedInitially = false
+
     init {
         observeConnectionState()
         observeFeedUpdates()
@@ -50,15 +53,15 @@ class BadgeCountsViewModel @Inject constructor(
 
     /**
      * Start observing when NATS connects.
+     * Only refreshes once on initial connection.
      */
     private fun observeConnectionState() {
         viewModelScope.launch {
             connectionManager.connectionState.collect { state ->
-                if (state is NatsConnectionState.Connected) {
-                    Log.d(TAG, "NATS connected, refreshing badge counts")
+                if (state is NatsConnectionState.Connected && !hasRefreshedInitially) {
+                    hasRefreshedInitially = true
+                    Log.d(TAG, "NATS connected, refreshing badge counts (initial)")
                     // Delay to let PIN unlock and other initial requests complete first.
-                    // JetStream requests are serialized, so this avoids queueing up
-                    // behind PIN unlock request.
                     delay(2000)
                     refreshCounts()
                 }

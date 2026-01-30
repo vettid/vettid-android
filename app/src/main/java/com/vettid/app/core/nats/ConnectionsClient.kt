@@ -33,27 +33,18 @@ class ConnectionsClient @Inject constructor(
     private val connectionManager: NatsConnectionManager
 ) {
     private val gson = Gson()
-    private var jetStreamClient: JetStreamNatsClient? = null
 
     /**
-     * Initialize JetStream client for reliable message delivery.
+     * Get the shared JetStream client from NatsConnectionManager.
+     * Uses the shared instance to ensure proper mutex serialization.
      */
-    private fun ensureJetStreamInitialized(): Result<JetStreamNatsClient> {
-        jetStreamClient?.let { client ->
-            if (client.isConnected) return Result.success(client)
+    private fun getJetStreamClient(): Result<JetStreamNatsClient> {
+        val jsClient = connectionManager.getJetStreamClient()
+        return if (jsClient != null && jsClient.isConnected) {
+            Result.success(jsClient)
+        } else {
+            Result.failure(NatsException("JetStream not available"))
         }
-
-        val natsClient = connectionManager.getNatsClient()
-        if (!natsClient.isConnected) {
-            return Result.failure(NatsException("NATS not connected"))
-        }
-
-        val androidClient = natsClient.getAndroidClient()
-        val jsClient = JetStreamNatsClient()
-        jsClient.initialize(androidClient)
-        jetStreamClient = jsClient
-
-        return Result.success(jsClient)
     }
 
     /**
@@ -64,18 +55,20 @@ class ConnectionsClient @Inject constructor(
      *
      * @param peerGuid GUID of the peer being invited
      * @param label Human-readable label for this connection
-     * @param expiresInHours How long the invitation is valid (default: 24 hours)
+     * @param expiresInMinutes How long the invitation is valid (default: 1440 minutes = 24 hours)
      * @return Connection invitation with credentials
      */
     suspend fun createInvite(
         peerGuid: String,
         label: String,
-        expiresInHours: Int = 24
+        expiresInMinutes: Int = 1440
     ): Result<ConnectionInvitation> {
         val payload = JsonObject().apply {
             addProperty("peer_guid", peerGuid)
             addProperty("label", label)
-            addProperty("expires_in_hours", expiresInHours)
+            // Send both formats for backward compatibility until enclave is updated
+            addProperty("expires_in_minutes", expiresInMinutes)
+            addProperty("expires_in_hours", (expiresInMinutes / 60).coerceAtLeast(1))
         }
 
         return sendAndAwait("connection.create-invite", payload) { result ->
@@ -240,8 +233,8 @@ class ConnectionsClient @Inject constructor(
         val ownerSpace = connectionManager.getOwnerSpaceId()
             ?: return Result.failure(NatsException("No OwnerSpace ID available"))
 
-        // Use JetStream for reliable delivery (enclave publishes to JetStream)
-        val jsResult = ensureJetStreamInitialized()
+        // Use shared JetStream client for reliable delivery
+        val jsResult = getJetStreamClient()
         if (jsResult.isFailure) {
             Log.e(TAG, "JetStream not available: ${jsResult.exceptionOrNull()?.message}")
             return Result.failure(jsResult.exceptionOrNull() ?: NatsException("JetStream not available"))
@@ -250,68 +243,124 @@ class ConnectionsClient @Inject constructor(
         val jsClient = jsResult.getOrThrow()
         Log.d(TAG, "Using JetStream for $messageType")
 
-        val requestId = UUID.randomUUID().toString()
-        val request = JsonObject().apply {
-            addProperty("id", requestId)
-            addProperty("type", messageType)
-            addProperty("timestamp", java.time.Instant.now().toString())
-            // Merge the payload fields
-            payload.entrySet().forEach { (key, value) ->
-                add(key, value)
-            }
-        }
-
         // ownerSpace already includes "OwnerSpace." prefix (e.g., "OwnerSpace.af44310d-...")
         val topic = "$ownerSpace.forVault.$messageType"
         val responseTopic = "$ownerSpace.forApp.$messageType.response"
 
-        return try {
-            val response = jsClient.requestWithJetStream(
-                requestSubject = topic,
-                responseSubject = responseTopic,
-                payload = gson.toJson(request).toByteArray(Charsets.UTF_8),
-                timeoutMs = timeoutMs
-            )
+        // Retry loop for race condition handling
+        var attempts = 0
+        val maxAttempts = 3
 
-            response.fold(
-                onSuccess = { msg ->
-                    Log.d(TAG, "$messageType response received: ${msg.dataString.take(200)}")
-                    val jsonResponse = gson.fromJson(msg.dataString, JsonObject::class.java)
+        while (attempts < maxAttempts) {
+            attempts++
 
-                    // Check for error response
-                    if (jsonResponse.has("error") && !jsonResponse.get("error").isJsonNull) {
-                        val error = jsonResponse.get("error").asString
-                        Log.w(TAG, "$messageType failed: $error")
-                        Result.failure(NatsException(error))
-                    } else if (jsonResponse.has("success") && jsonResponse.get("success").asBoolean == false) {
-                        val error = jsonResponse.get("error")?.asString ?: "Request failed"
-                        Log.w(TAG, "$messageType failed: $error")
-                        Result.failure(NatsException(error))
-                    } else {
-                        // Extract result field or use whole response
-                        val resultObj = if (jsonResponse.has("result")) {
-                            jsonResponse.getAsJsonObject("result")
-                        } else {
-                            jsonResponse
-                        }
-                        try {
-                            val parsed = transform(resultObj)
-                            Result.success(parsed)
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Failed to parse $messageType response", e)
-                            Result.failure(e)
-                        }
-                    }
-                },
-                onFailure = { e ->
-                    Log.e(TAG, "$messageType request failed: ${e.message}", e)
-                    Result.failure(e)
+            val requestId = UUID.randomUUID().toString()
+            val request = JsonObject().apply {
+                addProperty("id", requestId)
+                addProperty("type", messageType)
+                addProperty("timestamp", java.time.Instant.now().toString())
+                // Merge the payload fields
+                payload.entrySet().forEach { (key, value) ->
+                    add(key, value)
                 }
-            )
-        } catch (e: Exception) {
-            Log.e(TAG, "JetStream $messageType failed: ${e.message}", e)
-            Result.failure(e)
+            }
+
+            try {
+                val response = jsClient.requestWithJetStream(
+                    requestSubject = topic,
+                    responseSubject = responseTopic,
+                    payload = gson.toJson(request).toByteArray(Charsets.UTF_8),
+                    timeoutMs = timeoutMs
+                )
+
+                if (response.isFailure) {
+                    Log.e(TAG, "$messageType request failed: ${response.exceptionOrNull()?.message}")
+                    return Result.failure(response.exceptionOrNull() ?: NatsException("Request failed"))
+                }
+
+                val msg = response.getOrThrow()
+                Log.d(TAG, "$messageType response received: ${msg.dataString.take(200)}")
+                val jsonResponse = gson.fromJson(msg.dataString, JsonObject::class.java)
+
+                // Race condition detection: Check if we got wrong response type
+                if (isWrongResponseType(jsonResponse, messageType)) {
+                    Log.w(TAG, "RACE CONDITION: Got wrong response for $messageType, retrying (attempt $attempts/$maxAttempts)")
+                    if (attempts < maxAttempts) {
+                        kotlinx.coroutines.delay(300)
+                        continue
+                    }
+                    return Result.failure(NatsException("Race condition: wrong response type"))
+                }
+
+                // Check for error response
+                if (jsonResponse.has("error") && !jsonResponse.get("error").isJsonNull) {
+                    val error = jsonResponse.get("error").asString
+                    Log.w(TAG, "$messageType failed: $error")
+                    return Result.failure(NatsException(error))
+                } else if (jsonResponse.has("success") && jsonResponse.get("success").asBoolean == false) {
+                    val error = jsonResponse.get("error")?.asString ?: "Request failed"
+                    Log.w(TAG, "$messageType failed: $error")
+                    return Result.failure(NatsException(error))
+                } else {
+                    // Extract result field or use whole response
+                    val resultObj = if (jsonResponse.has("result")) {
+                        jsonResponse.getAsJsonObject("result")
+                    } else {
+                        jsonResponse
+                    }
+                    return try {
+                        val parsed = transform(resultObj)
+                        Result.success(parsed)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to parse $messageType response", e)
+                        Result.failure(e)
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e  // Rethrow cancellation
+            } catch (e: Exception) {
+                Log.e(TAG, "JetStream $messageType failed: ${e.message}", e)
+                return Result.failure(e)
+            }
         }
+
+        return Result.failure(NatsException("Max retry attempts reached"))
+    }
+
+    /**
+     * Check if the response is for a different request type (race condition).
+     */
+    private fun isWrongResponseType(response: JsonObject, expectedType: String): Boolean {
+        // PIN unlock response received instead of connection response
+        if (response.has("status")) {
+            val status = response.get("status")?.asString
+            if (status == "unlocked" || status == "vault_ready") {
+                Log.e(TAG, "RACE CONDITION: Received PIN unlock response instead of $expectedType")
+                return true
+            }
+        }
+
+        // Profile response received
+        if (response.has("first_name") || response.has("last_name") || response.has("fields")) {
+            Log.e(TAG, "RACE CONDITION: Received profile response instead of $expectedType")
+            return true
+        }
+
+        // Feed response received
+        if (response.has("events") && expectedType != "feed.sync" && expectedType != "feed.get") {
+            Log.e(TAG, "RACE CONDITION: Received feed response instead of $expectedType")
+            return true
+        }
+
+        // For connection.list, we expect either "connections" or "items" array
+        if (expectedType == "connection.list") {
+            if (!response.has("connections") && !response.has("items") && !response.has("total")) {
+                // Doesn't look like a connection list response
+                return true
+            }
+        }
+
+        return false
     }
 
     private fun parseConnectionRecord(json: JsonObject): ConnectionRecord {
