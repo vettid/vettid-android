@@ -8,19 +8,12 @@ import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.core.storage.CredentialStore
-import com.vettid.app.core.storage.CustomField
-import com.vettid.app.core.storage.FieldCategory
-import com.vettid.app.core.storage.FieldType
-import com.vettid.app.core.storage.OptionalField
-import com.vettid.app.core.storage.OptionalPersonalData
 import com.vettid.app.core.storage.PersonalDataStore
-import com.vettid.app.core.storage.SystemPersonalData
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Instant
-import java.util.UUID
 import javax.inject.Inject
 
 private const val TAG = "PersonalDataViewModel"
@@ -45,8 +38,11 @@ class PersonalDataViewModel @Inject constructor(
     private val _showAddDialog = MutableStateFlow(false)
     val showAddDialog: StateFlow<Boolean> = _showAddDialog.asStateFlow()
 
-    // In-memory data store (would be persisted to vault in production)
+    // In-memory data store loaded from vault
     private val dataItems = mutableListOf<PersonalDataItem>()
+
+    // Public profile fields set (namespaces that are shared)
+    private var publicProfileFields = mutableSetOf<String>()
 
     init {
         loadPersonalData()
@@ -67,29 +63,29 @@ class PersonalDataViewModel @Inject constructor(
         viewModelScope.launch {
             _state.value = PersonalDataState.Loading
             try {
-                // First try to fetch from vault if connected
+                dataItems.clear()
+
+                // Try to fetch from vault if connected
                 if (connectionManager.isConnected()) {
-                    Log.d(TAG, "Attempting to load personal data from vault")
+                    Log.d(TAG, "Loading personal data from vault...")
                     val vaultLoadSuccess = loadFromVault()
                     if (vaultLoadSuccess) {
-                        Log.d(TAG, "Personal data loaded from vault")
+                        Log.d(TAG, "Loaded ${dataItems.size} items from vault")
                     } else {
                         Log.d(TAG, "Vault load failed, falling back to local storage")
+                        loadFromLocalStorage()
                     }
                 } else {
                     Log.d(TAG, "Not connected to vault, loading from local storage")
+                    loadFromLocalStorage()
                 }
-
-                // Load from local storage (may have been updated by vault sync)
-                dataItems.clear()
-                dataItems.addAll(loadAllPersonalData())
 
                 if (dataItems.isEmpty()) {
                     _state.value = PersonalDataState.Empty
                 } else {
                     _state.value = PersonalDataState.Loaded(items = dataItems.toList())
                 }
-                Log.d(TAG, "Loaded ${dataItems.size} personal data items")
+                Log.d(TAG, "Total items loaded: ${dataItems.size}")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load personal data", e)
                 _state.value = PersonalDataState.Error(e.message ?: "Failed to load data")
@@ -98,7 +94,7 @@ class PersonalDataViewModel @Inject constructor(
     }
 
     /**
-     * Load personal data from vault.
+     * Load personal data directly from vault.
      * Returns true if successful, false otherwise.
      */
     private suspend fun loadFromVault(): Boolean {
@@ -126,7 +122,7 @@ class PersonalDataViewModel @Inject constructor(
             when (response) {
                 is VaultResponse.HandlerResult -> {
                     if (response.success && response.result != null) {
-                        processVaultProfileResponse(response.result)
+                        parseVaultResponse(response.result)
                         true
                     } else {
                         Log.w(TAG, "Profile request failed: ${response.error}")
@@ -149,130 +145,361 @@ class PersonalDataViewModel @Inject constructor(
     }
 
     /**
-     * Process profile data from vault response and update local storage.
+     * Parse vault response and populate dataItems directly.
+     * This is the core of the dynamic loading - no static field mappings.
      */
-    private fun processVaultProfileResponse(result: JsonObject) {
-        try {
-            Log.d(TAG, "Processing vault profile response: ${result.keySet()}")
-            Log.d(TAG, "Full profile response: $result")
+    private fun parseVaultResponse(result: JsonObject) {
+        val now = Instant.now()
+        Log.d(TAG, "Parsing vault response: ${result.keySet()}")
 
-            // Extract system fields - try multiple possible formats from vault
-            // Format 1: Top-level fields (first_name, last_name, email)
-            // Format 2: Nested under _system (profile/_system/first_name)
-            // Format 3: In fields object with _system prefix
-            var systemFirstName = result.get("first_name")?.takeIf { !it.isJsonNull }?.asString
-            var systemLastName = result.get("last_name")?.takeIf { !it.isJsonNull }?.asString
-            var systemEmail = result.get("email")?.takeIf { !it.isJsonNull }?.asString
+        // Load public profile fields set
+        loadPublicProfileSettings()
 
-            // Try nested _system format
-            if (systemFirstName == null && result.has("_system")) {
-                val systemObj = result.getAsJsonObject("_system")
-                systemFirstName = systemObj?.get("first_name")?.takeIf { !it.isJsonNull }?.asString
-                systemLastName = systemObj?.get("last_name")?.takeIf { !it.isJsonNull }?.asString
-                systemEmail = systemObj?.get("email")?.takeIf { !it.isJsonNull }?.asString
-                Log.d(TAG, "Found system fields in _system object: $systemFirstName $systemLastName")
-            }
+        // Extract system fields (registration info) - always at top level
+        val systemFirstName = result.get("first_name")?.takeIf { !it.isJsonNull }?.asString
+        val systemLastName = result.get("last_name")?.takeIf { !it.isJsonNull }?.asString
+        val systemEmail = result.get("email")?.takeIf { !it.isJsonNull }?.asString
 
-            // Try fields object with _system prefix
-            val fieldsObject = result.getAsJsonObject("fields")
-            if (systemFirstName == null && fieldsObject != null) {
-                fieldsObject.entrySet().forEach { (key, value) ->
+        // Add system fields as items (read-only, always in public profile)
+        if (!systemFirstName.isNullOrEmpty()) {
+            dataItems.add(PersonalDataItem(
+                id = "_system_first_name",
+                name = "First Name",
+                type = DataType.PUBLIC,
+                value = systemFirstName,
+                category = DataCategory.IDENTITY,
+                isSystemField = true,
+                isInPublicProfile = true, // Always shared
+                createdAt = now,
+                updatedAt = now
+            ))
+        }
+        if (!systemLastName.isNullOrEmpty()) {
+            dataItems.add(PersonalDataItem(
+                id = "_system_last_name",
+                name = "Last Name",
+                type = DataType.PUBLIC,
+                value = systemLastName,
+                category = DataCategory.IDENTITY,
+                isSystemField = true,
+                isInPublicProfile = true, // Always shared
+                createdAt = now,
+                updatedAt = now
+            ))
+        }
+        if (!systemEmail.isNullOrEmpty()) {
+            dataItems.add(PersonalDataItem(
+                id = "_system_email",
+                name = "Email",
+                type = DataType.PUBLIC,
+                value = systemEmail,
+                category = DataCategory.CONTACT,
+                isSystemField = true,
+                isInPublicProfile = true, // Always shared
+                createdAt = now,
+                updatedAt = now
+            ))
+        }
+
+        // Extract dynamic fields from the "fields" object
+        val fieldsObject = result.getAsJsonObject("fields")
+        if (fieldsObject != null) {
+            Log.d(TAG, "Processing ${fieldsObject.size()} fields from vault")
+
+            fieldsObject.entrySet().forEach { (namespace, value) ->
+                try {
+                    // Skip system fields (already handled above)
+                    if (namespace.startsWith("_system_")) {
+                        return@forEach
+                    }
+
+                    // Extract value - could be object with "value" key or primitive
                     val fieldValue = if (value.isJsonObject) {
                         value.asJsonObject.get("value")?.takeIf { !it.isJsonNull }?.asString
                     } else if (value.isJsonPrimitive) {
                         value.asString
                     } else null
 
-                    when (key) {
-                        "_system_first_name", "profile/_system/first_name" -> systemFirstName = fieldValue
-                        "_system_last_name", "profile/_system/last_name" -> systemLastName = fieldValue
-                        "_system_email", "profile/_system/email" -> systemEmail = fieldValue
+                    if (fieldValue.isNullOrEmpty()) {
+                        return@forEach
                     }
-                }
-                if (systemFirstName != null) {
-                    Log.d(TAG, "Found system fields in fields object with _system prefix: $systemFirstName $systemLastName")
+
+                    // Extract updated_at if available
+                    val updatedAt = if (value.isJsonObject) {
+                        value.asJsonObject.get("updated_at")?.takeIf { !it.isJsonNull }?.asString?.let {
+                            try { Instant.parse(it) } catch (e: Exception) { now }
+                        } ?: now
+                    } else now
+
+                    // Derive category and display name from namespace
+                    val category = categoryFromNamespace(namespace)
+                    val displayName = displayNameFromNamespace(namespace)
+                    val dataType = dataTypeFromNamespace(namespace)
+                    val isInPublicProfile = publicProfileFields.contains(namespace)
+
+                    dataItems.add(PersonalDataItem(
+                        id = namespace,
+                        name = displayName,
+                        type = dataType,
+                        value = fieldValue,
+                        category = category,
+                        isSystemField = false,
+                        isInPublicProfile = isInPublicProfile,
+                        createdAt = updatedAt, // Use updatedAt as createdAt if not available
+                        updatedAt = updatedAt
+                    ))
+
+                    Log.d(TAG, "Added field: $namespace = $displayName ($category)")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error processing field $namespace: ${e.message}")
                 }
             }
+        } else {
+            Log.d(TAG, "No fields object in vault response")
+        }
 
-            if (!systemFirstName.isNullOrEmpty() && !systemLastName.isNullOrEmpty() && !systemEmail.isNullOrEmpty()) {
-                Log.d(TAG, "Storing system fields from vault: $systemFirstName $systemLastName")
-                personalDataStore.storeSystemFields(
-                    SystemPersonalData(
-                        firstName = systemFirstName!!,
-                        lastName = systemLastName!!,
-                        email = systemEmail!!
-                    )
+        // Also store system fields locally for offline access
+        if (!systemFirstName.isNullOrEmpty() && !systemLastName.isNullOrEmpty() && !systemEmail.isNullOrEmpty()) {
+            personalDataStore.storeSystemFields(
+                com.vettid.app.core.storage.SystemPersonalData(
+                    firstName = systemFirstName,
+                    lastName = systemLastName,
+                    email = systemEmail
                 )
-            } else {
-                Log.w(TAG, "System fields not found in vault response. firstName=$systemFirstName, lastName=$systemLastName, email=$systemEmail")
-                // Migration: if local system fields exist but not in vault, sync them up
-                val localSystemFields = personalDataStore.getSystemFields()
-                if (localSystemFields != null && systemFirstName == null) {
-                    Log.i(TAG, "Migrating local system fields to vault")
-                    migrateLocalSystemFieldsToVault(localSystemFields)
-                }
-            }
+            )
+        }
 
-            // Extract optional fields from the nested "fields" object
-            // Vault returns: { "fields": { "personal.legal.first_name": { "value": "...", "updated_at": "..." }, ... } }
-            // fieldsObject already defined above
-            if (fieldsObject != null) {
-                Log.d(TAG, "Processing ${fieldsObject.size()} fields from vault")
-                fieldsObject.entrySet().forEach { (key, value) ->
-                    try {
-                        // Each field is an object with "value" and "updated_at"
-                        val fieldValue = if (value.isJsonObject) {
-                            value.asJsonObject.get("value")?.asString
-                        } else if (value.isJsonPrimitive) {
-                            value.asString
-                        } else null
+        Log.i(TAG, "Parsed ${dataItems.size} items from vault")
+    }
 
-                        if (fieldValue != null && fieldValue.isNotEmpty()) {
-                            // Map dotted namespace to local storage
-                            val updated = personalDataStore.updateOptionalFieldByNamespace(key, fieldValue)
-                            if (updated) {
-                                Log.d(TAG, "Updated optional field from vault: $key = $fieldValue")
-                            } else {
-                                Log.d(TAG, "Field not mapped to optional field: $key")
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Error processing field $key: ${e.message}")
-                    }
-                }
-            } else {
-                Log.d(TAG, "No fields object in vault response")
-            }
+    /**
+     * Load public profile settings from vault.
+     */
+    private fun loadPublicProfileSettings() {
+        publicProfileFields.clear()
+        publicProfileFields.addAll(personalDataStore.getPublicProfileFields())
+    }
 
-            // Mark sync as complete
-            personalDataStore.markSyncComplete()
-            Log.i(TAG, "Profile loaded from vault successfully")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error processing vault profile response", e)
+    /**
+     * Derive category from namespace prefix.
+     */
+    private fun categoryFromNamespace(namespace: String): DataCategory {
+        return when {
+            namespace.startsWith("personal.legal") -> DataCategory.IDENTITY
+            namespace.startsWith("personal.info") -> DataCategory.IDENTITY
+            namespace.startsWith("contact.") -> DataCategory.CONTACT
+            namespace.startsWith("social.") -> DataCategory.CONTACT
+            namespace.startsWith("address.") -> DataCategory.ADDRESS
+            namespace.startsWith("financial.") -> DataCategory.FINANCIAL
+            namespace.startsWith("medical.") -> DataCategory.MEDICAL
+            namespace.startsWith("crypto.") -> DataCategory.CRYPTO
+            namespace.startsWith("document.") -> DataCategory.DOCUMENT
+            else -> DataCategory.OTHER
         }
     }
 
     /**
-     * Migrate local system fields to vault for existing users.
+     * Derive display name from namespace.
+     * Converts "personal.legal.first_name" -> "Legal First Name"
      */
-    private fun migrateLocalSystemFieldsToVault(systemFields: SystemPersonalData) {
-        viewModelScope.launch {
-            try {
-                val payload = JsonObject().apply {
-                    addProperty("_system_first_name", systemFields.firstName)
-                    addProperty("_system_last_name", systemFields.lastName)
-                    addProperty("_system_email", systemFields.email)
-                    addProperty("_system_stored_at", System.currentTimeMillis())
-                }
+    private fun displayNameFromNamespace(namespace: String): String {
+        // Common namespace to display name mappings
+        val knownMappings = mapOf(
+            "personal.legal.prefix" to "Name Prefix",
+            "personal.legal.first_name" to "Legal First Name",
+            "personal.legal.middle_name" to "Middle Name",
+            "personal.legal.last_name" to "Legal Last Name",
+            "personal.legal.suffix" to "Name Suffix",
+            "personal.info.birthday" to "Birthday",
+            "contact.phone.mobile" to "Mobile Phone",
+            "contact.phone.work" to "Work Phone",
+            "contact.phone.home" to "Home Phone",
+            "contact.email.personal" to "Personal Email",
+            "contact.email.work" to "Work Email",
+            "address.home.street" to "Street Address",
+            "address.home.street2" to "Address Line 2",
+            "address.home.city" to "City",
+            "address.home.state" to "State",
+            "address.home.postal_code" to "Postal Code",
+            "address.home.country" to "Country",
+            "address.work.street" to "Work Street",
+            "address.work.city" to "Work City",
+            "social.website.personal" to "Website",
+            "social.linkedin.url" to "LinkedIn",
+            "social.twitter.handle" to "X (Twitter)",
+            "social.instagram.handle" to "Instagram",
+            "social.github.username" to "GitHub",
+            "financial.bank.name" to "Bank Name",
+            "financial.bank.account_number" to "Account Number",
+            "financial.bank.routing_number" to "Routing Number"
+        )
 
-                ownerSpaceClient.sendToVault("profile.update", payload).fold(
-                    onSuccess = { Log.i(TAG, "System fields migrated to vault") },
-                    onFailure = { Log.e(TAG, "Failed to migrate system fields: ${it.message}") }
-                )
-            } catch (e: Exception) {
-                Log.e(TAG, "Error migrating system fields to vault", e)
+        // Return known mapping if exists
+        knownMappings[namespace]?.let { return it }
+
+        // Otherwise, derive from namespace parts
+        // e.g., "custom.identity.my_field" -> "My Field"
+        val parts = namespace.split(".")
+        val lastPart = parts.lastOrNull() ?: namespace
+        return lastPart
+            .replace("_", " ")
+            .split(" ")
+            .joinToString(" ") { word ->
+                word.replaceFirstChar { it.uppercase() }
+            }
+    }
+
+    /**
+     * Derive data type from namespace.
+     */
+    private fun dataTypeFromNamespace(namespace: String): DataType {
+        return when {
+            // Sensitive financial data
+            namespace.contains("account_number") -> DataType.MINOR_SECRET
+            namespace.contains("routing_number") -> DataType.MINOR_SECRET
+            namespace.contains("ssn") -> DataType.MINOR_SECRET
+            namespace.contains("password") -> DataType.MINOR_SECRET
+            namespace.contains("pin") -> DataType.MINOR_SECRET
+            namespace.contains("secret") -> DataType.MINOR_SECRET
+            // Medical is private
+            namespace.startsWith("medical.") -> DataType.PRIVATE
+            // Financial is private
+            namespace.startsWith("financial.") -> DataType.PRIVATE
+            // Social links are public
+            namespace.startsWith("social.") -> DataType.PUBLIC
+            // Contact info is typically private
+            namespace.startsWith("contact.") -> DataType.PRIVATE
+            // Address is private
+            namespace.startsWith("address.") -> DataType.PRIVATE
+            // Legal name is private
+            namespace.startsWith("personal.legal") -> DataType.PRIVATE
+            else -> DataType.PRIVATE
+        }
+    }
+
+    /**
+     * Load from local storage as fallback when vault is unavailable.
+     */
+    private fun loadFromLocalStorage() {
+        val now = Instant.now()
+
+        // Load system fields
+        val systemFields = personalDataStore.getSystemFields()
+        systemFields?.let { system ->
+            dataItems.add(PersonalDataItem(
+                id = "_system_first_name",
+                name = "First Name",
+                type = DataType.PUBLIC,
+                value = system.firstName,
+                category = DataCategory.IDENTITY,
+                isSystemField = true,
+                isInPublicProfile = true,
+                createdAt = now,
+                updatedAt = now
+            ))
+            dataItems.add(PersonalDataItem(
+                id = "_system_last_name",
+                name = "Last Name",
+                type = DataType.PUBLIC,
+                value = system.lastName,
+                category = DataCategory.IDENTITY,
+                isSystemField = true,
+                isInPublicProfile = true,
+                createdAt = now,
+                updatedAt = now
+            ))
+            dataItems.add(PersonalDataItem(
+                id = "_system_email",
+                name = "Email",
+                type = DataType.PUBLIC,
+                value = system.email,
+                category = DataCategory.CONTACT,
+                isSystemField = true,
+                isInPublicProfile = true,
+                createdAt = now,
+                updatedAt = now
+            ))
+        }
+
+        // Load optional fields from local storage
+        val optional = personalDataStore.getOptionalFields()
+        val publicFields = personalDataStore.getPublicProfileFields().toSet()
+
+        fun addIfNotEmpty(namespace: String, displayName: String, value: String?, category: DataCategory, type: DataType = DataType.PRIVATE) {
+            if (!value.isNullOrEmpty()) {
+                dataItems.add(PersonalDataItem(
+                    id = namespace,
+                    name = displayName,
+                    type = type,
+                    value = value,
+                    category = category,
+                    isSystemField = false,
+                    isInPublicProfile = publicFields.contains(namespace),
+                    createdAt = now,
+                    updatedAt = now
+                ))
             }
         }
+
+        // Legal name fields
+        addIfNotEmpty("personal.legal.prefix", "Name Prefix", optional.prefix, DataCategory.IDENTITY)
+        addIfNotEmpty("personal.legal.first_name", "Legal First Name", optional.firstName, DataCategory.IDENTITY)
+        addIfNotEmpty("personal.legal.middle_name", "Middle Name", optional.middleName, DataCategory.IDENTITY)
+        addIfNotEmpty("personal.legal.last_name", "Legal Last Name", optional.lastName, DataCategory.IDENTITY)
+        addIfNotEmpty("personal.legal.suffix", "Name Suffix", optional.suffix, DataCategory.IDENTITY)
+
+        // Contact fields
+        addIfNotEmpty("contact.phone.mobile", "Mobile Phone", optional.phone, DataCategory.CONTACT)
+        addIfNotEmpty("personal.info.birthday", "Birthday", optional.birthday, DataCategory.IDENTITY)
+
+        // Address fields
+        addIfNotEmpty("address.home.street", "Street Address", optional.street, DataCategory.ADDRESS)
+        addIfNotEmpty("address.home.street2", "Address Line 2", optional.street2, DataCategory.ADDRESS)
+        addIfNotEmpty("address.home.city", "City", optional.city, DataCategory.ADDRESS)
+        addIfNotEmpty("address.home.state", "State", optional.state, DataCategory.ADDRESS)
+        addIfNotEmpty("address.home.postal_code", "Postal Code", optional.postalCode, DataCategory.ADDRESS)
+        addIfNotEmpty("address.home.country", "Country", optional.country, DataCategory.ADDRESS)
+
+        // Social fields
+        addIfNotEmpty("social.website.personal", "Website", optional.website, DataCategory.CONTACT, DataType.PUBLIC)
+        addIfNotEmpty("social.linkedin.url", "LinkedIn", optional.linkedin, DataCategory.CONTACT, DataType.PUBLIC)
+        addIfNotEmpty("social.twitter.handle", "X (Twitter)", optional.twitter, DataCategory.CONTACT, DataType.PUBLIC)
+        addIfNotEmpty("social.instagram.handle", "Instagram", optional.instagram, DataCategory.CONTACT, DataType.PUBLIC)
+        addIfNotEmpty("social.github.username", "GitHub", optional.github, DataCategory.CONTACT, DataType.PUBLIC)
+
+        // Load custom fields
+        val customFields = personalDataStore.getCustomFields()
+        customFields.forEach { customField ->
+            val namespace = personalDataStore.generateNamespace(
+                customField.category.name.lowercase(),
+                customField.name
+            )
+            val category = when (customField.category) {
+                com.vettid.app.core.storage.FieldCategory.IDENTITY -> DataCategory.IDENTITY
+                com.vettid.app.core.storage.FieldCategory.CONTACT -> DataCategory.CONTACT
+                com.vettid.app.core.storage.FieldCategory.ADDRESS -> DataCategory.ADDRESS
+                com.vettid.app.core.storage.FieldCategory.FINANCIAL -> DataCategory.FINANCIAL
+                com.vettid.app.core.storage.FieldCategory.MEDICAL -> DataCategory.MEDICAL
+                com.vettid.app.core.storage.FieldCategory.OTHER -> DataCategory.OTHER
+            }
+            val dataType = when (customField.fieldType) {
+                com.vettid.app.core.storage.FieldType.PASSWORD -> DataType.MINOR_SECRET
+                else -> DataType.PRIVATE
+            }
+            dataItems.add(PersonalDataItem(
+                id = namespace,
+                name = customField.name,
+                type = dataType,
+                value = customField.value,
+                category = category,
+                isSystemField = false,
+                isInPublicProfile = publicFields.contains(namespace),
+                createdAt = Instant.ofEpochMilli(customField.createdAt),
+                updatedAt = Instant.ofEpochMilli(customField.updatedAt)
+            ))
+        }
+
+        Log.d(TAG, "Loaded ${dataItems.size} items from local storage")
     }
 
     private fun updateSearchQuery(query: String) {
@@ -349,95 +576,107 @@ class PersonalDataViewModel @Inject constructor(
             _editState.value = current.copy(isSaving = true)
 
             try {
-                if (current.id != null) {
-                    // Update existing item
-                    val existingItem = dataItems.find { it.id == current.id }
-                    if (existingItem != null && !existingItem.isSystemField) {
-                        // Handle custom fields
-                        if (current.id.startsWith("custom-")) {
-                            val customFieldId = current.id.removePrefix("custom-")
-                            val fieldCategory = when (current.category) {
-                                DataCategory.IDENTITY -> FieldCategory.IDENTITY
-                                DataCategory.CONTACT -> FieldCategory.CONTACT
-                                DataCategory.ADDRESS -> FieldCategory.ADDRESS
-                                DataCategory.FINANCIAL -> FieldCategory.FINANCIAL
-                                DataCategory.MEDICAL -> FieldCategory.MEDICAL
-                                else -> FieldCategory.OTHER
-                            }
-                            val fieldType = when (current.type) {
-                                DataType.MINOR_SECRET -> FieldType.PASSWORD
-                                else -> FieldType.TEXT
-                            }
-                            val customFields = personalDataStore.getCustomFields()
-                            val existingCustom = customFields.find { it.id == customFieldId }
-                            if (existingCustom != null) {
-                                personalDataStore.updateCustomField(existingCustom.copy(
-                                    name = current.name,
-                                    value = current.value,
-                                    category = fieldCategory,
-                                    fieldType = fieldType
-                                ))
-                            }
-                        }
-                        // Handle optional fields
-                        else if (current.id.startsWith("optional-")) {
-                            val optionalField = when (current.id) {
-                                "optional-prefix" -> OptionalField.PREFIX
-                                "optional-first-name" -> OptionalField.FIRST_NAME
-                                "optional-middle-name" -> OptionalField.MIDDLE_NAME
-                                "optional-last-name" -> OptionalField.LAST_NAME
-                                "optional-suffix" -> OptionalField.SUFFIX
-                                "optional-phone" -> OptionalField.PHONE
-                                "optional-birthday" -> OptionalField.BIRTHDAY
-                                "optional-street" -> OptionalField.STREET
-                                "optional-street2" -> OptionalField.STREET2
-                                "optional-city" -> OptionalField.CITY
-                                "optional-state" -> OptionalField.STATE
-                                "optional-postal-code" -> OptionalField.POSTAL_CODE
-                                "optional-country" -> OptionalField.COUNTRY
-                                "optional-website" -> OptionalField.WEBSITE
-                                "optional-linkedin" -> OptionalField.LINKEDIN
-                                "optional-twitter" -> OptionalField.TWITTER
-                                "optional-instagram" -> OptionalField.INSTAGRAM
-                                "optional-github" -> OptionalField.GITHUB
-                                else -> null
-                            }
-                            if (optionalField != null) {
-                                personalDataStore.updateOptionalField(optionalField, current.value.ifBlank { null })
-                            }
-                        }
-                    }
-                    _effects.emit(PersonalDataEffect.ShowSuccess("Data updated"))
-                } else {
-                    // Create new custom field
-                    val fieldCategory = when (current.category) {
-                        DataCategory.IDENTITY -> FieldCategory.IDENTITY
-                        DataCategory.CONTACT -> FieldCategory.CONTACT
-                        DataCategory.ADDRESS -> FieldCategory.ADDRESS
-                        DataCategory.FINANCIAL -> FieldCategory.FINANCIAL
-                        DataCategory.MEDICAL -> FieldCategory.MEDICAL
-                        else -> FieldCategory.OTHER
-                    }
-                    val fieldType = when (current.type) {
-                        DataType.MINOR_SECRET -> FieldType.PASSWORD
-                        else -> FieldType.TEXT
-                    }
-                    personalDataStore.addCustomField(
-                        name = current.name,
-                        value = current.value,
-                        category = fieldCategory,
-                        fieldType = fieldType
-                    )
-                    _effects.emit(PersonalDataEffect.ShowSuccess("Data added"))
+                val category = current.category ?: DataCategory.OTHER
+                val namespace = current.id ?: generateNamespace(category, current.name)
+
+                // Save to vault
+                val payload = JsonObject().apply {
+                    val fieldsObj = JsonObject()
+                    fieldsObj.addProperty(namespace, current.value)
+                    add("fields", fieldsObj)
                 }
 
-                _showAddDialog.value = false
-                _editState.value = EditDataItemState()
-                loadPersonalData()
+                val result = ownerSpaceClient.sendToVault("profile.update", payload)
+
+                result.fold(
+                    onSuccess = { requestId ->
+                        Log.i(TAG, "Field saved to vault: $namespace, requestId: $requestId")
+
+                        // Also save locally for offline access
+                        saveFieldLocally(namespace, current)
+
+                        _showAddDialog.value = false
+                        _editState.value = EditDataItemState()
+                        _effects.emit(PersonalDataEffect.ShowSuccess(
+                            if (current.isEditing) "Data updated" else "Data added"
+                        ))
+                        loadPersonalData() // Reload to show updated data
+                    },
+                    onFailure = { error ->
+                        Log.e(TAG, "Failed to save field: ${error.message}")
+                        _editState.value = current.copy(isSaving = false)
+                        _effects.emit(PersonalDataEffect.ShowError("Failed to save: ${error.message}"))
+                    }
+                )
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to save data", e)
                 _effects.emit(PersonalDataEffect.ShowError(e.message ?: "Failed to save"))
                 _editState.value = current.copy(isSaving = false)
+            }
+        }
+    }
+
+    /**
+     * Generate namespace from category and name.
+     */
+    private fun generateNamespace(category: DataCategory, name: String): String {
+        val prefix = when (category) {
+            DataCategory.IDENTITY -> "personal.custom"
+            DataCategory.CONTACT -> "contact.custom"
+            DataCategory.ADDRESS -> "address.custom"
+            DataCategory.FINANCIAL -> "financial.custom"
+            DataCategory.MEDICAL -> "medical.custom"
+            DataCategory.CRYPTO -> "crypto.custom"
+            DataCategory.DOCUMENT -> "document.custom"
+            DataCategory.OTHER -> "other.custom"
+        }
+        val sanitizedName = name.lowercase().replace(" ", "_").replace(Regex("[^a-z0-9_]"), "")
+        return "$prefix.$sanitizedName"
+    }
+
+    /**
+     * Save field locally for offline access.
+     */
+    private fun saveFieldLocally(namespace: String, state: EditDataItemState) {
+        // Map to local storage if it's a known optional field
+        val updated = personalDataStore.updateOptionalFieldByNamespace(namespace, state.value)
+        if (!updated) {
+            // It's a custom field, save as such
+            val fieldCategory = when (state.category) {
+                DataCategory.IDENTITY -> com.vettid.app.core.storage.FieldCategory.IDENTITY
+                DataCategory.CONTACT -> com.vettid.app.core.storage.FieldCategory.CONTACT
+                DataCategory.ADDRESS -> com.vettid.app.core.storage.FieldCategory.ADDRESS
+                DataCategory.FINANCIAL -> com.vettid.app.core.storage.FieldCategory.FINANCIAL
+                DataCategory.MEDICAL -> com.vettid.app.core.storage.FieldCategory.MEDICAL
+                else -> com.vettid.app.core.storage.FieldCategory.OTHER
+            }
+            val fieldType = when (state.type) {
+                DataType.MINOR_SECRET -> com.vettid.app.core.storage.FieldType.PASSWORD
+                else -> com.vettid.app.core.storage.FieldType.TEXT
+            }
+
+            if (state.isEditing && state.id != null) {
+                // Update existing custom field
+                val existingFields = personalDataStore.getCustomFields()
+                val existing = existingFields.find {
+                    personalDataStore.generateNamespace(it.category.name.lowercase(), it.name) == state.id
+                }
+                if (existing != null) {
+                    personalDataStore.updateCustomField(existing.copy(
+                        name = state.name,
+                        value = state.value,
+                        category = fieldCategory,
+                        fieldType = fieldType
+                    ))
+                }
+            } else {
+                // Add new custom field
+                personalDataStore.addCustomField(
+                    name = state.name,
+                    value = state.value,
+                    category = fieldCategory,
+                    fieldType = fieldType
+                )
             }
         }
     }
@@ -451,41 +690,30 @@ class PersonalDataViewModel @Inject constructor(
                     return@launch
                 }
 
-                // Handle custom fields
-                if (itemId.startsWith("custom-")) {
-                    val customFieldId = itemId.removePrefix("custom-")
-                    personalDataStore.removeCustomField(customFieldId)
-                }
-                // Handle optional fields (clear value)
-                else if (itemId.startsWith("optional-")) {
-                    val optionalField = when (itemId) {
-                        "optional-prefix" -> OptionalField.PREFIX
-                        "optional-first-name" -> OptionalField.FIRST_NAME
-                        "optional-middle-name" -> OptionalField.MIDDLE_NAME
-                        "optional-last-name" -> OptionalField.LAST_NAME
-                        "optional-suffix" -> OptionalField.SUFFIX
-                        "optional-phone" -> OptionalField.PHONE
-                        "optional-birthday" -> OptionalField.BIRTHDAY
-                        "optional-street" -> OptionalField.STREET
-                        "optional-street2" -> OptionalField.STREET2
-                        "optional-city" -> OptionalField.CITY
-                        "optional-state" -> OptionalField.STATE
-                        "optional-postal-code" -> OptionalField.POSTAL_CODE
-                        "optional-country" -> OptionalField.COUNTRY
-                        "optional-website" -> OptionalField.WEBSITE
-                        "optional-linkedin" -> OptionalField.LINKEDIN
-                        "optional-twitter" -> OptionalField.TWITTER
-                        "optional-instagram" -> OptionalField.INSTAGRAM
-                        "optional-github" -> OptionalField.GITHUB
-                        else -> null
-                    }
-                    if (optionalField != null) {
-                        personalDataStore.updateOptionalField(optionalField, null)
-                    }
+                // Delete from vault
+                val payload = JsonObject().apply {
+                    val fieldsArray = com.google.gson.JsonArray()
+                    fieldsArray.add(itemId)
+                    add("fields", fieldsArray)
                 }
 
-                loadPersonalData()
-                _effects.emit(PersonalDataEffect.ShowSuccess("Data deleted"))
+                val result = ownerSpaceClient.sendToVault("profile.delete", payload)
+
+                result.fold(
+                    onSuccess = { requestId ->
+                        Log.i(TAG, "Field deleted from vault: $itemId, requestId: $requestId")
+
+                        // Also delete locally
+                        deleteFieldLocally(itemId)
+
+                        _effects.emit(PersonalDataEffect.ShowSuccess("Data deleted"))
+                        loadPersonalData()
+                    },
+                    onFailure = { error ->
+                        Log.e(TAG, "Failed to delete field: ${error.message}")
+                        _effects.emit(PersonalDataEffect.ShowError("Failed to delete: ${error.message}"))
+                    }
+                )
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to delete item", e)
                 _effects.emit(PersonalDataEffect.ShowError("Failed to delete"))
@@ -494,23 +722,20 @@ class PersonalDataViewModel @Inject constructor(
     }
 
     /**
-     * Get personal data grouped by type.
-     * @deprecated Use getDataByCategory instead
+     * Delete field from local storage.
      */
-    fun getGroupedData(): GroupedPersonalData {
-        return GroupedPersonalData(
-            publicData = dataItems.filter { it.type == DataType.PUBLIC },
-            privateData = dataItems.filter { it.type == DataType.PRIVATE },
-            keys = dataItems.filter { it.type == DataType.KEY },
-            minorSecrets = dataItems.filter { it.type == DataType.MINOR_SECRET }
-        )
-    }
+    private fun deleteFieldLocally(namespace: String) {
+        // Try to clear as optional field
+        personalDataStore.updateOptionalFieldByNamespace(namespace, null)
 
-    /**
-     * Get personal data grouped by category.
-     */
-    fun getDataByCategory(): GroupedByCategory {
-        return GroupedByCategory.fromItems(dataItems)
+        // Also try to remove as custom field
+        val customFields = personalDataStore.getCustomFields()
+        val matching = customFields.find {
+            personalDataStore.generateNamespace(it.category.name.lowercase(), it.name) == namespace
+        }
+        matching?.let {
+            personalDataStore.removeCustomField(it.id)
+        }
     }
 
     /**
@@ -522,13 +747,28 @@ class PersonalDataViewModel @Inject constructor(
                 val index = dataItems.indexOfFirst { it.id == itemId }
                 if (index >= 0) {
                     val item = dataItems[index]
+
+                    // System fields are always in public profile
+                    if (item.isSystemField) {
+                        _effects.emit(PersonalDataEffect.ShowError("System fields are always shared"))
+                        return@launch
+                    }
+
                     val newValue = !item.isInPublicProfile
 
                     // Update in-memory
                     dataItems[index] = item.copy(isInPublicProfile = newValue)
 
-                    // Persist to storage
-                    personalDataStore.setPublicProfileStatus(itemId, newValue)
+                    // Update local storage
+                    if (newValue) {
+                        publicProfileFields.add(itemId)
+                    } else {
+                        publicProfileFields.remove(itemId)
+                    }
+                    personalDataStore.updatePublicProfileFields(publicProfileFields.toList())
+
+                    // Update vault public profile settings
+                    ownerSpaceClient.updatePublicProfileSettings(publicProfileFields.toList())
 
                     // Refresh state
                     _state.value = PersonalDataState.Loaded(items = dataItems.toList())
@@ -546,132 +786,9 @@ class PersonalDataViewModel @Inject constructor(
     }
 
     /**
-     * Load all personal data from the PersonalDataStore.
-     * Converts system fields, optional fields, and custom fields to PersonalDataItem objects.
+     * Get personal data grouped by category.
      */
-    private fun loadAllPersonalData(): List<PersonalDataItem> {
-        val now = Instant.now()
-        val items = mutableListOf<PersonalDataItem>()
-
-        // Get public profile fields set for checking isInPublicProfile
-        val publicProfileFields = personalDataStore.getPublicProfileFields().toSet()
-
-        // Load system fields (read-only from registration)
-        val systemFields = personalDataStore.getSystemFields()
-        android.util.Log.d("PersonalDataVM", "System fields: ${systemFields?.firstName} ${systemFields?.lastName}, hasSystemFields: ${personalDataStore.hasSystemFields()}")
-        systemFields?.let { system ->
-            items.add(PersonalDataItem(
-                id = "system-first-name",
-                name = "First Name",
-                type = DataType.PUBLIC,
-                value = system.firstName,
-                category = DataCategory.IDENTITY,
-                isSystemField = true,
-                isInPublicProfile = publicProfileFields.contains("system-first-name"),
-                createdAt = now,
-                updatedAt = now
-            ))
-            items.add(PersonalDataItem(
-                id = "system-last-name",
-                name = "Last Name",
-                type = DataType.PUBLIC,
-                value = system.lastName,
-                category = DataCategory.IDENTITY,
-                isSystemField = true,
-                isInPublicProfile = publicProfileFields.contains("system-last-name"),
-                createdAt = now,
-                updatedAt = now
-            ))
-            items.add(PersonalDataItem(
-                id = "system-email",
-                name = "Email",
-                type = DataType.PUBLIC,
-                value = system.email,
-                category = DataCategory.CONTACT,
-                isSystemField = true,
-                isInPublicProfile = publicProfileFields.contains("system-email"),
-                createdAt = now,
-                updatedAt = now
-            ))
-        }
-
-        // Load optional fields
-        val optional = personalDataStore.getOptionalFields()
-        android.util.Log.d("PersonalDataVM", "Optional fields: prefix=${optional.prefix}, firstName=${optional.firstName}, middleName=${optional.middleName}, lastName=${optional.lastName}")
-
-        // Helper function to create optional field item
-        fun addOptionalItem(id: String, name: String, value: String, type: DataType, category: DataCategory) {
-            items.add(PersonalDataItem(
-                id = id,
-                name = name,
-                type = type,
-                value = value,
-                category = category,
-                isSystemField = false,
-                isInPublicProfile = publicProfileFields.contains(id),
-                createdAt = now,
-                updatedAt = now
-            ))
-        }
-
-        // Legal name fields
-        optional.prefix?.let { addOptionalItem("optional-prefix", "Name Prefix", it, DataType.PRIVATE, DataCategory.IDENTITY) }
-        optional.firstName?.let { addOptionalItem("optional-first-name", "Legal First Name", it, DataType.PRIVATE, DataCategory.IDENTITY) }
-        optional.middleName?.let { addOptionalItem("optional-middle-name", "Middle Name", it, DataType.PRIVATE, DataCategory.IDENTITY) }
-        optional.lastName?.let { addOptionalItem("optional-last-name", "Legal Last Name", it, DataType.PRIVATE, DataCategory.IDENTITY) }
-        optional.suffix?.let { addOptionalItem("optional-suffix", "Name Suffix", it, DataType.PRIVATE, DataCategory.IDENTITY) }
-
-        // Contact fields
-        optional.phone?.let { addOptionalItem("optional-phone", "Phone", it, DataType.PRIVATE, DataCategory.CONTACT) }
-        optional.birthday?.let { addOptionalItem("optional-birthday", "Birthday", it, DataType.PRIVATE, DataCategory.IDENTITY) }
-
-        // Address fields
-        optional.street?.let { addOptionalItem("optional-street", "Street Address", it, DataType.PRIVATE, DataCategory.ADDRESS) }
-        optional.street2?.let { addOptionalItem("optional-street2", "Address Line 2", it, DataType.PRIVATE, DataCategory.ADDRESS) }
-        optional.city?.let { addOptionalItem("optional-city", "City", it, DataType.PRIVATE, DataCategory.ADDRESS) }
-        optional.state?.let { addOptionalItem("optional-state", "State", it, DataType.PRIVATE, DataCategory.ADDRESS) }
-        optional.postalCode?.let { addOptionalItem("optional-postal-code", "Postal Code", it, DataType.PRIVATE, DataCategory.ADDRESS) }
-        optional.country?.let { addOptionalItem("optional-country", "Country", it, DataType.PRIVATE, DataCategory.ADDRESS) }
-
-        // Social/Web fields
-        optional.website?.let { addOptionalItem("optional-website", "Website", it, DataType.PUBLIC, DataCategory.CONTACT) }
-        optional.linkedin?.let { addOptionalItem("optional-linkedin", "LinkedIn", it, DataType.PUBLIC, DataCategory.CONTACT) }
-        optional.twitter?.let { addOptionalItem("optional-twitter", "X (Twitter)", it, DataType.PUBLIC, DataCategory.CONTACT) }
-        optional.instagram?.let { addOptionalItem("optional-instagram", "Instagram", it, DataType.PUBLIC, DataCategory.CONTACT) }
-        optional.github?.let { addOptionalItem("optional-github", "GitHub", it, DataType.PUBLIC, DataCategory.CONTACT) }
-
-        // Load custom fields
-        val customFields = personalDataStore.getCustomFields()
-        android.util.Log.d("PersonalDataVM", "Custom fields count: ${customFields.size}")
-        customFields.forEach { customField ->
-            val category = when (customField.category) {
-                FieldCategory.IDENTITY -> DataCategory.IDENTITY
-                FieldCategory.CONTACT -> DataCategory.CONTACT
-                FieldCategory.ADDRESS -> DataCategory.ADDRESS
-                FieldCategory.FINANCIAL -> DataCategory.FINANCIAL
-                FieldCategory.MEDICAL -> DataCategory.MEDICAL
-                FieldCategory.OTHER -> DataCategory.OTHER
-            }
-            val dataType = when (customField.fieldType) {
-                FieldType.PASSWORD -> DataType.MINOR_SECRET
-                FieldType.NOTE -> DataType.PRIVATE
-                else -> DataType.PRIVATE
-            }
-            val itemId = "custom-${customField.id}"
-            items.add(PersonalDataItem(
-                id = itemId,
-                name = customField.name,
-                type = dataType,
-                value = customField.value,
-                category = category,
-                isSystemField = false,
-                isInPublicProfile = publicProfileFields.contains(itemId),
-                createdAt = Instant.ofEpochMilli(customField.createdAt),
-                updatedAt = Instant.ofEpochMilli(customField.updatedAt)
-            ))
-        }
-
-        android.util.Log.d("PersonalDataVM", "Total items loaded: ${items.size}, IDs: ${items.map { it.id }}")
-        return items
+    fun getDataByCategory(): GroupedByCategory {
+        return GroupedByCategory.fromItems(dataItems)
     }
 }
