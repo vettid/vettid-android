@@ -17,6 +17,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.vettid.app.core.storage.CategoryInfo
 import com.vettid.app.core.storage.CustomField
 import com.vettid.app.core.storage.FieldCategory
 import com.vettid.app.core.storage.FieldType
@@ -36,6 +37,7 @@ fun PersonalDataPhaseContent(
     systemFields: SystemPersonalData?,
     optionalFields: OptionalPersonalData,
     customFields: List<CustomField>,
+    customCategories: List<CategoryInfo>,
     hasPendingSync: Boolean,
     error: String?,
     showAddFieldDialog: Boolean,
@@ -44,6 +46,7 @@ fun PersonalDataPhaseContent(
     onAddCustomField: (name: String, value: String, category: FieldCategory, fieldType: FieldType) -> Unit,
     onUpdateCustomField: (CustomField) -> Unit,
     onRemoveCustomField: (String) -> Unit,
+    onCreateCategory: (String) -> Unit,
     onSyncNow: () -> Unit,
     onShowAddDialog: () -> Unit,
     onHideAddDialog: () -> Unit,
@@ -169,8 +172,10 @@ fun PersonalDataPhaseContent(
         // Add Custom Field Dialog
         if (showAddFieldDialog) {
             AddCustomFieldDialog(
+                customCategories = customCategories,
                 onDismiss = onHideAddDialog,
-                onAdd = onAddCustomField
+                onAdd = onAddCustomField,
+                onCreateCategory = onCreateCategory
             )
         }
 
@@ -178,9 +183,11 @@ fun PersonalDataPhaseContent(
         if (editingField != null) {
             EditCustomFieldDialog(
                 field = editingField,
+                customCategories = customCategories,
                 onDismiss = onHideEditDialog,
                 onSave = onUpdateCustomField,
-                onDelete = { onRemoveCustomField(editingField.id) }
+                onDelete = { onRemoveCustomField(editingField.id) },
+                onCreateCategory = onCreateCategory
             )
         }
     }
@@ -961,15 +968,74 @@ private fun BottomButtons(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AddCustomFieldDialog(
+    customCategories: List<CategoryInfo>,
     onDismiss: () -> Unit,
-    onAdd: (name: String, value: String, category: FieldCategory, fieldType: FieldType) -> Unit
+    onAdd: (name: String, value: String, category: FieldCategory, fieldType: FieldType) -> Unit,
+    onCreateCategory: (String) -> Unit
 ) {
     var name by remember { mutableStateOf("") }
     var value by remember { mutableStateOf("") }
     var category by remember { mutableStateOf(FieldCategory.OTHER) }
+    var selectedCustomCategory by remember { mutableStateOf<CategoryInfo?>(null) }
     var fieldType by remember { mutableStateOf(FieldType.TEXT) }
     var categoryExpanded by remember { mutableStateOf(false) }
     var typeExpanded by remember { mutableStateOf(false) }
+    var showNewCategoryDialog by remember { mutableStateOf(false) }
+    var pendingCategoryName by remember { mutableStateOf("") }
+
+    // New Category Dialog
+    if (showNewCategoryDialog) {
+        AlertDialog(
+            onDismissRequest = { showNewCategoryDialog = false },
+            title = { Text("New Category") },
+            text = {
+                OutlinedTextField(
+                    value = pendingCategoryName,
+                    onValueChange = { pendingCategoryName = it },
+                    label = { Text("Category Name") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Words
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (pendingCategoryName.isNotBlank()) {
+                            // Call the callback to create and sync the category to vault
+                            onCreateCategory(pendingCategoryName)
+                            // Set to OTHER for the field, but the category name will be synced
+                            category = FieldCategory.OTHER
+                            selectedCustomCategory = CategoryInfo(
+                                id = pendingCategoryName.lowercase().replace(" ", "_"),
+                                name = pendingCategoryName,
+                                icon = "more"
+                            )
+                            showNewCategoryDialog = false
+                            pendingCategoryName = ""
+                        }
+                    },
+                    enabled = pendingCategoryName.isNotBlank()
+                ) {
+                    Text("Create")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showNewCategoryDialog = false
+                    pendingCategoryName = ""
+                }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Compute display value for category
+    val categoryDisplayValue = selectedCustomCategory?.name
+        ?: category.name.lowercase().replaceFirstChar { it.uppercase() }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -978,18 +1044,86 @@ private fun AddCustomFieldDialog(
             Column(
                 modifier = Modifier.verticalScroll(rememberScrollState())
             ) {
+                // 1. Category dropdown (FIRST)
+                ExposedDropdownMenuBox(
+                    expanded = categoryExpanded,
+                    onExpandedChange = { categoryExpanded = it }
+                ) {
+                    OutlinedTextField(
+                        value = categoryDisplayValue,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Category") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = categoryExpanded) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor()
+                    )
+
+                    ExposedDropdownMenu(
+                        expanded = categoryExpanded,
+                        onDismissRequest = { categoryExpanded = false }
+                    ) {
+                        // Predefined categories
+                        FieldCategory.entries.forEach { cat ->
+                            DropdownMenuItem(
+                                text = { Text(cat.name.lowercase().replaceFirstChar { it.uppercase() }) },
+                                onClick = {
+                                    category = cat
+                                    selectedCustomCategory = null
+                                    categoryExpanded = false
+                                }
+                            )
+                        }
+                        // Custom categories from vault
+                        if (customCategories.isNotEmpty()) {
+                            Divider()
+                            customCategories.forEach { customCat ->
+                                DropdownMenuItem(
+                                    text = { Text(customCat.name) },
+                                    onClick = {
+                                        category = FieldCategory.OTHER
+                                        selectedCustomCategory = customCat
+                                        categoryExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                        Divider()
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Create New Category")
+                                }
+                            },
+                            onClick = {
+                                categoryExpanded = false
+                                showNewCategoryDialog = true
+                            }
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // 2. Field Name
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
                     label = { Text("Field Name") },
                     placeholder = { Text("e.g., Driver's License") },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Words
+                    ),
                     modifier = Modifier.fillMaxWidth()
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Field Type dropdown
+                // 3. Field Type dropdown
                 ExposedDropdownMenuBox(
                     expanded = typeExpanded,
                     onExpandedChange = { typeExpanded = it }
@@ -1033,40 +1167,6 @@ private fun AddCustomFieldDialog(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // Category dropdown
-                ExposedDropdownMenuBox(
-                    expanded = categoryExpanded,
-                    onExpandedChange = { categoryExpanded = it }
-                ) {
-                    OutlinedTextField(
-                        value = category.name.lowercase().replaceFirstChar { it.uppercase() },
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("Category") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = categoryExpanded) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor()
-                    )
-
-                    ExposedDropdownMenu(
-                        expanded = categoryExpanded,
-                        onDismissRequest = { categoryExpanded = false }
-                    ) {
-                        FieldCategory.entries.forEach { cat ->
-                            DropdownMenuItem(
-                                text = { Text(cat.name.lowercase().replaceFirstChar { it.uppercase() }) },
-                                onClick = {
-                                    category = cat
-                                    categoryExpanded = false
-                                }
-                            )
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
                 // Value input - varies based on field type
                 when (fieldType) {
                     FieldType.NOTE -> {
@@ -1076,6 +1176,9 @@ private fun AddCustomFieldDialog(
                             label = { Text("Value") },
                             minLines = 3,
                             maxLines = 5,
+                            keyboardOptions = KeyboardOptions(
+                                capitalization = KeyboardCapitalization.Sentences
+                            ),
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -1136,6 +1239,9 @@ private fun AddCustomFieldDialog(
                             onValueChange = { value = it },
                             label = { Text("Value") },
                             singleLine = true,
+                            keyboardOptions = KeyboardOptions(
+                                capitalization = KeyboardCapitalization.Sentences
+                            ),
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -1144,7 +1250,16 @@ private fun AddCustomFieldDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onAdd(name, value, category, fieldType) },
+                onClick = {
+                    // If custom category, prefix it to the field name for identification
+                    // Use format "CategoryName - FieldName" (no brackets, as validation doesn't allow them)
+                    val finalName = if (selectedCustomCategory != null) {
+                        "${selectedCustomCategory!!.name} - $name"
+                    } else {
+                        name
+                    }
+                    onAdd(finalName, value, category, fieldType)
+                },
                 enabled = name.isNotBlank()
             ) {
                 Text("Add")
@@ -1162,17 +1277,74 @@ private fun AddCustomFieldDialog(
 @Composable
 private fun EditCustomFieldDialog(
     field: CustomField,
+    customCategories: List<CategoryInfo> = emptyList(),
     onDismiss: () -> Unit,
     onSave: (CustomField) -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onCreateCategory: (String) -> Unit = {}
 ) {
     var name by remember { mutableStateOf(field.name) }
     var value by remember { mutableStateOf(field.value) }
     var category by remember { mutableStateOf(field.category) }
+    var selectedCustomCategory by remember { mutableStateOf<CategoryInfo?>(null) }
     var fieldType by remember { mutableStateOf(field.fieldType) }
     var categoryExpanded by remember { mutableStateOf(false) }
     var typeExpanded by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    var showNewCategoryDialog by remember { mutableStateOf(false) }
+    var pendingCategoryName by remember { mutableStateOf("") }
+
+    // New Category Dialog
+    if (showNewCategoryDialog) {
+        AlertDialog(
+            onDismissRequest = { showNewCategoryDialog = false },
+            title = { Text("New Category") },
+            text = {
+                OutlinedTextField(
+                    value = pendingCategoryName,
+                    onValueChange = { pendingCategoryName = it },
+                    label = { Text("Category Name") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Words
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (pendingCategoryName.isNotBlank()) {
+                            onCreateCategory(pendingCategoryName)
+                            category = FieldCategory.OTHER
+                            selectedCustomCategory = CategoryInfo(
+                                id = pendingCategoryName.lowercase().replace(" ", "_"),
+                                name = pendingCategoryName,
+                                icon = "more"
+                            )
+                            showNewCategoryDialog = false
+                            pendingCategoryName = ""
+                        }
+                    },
+                    enabled = pendingCategoryName.isNotBlank()
+                ) {
+                    Text("Create")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showNewCategoryDialog = false
+                    pendingCategoryName = ""
+                }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Compute display value for category
+    val categoryDisplayValue = selectedCustomCategory?.name
+        ?: category.name.lowercase().replaceFirstChar { it.uppercase() }
 
     if (showDeleteConfirm) {
         AlertDialog(
@@ -1206,17 +1378,85 @@ private fun EditCustomFieldDialog(
                 Column(
                     modifier = Modifier.verticalScroll(rememberScrollState())
                 ) {
+                    // 1. Category dropdown (FIRST)
+                    ExposedDropdownMenuBox(
+                        expanded = categoryExpanded,
+                        onExpandedChange = { categoryExpanded = it }
+                    ) {
+                        OutlinedTextField(
+                            value = categoryDisplayValue,
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Category") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = categoryExpanded) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .menuAnchor()
+                        )
+
+                        ExposedDropdownMenu(
+                            expanded = categoryExpanded,
+                            onDismissRequest = { categoryExpanded = false }
+                        ) {
+                            // Predefined categories
+                            FieldCategory.entries.forEach { cat ->
+                                DropdownMenuItem(
+                                    text = { Text(cat.name.lowercase().replaceFirstChar { it.uppercase() }) },
+                                    onClick = {
+                                        category = cat
+                                        selectedCustomCategory = null
+                                        categoryExpanded = false
+                                    }
+                                )
+                            }
+                            // Custom categories
+                            if (customCategories.isNotEmpty()) {
+                                Divider()
+                                customCategories.forEach { customCat ->
+                                    DropdownMenuItem(
+                                        text = { Text(customCat.name) },
+                                        onClick = {
+                                            category = FieldCategory.OTHER
+                                            selectedCustomCategory = customCat
+                                            categoryExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                            Divider()
+                            DropdownMenuItem(
+                                text = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text("Create New Category")
+                                    }
+                                },
+                                onClick = {
+                                    categoryExpanded = false
+                                    showNewCategoryDialog = true
+                                }
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // 2. Field Name
                     OutlinedTextField(
                         value = name,
                         onValueChange = { name = it },
                         label = { Text("Field Name") },
                         singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Words
+                        ),
                         modifier = Modifier.fillMaxWidth()
                     )
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Field Type dropdown
+                    // 3. Field Type dropdown
                     ExposedDropdownMenuBox(
                         expanded = typeExpanded,
                         onExpandedChange = { typeExpanded = it }
@@ -1260,41 +1500,7 @@ private fun EditCustomFieldDialog(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Category dropdown
-                    ExposedDropdownMenuBox(
-                        expanded = categoryExpanded,
-                        onExpandedChange = { categoryExpanded = it }
-                    ) {
-                        OutlinedTextField(
-                            value = category.name.lowercase().replaceFirstChar { it.uppercase() },
-                            onValueChange = {},
-                            readOnly = true,
-                            label = { Text("Category") },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = categoryExpanded) },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .menuAnchor()
-                        )
-
-                        ExposedDropdownMenu(
-                            expanded = categoryExpanded,
-                            onDismissRequest = { categoryExpanded = false }
-                        ) {
-                            FieldCategory.entries.forEach { cat ->
-                                DropdownMenuItem(
-                                    text = { Text(cat.name.lowercase().replaceFirstChar { it.uppercase() }) },
-                                    onClick = {
-                                        category = cat
-                                        categoryExpanded = false
-                                    }
-                                )
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Value input - varies based on field type
+                    // 4. Value input - varies based on field type
                     when (fieldType) {
                         FieldType.NOTE -> {
                             OutlinedTextField(
@@ -1303,6 +1509,9 @@ private fun EditCustomFieldDialog(
                                 label = { Text("Value") },
                                 minLines = 3,
                                 maxLines = 5,
+                                keyboardOptions = KeyboardOptions(
+                                    capitalization = KeyboardCapitalization.Sentences
+                                ),
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }
@@ -1363,6 +1572,9 @@ private fun EditCustomFieldDialog(
                                 onValueChange = { value = it },
                                 label = { Text("Value") },
                                 singleLine = true,
+                                keyboardOptions = KeyboardOptions(
+                                    capitalization = KeyboardCapitalization.Sentences
+                                ),
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }
@@ -1385,7 +1597,13 @@ private fun EditCustomFieldDialog(
             confirmButton = {
                 Button(
                     onClick = {
-                        onSave(field.copy(name = name, value = value, category = category, fieldType = fieldType))
+                        // If custom category, prefix it to the field name
+                        val finalName = if (selectedCustomCategory != null) {
+                            "${selectedCustomCategory!!.name} - $name"
+                        } else {
+                            name
+                        }
+                        onSave(field.copy(name = finalName, value = value, category = category, fieldType = fieldType))
                     },
                     enabled = name.isNotBlank()
                 ) {

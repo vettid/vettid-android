@@ -20,11 +20,27 @@ data class PersonalDataItem(
     val type: DataType,
     val value: String,
     val category: DataCategory? = null,
+    val fieldType: FieldType = FieldType.TEXT,
     val isSystemField: Boolean = false,
     val isInPublicProfile: Boolean = false,  // Whether to include in public profile
+    val isSensitive: Boolean = false,  // Whether to mask value (PASSWORD type fields)
     val createdAt: Instant,
     val updatedAt: Instant
 )
+
+/**
+ * Field types that define how data is stored and displayed.
+ */
+enum class FieldType(val displayName: String, val description: String) {
+    TEXT("Text", "General text value"),
+    PASSWORD("Password", "Masked/hidden value"),
+    NUMBER("Number", "Numeric value"),
+    DATE("Date", "Date value (YYYY-MM-DD)"),
+    EMAIL("Email", "Email address"),
+    PHONE("Phone", "Phone number"),
+    URL("URL", "Web address"),
+    NOTE("Note", "Multi-line text")
+}
 
 /**
  * Data visibility types per mobile-ui-plan.md Section 5.2
@@ -46,7 +62,6 @@ enum class DataCategory(val displayName: String, val iconName: String) {
     FINANCIAL("Financial", "account_balance"),
     MEDICAL("Medical", "medical_services"),
     CRYPTO("Cryptocurrency", "currency_bitcoin"),
-    DOCUMENT("Document", "description"),
     OTHER("Other", "category")
 }
 
@@ -94,7 +109,6 @@ data class GroupedByCategory(
                 DataCategory.FINANCIAL,
                 DataCategory.MEDICAL,
                 DataCategory.CRYPTO,
-                DataCategory.DOCUMENT,
                 DataCategory.OTHER
             ).forEach { category ->
                 grouped[category]?.let { orderedCategories[category] = it }
@@ -134,6 +148,7 @@ data class EditDataItemState(
     val name: String = "",
     val value: String = "",
     val type: DataType = DataType.PRIVATE,
+    val fieldType: FieldType = FieldType.TEXT,
     val category: DataCategory? = null,
     val isInPublicProfile: Boolean = false,
     val isEditing: Boolean = false,

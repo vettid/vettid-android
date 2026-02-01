@@ -1,6 +1,7 @@
 package com.vettid.app.features.enrollmentwizard
 
 import com.vettid.app.core.nats.UtkInfo
+import com.vettid.app.core.storage.CategoryInfo
 import com.vettid.app.core.storage.CustomField
 import com.vettid.app.core.storage.OptionalPersonalData
 import com.vettid.app.core.storage.SystemPersonalData
@@ -30,7 +31,7 @@ enum class WizardPhase(val stepIndex: Int, val label: String) {
     PIN_SETUP(3, "PIN"),
     PASSWORD_SETUP(4, "Password"),
     VERIFY_CREDENTIAL(5, "Confirm"),
-    PERSONAL_DATA(6, "Profile"),
+    PERSONAL_DATA(6, "Data"),
     PUBLIC_PROFILE(7, "Share"),
     COMPLETE(8, "Done");
 
@@ -188,6 +189,7 @@ sealed class WizardState {
         val systemFields: SystemPersonalData? = null,
         val optionalFields: OptionalPersonalData = OptionalPersonalData(),
         val customFields: List<CustomField> = emptyList(),
+        val customCategories: List<CategoryInfo> = emptyList(),
         val hasPendingSync: Boolean = false,
         val error: String? = null,
         val showAddFieldDialog: Boolean = false,

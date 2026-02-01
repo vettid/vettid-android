@@ -44,7 +44,7 @@ sealed class PinUnlockState {
     ) : PinUnlockState()
     data object Connecting : PinUnlockState()
     data object Verifying : PinUnlockState()
-    data object Success : PinUnlockState()
+    data class Success(val firstName: String? = null) : PinUnlockState()
     data class Error(val message: String) : PinUnlockState()
 }
 
@@ -180,10 +180,13 @@ class PinUnlockViewModel @Inject constructor(
                 PinVerificationResult.Success -> {
                     Log.i(TAG, "PIN verification successful")
 
+                    // Get first name for welcome message
+                    val firstName = personalDataStore.getSystemFields()?.firstName
+
                     // Load profile from vault in background
                     loadProfileFromVault()
 
-                    _state.value = PinUnlockState.Success
+                    _state.value = PinUnlockState.Success(firstName = firstName)
                     _effects.emit(PinUnlockEffect.UnlockSuccess)
                 }
                 PinVerificationResult.InvalidPin -> {

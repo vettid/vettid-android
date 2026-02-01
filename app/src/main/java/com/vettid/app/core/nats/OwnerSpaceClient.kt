@@ -208,6 +208,15 @@ class OwnerSpaceClient @Inject constructor(
     }
 
     /**
+     * Get personal data from the vault.
+     * Personal data is private data stored in the vault (separate from public profile).
+     * @return Request ID for correlating response
+     */
+    suspend fun getPersonalDataFromVault(): Result<String> {
+        return sendToVault("personal-data.get", JsonObject())
+    }
+
+    /**
      * Publish the public profile to NATS.
      *
      * The vault will:
@@ -258,6 +267,32 @@ class OwnerSpaceClient @Inject constructor(
      */
     suspend fun getCategories(): Result<String> {
         return sendToVault("profile.categories.get", JsonObject())
+    }
+
+    /**
+     * Update custom categories in the vault.
+     * Custom categories are user-created categories for organizing personal data.
+     *
+     * @param categories List of custom categories to store
+     * @return Request ID for correlating response
+     */
+    suspend fun updateCategories(categories: List<CustomCategoryDto>): Result<String> {
+        val payload = JsonObject().apply {
+            val categoriesArray = com.google.gson.JsonArray()
+            categories.forEach { category ->
+                val categoryObj = JsonObject().apply {
+                    addProperty("id", category.id)
+                    addProperty("name", category.name)
+                    if (category.icon != null) {
+                        addProperty("icon", category.icon)
+                    }
+                    addProperty("created_at", category.createdAt)
+                }
+                categoriesArray.add(categoryObj)
+            }
+            add("categories", categoriesArray)
+        }
+        return sendToVault("profile.categories.update", payload)
     }
 
     /**
@@ -1722,3 +1757,14 @@ enum class NotificationImportance {
     /** Priority -1 (low): Min importance, silent */
     LOW
 }
+
+/**
+ * DTO for custom categories to sync with vault.
+ * Matches the enclave's CustomCategory structure.
+ */
+data class CustomCategoryDto(
+    val id: String,
+    val name: String,
+    val icon: String? = null,
+    val createdAt: Long = System.currentTimeMillis()
+)

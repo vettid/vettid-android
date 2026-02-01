@@ -967,6 +967,52 @@ class PersonalDataStore @Inject constructor(
         return fields
     }
 
+    /**
+     * Export fields map for personal-data.update (vault personal data storage).
+     * This excludes system fields which are stored separately in profile/_system_*.
+     * Returns a map of namespace -> value for user-added personal data only.
+     */
+    fun exportFieldsMapForPersonalData(): Map<String, String> {
+        val fields = mutableMapOf<String, String>()
+
+        // Optional fields - use dotted namespace format
+        val optional = getOptionalFields()
+
+        // Name fields
+        optional.prefix?.let { fields["personal.legal.prefix"] = it }
+        optional.firstName?.let { fields["personal.legal.first_name"] = it }
+        optional.middleName?.let { fields["personal.legal.middle_name"] = it }
+        optional.lastName?.let { fields["personal.legal.last_name"] = it }
+        optional.suffix?.let { fields["personal.legal.suffix"] = it }
+
+        // Contact fields
+        optional.phone?.let { fields["contact.phone.mobile"] = it }
+        optional.birthday?.let { fields["personal.info.birthday"] = it }
+
+        // Address fields
+        optional.street?.let { fields["address.home.street"] = it }
+        optional.street2?.let { fields["address.home.street2"] = it }
+        optional.city?.let { fields["address.home.city"] = it }
+        optional.state?.let { fields["address.home.state"] = it }
+        optional.postalCode?.let { fields["address.home.postal_code"] = it }
+        optional.country?.let { fields["address.home.country"] = it }
+
+        // Social/Web fields
+        optional.website?.let { fields["social.website.personal"] = it }
+        optional.linkedin?.let { fields["social.linkedin.url"] = it }
+        optional.twitter?.let { fields["social.twitter.handle"] = it }
+        optional.instagram?.let { fields["social.instagram.handle"] = it }
+        optional.github?.let { fields["social.github.username"] = it }
+
+        // Custom fields - generate namespace from category and name
+        getCustomFields().forEach { field ->
+            val namespace = generateNamespace(field.category.name.lowercase(), field.name)
+            fields[namespace] = field.value
+        }
+
+        return fields
+    }
+
     // MARK: - Clear
 
     /**

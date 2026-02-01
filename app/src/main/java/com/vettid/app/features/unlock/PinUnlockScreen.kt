@@ -108,7 +108,7 @@ fun PinUnlockScreen(
                 }
 
                 is PinUnlockState.Success -> {
-                    SuccessContent()
+                    SuccessContent(firstName = currentState.firstName)
                 }
 
                 is PinUnlockState.Error -> {
@@ -300,7 +300,7 @@ private fun LoadingContent() {
 }
 
 @Composable
-private fun SuccessContent() {
+private fun SuccessContent(firstName: String? = null) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.fillMaxWidth()
@@ -315,7 +315,7 @@ private fun SuccessContent() {
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = "Welcome back!",
+            text = if (firstName != null) "Welcome back, $firstName!" else "Welcome back!",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Medium
         )

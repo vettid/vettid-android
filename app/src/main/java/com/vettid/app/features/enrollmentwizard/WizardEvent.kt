@@ -107,6 +107,9 @@ sealed class WizardEvent {
     /** Remove custom field */
     data class RemoveCustomField(val fieldId: String) : WizardEvent()
 
+    /** Create a new custom category */
+    data class CreateCategory(val name: String) : WizardEvent()
+
     /** Sync personal data to vault */
     object SyncPersonalData : WizardEvent()
 

@@ -784,6 +784,47 @@ class NitroEnrollmentClient @Inject constructor(
     }
 
     /**
+     * Check if NATS client is connected.
+     */
+    val isConnected: Boolean
+        get() = natsClient?.isConnected == true
+
+    /**
+     * Send a message to vault using OwnerSpaceClient message format.
+     * Used during enrollment to sync personal data before the main NatsConnectionManager is connected.
+     *
+     * @param messageType The message type/action (e.g., "personal-data.update")
+     * @param payload The message payload
+     * @return Result with event ID on success
+     */
+    suspend fun sendToVault(
+        messageType: String,
+        payload: JsonObject = JsonObject()
+    ): Result<String> {
+        val client = natsClient
+            ?: return Result.failure(NatsException("NATS client not connected"))
+
+        val ownerSpaceId = ownerSpace
+            ?: return Result.failure(NatsException("No OwnerSpace ID available"))
+
+        val requestId = UUID.randomUUID().toString()
+        val subject = "$ownerSpaceId.forVault.$messageType"
+
+        // Build message in same format as OwnerSpaceClient.VaultMessage
+        val message = JsonObject().apply {
+            addProperty("id", requestId)
+            addProperty("type", messageType)
+            add("payload", payload)
+            addProperty("timestamp", java.time.Instant.now().toString())
+        }
+
+        Log.d(TAG, "sendToVault: $messageType to $subject")
+
+        return client.publish(subject, gson.toJson(message).toByteArray(Charsets.UTF_8))
+            .map { requestId }
+    }
+
+    /**
      * Disconnect from NATS.
      */
     suspend fun disconnect() {

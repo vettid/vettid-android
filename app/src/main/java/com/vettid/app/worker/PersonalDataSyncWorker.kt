@@ -129,8 +129,8 @@ class PersonalDataSyncWorker @AssistedInject constructor(
             // Build payload with correct structure for profile.update
             val payload = buildProfileUpdatePayload(fieldsMap)
 
-            Log.d(TAG, "Syncing ${fieldsMap.size} fields to vault")
-            val result = ownerSpaceClient.sendToVault("profile.update", payload)
+            Log.d(TAG, "Syncing ${fieldsMap.size} fields to vault via personal-data.update")
+            val result = ownerSpaceClient.sendToVault("personal-data.update", payload)
 
             result.fold(
                 onSuccess = { requestId ->

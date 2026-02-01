@@ -11,6 +11,7 @@ import com.vettid.app.core.attestation.NitroAttestationVerifier
 import com.vettid.app.core.attestation.PcrConfigManager
 import com.vettid.app.core.attestation.VerifiedAttestation
 import com.vettid.app.core.crypto.CryptoManager
+import com.vettid.app.core.nats.CustomCategoryDto
 import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.NitroEnrollmentClient
 import com.vettid.app.core.nats.OwnerSpaceClient
@@ -20,6 +21,7 @@ import com.vettid.app.core.nats.UtkInfo
 import com.vettid.app.core.network.EnrollmentQRData
 import com.vettid.app.core.network.NatsConnectionInfo
 import com.vettid.app.core.network.VaultServiceClient
+import com.vettid.app.core.storage.CategoryInfo
 import com.vettid.app.core.storage.CredentialStore
 import com.vettid.app.core.storage.CustomField
 import com.vettid.app.core.storage.FieldCategory
@@ -30,6 +32,7 @@ import com.vettid.app.features.enrollment.AttestationInfo
 import com.vettid.app.features.enrollment.NatsBootstrapInfo
 import com.vettid.app.features.enrollment.PasswordStrength
 import com.vettid.app.worker.BackupWorker
+import com.vettid.app.worker.PersonalDataSyncWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
@@ -102,6 +105,11 @@ class EnrollmentWizardViewModel @Inject constructor(
      */
     fun initialize(startWithManualEntry: Boolean = false, initialCode: String? = null) {
         viewModelScope.launch {
+            // Clear any leftover personal data from previous enrollment attempts
+            // This ensures fresh enrollment starts with clean slate
+            personalDataStore.clearAll()
+            Log.d(TAG, "Cleared local personal data store for fresh enrollment")
+
             when {
                 initialCode != null -> {
                     // Process the code from deep link directly
@@ -162,6 +170,7 @@ class EnrollmentWizardViewModel @Inject constructor(
                 is WizardEvent.AddCustomField -> addCustomField(event.name, event.value, event.category, event.fieldType)
                 is WizardEvent.UpdateCustomField -> updateCustomField(event.field)
                 is WizardEvent.RemoveCustomField -> removeCustomField(event.fieldId)
+                is WizardEvent.CreateCategory -> createCategory(event.name)
                 is WizardEvent.SyncPersonalData -> syncPersonalData()
                 is WizardEvent.ShowAddFieldDialog -> showAddFieldDialog()
                 is WizardEvent.HideAddFieldDialog -> hideAddFieldDialog()
@@ -874,8 +883,8 @@ class EnrollmentWizardViewModel @Inject constructor(
                         Log.i(TAG, "NATS credentials stored for post-enrollment auth: $natsEndpoint")
                     }
 
-                    // Disconnect enrollment client
-                    nitroEnrollmentClient.disconnect()
+                    // NOTE: Keep enrollment client connected for personal data sync
+                    // It will be disconnected in completeWizard() after sync
 
                     // Trigger backup
                     BackupWorker.triggerNow(context)
@@ -1085,6 +1094,7 @@ class EnrollmentWizardViewModel @Inject constructor(
                 val systemFields = personalDataStore.getSystemFields()
                 val optionalFields = personalDataStore.getOptionalFields()
                 val customFields = personalDataStore.getCustomFields()
+                val customCategories = loadCustomCategoriesFromVault()
                 val hasPendingSync = personalDataStore.hasPendingSync()
 
                 _state.value = WizardState.PersonalData(
@@ -1092,6 +1102,7 @@ class EnrollmentWizardViewModel @Inject constructor(
                     systemFields = systemFields,
                     optionalFields = optionalFields,
                     customFields = customFields,
+                    customCategories = customCategories,
                     hasPendingSync = hasPendingSync
                 )
             } catch (e: Exception) {
@@ -1100,6 +1111,73 @@ class EnrollmentWizardViewModel @Inject constructor(
                     isLoading = false,
                     error = "Failed to load personal data: ${e.message}"
                 )
+            }
+        }
+    }
+
+    private suspend fun loadCustomCategoriesFromVault(): List<CategoryInfo> {
+        return try {
+            val result = ownerSpaceClient.getCategories()
+            if (result.isSuccess) {
+                val json = com.google.gson.JsonParser.parseString(result.getOrNull() ?: "{}").asJsonObject
+                val customArray = json.getAsJsonArray("custom") ?: return emptyList()
+                customArray.mapNotNull { element ->
+                    val obj = element.asJsonObject
+                    CategoryInfo(
+                        id = obj.get("id")?.asString ?: return@mapNotNull null,
+                        name = obj.get("name")?.asString ?: return@mapNotNull null,
+                        icon = obj.get("icon")?.asString ?: "more",
+                        createdAt = obj.get("created_at")?.asLong ?: 0
+                    )
+                }
+            } else {
+                Log.w(TAG, "Failed to load custom categories: ${result.exceptionOrNull()?.message}")
+                emptyList()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading custom categories", e)
+            emptyList()
+        }
+    }
+
+    private fun createCategory(name: String) {
+        val current = _state.value
+        if (current !is WizardState.PersonalData) return
+
+        viewModelScope.launch {
+            try {
+                // Create the new category
+                val newCategory = CategoryInfo(
+                    id = name.lowercase().replace(" ", "_").replace(Regex("[^a-z0-9_]"), ""),
+                    name = name,
+                    icon = "more",
+                    createdAt = System.currentTimeMillis()
+                )
+
+                // Get existing custom categories and add new one
+                val updatedCategories = current.customCategories + newCategory
+
+                // Sync to vault
+                val categoryDtos = updatedCategories.map { cat ->
+                    CustomCategoryDto(
+                        id = cat.id,
+                        name = cat.name,
+                        icon = cat.icon,
+                        createdAt = cat.createdAt
+                    )
+                }
+                val syncResult = ownerSpaceClient.updateCategories(categoryDtos)
+                if (syncResult.isFailure) {
+                    Log.w(TAG, "Failed to sync categories to vault: ${syncResult.exceptionOrNull()?.message}")
+                }
+
+                // Update state with new category
+                _state.value = current.copy(customCategories = updatedCategories)
+
+                Log.i(TAG, "Created custom category: ${newCategory.name}")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to create category", e)
+                _state.value = current.copy(error = "Failed to create category: ${e.message}")
             }
         }
     }
@@ -1183,7 +1261,11 @@ class EnrollmentWizardViewModel @Inject constructor(
         val current = _state.value
         if (current !is WizardState.PersonalData) return
 
-        if (!connectionManager.isConnected()) {
+        // Check which connection is available
+        val useEnrollmentClient = nitroEnrollmentClient.isConnected
+        val useConnectionManager = connectionManager.isConnected()
+
+        if (!useEnrollmentClient && !useConnectionManager) {
             _state.value = current.copy(error = "Not connected to vault. Changes will sync when connection is restored.")
             return
         }
@@ -1191,10 +1273,20 @@ class EnrollmentWizardViewModel @Inject constructor(
         _state.value = current.copy(isSyncing = true)
 
         try {
-            // Get fields map in the format expected by enclave: { "fields": { "name": "value" } }
-            val fieldsMap = personalDataStore.exportFieldsMapForProfileUpdate()
+            // Use exportFieldsMapForPersonalData() which excludes system fields
+            val fieldsMap = personalDataStore.exportFieldsMapForPersonalData()
 
-            // Build payload with the correct structure for profile.update
+            if (fieldsMap.isEmpty()) {
+                _state.update {
+                    if (it is WizardState.PersonalData) {
+                        it.copy(isSyncing = false, hasPendingSync = false)
+                    } else it
+                }
+                _effects.emit(WizardEffect.ShowToast("No personal data to sync"))
+                return
+            }
+
+            // Build payload for personal-data.update
             val fieldsObject = com.google.gson.JsonObject().apply {
                 fieldsMap.forEach { (key, value) ->
                     addProperty(key, value)
@@ -1205,7 +1297,16 @@ class EnrollmentWizardViewModel @Inject constructor(
             }
 
             Log.d(TAG, "Syncing personal data: ${fieldsMap.size} fields")
-            val result = ownerSpaceClient.sendToVault("profile.update", payload)
+            fieldsMap.forEach { (key, value) ->
+                Log.d(TAG, "  Field: $key = ${value.take(30)}${if (value.length > 30) "..." else ""}")
+            }
+
+            // Send to personal-data.update (not profile.update)
+            val result = if (useEnrollmentClient) {
+                nitroEnrollmentClient.sendToVault("personal-data.update", payload)
+            } else {
+                ownerSpaceClient.sendToVault("personal-data.update", payload)
+            }
 
             result.fold(
                 onSuccess = {
@@ -1283,11 +1384,81 @@ class EnrollmentWizardViewModel @Inject constructor(
     // ============== PUBLIC PROFILE PHASE ==============
 
     private suspend fun continueToPublicProfile() {
-        // Sync personal data first if there are pending changes
-        if (personalDataStore.hasPendingSync()) {
-            syncPersonalData()
+        // Always sync personal data to vault before moving to public profile
+        Log.d(TAG, "continueToPublicProfile: hasPendingSync=${personalDataStore.hasPendingSync()}")
+
+        val fieldsMap = personalDataStore.exportFieldsMapForProfileUpdate()
+        Log.d(TAG, "continueToPublicProfile: ${fieldsMap.size} fields to sync")
+        fieldsMap.forEach { (key, value) ->
+            Log.d(TAG, "  Field: $key = ${value.take(20)}...")
         }
+
+        // Force sync all personal data
+        syncPersonalDataAndWait()
+
         loadPublicProfile()
+    }
+
+    private suspend fun syncPersonalDataAndWait() {
+        // Check which NATS connection is available:
+        // During enrollment, nitroEnrollmentClient is connected but connectionManager is not
+        // After enrollment, connectionManager is used
+        val useEnrollmentClient = nitroEnrollmentClient.isConnected
+        val useConnectionManager = connectionManager.isConnected()
+
+        if (!useEnrollmentClient && !useConnectionManager) {
+            Log.w(TAG, "Cannot sync personal data - not connected to vault")
+            return
+        }
+
+        try {
+            // Use exportFieldsMapForPersonalData() which excludes system fields
+            // System fields are already stored in profile/_system_* during PIN setup
+            val fieldsMap = personalDataStore.exportFieldsMapForPersonalData()
+            if (fieldsMap.isEmpty()) {
+                Log.d(TAG, "No personal data fields to sync (system fields excluded)")
+                return
+            }
+
+            val fieldsObject = com.google.gson.JsonObject().apply {
+                fieldsMap.forEach { (key, value) ->
+                    addProperty(key, value)
+                }
+            }
+            val payload = com.google.gson.JsonObject().apply {
+                add("fields", fieldsObject)
+            }
+
+            Log.i(TAG, "Syncing ${fieldsMap.size} personal data fields to vault via ${if (useEnrollmentClient) "enrollment client" else "connection manager"}")
+            fieldsMap.forEach { (key, value) ->
+                Log.d(TAG, "  Field: $key = ${value.take(30)}${if (value.length > 30) "..." else ""}")
+            }
+
+            // Use the enrollment client's connection during enrollment, otherwise use ownerSpaceClient
+            val result = if (useEnrollmentClient) {
+                nitroEnrollmentClient.sendToVault("personal-data.update", payload)
+            } else {
+                ownerSpaceClient.sendToVault("personal-data.update", payload)
+            }
+
+            result.fold(
+                onSuccess = { requestId ->
+                    Log.i(TAG, "Personal data sync sent: $requestId, waiting for vault to process...")
+
+                    // Wait for vault to process the data before continuing
+                    // The vault needs time to store the data before we can read it back
+                    delay(1500)
+
+                    Log.i(TAG, "Personal data sync complete after delay")
+                    personalDataStore.markSyncComplete()
+                },
+                onFailure = { error ->
+                    Log.e(TAG, "Personal data sync failed: ${error.message}")
+                }
+            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Error syncing personal data", e)
+        }
     }
 
     private fun loadPublicProfile() {
@@ -1300,9 +1471,19 @@ class EnrollmentWizardViewModel @Inject constructor(
                 val customFields = personalDataStore.getCustomFields()
 
                 // Build list of available fields for public profile
+                // Field naming convention: {category}.{subcategory}.{field_name}
                 val availableFields = mutableListOf<PublicProfileField>()
 
-                // Add optional fields that have values
+                // Identity fields (personal.legal.* and personal.info.*)
+                optionalFields.prefix?.let {
+                    availableFields.add(PublicProfileField(
+                        namespace = "personal.legal.prefix",
+                        displayName = "Name Prefix",
+                        value = it,
+                        fieldType = FieldType.TEXT,
+                        category = "identity"
+                    ))
+                }
                 optionalFields.firstName?.let {
                     availableFields.add(PublicProfileField(
                         namespace = "personal.legal.first_name",
@@ -1330,6 +1511,26 @@ class EnrollmentWizardViewModel @Inject constructor(
                         category = "identity"
                     ))
                 }
+                optionalFields.suffix?.let {
+                    availableFields.add(PublicProfileField(
+                        namespace = "personal.legal.suffix",
+                        displayName = "Name Suffix",
+                        value = it,
+                        fieldType = FieldType.TEXT,
+                        category = "identity"
+                    ))
+                }
+                optionalFields.birthday?.let {
+                    availableFields.add(PublicProfileField(
+                        namespace = "personal.info.birthday",
+                        displayName = "Birthday",
+                        value = it,
+                        fieldType = FieldType.DATE,
+                        category = "identity"
+                    ))
+                }
+
+                // Contact fields (contact.phone.*)
                 optionalFields.phone?.let {
                     availableFields.add(PublicProfileField(
                         namespace = "contact.phone.mobile",
@@ -1339,13 +1540,71 @@ class EnrollmentWizardViewModel @Inject constructor(
                         category = "contact"
                     ))
                 }
+
+                // Address fields (address.home.*)
+                optionalFields.street?.let {
+                    availableFields.add(PublicProfileField(
+                        namespace = "address.home.street",
+                        displayName = "Street Address",
+                        value = it,
+                        fieldType = FieldType.TEXT,
+                        category = "address"
+                    ))
+                }
+                optionalFields.street2?.let {
+                    availableFields.add(PublicProfileField(
+                        namespace = "address.home.street2",
+                        displayName = "Street Address 2",
+                        value = it,
+                        fieldType = FieldType.TEXT,
+                        category = "address"
+                    ))
+                }
+                optionalFields.city?.let {
+                    availableFields.add(PublicProfileField(
+                        namespace = "address.home.city",
+                        displayName = "City",
+                        value = it,
+                        fieldType = FieldType.TEXT,
+                        category = "address"
+                    ))
+                }
+                optionalFields.state?.let {
+                    availableFields.add(PublicProfileField(
+                        namespace = "address.home.state",
+                        displayName = "State",
+                        value = it,
+                        fieldType = FieldType.TEXT,
+                        category = "address"
+                    ))
+                }
+                optionalFields.postalCode?.let {
+                    availableFields.add(PublicProfileField(
+                        namespace = "address.home.postal_code",
+                        displayName = "Postal Code",
+                        value = it,
+                        fieldType = FieldType.TEXT,
+                        category = "address"
+                    ))
+                }
+                optionalFields.country?.let {
+                    availableFields.add(PublicProfileField(
+                        namespace = "address.home.country",
+                        displayName = "Country",
+                        value = it,
+                        fieldType = FieldType.TEXT,
+                        category = "address"
+                    ))
+                }
+
+                // Social/Web fields (social.*.*)
                 optionalFields.website?.let {
                     availableFields.add(PublicProfileField(
                         namespace = "social.website.personal",
                         displayName = "Personal Website",
                         value = it,
                         fieldType = FieldType.URL,
-                        category = "contact"
+                        category = "social"
                     ))
                 }
                 optionalFields.linkedin?.let {
@@ -1354,7 +1613,7 @@ class EnrollmentWizardViewModel @Inject constructor(
                         displayName = "LinkedIn",
                         value = it,
                         fieldType = FieldType.URL,
-                        category = "contact"
+                        category = "social"
                     ))
                 }
                 optionalFields.twitter?.let {
@@ -1363,7 +1622,7 @@ class EnrollmentWizardViewModel @Inject constructor(
                         displayName = "X/Twitter",
                         value = it,
                         fieldType = FieldType.TEXT,
-                        category = "contact"
+                        category = "social"
                     ))
                 }
                 optionalFields.instagram?.let {
@@ -1372,7 +1631,7 @@ class EnrollmentWizardViewModel @Inject constructor(
                         displayName = "Instagram",
                         value = it,
                         fieldType = FieldType.TEXT,
-                        category = "contact"
+                        category = "social"
                     ))
                 }
                 optionalFields.github?.let {
@@ -1381,7 +1640,7 @@ class EnrollmentWizardViewModel @Inject constructor(
                         displayName = "GitHub",
                         value = it,
                         fieldType = FieldType.URL,
-                        category = "contact"
+                        category = "social"
                     ))
                 }
 
@@ -1462,18 +1721,43 @@ class EnrollmentWizardViewModel @Inject constructor(
             // Save selected fields locally
             personalDataStore.updatePublicProfileFields(current.selectedFields.toList())
 
-            // Publish to vault if connected
-            if (connectionManager.isConnected()) {
+            // Build payload with selected fields
+            val payload = com.google.gson.JsonObject().apply {
+                val fieldsArray = com.google.gson.JsonArray()
+                current.selectedFields.forEach { fieldsArray.add(it) }
+                add("fields", fieldsArray)
+            }
+
+            Log.d(TAG, "Publishing profile with ${current.selectedFields.size} selected fields: ${current.selectedFields}")
+
+            // Use enrollment client if connected (during enrollment), otherwise use ownerSpaceClient
+            val useEnrollmentClient = nitroEnrollmentClient.isConnected
+            val useConnectionManager = connectionManager.isConnected()
+
+            if (useEnrollmentClient) {
+                Log.d(TAG, "Publishing via nitroEnrollmentClient")
+                val result = nitroEnrollmentClient.sendToVault("profile.publish", payload)
+                result.fold(
+                    onSuccess = { requestId ->
+                        Log.i(TAG, "Public profile publish request sent via enrollment client: $requestId")
+                    },
+                    onFailure = { error ->
+                        Log.w(TAG, "Failed to publish profile via enrollment client: ${error.message}")
+                    }
+                )
+            } else if (useConnectionManager) {
+                Log.d(TAG, "Publishing via ownerSpaceClient")
                 val result = ownerSpaceClient.publishProfile(current.selectedFields.toList())
                 result.fold(
                     onSuccess = { requestId ->
-                        Log.i(TAG, "Public profile publish request sent: $requestId")
+                        Log.i(TAG, "Public profile publish request sent via ownerSpaceClient: $requestId")
                     },
                     onFailure = { error ->
-                        Log.w(TAG, "Failed to publish profile: ${error.message}")
-                        // Continue anyway - local settings are saved
+                        Log.w(TAG, "Failed to publish profile via ownerSpaceClient: ${error.message}")
                     }
                 )
+            } else {
+                Log.w(TAG, "Not connected to vault - profile settings saved locally only")
             }
 
             _effects.emit(WizardEffect.ShowToast("Public profile saved"))
@@ -1495,9 +1779,12 @@ class EnrollmentWizardViewModel @Inject constructor(
     // ============== COMPLETE PHASE ==============
 
     private suspend fun completeWizard() {
-        // Schedule background sync if there are pending changes
+        // Schedule background sync if there are pending personal data changes
+        // This handles the case where personal data was entered during enrollment
+        // but couldn't be synced because vault wasn't connected yet
         if (personalDataStore.hasPendingSync()) {
-            Log.d(TAG, "Scheduling background sync for pending changes")
+            Log.i(TAG, "Scheduling PersonalDataSyncWorker for pending changes")
+            PersonalDataSyncWorker.scheduleImmediate(context)
         }
 
         _state.value = WizardState.Complete(userGuid = userGuid ?: "")

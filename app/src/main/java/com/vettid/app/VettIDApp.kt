@@ -425,7 +425,7 @@ fun VettIDApp(
                     navController.navigate(Screen.HandlerDetail.createRoute(handlerId))
                 },
                 onNavigateToPersonalData = {
-                    navController.navigate(Screen.PersonalDataCollection.route)
+                    navController.navigate(Screen.PersonalData.route)
                 },
                 onNavigateToSecrets = {
                     navController.navigate(Screen.Secrets.route)

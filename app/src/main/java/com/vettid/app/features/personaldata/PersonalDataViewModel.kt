@@ -38,6 +38,20 @@ class PersonalDataViewModel @Inject constructor(
     private val _showAddDialog = MutableStateFlow(false)
     val showAddDialog: StateFlow<Boolean> = _showAddDialog.asStateFlow()
 
+    private val _showPublicProfilePreview = MutableStateFlow(false)
+    val showPublicProfilePreview: StateFlow<Boolean> = _showPublicProfilePreview.asStateFlow()
+
+    // Published profile data (what others see)
+    private val _publishedProfile = MutableStateFlow<PublishedProfileData?>(null)
+    val publishedProfile: StateFlow<PublishedProfileData?> = _publishedProfile.asStateFlow()
+
+    private val _isLoadingPublishedProfile = MutableStateFlow(false)
+    val isLoadingPublishedProfile: StateFlow<Boolean> = _isLoadingPublishedProfile.asStateFlow()
+
+    // Track if there are unpublished changes
+    private val _hasUnpublishedChanges = MutableStateFlow(false)
+    val hasUnpublishedChanges: StateFlow<Boolean> = _hasUnpublishedChanges.asStateFlow()
+
     // In-memory data store loaded from vault
     private val dataItems = mutableListOf<PersonalDataItem>()
 
@@ -45,6 +59,7 @@ class PersonalDataViewModel @Inject constructor(
     private var publicProfileFields = mutableSetOf<String>()
 
     init {
+        Log.i(TAG, "PersonalDataViewModel created - starting load")
         loadPersonalData()
     }
 
@@ -96,46 +111,85 @@ class PersonalDataViewModel @Inject constructor(
     /**
      * Load personal data directly from vault.
      * Returns true if successful, false otherwise.
+     *
+     * Note: We need to call two endpoints:
+     * 1. profile.get - Returns system fields (first_name, last_name, email) at top level
+     * 2. personal-data.get - Returns user-added personal data fields
      */
     private suspend fun loadFromVault(): Boolean {
         return try {
-            // Send profile.get request
-            val requestResult = ownerSpaceClient.getProfileFromVault()
-            if (requestResult.isFailure) {
-                Log.e(TAG, "Failed to request profile from vault: ${requestResult.exceptionOrNull()?.message}")
+            // Step 1: Get system fields (registration info) from profile.get
+            val profileResult = ownerSpaceClient.getProfileFromVault()
+            if (profileResult.isFailure) {
+                Log.e(TAG, "Failed to request profile from vault: ${profileResult.exceptionOrNull()?.message}")
                 return false
             }
 
-            val requestId = requestResult.getOrThrow()
-            Log.d(TAG, "Profile request sent, waiting for response: $requestId")
+            val profileRequestId = profileResult.getOrThrow()
+            Log.d(TAG, "Profile request sent, waiting for response: $profileRequestId")
 
-            // Wait for response with timeout
-            val response = withTimeoutOrNull(10000L) {
-                ownerSpaceClient.vaultResponses.first { it.requestId == requestId }
+            val profileResponse = withTimeoutOrNull(10000L) {
+                ownerSpaceClient.vaultResponses.first { it.requestId == profileRequestId }
             }
 
-            if (response == null) {
+            if (profileResponse == null) {
                 Log.w(TAG, "Profile request timed out")
                 return false
             }
 
-            when (response) {
+            // Parse system fields from profile response
+            when (profileResponse) {
                 is VaultResponse.HandlerResult -> {
-                    if (response.success && response.result != null) {
-                        parseVaultResponse(response.result)
-                        true
+                    if (profileResponse.success && profileResponse.result != null) {
+                        parseSystemFieldsFromProfile(profileResponse.result)
                     } else {
-                        Log.w(TAG, "Profile request failed: ${response.error}")
-                        false
+                        Log.w(TAG, "Profile request failed: ${profileResponse.error}")
                     }
                 }
                 is VaultResponse.Error -> {
-                    Log.e(TAG, "Profile request error: ${response.code} - ${response.message}")
-                    false
+                    Log.e(TAG, "Profile request error: ${profileResponse.code} - ${profileResponse.message}")
                 }
                 else -> {
                     Log.w(TAG, "Unexpected response type for profile request")
-                    false
+                }
+            }
+
+            // Step 2: Get personal data fields from personal-data.get
+            val personalDataResult = ownerSpaceClient.getPersonalDataFromVault()
+            if (personalDataResult.isFailure) {
+                Log.e(TAG, "Failed to request personal data from vault: ${personalDataResult.exceptionOrNull()?.message}")
+                return dataItems.isNotEmpty() // Return true if we at least got system fields
+            }
+
+            val personalDataRequestId = personalDataResult.getOrThrow()
+            Log.d(TAG, "Personal data request sent, waiting for response: $personalDataRequestId")
+
+            val personalDataResponse = withTimeoutOrNull(10000L) {
+                ownerSpaceClient.vaultResponses.first { it.requestId == personalDataRequestId }
+            }
+
+            if (personalDataResponse == null) {
+                Log.w(TAG, "Personal data request timed out")
+                return dataItems.isNotEmpty() // Return true if we at least got system fields
+            }
+
+            when (personalDataResponse) {
+                is VaultResponse.HandlerResult -> {
+                    if (personalDataResponse.success && personalDataResponse.result != null) {
+                        parsePersonalDataFields(personalDataResponse.result)
+                        true
+                    } else {
+                        Log.w(TAG, "Personal data request failed: ${personalDataResponse.error}")
+                        dataItems.isNotEmpty() // Return true if we at least got system fields
+                    }
+                }
+                is VaultResponse.Error -> {
+                    Log.e(TAG, "Personal data request error: ${personalDataResponse.code} - ${personalDataResponse.message}")
+                    dataItems.isNotEmpty()
+                }
+                else -> {
+                    Log.w(TAG, "Unexpected response type for personal data request")
+                    dataItems.isNotEmpty()
                 }
             }
         } catch (e: Exception) {
@@ -145,20 +199,22 @@ class PersonalDataViewModel @Inject constructor(
     }
 
     /**
-     * Parse vault response and populate dataItems directly.
-     * This is the core of the dynamic loading - no static field mappings.
+     * Parse system fields from profile.get response.
+     * System fields (registration info) are at the top level of the profile response.
      */
-    private fun parseVaultResponse(result: JsonObject) {
+    private fun parseSystemFieldsFromProfile(result: JsonObject) {
         val now = Instant.now()
-        Log.d(TAG, "Parsing vault response: ${result.keySet()}")
+        Log.d(TAG, "Parsing profile response for system fields: ${result.keySet()}")
 
         // Load public profile fields set
         loadPublicProfileSettings()
 
-        // Extract system fields (registration info) - always at top level
+        // Extract system fields (registration info) - at top level of profile.get response
         val systemFirstName = result.get("first_name")?.takeIf { !it.isJsonNull }?.asString
         val systemLastName = result.get("last_name")?.takeIf { !it.isJsonNull }?.asString
         val systemEmail = result.get("email")?.takeIf { !it.isJsonNull }?.asString
+
+        Log.d(TAG, "System fields from profile: firstName=$systemFirstName, lastName=$systemLastName, email=$systemEmail")
 
         // Add system fields as items (read-only, always in public profile)
         if (!systemFirstName.isNullOrEmpty()) {
@@ -201,15 +257,40 @@ class PersonalDataViewModel @Inject constructor(
             ))
         }
 
+        // Store system fields locally for offline access
+        if (!systemFirstName.isNullOrEmpty() && !systemLastName.isNullOrEmpty() && !systemEmail.isNullOrEmpty()) {
+            personalDataStore.storeSystemFields(
+                com.vettid.app.core.storage.SystemPersonalData(
+                    firstName = systemFirstName,
+                    lastName = systemLastName,
+                    email = systemEmail
+                )
+            )
+        }
+
+        Log.i(TAG, "Parsed ${dataItems.size} system fields from profile")
+    }
+
+    /**
+     * Parse personal data fields from personal-data.get response.
+     * Personal data fields are in the "fields" object.
+     */
+    private fun parsePersonalDataFields(result: JsonObject) {
+        val now = Instant.now()
+        Log.d(TAG, "Parsing personal data response: ${result.keySet()}")
+
         // Extract dynamic fields from the "fields" object
         val fieldsObject = result.getAsJsonObject("fields")
         if (fieldsObject != null) {
-            Log.d(TAG, "Processing ${fieldsObject.size()} fields from vault")
+            Log.d(TAG, "Processing ${fieldsObject.size()} personal data fields from vault")
 
             fieldsObject.entrySet().forEach { (namespace, value) ->
                 try {
-                    // Skip system fields (already handled above)
+                    Log.d(TAG, "Processing field: $namespace = $value")
+
+                    // Skip system fields (handled by parseSystemFieldsFromProfile)
                     if (namespace.startsWith("_system_")) {
+                        Log.d(TAG, "Skipping system field: $namespace")
                         return@forEach
                     }
 
@@ -221,6 +302,7 @@ class PersonalDataViewModel @Inject constructor(
                     } else null
 
                     if (fieldValue.isNullOrEmpty()) {
+                        Log.d(TAG, "Skipping empty field: $namespace")
                         return@forEach
                     }
 
@@ -255,21 +337,10 @@ class PersonalDataViewModel @Inject constructor(
                 }
             }
         } else {
-            Log.d(TAG, "No fields object in vault response")
+            Log.d(TAG, "No fields object in personal data response")
         }
 
-        // Also store system fields locally for offline access
-        if (!systemFirstName.isNullOrEmpty() && !systemLastName.isNullOrEmpty() && !systemEmail.isNullOrEmpty()) {
-            personalDataStore.storeSystemFields(
-                com.vettid.app.core.storage.SystemPersonalData(
-                    firstName = systemFirstName,
-                    lastName = systemLastName,
-                    email = systemEmail
-                )
-            )
-        }
-
-        Log.i(TAG, "Parsed ${dataItems.size} items from vault")
+        Log.i(TAG, "Total items after parsing personal data: ${dataItems.size}")
     }
 
     /**
@@ -278,6 +349,11 @@ class PersonalDataViewModel @Inject constructor(
     private fun loadPublicProfileSettings() {
         publicProfileFields.clear()
         publicProfileFields.addAll(personalDataStore.getPublicProfileFields())
+
+        // Check if there are unpublished changes based on local settings
+        // This is a heuristic - if there are public profile fields selected but
+        // we don't know if they were published, we assume no changes until user makes one
+        _hasUnpublishedChanges.value = false
     }
 
     /**
@@ -293,7 +369,6 @@ class PersonalDataViewModel @Inject constructor(
             namespace.startsWith("financial.") -> DataCategory.FINANCIAL
             namespace.startsWith("medical.") -> DataCategory.MEDICAL
             namespace.startsWith("crypto.") -> DataCategory.CRYPTO
-            namespace.startsWith("document.") -> DataCategory.DOCUMENT
             else -> DataCategory.OTHER
         }
     }
@@ -543,6 +618,32 @@ class PersonalDataViewModel @Inject constructor(
         _editState.value = EditDataItemState()
     }
 
+    /**
+     * Publish public profile to NATS.
+     */
+    fun publishProfile() {
+        viewModelScope.launch {
+            try {
+                Log.i(TAG, "Publishing public profile...")
+                val result = ownerSpaceClient.sendToVault("profile.publish", JsonObject())
+                result.fold(
+                    onSuccess = { requestId ->
+                        Log.i(TAG, "Profile publish request sent: $requestId")
+                        _hasUnpublishedChanges.value = false
+                        _effects.emit(PersonalDataEffect.ShowSuccess("Public profile published"))
+                    },
+                    onFailure = { error ->
+                        Log.e(TAG, "Failed to publish profile: ${error.message}")
+                        _effects.emit(PersonalDataEffect.ShowError("Failed to publish: ${error.message}"))
+                    }
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Error publishing profile", e)
+                _effects.emit(PersonalDataEffect.ShowError(e.message ?: "Failed to publish"))
+            }
+        }
+    }
+
     fun updateEditName(name: String) {
         _editState.value = _editState.value.copy(name = name, nameError = null)
     }
@@ -553,6 +654,10 @@ class PersonalDataViewModel @Inject constructor(
 
     fun updateEditType(type: DataType) {
         _editState.value = _editState.value.copy(type = type)
+    }
+
+    fun updateEditFieldType(fieldType: FieldType) {
+        _editState.value = _editState.value.copy(fieldType = fieldType)
     }
 
     fun updateEditCategory(category: DataCategory?) {
@@ -586,20 +691,40 @@ class PersonalDataViewModel @Inject constructor(
                     add("fields", fieldsObj)
                 }
 
-                val result = ownerSpaceClient.sendToVault("profile.update", payload)
+                Log.d(TAG, "Saving field to vault via personal-data.update: $payload")
+                val sendResult = ownerSpaceClient.sendToVault("personal-data.update", payload)
 
-                result.fold(
+                sendResult.fold(
                     onSuccess = { requestId ->
-                        Log.i(TAG, "Field saved to vault: $namespace, requestId: $requestId")
+                        Log.i(TAG, "Field update sent to vault: $namespace, requestId: $requestId")
+
+                        // Wait for vault confirmation
+                        val response = withTimeoutOrNull(5000L) {
+                            ownerSpaceClient.vaultResponses.first { it.requestId == requestId }
+                        }
+
+                        if (response == null) {
+                            Log.w(TAG, "Timeout waiting for vault update confirmation")
+                        } else {
+                            Log.i(TAG, "Field saved confirmed by vault")
+                        }
 
                         // Also save locally for offline access
                         saveFieldLocally(namespace, current)
+
+                        // Mark as having unpublished changes if field is in public profile
+                        if (current.isInPublicProfile) {
+                            _hasUnpublishedChanges.value = true
+                        }
 
                         _showAddDialog.value = false
                         _editState.value = EditDataItemState()
                         _effects.emit(PersonalDataEffect.ShowSuccess(
                             if (current.isEditing) "Data updated" else "Data added"
                         ))
+
+                        // Small delay to ensure enclave has committed the data
+                        kotlinx.coroutines.delay(200)
                         loadPersonalData() // Reload to show updated data
                     },
                     onFailure = { error ->
@@ -627,7 +752,6 @@ class PersonalDataViewModel @Inject constructor(
             DataCategory.FINANCIAL -> "financial.custom"
             DataCategory.MEDICAL -> "medical.custom"
             DataCategory.CRYPTO -> "crypto.custom"
-            DataCategory.DOCUMENT -> "document.custom"
             DataCategory.OTHER -> "other.custom"
         }
         val sanitizedName = name.lowercase().replace(" ", "_").replace(Regex("[^a-z0-9_]"), "")
@@ -770,6 +894,9 @@ class PersonalDataViewModel @Inject constructor(
                     // Update vault public profile settings
                     ownerSpaceClient.updatePublicProfileSettings(publicProfileFields.toList())
 
+                    // Mark as having unpublished changes
+                    _hasUnpublishedChanges.value = true
+
                     // Refresh state
                     _state.value = PersonalDataState.Loaded(items = dataItems.toList())
 
@@ -786,9 +913,222 @@ class PersonalDataViewModel @Inject constructor(
     }
 
     /**
+     * Create a custom category.
+     * Returns the created category info.
+     */
+    fun createCustomCategory(name: String): com.vettid.app.core.storage.CategoryInfo {
+        Log.i(TAG, "Creating custom category: $name")
+        val category = personalDataStore.addCustomCategory(name)
+        Log.i(TAG, "Created custom category: ${category.id} - ${category.name}")
+        return category
+    }
+
+    /**
+     * Get all custom categories.
+     */
+    fun getCustomCategories(): List<com.vettid.app.core.storage.CategoryInfo> {
+        return personalDataStore.getCustomCategories()
+    }
+
+    /**
      * Get personal data grouped by category.
      */
     fun getDataByCategory(): GroupedByCategory {
         return GroupedByCategory.fromItems(dataItems)
     }
+
+    /**
+     * Get items that are included in the public profile.
+     */
+    fun getPublicProfileItems(): List<PersonalDataItem> {
+        return dataItems.filter { it.isInPublicProfile }
+    }
+
+    /**
+     * Show the public profile preview dialog.
+     * Fetches the actual published profile from the vault/NATS.
+     */
+    fun showPublicProfilePreview() {
+        _showPublicProfilePreview.value = true
+        fetchPublishedProfile()
+    }
+
+    /**
+     * Hide the public profile preview dialog.
+     */
+    fun hidePublicProfilePreview() {
+        _showPublicProfilePreview.value = false
+    }
+
+    /**
+     * Fetch the published profile from the vault.
+     * This is what connections actually see in the NATS message space.
+     * If no profile has been published yet, shows what would be published based on current selections.
+     */
+    private fun fetchPublishedProfile() {
+        viewModelScope.launch {
+            _isLoadingPublishedProfile.value = true
+            try {
+                // Request the published profile from the vault
+                val result = ownerSpaceClient.sendToVault("profile.get-published", JsonObject())
+
+                result.fold(
+                    onSuccess = { requestId ->
+                        Log.d(TAG, "Fetching published profile, requestId: $requestId")
+
+                        val response = withTimeoutOrNull(10000L) {
+                            ownerSpaceClient.vaultResponses.first { it.requestId == requestId }
+                        }
+
+                        when (response) {
+                            is VaultResponse.HandlerResult -> {
+                                if (response.success && response.result != null) {
+                                    // Check if profile was actually published
+                                    val published = response.result.get("published")?.takeIf { !it.isJsonNull }?.asBoolean ?: false
+                                    if (published) {
+                                        parsePublishedProfile(response.result)
+                                    } else {
+                                        // No published profile yet - show local items marked for public profile
+                                        Log.d(TAG, "No published profile found, showing local preview")
+                                        showLocalPreview()
+                                    }
+                                } else {
+                                    // No published profile yet - show local preview
+                                    Log.d(TAG, "Profile request failed, showing local preview")
+                                    showLocalPreview()
+                                }
+                            }
+                            is VaultResponse.Error -> {
+                                Log.e(TAG, "Error fetching published profile: ${response.message}")
+                                // Fall back to local items
+                                showLocalPreview()
+                            }
+                            else -> {
+                                // Timeout or unexpected response - show local
+                                showLocalPreview()
+                            }
+                        }
+                    },
+                    onFailure = { error ->
+                        Log.e(TAG, "Failed to request published profile: ${error.message}")
+                        // Fall back to local items
+                        showLocalPreview()
+                    }
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching published profile", e)
+                showLocalPreview()
+            } finally {
+                _isLoadingPublishedProfile.value = false
+            }
+        }
+    }
+
+    /**
+     * Show that no profile has been published yet.
+     * We don't show a preview - only actual published data.
+     */
+    private fun showLocalPreview() {
+        Log.d(TAG, "No published profile found")
+        _publishedProfile.value = PublishedProfileData(
+            items = emptyList(),
+            isFromVault = false
+        )
+    }
+
+    /**
+     * Parse the published profile from vault response.
+     */
+    private fun parsePublishedProfile(result: JsonObject) {
+        val items = mutableListOf<PersonalDataItem>()
+        val now = Instant.now()
+
+        Log.d(TAG, "Parsing published profile: ${result.keySet()}")
+
+        // Always-shared system fields
+        result.get("first_name")?.takeIf { !it.isJsonNull }?.asString?.let { firstName ->
+            items.add(PersonalDataItem(
+                id = "_published_first_name",
+                name = "First Name",
+                type = DataType.PUBLIC,
+                value = firstName,
+                category = DataCategory.IDENTITY,
+                isSystemField = true,
+                isInPublicProfile = true,
+                createdAt = now,
+                updatedAt = now
+            ))
+        }
+
+        result.get("last_name")?.takeIf { !it.isJsonNull }?.asString?.let { lastName ->
+            items.add(PersonalDataItem(
+                id = "_published_last_name",
+                name = "Last Name",
+                type = DataType.PUBLIC,
+                value = lastName,
+                category = DataCategory.IDENTITY,
+                isSystemField = true,
+                isInPublicProfile = true,
+                createdAt = now,
+                updatedAt = now
+            ))
+        }
+
+        result.get("email")?.takeIf { !it.isJsonNull }?.asString?.let { email ->
+            items.add(PersonalDataItem(
+                id = "_published_email",
+                name = "Email",
+                type = DataType.PUBLIC,
+                value = email,
+                category = DataCategory.CONTACT,
+                isSystemField = true,
+                isInPublicProfile = true,
+                createdAt = now,
+                updatedAt = now
+            ))
+        }
+
+        // Parse additional fields
+        result.getAsJsonObject("fields")?.let { fieldsObj ->
+            fieldsObj.entrySet().forEach { (name, fieldData) ->
+                try {
+                    val displayName = fieldData.asJsonObject.get("display_name")?.asString ?: name
+                    val value = fieldData.asJsonObject.get("value")?.asString ?: ""
+                    val fieldType = fieldData.asJsonObject.get("field_type")?.asString ?: "text"
+
+                    items.add(PersonalDataItem(
+                        id = "_published_$name",
+                        name = displayName,
+                        type = DataType.PUBLIC,
+                        value = value,
+                        category = categoryFromNamespace(name),
+                        isSystemField = false,
+                        isInPublicProfile = true,
+                        createdAt = now,
+                        updatedAt = now
+                    ))
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error parsing published field $name: ${e.message}")
+                }
+            }
+        }
+
+        val updatedAt = result.get("updated_at")?.takeIf { !it.isJsonNull }?.asString
+        Log.i(TAG, "Parsed ${items.size} items from published profile, updated_at: $updatedAt")
+
+        _publishedProfile.value = PublishedProfileData(
+            items = items,
+            isFromVault = true,
+            updatedAt = updatedAt
+        )
+    }
 }
+
+/**
+ * Data class for published profile display.
+ */
+data class PublishedProfileData(
+    val items: List<PersonalDataItem>,
+    val isFromVault: Boolean,
+    val updatedAt: String? = null
+)
