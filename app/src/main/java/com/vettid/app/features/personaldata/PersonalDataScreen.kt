@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -825,8 +826,15 @@ private fun AddFieldDialog(
                     minLines = if (state.fieldType == FieldType.NOTE) 3 else 1,
                     maxLines = if (state.fieldType == FieldType.NOTE) 5 else 1,
                     keyboardOptions = KeyboardOptions(
+                        keyboardType = when (state.fieldType) {
+                            FieldType.PHONE -> KeyboardType.Phone
+                            FieldType.EMAIL -> KeyboardType.Email
+                            FieldType.NUMBER -> KeyboardType.Number
+                            FieldType.URL -> KeyboardType.Uri
+                            else -> KeyboardType.Text
+                        },
                         capitalization = when (state.fieldType) {
-                            FieldType.EMAIL, FieldType.URL, FieldType.PASSWORD -> KeyboardCapitalization.None
+                            FieldType.EMAIL, FieldType.URL, FieldType.PASSWORD, FieldType.PHONE, FieldType.NUMBER -> KeyboardCapitalization.None
                             FieldType.NOTE -> KeyboardCapitalization.Sentences
                             else -> KeyboardCapitalization.Words
                         }
@@ -1124,13 +1132,14 @@ private fun ProfileInstructionStep(
 }
 
 /**
- * Dynamic profile card view that adapts to whatever fields the user shares.
- * Shows primary contact info (name/email) prominently, then organizes
- * additional fields by category in a clean, scannable layout.
+ * Modern biographical profile view with a clean, engaging design.
+ * Shows the user's identity prominently with clickable contact info.
  */
 @Composable
 private fun BusinessCardView(profile: PublishedProfileData) {
-    // Extract primary identity fields (always shown at top if present)
+    val context = LocalContext.current
+
+    // Extract primary identity fields
     val firstName = profile.items.find { it.name == "First Name" }?.value ?: ""
     val lastName = profile.items.find { it.name == "Last Name" }?.value ?: ""
     val fullName = listOf(firstName, lastName).filter { it.isNotBlank() }.joinToString(" ")
@@ -1142,22 +1151,35 @@ private fun BusinessCardView(profile: PublishedProfileData) {
     val otherFields = profile.items.filter { it.name !in primaryFieldNames }
     val groupedByCategory = otherFields.groupBy { it.category ?: DataCategory.OTHER }
 
+    // Helper to open intents
+    fun openEmail(emailAddress: String) {
+        try {
+            context.startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:$emailAddress")))
+        } catch (e: Exception) { /* ignore */ }
+    }
+
+    fun openPhone(phoneNumber: String) {
+        try {
+            val cleaned = phoneNumber.replace(Regex("[^+0-9]"), "")
+            context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$cleaned")))
+        } catch (e: Exception) { /* ignore */ }
+    }
+
     Column(modifier = Modifier.fillMaxWidth()) {
-        // Primary identity section - name with avatar
-        Surface(
-            modifier = Modifier.fillMaxWidth(),
-            color = MaterialTheme.colorScheme.primaryContainer,
-            shape = MaterialTheme.shapes.medium
+        // Hero section with large avatar and name
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 16.dp),
+            contentAlignment = Alignment.Center
         ) {
-            Row(
-                modifier = Modifier.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Avatar circle with initials
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                // Large avatar
                 Surface(
-                    modifier = Modifier.size(52.dp),
+                    modifier = Modifier.size(100.dp),
                     shape = MaterialTheme.shapes.extraLarge,
-                    color = MaterialTheme.colorScheme.primary
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    tonalElevation = 4.dp
                 ) {
                     Box(
                         contentAlignment = Alignment.Center,
@@ -1169,75 +1191,168 @@ private fun BusinessCardView(profile: PublishedProfileData) {
                             .take(2)
                         Text(
                             text = initials.ifEmpty { "?" },
-                            style = MaterialTheme.typography.titleLarge,
-                            color = MaterialTheme.colorScheme.onPrimary
+                            style = MaterialTheme.typography.displaySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.width(14.dp))
+                Spacer(modifier = Modifier.height(16.dp))
 
-                Column(modifier = Modifier.weight(1f)) {
-                    if (fullName.isNotBlank()) {
-                        Text(
-                            text = fullName,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                // Name
+                if (fullName.isNotBlank()) {
+                    Text(
+                        text = fullName,
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+        }
+
+        // Contact buttons row
+        if (email != null || phone != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.Center
+            ) {
+                email?.let { emailAddr ->
+                    FilledTonalButton(
+                        onClick = { openEmail(emailAddr) },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            Icons.Default.Email,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Email", maxLines = 1)
+                    }
+                }
+
+                if (email != null && phone != null) {
+                    Spacer(modifier = Modifier.width(12.dp))
+                }
+
+                phone?.let { phoneNum ->
+                    FilledTonalButton(
+                        onClick = { openPhone(phoneNum) },
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            Icons.Default.Phone,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Call", maxLines = 1)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(20.dp))
+        }
+
+        // Contact details card
+        if (email != null || phone != null) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                shape = MaterialTheme.shapes.medium
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "CONTACT",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+
+                    email?.let { emailAddr ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { openEmail(emailAddr) }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Email,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    text = "Email",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                                Text(
+                                    text = emailAddr,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textDecoration = TextDecoration.Underline
+                                )
+                            }
+                        }
+                    }
+
+                    if (email != null && phone != null) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(vertical = 8.dp),
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
                         )
                     }
 
-                    // Primary contact row (email and/or phone)
-                    if (email != null || phone != null) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Column {
-                            email?.let {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        Icons.Default.Email,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(14.dp),
-                                        tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = it,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
-                                    )
-                                }
-                            }
-                            phone?.let {
-                                if (email != null) Spacer(modifier = Modifier.height(2.dp))
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        Icons.Default.Phone,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(14.dp),
-                                        tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = it,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
-                                    )
-                                }
+                    phone?.let { phoneNum ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { openPhone(phoneNum) }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Phone,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column {
+                                Text(
+                                    text = "Phone",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                                Text(
+                                    text = phoneNum,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textDecoration = TextDecoration.Underline
+                                )
                             }
                         }
                     }
                 }
             }
+
+            Spacer(modifier = Modifier.height(12.dp))
         }
 
         // Additional fields organized by category
         if (groupedByCategory.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Define category display order
             val categoryOrder = listOf(
+                DataCategory.IDENTITY,
                 DataCategory.CONTACT,
                 DataCategory.ADDRESS,
-                DataCategory.IDENTITY,
                 DataCategory.FINANCIAL,
                 DataCategory.MEDICAL,
                 DataCategory.CRYPTO,
@@ -1257,7 +1372,7 @@ private fun BusinessCardView(profile: PublishedProfileData) {
                             category = category,
                             items = filteredItems
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
                     }
                 }
             }
@@ -1265,23 +1380,23 @@ private fun BusinessCardView(profile: PublishedProfileData) {
 
         // Published timestamp
         profile.updatedAt?.let { updatedAt ->
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
-                    Icons.Default.Check,
+                    Icons.Default.Verified,
                     contentDescription = null,
-                    modifier = Modifier.size(12.dp),
+                    modifier = Modifier.size(14.dp),
                     tint = MaterialTheme.colorScheme.primary
                 )
-                Spacer(modifier = Modifier.width(4.dp))
+                Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "Published $updatedAt",
+                    text = "Profile verified \u2022 Updated $updatedAt",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                 )
             }
         }
