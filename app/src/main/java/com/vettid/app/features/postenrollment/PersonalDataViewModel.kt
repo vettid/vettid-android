@@ -235,37 +235,23 @@ class PersonalDataViewModel @Inject constructor(
         try {
             val data = personalDataStore.exportForSync()
 
-            // Build payload for profile.update
-            val payload = com.google.gson.JsonObject().apply {
+            // Build payload for personal-data.update (wrapped in "fields" object)
+            val fieldsObject = com.google.gson.JsonObject().apply {
                 data.forEach { (key, value) ->
                     when (value) {
                         is String -> addProperty(key, value)
-                        is Number -> addProperty(key, value)
-                        is Boolean -> addProperty(key, value)
-                        is List<*> -> {
-                            val jsonArray = com.google.gson.JsonArray()
-                            @Suppress("UNCHECKED_CAST")
-                            (value as? List<Map<String, Any?>>)?.forEach { item ->
-                                val jsonObj = com.google.gson.JsonObject()
-                                item.forEach { (k, v) ->
-                                    when (v) {
-                                        is String -> jsonObj.addProperty(k, v)
-                                        is Number -> jsonObj.addProperty(k, v)
-                                        is Boolean -> jsonObj.addProperty(k, v)
-                                        else -> jsonObj.addProperty(k, v?.toString())
-                                    }
-                                }
-                                jsonArray.add(jsonObj)
-                            }
-                            add(key, jsonArray)
-                        }
+                        is Number -> addProperty(key, value.toString())
+                        is Boolean -> addProperty(key, value.toString())
                         null -> {} // Skip null values
                         else -> addProperty(key, value.toString())
                     }
                 }
             }
+            val payload = com.google.gson.JsonObject().apply {
+                add("fields", fieldsObject)
+            }
 
-            val result = ownerSpaceClient.sendToVault("profile.update", payload)
+            val result = ownerSpaceClient.sendToVault("personal-data.update", payload)
 
             result.fold(
                 onSuccess = { requestId ->

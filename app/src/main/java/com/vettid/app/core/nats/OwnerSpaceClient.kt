@@ -10,10 +10,13 @@ import com.vettid.app.core.crypto.SessionInfo
 import com.vettid.app.core.crypto.SessionKeyPair
 import com.vettid.app.core.network.TransactionKeyInfo
 import com.vettid.app.core.storage.CredentialStore
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
+import java.util.concurrent.ConcurrentHashMap
 import java.time.Instant
 import java.util.UUID
 import javax.inject.Inject
@@ -45,6 +48,10 @@ class OwnerSpaceClient @Inject constructor(
 
     private val _vaultResponses = MutableSharedFlow<VaultResponse>(extraBufferCapacity = 64)
     val vaultResponses: SharedFlow<VaultResponse> = _vaultResponses.asSharedFlow()
+
+    // Pending requests map for direct request/response correlation
+    // This prevents race conditions where multiple collectors compete for responses
+    private val pendingRequests = ConcurrentHashMap<String, CompletableDeferred<VaultResponse>>()
 
     private val _vaultEvents = MutableSharedFlow<VaultEvent>(extraBufferCapacity = 64)
     val vaultEvents: SharedFlow<VaultEvent> = _vaultEvents.asSharedFlow()
@@ -175,6 +182,81 @@ class OwnerSpaceClient @Inject constructor(
 
         val json = gson.toJson(message)
         return natsClient.publish(subject, json).map { requestId }
+    }
+
+    /**
+     * Send a message to the vault and await the response.
+     *
+     * This is the preferred method for request/response patterns as it properly
+     * correlates responses using CompletableDeferred, avoiding race conditions
+     * that can occur when multiple clients use the SharedFlow approach.
+     *
+     * @param messageType The message type/action (e.g., "profile.get", "feed.sync")
+     * @param payload The message payload
+     * @param timeoutMs Timeout in milliseconds (default 30 seconds)
+     * @return The vault response, or null if timeout
+     */
+    suspend fun sendAndAwaitResponse(
+        messageType: String,
+        payload: JsonObject = JsonObject(),
+        timeoutMs: Long = 30000L
+    ): VaultResponse? {
+        val ownerSpaceId = connectionManager.getOwnerSpaceId()
+            ?: return VaultResponse.Error(
+                requestId = "",
+                code = "NO_OWNER_SPACE",
+                message = "No OwnerSpace ID available"
+            )
+
+        val requestId = UUID.randomUUID().toString()
+        val subject = "$ownerSpaceId.forVault.$messageType"
+
+        // Register the pending request BEFORE sending
+        val deferred = CompletableDeferred<VaultResponse>()
+        pendingRequests[requestId] = deferred
+
+        try {
+            // Encrypt payload if E2E session is established (skip for bootstrap)
+            val effectivePayload = if (isE2EEnabled && messageType != "app.bootstrap") {
+                encryptPayload(payload)
+            } else {
+                payload
+            }
+
+            val message = VaultMessage(
+                id = requestId,
+                type = messageType,
+                payload = effectivePayload,
+                timestamp = Instant.now().toString()
+            )
+
+            val json = gson.toJson(message)
+            val publishResult = natsClient.publish(subject, json)
+
+            if (publishResult.isFailure) {
+                pendingRequests.remove(requestId)
+                return VaultResponse.Error(
+                    requestId = requestId,
+                    code = "PUBLISH_FAILED",
+                    message = publishResult.exceptionOrNull()?.message ?: "Failed to publish"
+                )
+            }
+
+            // Wait for the response with timeout
+            return withTimeoutOrNull(timeoutMs) {
+                deferred.await()
+            } ?: run {
+                android.util.Log.w(TAG, "Request $requestId ($messageType) timed out after ${timeoutMs}ms")
+                VaultResponse.Error(
+                    requestId = requestId,
+                    code = "TIMEOUT",
+                    message = "Request timed out"
+                )
+            }
+        } finally {
+            // Always clean up the pending request
+            pendingRequests.remove(requestId)
+        }
     }
 
     /**
@@ -729,6 +811,9 @@ class OwnerSpaceClient @Inject constructor(
             val data = decryptPayload(message.data)
             val responseString = String(data, Charsets.UTF_8)
 
+            // DEBUG: Log raw response for troubleshooting
+            android.util.Log.d(TAG, "handleVaultResponse subject=${message.subject} raw=${responseString.take(500)}")
+
             val response = gson.fromJson(responseString, VaultResponseJson::class.java)
             val correlationId = response.getCorrelationId()
 
@@ -762,7 +847,7 @@ class OwnerSpaceClient @Inject constructor(
                         message = response.error ?: "Unknown error"
                     )
                 }
-                _vaultResponses.tryEmit(vaultResponse)
+                dispatchResponse(correlationId, vaultResponse)
                 return
             }
 
@@ -804,10 +889,29 @@ class OwnerSpaceClient @Inject constructor(
                 }
             }
 
-            _vaultResponses.tryEmit(vaultResponse)
+            dispatchResponse(correlationId, vaultResponse)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to parse vault response", e)
         }
+    }
+
+    /**
+     * Dispatch a response to the appropriate handler.
+     * First checks for a pending request (sendAndAwaitResponse), then falls back to SharedFlow.
+     */
+    private fun dispatchResponse(requestId: String, response: VaultResponse) {
+        // First, try to complete a pending request (direct correlation)
+        val pendingDeferred = pendingRequests.remove(requestId)
+        if (pendingDeferred != null) {
+            android.util.Log.d(TAG, "Dispatching response to pending request: $requestId")
+            pendingDeferred.complete(response)
+            // Don't emit to SharedFlow - the requester will get it directly
+            return
+        }
+
+        // Fall back to SharedFlow for legacy consumers (backward compatibility)
+        android.util.Log.d(TAG, "No pending request for $requestId, emitting to SharedFlow")
+        _vaultResponses.tryEmit(response)
     }
 
     private fun parseTimestamp(timestamp: String?): Long {
