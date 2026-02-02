@@ -9,6 +9,7 @@ import com.vettid.app.core.attestation.AttestationVerificationException
 import com.vettid.app.core.attestation.HardwareAttestationManager
 import com.vettid.app.core.attestation.NitroAttestationVerifier
 import com.vettid.app.core.attestation.PcrConfigManager
+import com.vettid.app.core.attestation.PcrInitializationService
 import com.vettid.app.core.attestation.VerifiedAttestation
 import com.vettid.app.core.crypto.CryptoManager
 import com.vettid.app.core.nats.CustomCategoryDto
@@ -63,6 +64,7 @@ class EnrollmentWizardViewModel @Inject constructor(
     private val nitroEnrollmentClient: NitroEnrollmentClient,
     private val credentialStore: CredentialStore,
     private val pcrConfigManager: PcrConfigManager,
+    private val pcrInitializationService: PcrInitializationService,
     private val postEnrollmentAuthClient: PostEnrollmentAuthClient,
     private val personalDataStore: PersonalDataStore,
     private val ownerSpaceClient: OwnerSpaceClient,
@@ -540,6 +542,12 @@ class EnrollmentWizardViewModel @Inject constructor(
 
     private suspend fun requestNitroAttestation() {
         _state.value = WizardState.RequestingAttestation(progress = 0.2f)
+
+        // Ensure PCR values are fetched before attestation verification
+        // This is critical - the async fetch started on app launch may not have completed yet
+        Log.d(TAG, "Ensuring PCR values are fetched before attestation...")
+        pcrInitializationService.initializeSync()
+        Log.d(TAG, "PCR initialization complete, version: ${pcrConfigManager.getCurrentVersion()}")
 
         try {
             val result = nitroEnrollmentClient.requestAttestation()
@@ -1117,7 +1125,13 @@ class EnrollmentWizardViewModel @Inject constructor(
 
     private suspend fun loadCustomCategoriesFromVault(): List<CategoryInfo> {
         return try {
-            val result = ownerSpaceClient.getCategories()
+            // Use enrollment client during enrollment, otherwise use ownerSpaceClient
+            val useEnrollmentClient = nitroEnrollmentClient.isConnected
+            val result = if (useEnrollmentClient) {
+                nitroEnrollmentClient.sendToVault("profile.categories.get", com.google.gson.JsonObject())
+            } else {
+                ownerSpaceClient.getCategories()
+            }
             if (result.isSuccess) {
                 val json = com.google.gson.JsonParser.parseString(result.getOrNull() ?: "{}").asJsonObject
                 val customArray = json.getAsJsonArray("custom") ?: return emptyList()
@@ -1157,16 +1171,26 @@ class EnrollmentWizardViewModel @Inject constructor(
                 // Get existing custom categories and add new one
                 val updatedCategories = current.customCategories + newCategory
 
-                // Sync to vault
-                val categoryDtos = updatedCategories.map { cat ->
-                    CustomCategoryDto(
-                        id = cat.id,
-                        name = cat.name,
-                        icon = cat.icon,
-                        createdAt = cat.createdAt
-                    )
+                // Sync to vault - use enrollment client during enrollment
+                val useEnrollmentClient = nitroEnrollmentClient.isConnected
+                val payload = com.google.gson.JsonObject().apply {
+                    val categoriesArray = com.google.gson.JsonArray()
+                    updatedCategories.forEach { cat ->
+                        val categoryObj = com.google.gson.JsonObject().apply {
+                            addProperty("id", cat.id)
+                            addProperty("name", cat.name)
+                            addProperty("icon", cat.icon)
+                            addProperty("created_at", cat.createdAt)
+                        }
+                        categoriesArray.add(categoryObj)
+                    }
+                    add("categories", categoriesArray)
                 }
-                val syncResult = ownerSpaceClient.updateCategories(categoryDtos)
+                val syncResult = if (useEnrollmentClient) {
+                    nitroEnrollmentClient.sendToVault("profile.categories.update", payload)
+                } else {
+                    ownerSpaceClient.sendToVault("profile.categories.update", payload)
+                }
                 if (syncResult.isFailure) {
                     Log.w(TAG, "Failed to sync categories to vault: ${syncResult.exceptionOrNull()?.message}")
                 }

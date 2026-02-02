@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -74,15 +75,26 @@ fun PersonalDataContent(
 
             is PersonalDataState.Loaded -> {
                 val hasUnpublishedChanges by viewModel.hasUnpublishedChanges.collectAsState()
-                PersonalDataList(
-                    groupedByCategory = viewModel.getDataByCategory(),
-                    hasUnpublishedChanges = hasUnpublishedChanges,
-                    onItemClick = { viewModel.onEvent(PersonalDataEvent.ItemClicked(it)) },
-                    onDeleteClick = { viewModel.onEvent(PersonalDataEvent.DeleteItem(it)) },
-                    onTogglePublicProfile = { viewModel.onEvent(PersonalDataEvent.TogglePublicProfile(it)) },
-                    onPublishClick = { viewModel.publishProfile() },
-                    onPreviewClick = { viewModel.showPublicProfilePreview() }
-                )
+                val isRefreshing by viewModel.isRefreshing.collectAsState()
+                val publishedProfile by viewModel.publishedProfile.collectAsState()
+                @OptIn(ExperimentalMaterial3Api::class)
+                PullToRefreshBox(
+                    isRefreshing = isRefreshing,
+                    onRefresh = { viewModel.onEvent(PersonalDataEvent.Refresh) },
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    PersonalDataList(
+                        groupedByCategory = viewModel.getDataByCategory(),
+                        hasUnpublishedChanges = hasUnpublishedChanges,
+                        lastPublishedAt = publishedProfile?.updatedAt,
+                        isProfilePublished = publishedProfile?.isFromVault == true && publishedProfile?.items?.isNotEmpty() == true,
+                        onItemClick = { viewModel.onEvent(PersonalDataEvent.ItemClicked(it)) },
+                        onDeleteClick = { viewModel.onEvent(PersonalDataEvent.DeleteItem(it)) },
+                        onTogglePublicProfile = { viewModel.onEvent(PersonalDataEvent.TogglePublicProfile(it)) },
+                        onPublishClick = { viewModel.publishProfile() },
+                        onPreviewClick = { viewModel.showPublicProfilePreview() }
+                    )
+                }
             }
         }
 
@@ -121,16 +133,25 @@ fun PersonalDataContent(
         )
     }
 
-    // Full screen public profile view
+    // Full screen public profile view - use Dialog to cover entire window (including scaffold top bar)
     if (showPublicProfilePreview) {
         val publishedProfile by viewModel.publishedProfile.collectAsState()
         val isLoadingPublishedProfile by viewModel.isLoadingPublishedProfile.collectAsState()
 
-        PublicProfileFullScreen(
-            publishedProfile = publishedProfile,
-            isLoading = isLoadingPublishedProfile,
-            onBack = viewModel::hidePublicProfilePreview
-        )
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = viewModel::hidePublicProfilePreview,
+            properties = androidx.compose.ui.window.DialogProperties(
+                dismissOnBackPress = true,
+                dismissOnClickOutside = false,
+                usePlatformDefaultWidth = false
+            )
+        ) {
+            PublicProfileFullScreen(
+                publishedProfile = publishedProfile,
+                isLoading = isLoadingPublishedProfile,
+                onBack = viewModel::hidePublicProfilePreview
+            )
+        }
     }
 }
 
@@ -138,6 +159,8 @@ fun PersonalDataContent(
 private fun PersonalDataList(
     groupedByCategory: GroupedByCategory,
     hasUnpublishedChanges: Boolean,
+    lastPublishedAt: String?,
+    isProfilePublished: Boolean,
     onItemClick: (String) -> Unit,
     onDeleteClick: (String) -> Unit,
     onTogglePublicProfile: (String) -> Unit,
@@ -180,6 +203,8 @@ private fun PersonalDataList(
         item {
             PublishProfileButton(
                 hasUnpublishedChanges = hasUnpublishedChanges,
+                lastPublishedAt = lastPublishedAt,
+                isProfilePublished = isProfilePublished,
                 onPublishClick = onPublishClick,
                 onPreviewClick = onPreviewClick
             )
@@ -335,35 +360,96 @@ private fun CollapsibleCategoryHeader(
 @Composable
 private fun PublishProfileButton(
     hasUnpublishedChanges: Boolean,
+    lastPublishedAt: String?,
+    isProfilePublished: Boolean,
     onPublishClick: () -> Unit,
     onPreviewClick: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
-        // Unpublished changes indicator
-        if (hasUnpublishedChanges) {
-            Surface(
-                color = MaterialTheme.colorScheme.tertiaryContainer,
-                shape = MaterialTheme.shapes.small,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 8.dp)
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+        // Status indicator
+        when {
+            hasUnpublishedChanges -> {
+                // Unpublished changes warning
+                Surface(
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
                 ) {
-                    Icon(
-                        Icons.Default.Info,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp),
-                        tint = MaterialTheme.colorScheme.onTertiaryContainer
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "You have unpublished changes",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onTertiaryContainer
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Info,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "You have unpublished changes",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer
+                        )
+                    }
+                }
+            }
+            isProfilePublished -> {
+                // Published successfully indicator
+                Surface(
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = if (lastPublishedAt != null) "Published: $lastPublishedAt" else "Profile published",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+            }
+            else -> {
+                // Not yet published
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = MaterialTheme.shapes.small,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.CloudOff,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Profile not yet published",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }
@@ -394,7 +480,7 @@ private fun PublishProfileButton(
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(if (hasUnpublishedChanges) "Publish" else "Publish")
+                Text(if (hasUnpublishedChanges) "Publish" else "Republish")
             }
         }
     }
