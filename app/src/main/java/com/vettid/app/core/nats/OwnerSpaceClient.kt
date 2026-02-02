@@ -49,9 +49,16 @@ class OwnerSpaceClient @Inject constructor(
     private val _vaultResponses = MutableSharedFlow<VaultResponse>(extraBufferCapacity = 64)
     val vaultResponses: SharedFlow<VaultResponse> = _vaultResponses.asSharedFlow()
 
+    // Pending request holder with expected request type for validation
+    private data class PendingRequest(
+        val deferred: CompletableDeferred<VaultResponse>,
+        val expectedRequestType: String  // e.g., "pin.unlock", "connection.list"
+    )
+
     // Pending requests map for direct request/response correlation
     // This prevents race conditions where multiple collectors compete for responses
-    private val pendingRequests = ConcurrentHashMap<String, CompletableDeferred<VaultResponse>>()
+    // Each entry includes the expected request type for validation
+    private val pendingRequests = ConcurrentHashMap<String, PendingRequest>()
 
     private val _vaultEvents = MutableSharedFlow<VaultEvent>(extraBufferCapacity = 64)
     val vaultEvents: SharedFlow<VaultEvent> = _vaultEvents.asSharedFlow()
@@ -212,8 +219,9 @@ class OwnerSpaceClient @Inject constructor(
         val subject = "$ownerSpaceId.forVault.$messageType"
 
         // Register the pending request BEFORE sending
+        // Store expected request type for validation when response arrives
         val deferred = CompletableDeferred<VaultResponse>()
-        pendingRequests[requestId] = deferred
+        pendingRequests[requestId] = PendingRequest(deferred, messageType)
 
         try {
             // Encrypt payload if E2E session is established (skip for bootstrap)
@@ -847,7 +855,7 @@ class OwnerSpaceClient @Inject constructor(
                         message = response.error ?: "Unknown error"
                     )
                 }
-                dispatchResponse(correlationId, vaultResponse)
+                dispatchResponse(correlationId, vaultResponse, response.request_type)
                 return
             }
 
@@ -879,17 +887,26 @@ class OwnerSpaceClient @Inject constructor(
                 )
                 else -> {
                     // Treat as generic handler result
+                    // If response.result is null, the enclave may have put data at the top level
+                    // (e.g., feed.sync returns events, has_more at root)
+                    val resultData = response.result ?: run {
+                        try {
+                            gson.fromJson(responseString, JsonObject::class.java)
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
                     VaultResponse.HandlerResult(
                         requestId = correlationId,
                         handlerId = null,
                         success = response.error == null,
-                        result = response.result,
+                        result = resultData,
                         error = response.error
                     )
                 }
             }
 
-            dispatchResponse(correlationId, vaultResponse)
+            dispatchResponse(correlationId, vaultResponse, response.request_type)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to parse vault response", e)
         }
@@ -898,13 +915,36 @@ class OwnerSpaceClient @Inject constructor(
     /**
      * Dispatch a response to the appropriate handler.
      * First checks for a pending request (sendAndAwaitResponse), then falls back to SharedFlow.
+     *
+     * @param requestId Correlation ID from the response
+     * @param response The vault response to dispatch
+     * @param responseRequestType The request_type from the response (for validation)
      */
-    private fun dispatchResponse(requestId: String, response: VaultResponse) {
+    private fun dispatchResponse(requestId: String, response: VaultResponse, responseRequestType: String?) {
         // First, try to complete a pending request (direct correlation)
-        val pendingDeferred = pendingRequests.remove(requestId)
-        if (pendingDeferred != null) {
-            android.util.Log.d(TAG, "Dispatching response to pending request: $requestId")
-            pendingDeferred.complete(response)
+        val pendingRequest = pendingRequests.remove(requestId)
+        if (pendingRequest != null) {
+            // Validate request type if response includes it
+            // This prevents responses from being delivered to wrong handlers
+            if (responseRequestType != null && responseRequestType != pendingRequest.expectedRequestType) {
+                android.util.Log.e(TAG,
+                    "REQUEST TYPE MISMATCH: Expected '${pendingRequest.expectedRequestType}' " +
+                    "but got '$responseRequestType' for request $requestId. " +
+                    "This indicates a response routing bug in the enclave."
+                )
+                // Return an error instead of the wrong response
+                pendingRequest.deferred.complete(
+                    VaultResponse.Error(
+                        requestId = requestId,
+                        code = "REQUEST_TYPE_MISMATCH",
+                        message = "Expected ${pendingRequest.expectedRequestType} response but got $responseRequestType"
+                    )
+                )
+                return
+            }
+
+            android.util.Log.d(TAG, "Dispatching response to pending request: $requestId (type: ${responseRequestType ?: "unknown"})")
+            pendingRequest.deferred.complete(response)
             // Don't emit to SharedFlow - the requester will get it directly
             return
         }
@@ -1540,6 +1580,7 @@ private data class VaultResponseJson(
     val id: String? = null,            // Alternative field name
     val requestId: String? = null,     // Legacy fallback
     val type: String? = null,
+    val request_type: String? = null,  // Added for response validation (e.g., "pin.unlock")
     val handlerId: String? = null,
     val success: Boolean? = null,
     val result: JsonObject? = null,
