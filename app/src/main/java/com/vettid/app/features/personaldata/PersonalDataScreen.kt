@@ -1,5 +1,7 @@
 package com.vettid.app.features.personaldata
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -12,8 +14,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -762,7 +766,10 @@ private fun AddFieldDialog(
                     isError = state.nameError != null,
                     supportingText = state.nameError?.let { { Text(it) } },
                     modifier = Modifier.fillMaxWidth(),
-                    singleLine = true
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Words
+                    )
                 )
 
                 // 3. Field type
@@ -816,7 +823,14 @@ private fun AddFieldDialog(
                     supportingText = state.valueError?.let { { Text(it) } },
                     modifier = Modifier.fillMaxWidth(),
                     minLines = if (state.fieldType == FieldType.NOTE) 3 else 1,
-                    maxLines = if (state.fieldType == FieldType.NOTE) 5 else 1
+                    maxLines = if (state.fieldType == FieldType.NOTE) 5 else 1,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = when (state.fieldType) {
+                            FieldType.EMAIL, FieldType.URL, FieldType.PASSWORD -> KeyboardCapitalization.None
+                            FieldType.NOTE -> KeyboardCapitalization.Sentences
+                            else -> KeyboardCapitalization.Words
+                        }
+                    )
                 )
             }
         },
@@ -1305,6 +1319,26 @@ private fun ProfileCategorySection(
 
 @Composable
 private fun BusinessCardField(item: PersonalDataItem) {
+    val context = LocalContext.current
+
+    // Determine if this field is clickable
+    val isPhone = item.name.contains("Phone", ignoreCase = true) ||
+                  item.fieldType == FieldType.PHONE
+    val isEmail = item.name.contains("Email", ignoreCase = true) ||
+                  item.fieldType == FieldType.EMAIL ||
+                  item.value.contains("@") && item.value.contains(".")
+    val isUrl = item.name.contains("Website", ignoreCase = true) ||
+                item.name.contains("LinkedIn", ignoreCase = true) ||
+                item.name.contains("GitHub", ignoreCase = true) ||
+                item.name.contains("Twitter", ignoreCase = true) ||
+                item.name.contains("Instagram", ignoreCase = true) ||
+                item.fieldType == FieldType.URL ||
+                item.value.startsWith("http://") ||
+                item.value.startsWith("https://") ||
+                item.value.startsWith("www.")
+
+    val isClickable = isPhone || isEmail || isUrl
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.Top
@@ -1360,8 +1394,35 @@ private fun BusinessCardField(item: PersonalDataItem) {
             )
             Text(
                 text = item.value,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                style = MaterialTheme.typography.bodyMedium.copy(
+                    textDecoration = if (isClickable) TextDecoration.Underline else TextDecoration.None
+                ),
+                color = if (isClickable) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = if (isClickable) {
+                    Modifier.clickable {
+                        try {
+                            val intent = when {
+                                isPhone -> {
+                                    val phoneNumber = item.value.replace(Regex("[^+0-9]"), "")
+                                    Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phoneNumber"))
+                                }
+                                isEmail -> Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:${item.value}"))
+                                isUrl -> {
+                                    val url = if (item.value.startsWith("http://") || item.value.startsWith("https://")) {
+                                        item.value
+                                    } else {
+                                        "https://${item.value}"
+                                    }
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                }
+                                else -> null
+                            }
+                            intent?.let { context.startActivity(it) }
+                        } catch (e: Exception) {
+                            // Handle error silently
+                        }
+                    }
+                } else Modifier
             )
         }
     }
