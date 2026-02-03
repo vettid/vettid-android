@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.JsonObject
+import com.vettid.app.core.events.ProfilePhotoEvents
 import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.nats.VaultResponse
@@ -22,7 +23,8 @@ class PersonalDataViewModel @Inject constructor(
     private val credentialStore: CredentialStore,
     private val personalDataStore: PersonalDataStore,
     private val ownerSpaceClient: OwnerSpaceClient,
-    private val connectionManager: NatsConnectionManager
+    private val connectionManager: NatsConnectionManager,
+    private val profilePhotoEvents: ProfilePhotoEvents
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<PersonalDataState>(PersonalDataState.Loading)
@@ -46,6 +48,16 @@ class PersonalDataViewModel @Inject constructor(
 
     private val _isLoadingPublishedProfile = MutableStateFlow(false)
     val isLoadingPublishedProfile: StateFlow<Boolean> = _isLoadingPublishedProfile.asStateFlow()
+
+    // Profile photo (Base64-encoded JPEG)
+    private val _profilePhoto = MutableStateFlow<String?>(null)
+    val profilePhoto: StateFlow<String?> = _profilePhoto.asStateFlow()
+
+    private val _isUploadingPhoto = MutableStateFlow(false)
+    val isUploadingPhoto: StateFlow<Boolean> = _isUploadingPhoto.asStateFlow()
+
+    private val _showPhotoCapture = MutableStateFlow(false)
+    val showPhotoCapture: StateFlow<Boolean> = _showPhotoCapture.asStateFlow()
 
     // Track if there are unpublished changes
     private val _hasUnpublishedChanges = MutableStateFlow(false)
@@ -73,6 +85,8 @@ class PersonalDataViewModel @Inject constructor(
             is PersonalDataEvent.AddItem -> showAddDialog()
             is PersonalDataEvent.DeleteItem -> deleteItem(event.itemId)
             is PersonalDataEvent.TogglePublicProfile -> togglePublicProfile(event.itemId)
+            is PersonalDataEvent.MoveItemUp -> moveItemUp(event.itemId)
+            is PersonalDataEvent.MoveItemDown -> moveItemDown(event.itemId)
             is PersonalDataEvent.Refresh -> loadPersonalData()
         }
     }
@@ -88,22 +102,27 @@ class PersonalDataViewModel @Inject constructor(
             }
 
             try {
-                dataItems.clear()
+                // Load into temp list first to avoid visual flash
+                val newItems = mutableListOf<PersonalDataItem>()
 
                 // Try to fetch from vault if connected
                 if (connectionManager.isConnected()) {
                     Log.d(TAG, "Loading personal data from vault...")
-                    val vaultLoadSuccess = loadFromVault()
+                    val vaultLoadSuccess = loadFromVaultInto(newItems)
                     if (vaultLoadSuccess) {
-                        Log.d(TAG, "Loaded ${dataItems.size} items from vault")
+                        Log.d(TAG, "Loaded ${newItems.size} items from vault")
                     } else {
                         Log.d(TAG, "Vault load failed, falling back to local storage")
-                        loadFromLocalStorage()
+                        loadFromLocalStorageInto(newItems)
                     }
                 } else {
                     Log.d(TAG, "Not connected to vault, loading from local storage")
-                    loadFromLocalStorage()
+                    loadFromLocalStorageInto(newItems)
                 }
+
+                // Only update dataItems once we have new data
+                dataItems.clear()
+                dataItems.addAll(newItems)
 
                 if (dataItems.isEmpty()) {
                     _state.value = PersonalDataState.Empty
@@ -115,6 +134,7 @@ class PersonalDataViewModel @Inject constructor(
                 // Also fetch the published profile status (non-blocking)
                 if (connectionManager.isConnected()) {
                     fetchPublishedProfileStatus()
+                    fetchProfilePhoto()
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load personal data", e)
@@ -126,24 +146,38 @@ class PersonalDataViewModel @Inject constructor(
     }
 
     /**
-     * Load personal data directly from vault.
-     * Returns true if successful, false otherwise.
+     * Load personal data directly from vault into the provided list.
+     * Returns true if successful AND data was loaded, false otherwise.
      *
      * Uses profile.get which returns both system fields and personal data fields.
      * The enclave's profile.get reads from profile/_index which contains all fields.
      */
-    private suspend fun loadFromVault(): Boolean {
+    private suspend fun loadFromVaultInto(items: MutableList<PersonalDataItem>): Boolean {
         return try {
-            Log.d(TAG, "Requesting profile from vault...")
+            Log.i(TAG, "Requesting profile from vault...")
             val profileResponse = ownerSpaceClient.sendAndAwaitResponse("profile.get", JsonObject(), 10000L)
 
             when (profileResponse) {
                 is VaultResponse.HandlerResult -> {
-                    Log.d(TAG, "Profile response received, keys: ${profileResponse.result?.keySet()}")
-                    Log.d(TAG, "Profile fields: ${profileResponse.result?.getAsJsonObject("fields")?.keySet()}")
+                    Log.i(TAG, "Profile response received, success=${profileResponse.success}")
+                    Log.i(TAG, "Profile response keys: ${profileResponse.result?.keySet()}")
+                    val fieldsObj = profileResponse.result?.getAsJsonObject("fields")
+                    Log.i(TAG, "Profile fields count: ${fieldsObj?.size() ?: 0}, keys: ${fieldsObj?.keySet()}")
+                    Log.d(TAG, "Full response: ${profileResponse.result}")
+
                     if (profileResponse.success && profileResponse.result != null) {
-                        parseProfileResponse(profileResponse.result)
-                        true
+                        val itemCountBefore = items.size
+                        parseProfileResponseInto(profileResponse.result, items)
+                        val itemCountAfter = items.size
+                        Log.i(TAG, "Parsed profile response: $itemCountBefore -> $itemCountAfter items")
+
+                        // Return true only if we actually loaded some data
+                        if (itemCountAfter > 0) {
+                            true
+                        } else {
+                            Log.w(TAG, "Vault returned success but no data was parsed!")
+                            false
+                        }
                     } else {
                         Log.w(TAG, "Profile request failed: ${profileResponse.error}")
                         false
@@ -169,10 +203,10 @@ class PersonalDataViewModel @Inject constructor(
     }
 
     /**
-     * Parse all data from profile.get response.
+     * Parse all data from profile.get response into the provided list.
      * System fields are at top level, personal data fields are in the "fields" object.
      */
-    private fun parseProfileResponse(result: JsonObject) {
+    private fun parseProfileResponseInto(result: JsonObject, items: MutableList<PersonalDataItem>) {
         val now = Instant.now()
         Log.d(TAG, "Parsing profile response: ${result.keySet()}")
 
@@ -188,7 +222,7 @@ class PersonalDataViewModel @Inject constructor(
 
         // Add system fields as items (read-only, always in public profile)
         if (!systemFirstName.isNullOrEmpty()) {
-            dataItems.add(PersonalDataItem(
+            items.add(PersonalDataItem(
                 id = "_system_first_name",
                 name = "First Name",
                 type = DataType.PUBLIC,
@@ -201,7 +235,7 @@ class PersonalDataViewModel @Inject constructor(
             ))
         }
         if (!systemLastName.isNullOrEmpty()) {
-            dataItems.add(PersonalDataItem(
+            items.add(PersonalDataItem(
                 id = "_system_last_name",
                 name = "Last Name",
                 type = DataType.PUBLIC,
@@ -214,7 +248,7 @@ class PersonalDataViewModel @Inject constructor(
             ))
         }
         if (!systemEmail.isNullOrEmpty()) {
-            dataItems.add(PersonalDataItem(
+            items.add(PersonalDataItem(
                 id = "_system_email",
                 name = "Email",
                 type = DataType.PUBLIC,
@@ -277,7 +311,7 @@ class PersonalDataViewModel @Inject constructor(
                     val dataType = dataTypeFromNamespace(namespace)
                     val isInPublicProfile = publicProfileFields.contains(namespace)
 
-                    dataItems.add(PersonalDataItem(
+                    items.add(PersonalDataItem(
                         id = namespace,
                         name = displayName,
                         type = dataType,
@@ -298,7 +332,7 @@ class PersonalDataViewModel @Inject constructor(
             Log.d(TAG, "No fields object in profile response")
         }
 
-        Log.i(TAG, "Total items after parsing profile: ${dataItems.size}")
+        Log.i(TAG, "Total items after parsing profile: ${items.size}")
     }
 
 
@@ -341,7 +375,7 @@ class PersonalDataViewModel @Inject constructor(
         val knownMappings = mapOf(
             "personal.legal.prefix" to "Name Prefix",
             "personal.legal.first_name" to "Legal First Name",
-            "personal.legal.middle_name" to "Middle Name",
+            "personal.legal.middle_name" to "Legal Middle Name",
             "personal.legal.last_name" to "Legal Last Name",
             "personal.legal.suffix" to "Name Suffix",
             "personal.info.birthday" to "Birthday",
@@ -414,13 +448,13 @@ class PersonalDataViewModel @Inject constructor(
     /**
      * Load from local storage as fallback when vault is unavailable.
      */
-    private fun loadFromLocalStorage() {
+    private fun loadFromLocalStorageInto(items: MutableList<PersonalDataItem>) {
         val now = Instant.now()
 
         // Load system fields
         val systemFields = personalDataStore.getSystemFields()
         systemFields?.let { system ->
-            dataItems.add(PersonalDataItem(
+            items.add(PersonalDataItem(
                 id = "_system_first_name",
                 name = "First Name",
                 type = DataType.PUBLIC,
@@ -431,7 +465,7 @@ class PersonalDataViewModel @Inject constructor(
                 createdAt = now,
                 updatedAt = now
             ))
-            dataItems.add(PersonalDataItem(
+            items.add(PersonalDataItem(
                 id = "_system_last_name",
                 name = "Last Name",
                 type = DataType.PUBLIC,
@@ -442,7 +476,7 @@ class PersonalDataViewModel @Inject constructor(
                 createdAt = now,
                 updatedAt = now
             ))
-            dataItems.add(PersonalDataItem(
+            items.add(PersonalDataItem(
                 id = "_system_email",
                 name = "Email",
                 type = DataType.PUBLIC,
@@ -461,7 +495,7 @@ class PersonalDataViewModel @Inject constructor(
 
         fun addIfNotEmpty(namespace: String, displayName: String, value: String?, category: DataCategory, type: DataType = DataType.PRIVATE) {
             if (!value.isNullOrEmpty()) {
-                dataItems.add(PersonalDataItem(
+                items.add(PersonalDataItem(
                     id = namespace,
                     name = displayName,
                     type = type,
@@ -478,7 +512,7 @@ class PersonalDataViewModel @Inject constructor(
         // Legal name fields
         addIfNotEmpty("personal.legal.prefix", "Name Prefix", optional.prefix, DataCategory.IDENTITY)
         addIfNotEmpty("personal.legal.first_name", "Legal First Name", optional.firstName, DataCategory.IDENTITY)
-        addIfNotEmpty("personal.legal.middle_name", "Middle Name", optional.middleName, DataCategory.IDENTITY)
+        addIfNotEmpty("personal.legal.middle_name", "Legal Middle Name", optional.middleName, DataCategory.IDENTITY)
         addIfNotEmpty("personal.legal.last_name", "Legal Last Name", optional.lastName, DataCategory.IDENTITY)
         addIfNotEmpty("personal.legal.suffix", "Name Suffix", optional.suffix, DataCategory.IDENTITY)
 
@@ -520,7 +554,7 @@ class PersonalDataViewModel @Inject constructor(
                 com.vettid.app.core.storage.FieldType.PASSWORD -> DataType.MINOR_SECRET
                 else -> DataType.PRIVATE
             }
-            dataItems.add(PersonalDataItem(
+            items.add(PersonalDataItem(
                 id = namespace,
                 name = customField.name,
                 type = dataType,
@@ -533,7 +567,7 @@ class PersonalDataViewModel @Inject constructor(
             ))
         }
 
-        Log.d(TAG, "Loaded ${dataItems.size} items from local storage")
+        Log.d(TAG, "Loaded ${items.size} items from local storage")
     }
 
     private fun updateSearchQuery(query: String) {
@@ -560,6 +594,7 @@ class PersonalDataViewModel @Inject constructor(
                 value = item.value,
                 type = item.type,
                 category = item.category,
+                originalCategory = item.category,  // Track original for detecting changes
                 isInPublicProfile = item.isInPublicProfile,
                 isEditing = true
             )
@@ -640,13 +675,60 @@ class PersonalDataViewModel @Inject constructor(
             _editState.value = current.copy(isSaving = true)
 
             try {
-                val category = current.category ?: DataCategory.OTHER
-                val namespace = current.id ?: generateNamespace(category, current.name)
+                val newCategory = current.category ?: DataCategory.OTHER
+                val oldNamespace = current.id
 
-                // Save to vault
+                // Check if category changed (for existing fields)
+                val categoryChanged = current.isEditing &&
+                    current.originalCategory != null &&
+                    current.originalCategory != newCategory
+
+                // Generate the new namespace based on category
+                val newNamespace = if (categoryChanged || oldNamespace == null) {
+                    // Category changed or new field - generate new namespace
+                    generateNamespace(newCategory, current.name)
+                } else {
+                    // No category change - use existing namespace
+                    oldNamespace
+                }
+
+                Log.d(TAG, "Save: categoryChanged=$categoryChanged, oldNamespace=$oldNamespace, newNamespace=$newNamespace")
+
+                // If category changed, delete the old field first
+                if (categoryChanged && oldNamespace != null) {
+                    Log.i(TAG, "Category changed from ${current.originalCategory} to $newCategory, deleting old field: $oldNamespace")
+
+                    val deletePayload = JsonObject().apply {
+                        val namespacesArray = com.google.gson.JsonArray()
+                        namespacesArray.add(oldNamespace)
+                        add("namespaces", namespacesArray)  // Enclave expects "namespaces" not "fields"
+                    }
+
+                    val deleteResponse = ownerSpaceClient.sendAndAwaitResponse("personal-data.delete", deletePayload, 10000L)
+                    when (deleteResponse) {
+                        is VaultResponse.HandlerResult -> {
+                            if (deleteResponse.success) {
+                                Log.i(TAG, "Old field deleted: $oldNamespace")
+                            } else {
+                                Log.w(TAG, "Failed to delete old field: ${deleteResponse.error}")
+                            }
+                        }
+                        is VaultResponse.Error -> {
+                            Log.e(TAG, "Error deleting old field: ${deleteResponse.code} - ${deleteResponse.message}")
+                        }
+                        else -> {
+                            Log.w(TAG, "Unexpected delete response: ${deleteResponse?.javaClass?.simpleName}")
+                        }
+                    }
+
+                    // Also delete from local storage
+                    deleteFieldLocally(oldNamespace)
+                }
+
+                // Save the field with the new namespace
                 val payload = JsonObject().apply {
                     val fieldsObj = JsonObject()
-                    fieldsObj.addProperty(namespace, current.value)
+                    fieldsObj.addProperty(newNamespace, current.value)
                     add("fields", fieldsObj)
                 }
 
@@ -656,7 +738,7 @@ class PersonalDataViewModel @Inject constructor(
                 when (response) {
                     is VaultResponse.HandlerResult -> {
                         if (response.success) {
-                            Log.i(TAG, "Field saved confirmed by vault: $namespace")
+                            Log.i(TAG, "Field saved confirmed by vault: $newNamespace")
                         } else {
                             Log.w(TAG, "Vault returned error: ${response.error}")
                         }
@@ -675,13 +757,55 @@ class PersonalDataViewModel @Inject constructor(
                     }
                 }
 
-                // Also save locally for offline access
-                saveFieldLocally(namespace, current)
+                // Also save locally for offline access (with new namespace if changed)
+                // If category changed, treat as new field since old one was deleted
+                val localState = if (categoryChanged) {
+                    current.copy(id = newNamespace, isEditing = false)
+                } else {
+                    current.copy(id = newNamespace)
+                }
+                saveFieldLocally(newNamespace, localState)
 
                 // Mark as having unpublished changes if field is in public profile
                 if (current.isInPublicProfile) {
                     _hasUnpublishedChanges.value = true
                 }
+
+                // Update local state optimistically instead of reloading from vault
+                // This avoids race conditions with other vault requests
+                val now = Instant.now()
+                val updatedItem = PersonalDataItem(
+                    id = newNamespace,
+                    name = current.name,
+                    type = current.type,
+                    value = current.value,
+                    category = newCategory,
+                    fieldType = current.fieldType,
+                    isSystemField = false,
+                    isInPublicProfile = current.isInPublicProfile,
+                    createdAt = now,
+                    updatedAt = now
+                )
+
+                if (categoryChanged && oldNamespace != null) {
+                    // Remove old item, add new one
+                    dataItems.removeAll { it.id == oldNamespace }
+                    dataItems.add(updatedItem)
+                } else if (current.isEditing) {
+                    // Update existing item
+                    val index = dataItems.indexOfFirst { it.id == newNamespace }
+                    if (index >= 0) {
+                        dataItems[index] = updatedItem
+                    } else {
+                        dataItems.add(updatedItem)
+                    }
+                } else {
+                    // Add new item
+                    dataItems.add(updatedItem)
+                }
+
+                // Update UI state
+                _state.value = PersonalDataState.Loaded(items = dataItems.toList())
 
                 _showAddDialog.value = false
                 _editState.value = EditDataItemState()
@@ -689,9 +813,7 @@ class PersonalDataViewModel @Inject constructor(
                     if (current.isEditing) "Data updated" else "Data added"
                 ))
 
-                // Small delay to ensure enclave has committed the data
-                kotlinx.coroutines.delay(200)
-                loadPersonalData() // Reload to show updated data
+                Log.i(TAG, "Save completed, local state updated optimistically")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to save data", e)
                 _effects.emit(PersonalDataEffect.ShowError(e.message ?: "Failed to save"))
@@ -775,9 +897,9 @@ class PersonalDataViewModel @Inject constructor(
 
                 // Delete from vault
                 val payload = JsonObject().apply {
-                    val fieldsArray = com.google.gson.JsonArray()
-                    fieldsArray.add(itemId)
-                    add("fields", fieldsArray)
+                    val namespacesArray = com.google.gson.JsonArray()
+                    namespacesArray.add(itemId)
+                    add("namespaces", namespacesArray)  // Enclave expects "namespaces" not "fields"
                 }
 
                 Log.d(TAG, "Deleting field from vault: $itemId")
@@ -880,6 +1002,68 @@ class PersonalDataViewModel @Inject constructor(
                 Log.e(TAG, "Failed to toggle public profile", e)
                 _effects.emit(PersonalDataEffect.ShowError("Failed to update public profile"))
             }
+        }
+    }
+
+    /**
+     * Move an item up within its category (decrease sort order).
+     */
+    private fun moveItemUp(itemId: String) {
+        val item = dataItems.find { it.id == itemId } ?: return
+        if (item.isSystemField) return  // System fields can't be reordered
+
+        val category = item.category
+        val categoryItems = dataItems.filter { it.category == category && !it.isSystemField }
+            .sortedBy { it.sortOrder }
+
+        val index = categoryItems.indexOfFirst { it.id == itemId }
+        if (index <= 0) return  // Already at top
+
+        // Swap sort orders with the item above
+        val itemAbove = categoryItems[index - 1]
+        val newSortOrder = itemAbove.sortOrder
+        val aboveSortOrder = item.sortOrder
+
+        updateItemSortOrder(itemId, newSortOrder)
+        updateItemSortOrder(itemAbove.id, aboveSortOrder)
+
+        // Refresh state
+        _state.value = PersonalDataState.Loaded(items = dataItems.toList())
+    }
+
+    /**
+     * Move an item down within its category (increase sort order).
+     */
+    private fun moveItemDown(itemId: String) {
+        val item = dataItems.find { it.id == itemId } ?: return
+        if (item.isSystemField) return  // System fields can't be reordered
+
+        val category = item.category
+        val categoryItems = dataItems.filter { it.category == category && !it.isSystemField }
+            .sortedBy { it.sortOrder }
+
+        val index = categoryItems.indexOfFirst { it.id == itemId }
+        if (index < 0 || index >= categoryItems.size - 1) return  // Already at bottom
+
+        // Swap sort orders with the item below
+        val itemBelow = categoryItems[index + 1]
+        val newSortOrder = itemBelow.sortOrder
+        val belowSortOrder = item.sortOrder
+
+        updateItemSortOrder(itemId, newSortOrder)
+        updateItemSortOrder(itemBelow.id, belowSortOrder)
+
+        // Refresh state
+        _state.value = PersonalDataState.Loaded(items = dataItems.toList())
+    }
+
+    /**
+     * Update sort order for an item in the local list.
+     */
+    private fun updateItemSortOrder(itemId: String, newSortOrder: Int) {
+        val index = dataItems.indexOfFirst { it.id == itemId }
+        if (index >= 0) {
+            dataItems[index] = dataItems[index].copy(sortOrder = newSortOrder)
         }
     }
 
@@ -1134,13 +1318,111 @@ class PersonalDataViewModel @Inject constructor(
         }
 
         val updatedAt = result.get("updated_at")?.takeIf { !it.isJsonNull }?.asString
-        Log.i(TAG, "Parsed ${items.size} items from published profile, updated_at: $updatedAt")
+        val photo = result.get("photo")?.takeIf { !it.isJsonNull }?.asString
+        Log.i(TAG, "Parsed ${items.size} items from published profile, updated_at: $updatedAt, has_photo: ${photo != null}")
 
         _publishedProfile.value = PublishedProfileData(
             items = items,
             isFromVault = true,
-            updatedAt = updatedAt
+            updatedAt = updatedAt,
+            photo = photo
         )
+    }
+
+    // MARK: - Profile Photo Methods
+
+    /**
+     * Fetch profile photo from vault (non-blocking).
+     */
+    private fun fetchProfilePhoto() {
+        viewModelScope.launch {
+            try {
+                val result = ownerSpaceClient.getProfilePhoto()
+                result.onSuccess { photo ->
+                    _profilePhoto.value = photo
+                    Log.d(TAG, "Profile photo loaded: ${photo?.length ?: 0} chars")
+                }.onFailure { error ->
+                    Log.e(TAG, "Failed to fetch profile photo", error)
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error fetching profile photo", e)
+            }
+        }
+    }
+
+    /**
+     * Show the photo capture dialog.
+     */
+    fun showPhotoCaptureDialog() {
+        _showPhotoCapture.value = true
+    }
+
+    /**
+     * Hide the photo capture dialog.
+     */
+    fun hidePhotoCaptureDialog() {
+        _showPhotoCapture.value = false
+    }
+
+    /**
+     * Upload a new profile photo.
+     *
+     * @param photoBytes Compressed JPEG bytes from camera capture
+     */
+    fun uploadPhoto(photoBytes: ByteArray) {
+        viewModelScope.launch {
+            _isUploadingPhoto.value = true
+            try {
+                // Convert to Base64
+                val base64Photo = android.util.Base64.encodeToString(
+                    photoBytes,
+                    android.util.Base64.NO_WRAP
+                )
+                Log.d(TAG, "Uploading photo: ${photoBytes.size} bytes, ${base64Photo.length} chars base64")
+
+                val result = ownerSpaceClient.updateProfilePhoto(base64Photo)
+                result.onSuccess {
+                    _profilePhoto.value = base64Photo
+                    _showPhotoCapture.value = false
+                    _effects.emit(PersonalDataEffect.ShowSuccess("Profile photo updated"))
+                    // Notify app-level state so header/drawer update
+                    profilePhotoEvents.notifyPhotoUpdated(base64Photo)
+                    Log.i(TAG, "Profile photo uploaded successfully")
+                }.onFailure { error ->
+                    Log.e(TAG, "Failed to upload profile photo", error)
+                    _effects.emit(PersonalDataEffect.ShowError("Failed to upload photo: ${error.message}"))
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error uploading profile photo", e)
+                _effects.emit(PersonalDataEffect.ShowError("Error uploading photo: ${e.message}"))
+            } finally {
+                _isUploadingPhoto.value = false
+            }
+        }
+    }
+
+    /**
+     * Delete the current profile photo.
+     */
+    fun deletePhoto() {
+        viewModelScope.launch {
+            try {
+                val result = ownerSpaceClient.deleteProfilePhoto()
+                result.onSuccess {
+                    _profilePhoto.value = null
+                    _effects.emit(PersonalDataEffect.ShowSuccess("Profile photo removed"))
+                    // Notify app-level state so header/drawer update
+                    profilePhotoEvents.notifyPhotoUpdated(null)
+                    Log.i(TAG, "Profile photo deleted")
+                }.onFailure { error ->
+                    Log.e(TAG, "Failed to delete profile photo", error)
+                    _effects.emit(PersonalDataEffect.ShowError("Failed to remove photo: ${error.message}"))
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error deleting profile photo", e)
+                _effects.emit(PersonalDataEffect.ShowError("Error removing photo: ${e.message}"))
+            }
+        }
     }
 }
 
@@ -1150,5 +1432,6 @@ class PersonalDataViewModel @Inject constructor(
 data class PublishedProfileData(
     val items: List<PersonalDataItem>,
     val isFromVault: Boolean,
-    val updatedAt: String? = null
+    val updatedAt: String? = null,
+    val photo: String? = null
 )

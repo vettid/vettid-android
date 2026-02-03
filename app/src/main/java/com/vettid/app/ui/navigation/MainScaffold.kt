@@ -27,6 +27,7 @@ fun MainScaffold(
     userName: String = "VettID User",
     userEmail: String = "",
     vaultStatus: VaultStatus = VaultStatus.ACTIVE,
+    profilePhotoBase64: String? = null,
     // NATS connection state
     natsConnectionState: NatsConnectionState = NatsConnectionState.Idle,
     natsErrorMessage: String? = null,
@@ -97,7 +98,8 @@ fun MainScaffold(
                     onActionClick = onHeaderAction,
                     showSearch = headerConfig.showSearch,
                     onSearchClick = onSearchClick,
-                    scrollBehavior = scrollBehavior
+                    scrollBehavior = scrollBehavior,
+                    profilePhotoBase64 = profilePhotoBase64
                 )
             },
             bottomBar = {
@@ -203,7 +205,8 @@ fun MainScaffold(
             onSignOut = {
                 onNavigationStateChange(navigationState.copy(isDrawerOpen = false))
                 showSignOutSheet = true
-            }
+            },
+            profilePhotoBase64 = profilePhotoBase64
         )
 
         // More bottom sheet

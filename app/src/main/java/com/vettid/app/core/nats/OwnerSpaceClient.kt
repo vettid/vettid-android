@@ -385,6 +385,119 @@ class OwnerSpaceClient @Inject constructor(
         return sendToVault("profile.categories.update", payload)
     }
 
+    // MARK: - Profile Photo Operations
+
+    /**
+     * Get profile photo from vault.
+     *
+     * @return Result with Base64-encoded JPEG or null if no photo set
+     */
+    suspend fun getProfilePhoto(): Result<String?> {
+        return try {
+            val response = sendAndAwaitResponse("profile.photo.get", JsonObject(), 10000L)
+            when (response) {
+                is VaultResponse.HandlerResult -> {
+                    if (response.success && response.result != null) {
+                        val photo = response.result.get("photo")?.takeIf { !it.isJsonNull }?.asString
+                        Result.success(photo?.takeIf { it.isNotEmpty() })
+                    } else {
+                        Result.success(null)
+                    }
+                }
+                is VaultResponse.Error -> {
+                    Log.e(TAG, "getProfilePhoto error: ${response.code} - ${response.message}")
+                    Result.failure(Exception(response.message))
+                }
+                null -> {
+                    Log.w(TAG, "getProfilePhoto timed out")
+                    Result.failure(Exception("Request timed out"))
+                }
+                else -> {
+                    Result.success(null)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "getProfilePhoto exception", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Update profile photo in vault.
+     *
+     * @param base64Photo Base64-encoded JPEG photo (max 200KB)
+     * @return Result indicating success
+     */
+    suspend fun updateProfilePhoto(base64Photo: String): Result<Unit> {
+        return try {
+            val payload = JsonObject().apply {
+                addProperty("photo", base64Photo)
+            }
+            val response = sendAndAwaitResponse("profile.photo.update", payload, 15000L)
+            when (response) {
+                is VaultResponse.HandlerResult -> {
+                    if (response.success) {
+                        Log.i(TAG, "Profile photo updated successfully")
+                        Result.success(Unit)
+                    } else {
+                        Log.e(TAG, "updateProfilePhoto failed: ${response.error}")
+                        Result.failure(Exception(response.error ?: "Update failed"))
+                    }
+                }
+                is VaultResponse.Error -> {
+                    Log.e(TAG, "updateProfilePhoto error: ${response.code} - ${response.message}")
+                    Result.failure(Exception(response.message))
+                }
+                null -> {
+                    Log.w(TAG, "updateProfilePhoto timed out")
+                    Result.failure(Exception("Request timed out"))
+                }
+                else -> {
+                    Result.failure(Exception("Unexpected response"))
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "updateProfilePhoto exception", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Delete profile photo from vault.
+     *
+     * @return Result indicating success
+     */
+    suspend fun deleteProfilePhoto(): Result<Unit> {
+        return try {
+            val response = sendAndAwaitResponse("profile.photo.delete", JsonObject(), 10000L)
+            when (response) {
+                is VaultResponse.HandlerResult -> {
+                    if (response.success) {
+                        Log.i(TAG, "Profile photo deleted successfully")
+                        Result.success(Unit)
+                    } else {
+                        Log.e(TAG, "deleteProfilePhoto failed: ${response.error}")
+                        Result.failure(Exception(response.error ?: "Delete failed"))
+                    }
+                }
+                is VaultResponse.Error -> {
+                    Log.e(TAG, "deleteProfilePhoto error: ${response.code} - ${response.message}")
+                    Result.failure(Exception(response.message))
+                }
+                null -> {
+                    Log.w(TAG, "deleteProfilePhoto timed out")
+                    Result.failure(Exception("Request timed out"))
+                }
+                else -> {
+                    Result.failure(Exception("Unexpected response"))
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "deleteProfilePhoto exception", e)
+            Result.failure(e)
+        }
+    }
+
     /**
      * Send a message to another user's vault.
      *

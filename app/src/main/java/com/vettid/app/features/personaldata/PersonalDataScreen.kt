@@ -1,10 +1,16 @@
 package com.vettid.app.features.personaldata
 
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.net.Uri
+import android.util.Base64
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -13,7 +19,10 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -22,6 +31,8 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.vettid.app.ui.components.PhoneNumberInput
+import com.vettid.app.ui.components.ProfilePhotoCapture
 import kotlinx.coroutines.flow.collectLatest
 
 /**
@@ -35,7 +46,9 @@ fun PersonalDataContent(
     val state by viewModel.state.collectAsState()
     val showAddDialog by viewModel.showAddDialog.collectAsState()
     val showPublicProfilePreview by viewModel.showPublicProfilePreview.collectAsState()
+    val showPhotoCapture by viewModel.showPhotoCapture.collectAsState()
     val editState by viewModel.editState.collectAsState()
+    val profilePhoto by viewModel.profilePhoto.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
     // Handle effects
@@ -154,7 +167,30 @@ fun PersonalDataContent(
             PublicProfileFullScreen(
                 publishedProfile = publishedProfile,
                 isLoading = isLoadingPublishedProfile,
-                onBack = viewModel::hidePublicProfilePreview
+                onBack = viewModel::hidePublicProfilePreview,
+                onEditPhoto = {
+                    viewModel.hidePublicProfilePreview()
+                    viewModel.showPhotoCaptureDialog()
+                }
+            )
+        }
+    }
+
+    // Full screen photo capture dialog
+    if (showPhotoCapture) {
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = viewModel::hidePhotoCaptureDialog,
+            properties = androidx.compose.ui.window.DialogProperties(
+                dismissOnBackPress = true,
+                dismissOnClickOutside = false,
+                usePlatformDefaultWidth = false
+            )
+        ) {
+            ProfilePhotoCapture(
+                onPhotoCapture = { bytes ->
+                    viewModel.uploadPhoto(bytes)
+                },
+                onCancel = viewModel::hidePhotoCaptureDialog
             )
         }
     }
@@ -172,8 +208,8 @@ private fun PersonalDataList(
     onPublishClick: () -> Unit,
     onPreviewClick: () -> Unit
 ) {
-    // Track collapsed categories
-    var collapsedCategories by remember { mutableStateOf(setOf<DataCategory>()) }
+    // Track collapsed categories - start with all categories collapsed
+    var collapsedCategories by remember { mutableStateOf(DataCategory.values().toSet()) }
 
     // Search query state
     var searchQuery by remember { mutableStateOf("") }
@@ -794,7 +830,8 @@ private fun AddFieldDialog(
                         expanded = expandedFieldType,
                         onDismissRequest = { expandedFieldType = false }
                     ) {
-                        FieldType.values().forEach { fieldType ->
+                        // Filter out PASSWORD type - it's for minor secrets, not personal data
+                        FieldType.values().filter { it != FieldType.PASSWORD }.forEach { fieldType ->
                             DropdownMenuItem(
                                 text = {
                                     Column {
@@ -815,31 +852,47 @@ private fun AddFieldDialog(
                     }
                 }
 
-                // 4. Value
-                OutlinedTextField(
-                    value = state.value,
-                    onValueChange = onValueChange,
-                    label = { Text("Value") },
-                    isError = state.valueError != null,
-                    supportingText = state.valueError?.let { { Text(it) } },
-                    modifier = Modifier.fillMaxWidth(),
-                    minLines = if (state.fieldType == FieldType.NOTE) 3 else 1,
-                    maxLines = if (state.fieldType == FieldType.NOTE) 5 else 1,
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = when (state.fieldType) {
-                            FieldType.PHONE -> KeyboardType.Phone
-                            FieldType.EMAIL -> KeyboardType.Email
-                            FieldType.NUMBER -> KeyboardType.Number
-                            FieldType.URL -> KeyboardType.Uri
-                            else -> KeyboardType.Text
-                        },
-                        capitalization = when (state.fieldType) {
-                            FieldType.EMAIL, FieldType.URL, FieldType.PASSWORD, FieldType.PHONE, FieldType.NUMBER -> KeyboardCapitalization.None
-                            FieldType.NOTE -> KeyboardCapitalization.Sentences
-                            else -> KeyboardCapitalization.Words
-                        }
+                // 4. Value - use PhoneNumberInput for phone fields
+                if (state.fieldType == FieldType.PHONE) {
+                    PhoneNumberInput(
+                        value = state.value,
+                        onValueChange = onValueChange,
+                        label = "Phone Number",
+                        modifier = Modifier.fillMaxWidth()
                     )
-                )
+                    state.valueError?.let { error ->
+                        Text(
+                            text = error,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(start = 16.dp, top = 4.dp)
+                        )
+                    }
+                } else {
+                    OutlinedTextField(
+                        value = state.value,
+                        onValueChange = onValueChange,
+                        label = { Text("Value") },
+                        isError = state.valueError != null,
+                        supportingText = state.valueError?.let { { Text(it) } },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = if (state.fieldType == FieldType.NOTE) 3 else 1,
+                        maxLines = if (state.fieldType == FieldType.NOTE) 5 else 1,
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = when (state.fieldType) {
+                                FieldType.EMAIL -> KeyboardType.Email
+                                FieldType.NUMBER -> KeyboardType.Number
+                                FieldType.URL -> KeyboardType.Uri
+                                else -> KeyboardType.Text
+                            },
+                            capitalization = when (state.fieldType) {
+                                FieldType.EMAIL, FieldType.URL, FieldType.PASSWORD, FieldType.NUMBER -> KeyboardCapitalization.None
+                                FieldType.NOTE -> KeyboardCapitalization.Sentences
+                                else -> KeyboardCapitalization.Words
+                            }
+                        )
+                    )
+                }
             }
         },
         confirmButton = {
@@ -939,7 +992,8 @@ private fun maskString(value: String): String {
 private fun PublicProfileFullScreen(
     publishedProfile: PublishedProfileData?,
     isLoading: Boolean,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onEditPhoto: () -> Unit = {}
 ) {
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -1078,10 +1132,19 @@ private fun PublicProfileFullScreen(
 
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        // Profile card
-                        BusinessCardView(publishedProfile)
+                        // Profile card - scrollable
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .verticalScroll(rememberScrollState())
+                        ) {
+                            BusinessCardView(
+                                profile = publishedProfile,
+                                onEditPhoto = onEditPhoto
+                            )
+                        }
 
-                        Spacer(modifier = Modifier.weight(1f))
+                        Spacer(modifier = Modifier.height(16.dp))
 
                         // Action button at bottom
                         Button(
@@ -1136,7 +1199,10 @@ private fun ProfileInstructionStep(
  * Shows the user's identity prominently with clickable contact info.
  */
 @Composable
-private fun BusinessCardView(profile: PublishedProfileData) {
+private fun BusinessCardView(
+    profile: PublishedProfileData,
+    onEditPhoto: () -> Unit = {}
+) {
     val context = LocalContext.current
 
     // Extract primary identity fields
@@ -1165,6 +1231,18 @@ private fun BusinessCardView(profile: PublishedProfileData) {
         } catch (e: Exception) { /* ignore */ }
     }
 
+    // Decode Base64 photo if present
+    val photoBitmap = remember(profile.photo) {
+        profile.photo?.let { base64 ->
+            try {
+                val bytes = Base64.decode(base64, Base64.DEFAULT)
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+
     Column(modifier = Modifier.fillMaxWidth()) {
         // Hero section with large avatar and name
         Box(
@@ -1174,26 +1252,62 @@ private fun BusinessCardView(profile: PublishedProfileData) {
             contentAlignment = Alignment.Center
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                // Large avatar
-                Surface(
-                    modifier = Modifier.size(100.dp),
-                    shape = MaterialTheme.shapes.extraLarge,
-                    color = MaterialTheme.colorScheme.primaryContainer,
-                    tonalElevation = 4.dp
+                // Large avatar - show photo if available, otherwise initials
+                Box(
+                    modifier = Modifier
+                        .size(100.dp)
+                        .clip(CircleShape)
+                        .clickable { onEditPhoto() }
                 ) {
-                    Box(
-                        contentAlignment = Alignment.Center,
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        val initials = listOf(firstName, lastName)
-                            .mapNotNull { it.firstOrNull()?.uppercaseChar() }
-                            .joinToString("")
-                            .take(2)
-                        Text(
-                            text = initials.ifEmpty { "?" },
-                            style = MaterialTheme.typography.displaySmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                    if (photoBitmap != null) {
+                        Image(
+                            bitmap = photoBitmap.asImageBitmap(),
+                            contentDescription = "Profile photo",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Crop
                         )
+                    } else {
+                        Surface(
+                            modifier = Modifier.fillMaxSize(),
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.primaryContainer,
+                            tonalElevation = 4.dp
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.fillMaxSize()
+                            ) {
+                                val initials = listOf(firstName, lastName)
+                                    .mapNotNull { it.firstOrNull()?.uppercaseChar() }
+                                    .joinToString("")
+                                    .take(2)
+                                Text(
+                                    text = initials.ifEmpty { "?" },
+                                    style = MaterialTheme.typography.displaySmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                        }
+                    }
+                    // Camera icon overlay
+                    Surface(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .size(28.dp),
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primary
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            Icon(
+                                Icons.Default.CameraAlt,
+                                contentDescription = "Edit photo",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onPrimary
+                            )
+                        }
                     }
                 }
 
@@ -1210,53 +1324,9 @@ private fun BusinessCardView(profile: PublishedProfileData) {
             }
         }
 
-        // Contact buttons row
-        if (email != null || phone != null) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.Center
-            ) {
-                email?.let { emailAddr ->
-                    FilledTonalButton(
-                        onClick = { openEmail(emailAddr) },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(
-                            Icons.Default.Email,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Email", maxLines = 1)
-                    }
-                }
+        Spacer(modifier = Modifier.height(16.dp))
 
-                if (email != null && phone != null) {
-                    Spacer(modifier = Modifier.width(12.dp))
-                }
-
-                phone?.let { phoneNum ->
-                    FilledTonalButton(
-                        onClick = { openPhone(phoneNum) },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(
-                            Icons.Default.Phone,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Call", maxLines = 1)
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-        }
-
-        // Contact details card
+        // Contact details card (clickable text, no buttons)
         if (email != null || phone != null) {
             Surface(
                 modifier = Modifier

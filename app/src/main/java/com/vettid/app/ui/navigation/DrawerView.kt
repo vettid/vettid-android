@@ -1,8 +1,11 @@
 package com.vettid.app.ui.navigation
 
+import android.graphics.BitmapFactory
+import android.util.Base64
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -17,7 +20,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
@@ -35,7 +40,8 @@ fun DrawerView(
     onThemeToggle: () -> Unit = {},
     onNotificationsToggle: () -> Unit = {},
     onHelpClick: () -> Unit = {},
-    onSignOut: () -> Unit
+    onSignOut: () -> Unit,
+    profilePhotoBase64: String? = null
 ) {
     AnimatedVisibility(
         visible = isOpen,
@@ -58,7 +64,8 @@ fun DrawerView(
                     DrawerHeader(
                         userName = userName,
                         userEmail = userEmail,
-                        vaultStatus = vaultStatus
+                        vaultStatus = vaultStatus,
+                        profilePhotoBase64 = profilePhotoBase64
                     )
 
                     Divider()
@@ -149,27 +156,51 @@ fun DrawerView(
 private fun DrawerHeader(
     userName: String,
     userEmail: String,
-    vaultStatus: VaultStatus
+    vaultStatus: VaultStatus,
+    profilePhotoBase64: String? = null
 ) {
+    // Decode profile photo if available
+    val profileBitmap = remember(profilePhotoBase64) {
+        profilePhotoBase64?.let { base64 ->
+            try {
+                val bytes = Base64.decode(base64, Base64.DEFAULT)
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(24.dp)
     ) {
         // Profile avatar
-        Surface(
-            modifier = Modifier
-                .size(64.dp)
-                .clip(CircleShape),
-            color = MaterialTheme.colorScheme.primaryContainer
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = Icons.Default.Person,
-                    contentDescription = null,
-                    modifier = Modifier.size(36.dp),
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer
-                )
+        if (profileBitmap != null) {
+            Image(
+                bitmap = profileBitmap.asImageBitmap(),
+                contentDescription = "Profile photo",
+                modifier = Modifier
+                    .size(64.dp)
+                    .clip(CircleShape),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Surface(
+                modifier = Modifier
+                    .size(64.dp)
+                    .clip(CircleShape),
+                color = MaterialTheme.colorScheme.primaryContainer
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = Icons.Default.Person,
+                        contentDescription = null,
+                        modifier = Modifier.size(36.dp),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
             }
         }
 

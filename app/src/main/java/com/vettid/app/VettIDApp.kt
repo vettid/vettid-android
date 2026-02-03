@@ -1123,6 +1123,7 @@ fun MainScreen(
         userName = "VettID User",
         userEmail = "",
         vaultStatus = com.vettid.app.ui.navigation.VaultStatus.ACTIVE,
+        profilePhotoBase64 = appState.profilePhoto,
         // NATS connection state
         natsConnectionState = appState.natsConnectionState,
         natsErrorMessage = appState.natsError,

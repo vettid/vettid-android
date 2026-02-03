@@ -3,7 +3,9 @@ package com.vettid.app
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.app.core.events.ProfilePhotoEvents
 import com.vettid.app.core.nats.NatsAutoConnector
+import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.storage.CredentialStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,7 +27,9 @@ data class AppState(
     val natsEndpoint: String? = null,
     val natsOwnerSpaceId: String? = null,
     val natsMessageSpaceId: String? = null,
-    val natsCredentialsExpiry: String? = null
+    val natsCredentialsExpiry: String? = null,
+    // Profile photo (Base64 encoded)
+    val profilePhoto: String? = null
 )
 
 enum class VaultStatus {
@@ -57,7 +61,9 @@ enum class NatsConnectionState {
 @HiltViewModel
 class AppViewModel @Inject constructor(
     private val credentialStore: CredentialStore,
-    private val natsAutoConnector: NatsAutoConnector
+    private val natsAutoConnector: NatsAutoConnector,
+    private val ownerSpaceClient: OwnerSpaceClient,
+    private val profilePhotoEvents: ProfilePhotoEvents
 ) : ViewModel() {
 
     private val _appState = MutableStateFlow(AppState())
@@ -66,6 +72,7 @@ class AppViewModel @Inject constructor(
     init {
         refreshCredentialStatus()
         observeNatsConnectionState()
+        observeProfilePhotoUpdates()
     }
 
     fun refreshCredentialStatus() {
@@ -115,6 +122,8 @@ class AppViewModel @Inject constructor(
                             natsCredentialsExpiry = expiryFormatted
                         )
                     }
+                    // Fetch profile photo after successful connection
+                    fetchProfilePhoto()
                 }
 
                 is NatsAutoConnector.ConnectionResult.NotEnrolled -> {
@@ -159,6 +168,18 @@ class AppViewModel @Inject constructor(
                         )
                     }
                 }
+            }
+        }
+    }
+
+    /**
+     * Observe profile photo updates from PersonalDataViewModel.
+     */
+    private fun observeProfilePhotoUpdates() {
+        viewModelScope.launch {
+            profilePhotoEvents.photoUpdated.collect { photo ->
+                Log.d(TAG, "Profile photo update received")
+                _appState.update { it.copy(profilePhoto = photo) }
             }
         }
     }
@@ -225,6 +246,37 @@ class AppViewModel @Inject constructor(
      * Check if NATS is currently connected.
      */
     fun isNatsConnected(): Boolean = natsAutoConnector.isConnected()
+
+    /**
+     * Fetch profile photo from vault.
+     */
+    private fun fetchProfilePhoto() {
+        viewModelScope.launch {
+            ownerSpaceClient.getProfilePhoto()
+                .onSuccess { photo ->
+                    _appState.update { it.copy(profilePhoto = photo) }
+                }
+                .onFailure { error ->
+                    Log.w(TAG, "Failed to fetch profile photo: ${error.message}")
+                }
+        }
+    }
+
+    /**
+     * Update profile photo in app state (called after upload from other ViewModels).
+     */
+    fun updateProfilePhoto(base64Photo: String?) {
+        _appState.update { it.copy(profilePhoto = base64Photo) }
+    }
+
+    /**
+     * Refresh profile photo from vault.
+     */
+    fun refreshProfilePhoto() {
+        if (isNatsConnected()) {
+            fetchProfilePhoto()
+        }
+    }
 
     fun signOut() {
         viewModelScope.launch {
