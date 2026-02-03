@@ -86,6 +86,9 @@ class PersonalDataStore @Inject constructor(
         private const val KEY_LAST_SYNCED_AT = "last_synced_at"
         private const val KEY_PENDING_SYNC = "pending_sync"
 
+        // Field sort order
+        private const val KEY_FIELD_SORT_ORDER = "field_sort_order"
+
         // Predefined categories matching enclave
         val PREDEFINED_CATEGORIES = listOf(
             CategoryInfo("identity", "Identity", "person"),
@@ -764,6 +767,57 @@ class PersonalDataStore @Inject constructor(
      */
     fun getPublicProfileVersion(): Int {
         return encryptedPrefs.getInt(KEY_PUBLIC_PROFILE_VERSION, 0)
+    }
+
+    // MARK: - Field Sort Order
+
+    /**
+     * Get field sort order map.
+     * Returns a map of field namespace to sort order index.
+     */
+    fun getFieldSortOrder(): Map<String, Int> {
+        val json = encryptedPrefs.getString(KEY_FIELD_SORT_ORDER, null) ?: return emptyMap()
+        return try {
+            val type = object : TypeToken<Map<String, Int>>() {}.type
+            gson.fromJson(json, type)
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
+
+    /**
+     * Update field sort order.
+     * Persists the sort order locally for offline access.
+     *
+     * @param sortOrder Map of field namespace to sort order index
+     */
+    fun updateFieldSortOrder(sortOrder: Map<String, Int>) {
+        val json = gson.toJson(sortOrder)
+        encryptedPrefs.edit()
+            .putString(KEY_FIELD_SORT_ORDER, json)
+            .apply()
+    }
+
+    /**
+     * Get sort order for a specific field.
+     *
+     * @param namespace The field namespace
+     * @return Sort order index, or default (Int.MAX_VALUE) if not set
+     */
+    fun getFieldSortOrderFor(namespace: String): Int {
+        return getFieldSortOrder()[namespace] ?: Int.MAX_VALUE
+    }
+
+    /**
+     * Update sort order for a specific field.
+     *
+     * @param namespace The field namespace
+     * @param sortOrder The new sort order index
+     */
+    fun updateFieldSortOrderFor(namespace: String, sortOrder: Int) {
+        val currentOrder = getFieldSortOrder().toMutableMap()
+        currentOrder[namespace] = sortOrder
+        updateFieldSortOrder(currentOrder)
     }
 
     // MARK: - Namespace Helpers

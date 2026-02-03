@@ -590,12 +590,13 @@ class CredentialStore @Inject constructor(
     /**
      * Store NATS vault bootstrap info from enrollment finalize.
      * VaultBootstrap contains connection info for NATS.
+     * Uses commit() (synchronous) to ensure critical data is persisted.
      *
      * Note: As of API change #49, credentials are no longer in finalize response.
      * Use credentials from nats-bootstrap endpoint instead.
      */
     fun storeNatsConnection(vaultBootstrap: VaultBootstrap) {
-        encryptedPrefs.edit().apply {
+        val success = encryptedPrefs.edit().apply {
             putString(KEY_NATS_ENDPOINT, vaultBootstrap.endpoint)
             // Only store credentials if present (removed from finalize in API #49)
             vaultBootstrap.credentials?.let { creds ->
@@ -616,8 +617,12 @@ class CredentialStore @Inject constructor(
                 putLong(KEY_NATS_CREDENTIALS_EXPIRY, expiryMs)
             }
             putLong(KEY_NATS_STORED_AT, System.currentTimeMillis())
-        }.apply()
-        android.util.Log.i("CredentialStore", "Stored NATS bootstrap info for ${vaultBootstrap.endpoint} (${vaultBootstrap.ownerSpace})")
+        }.commit()  // Use commit() for critical NATS credentials
+        if (success) {
+            android.util.Log.i("CredentialStore", "Stored NATS bootstrap info for ${vaultBootstrap.endpoint} (${vaultBootstrap.ownerSpace})")
+        } else {
+            android.util.Log.e("CredentialStore", "CRITICAL: Failed to persist NATS bootstrap info!")
+        }
     }
 
     /**
@@ -659,6 +664,7 @@ class CredentialStore @Inject constructor(
     /**
      * Store credential from Nitro Enclave enrollment flow.
      * This stores the encrypted credential blob, user info, UTKs, and PCR version.
+     * Uses commit() (synchronous) to ensure critical data is persisted before app close.
      *
      * @param encryptedCredential Encrypted credential blob from vault-manager
      * @param credentialGuid Unique identifier for the credential
@@ -686,7 +692,7 @@ class CredentialStore @Inject constructor(
             )
         }
 
-        encryptedPrefs.edit().apply {
+        val success = encryptedPrefs.edit().apply {
             putString(KEY_USER_GUID, userGuid)
             putString(KEY_CREDENTIAL_ID, credentialGuid)
             putString(KEY_ENCRYPTED_BLOB, encryptedCredential)
@@ -698,20 +704,30 @@ class CredentialStore @Inject constructor(
             // Store PCR version for enclave update compatibility
             pcrVersion?.let { putString(KEY_ENROLLMENT_PCR_VERSION, it) }
             pcr0Hash?.let { putString(KEY_PCR0_HASH, it) }
-        }.apply()
+        }.commit()  // Use commit() for critical enrollment data
 
-        android.util.Log.i("CredentialStore", "Stored Nitro credential: $credentialGuid for user $userGuid with ${utks.size} UTKs, PCR version: $pcrVersion")
+        if (success) {
+            android.util.Log.i("CredentialStore", "Stored Nitro credential: $credentialGuid for user $userGuid with ${utks.size} UTKs, PCR version: $pcrVersion")
+        } else {
+            android.util.Log.e("CredentialStore", "CRITICAL: Failed to persist Nitro credential!")
+        }
     }
 
     /**
      * Store enclave public key for PIN encryption during unlock.
      * This is the X25519 public key from attestation, used to encrypt PINs.
+     * Uses commit() (synchronous) instead of apply() to ensure critical data is persisted
+     * before the app can be closed/killed.
      */
     fun storeEnclavePublicKey(publicKey: ByteArray) {
-        encryptedPrefs.edit()
+        val success = encryptedPrefs.edit()
             .putString(KEY_ENCLAVE_PUBLIC_KEY, Base64.encodeToString(publicKey, Base64.NO_WRAP))
-            .apply()
-        android.util.Log.d("CredentialStore", "Stored enclave public key (${publicKey.size} bytes)")
+            .commit()  // Use commit() for critical data - must persist before app close
+        if (success) {
+            android.util.Log.i("CredentialStore", "Stored enclave public key (${publicKey.size} bytes)")
+        } else {
+            android.util.Log.e("CredentialStore", "CRITICAL: Failed to persist enclave public key!")
+        }
     }
 
     /**

@@ -92,7 +92,7 @@ class PinUnlockViewModel @Inject constructor(
 
     private val gson = Gson()
 
-    // Use shared JetStream client from connection manager to avoid race conditions
+    // Owner space for NATS communication (set during connection)
     private var ownerSpace: String? = null
 
     // Mutex to prevent concurrent PIN submission (e.g., double-tap)
@@ -101,6 +101,22 @@ class PinUnlockViewModel @Inject constructor(
     init {
         // Start in PIN entry mode
         _state.value = PinUnlockState.EnteringPin()
+        // Log credential diagnostics on startup
+        logCredentialState()
+    }
+
+    /**
+     * Log credential diagnostics to help debug PIN unlock issues.
+     */
+    private fun logCredentialState() {
+        Log.d(TAG, "Credential diagnostics:")
+        Log.d(TAG, "  - Has stored credential: ${credentialStore.hasStoredCredential()}")
+        Log.d(TAG, "  - Has enclave public key: ${credentialStore.getEnclavePublicKey() != null}")
+        Log.d(TAG, "  - Has encrypted blob: ${credentialStore.getEncryptedBlob() != null}")
+        Log.d(TAG, "  - UTK pool size: ${credentialStore.getUtkPool().size}")
+        Log.d(TAG, "  - Has NATS connection: ${credentialStore.hasNatsConnection()}")
+        Log.d(TAG, "  - NATS credentials valid: ${credentialStore.areNatsCredentialsValid()}")
+        Log.d(TAG, "  - User GUID: ${credentialStore.getUserGuid()}")
     }
 
     /**
@@ -160,21 +176,10 @@ class PinUnlockViewModel @Inject constructor(
                 return
             }
 
-            // Verify PIN with enclave - with automatic retry on race condition
+            // Verify PIN with enclave using OwnerSpaceClient (event_id correlation)
             _state.value = PinUnlockState.Verifying
 
-            var attempts = 0
-            val maxAttempts = 3
-            var result: PinVerificationResult
-
-            do {
-                attempts++
-                result = verifyPinWithEnclave(pin)
-                if (result == PinVerificationResult.RaceCondition && attempts < maxAttempts) {
-                    Log.w(TAG, "Race condition detected, retrying (attempt $attempts/$maxAttempts)...")
-                    kotlinx.coroutines.delay(500) // Small delay before retry
-                }
-            } while (result == PinVerificationResult.RaceCondition && attempts < maxAttempts)
+            val result = verifyPinWithEnclave(pin)
 
             when (result) {
                 PinVerificationResult.Success -> {
@@ -192,10 +197,6 @@ class PinUnlockViewModel @Inject constructor(
                 PinVerificationResult.InvalidPin -> {
                     Log.w(TAG, "PIN verification failed - invalid PIN")
                     _state.value = PinUnlockState.EnteringPin(pin = "", error = "Invalid PIN")
-                }
-                PinVerificationResult.RaceCondition -> {
-                    Log.e(TAG, "PIN verification failed - race condition persisted after $attempts attempts")
-                    _state.value = PinUnlockState.EnteringPin(pin = "", error = "Verification error. Please try again.")
                 }
                 PinVerificationResult.Error -> {
                     Log.e(TAG, "PIN verification failed - error")
@@ -220,7 +221,6 @@ class PinUnlockViewModel @Inject constructor(
     private enum class PinVerificationResult {
         Success,
         InvalidPin,
-        RaceCondition,  // Wrong response received due to JetStream race condition
         Error
     }
 
@@ -241,11 +241,8 @@ class PinUnlockViewModel @Inject constructor(
 
             // Check if already connected
             if (connectionManager.isConnected()) {
-                val jsClient = connectionManager.getJetStreamClient()
-                if (jsClient != null && jsClient.isConnected) {
-                    Log.i(TAG, "Using existing NATS connection for PIN verification")
-                    return@withContext true
-                }
+                Log.i(TAG, "Using existing NATS connection for PIN verification")
+                return@withContext true
             }
 
             // Trigger NATS auto-connect to establish the shared connection
@@ -256,12 +253,7 @@ class PinUnlockViewModel @Inject constructor(
             when (result) {
                 is NatsAutoConnector.ConnectionResult.Success -> {
                     Log.i(TAG, "NATS auto-connect successful for PIN verification")
-                    val jsClient = connectionManager.getJetStreamClient()
-                    if (jsClient != null && jsClient.isConnected) {
-                        return@withContext true
-                    }
-                    Log.e(TAG, "NATS connected but JetStream client not available")
-                    return@withContext false
+                    return@withContext true
                 }
                 is NatsAutoConnector.ConnectionResult.NotEnrolled -> {
                     Log.e(TAG, "NATS auto-connect: Not enrolled")
@@ -287,8 +279,11 @@ class PinUnlockViewModel @Inject constructor(
     }
 
     private suspend fun verifyPinWithEnclave(pin: String): PinVerificationResult = withContext(Dispatchers.IO) {
-        val client = connectionManager.getJetStreamClient() ?: return@withContext PinVerificationResult.Error
-        val space = ownerSpace ?: return@withContext PinVerificationResult.Error
+        // Verify owner space is set (connection was established)
+        if (ownerSpace == null) {
+            Log.e(TAG, "Owner space not set - connection not established")
+            return@withContext PinVerificationResult.Error
+        }
 
         try {
             // Get enclave public key
@@ -333,143 +328,98 @@ class PinUnlockViewModel @Inject constructor(
                 return@withContext PinVerificationResult.Error
             }
 
-            // Build request
-            val requestId = UUID.randomUUID().toString()
-            val request = JsonObject().apply {
-                addProperty("type", "pin.unlock")
+            // Build request payload for OwnerSpaceClient
+            val requestPayload = JsonObject().apply {
                 addProperty("utk_id", availableUtk.keyId)
                 addProperty("encrypted_payload", encryptedPayloadBase64)
                 addProperty("encrypted_credential", encryptedCredential)
-                addProperty("request_id", requestId)
             }
 
-            val requestTopic = "$space.forVault.pin-unlock"
-            val responseTopic = "$space.forApp.pin-unlock.response"
+            Log.d(TAG, "Sending PIN unlock request via OwnerSpaceClient (event_id correlation)")
 
-            Log.d(TAG, "Sending PIN unlock request to $requestTopic")
+            // Ensure we're subscribed to vault responses
+            ownerSpaceClient.subscribeToVault()
 
-            // Send request and wait for response
-            val result = client.requestWithJetStream(
-                requestSubject = requestTopic,
-                responseSubject = responseTopic,
-                payload = request.toString().toByteArray(),
+            // Use OwnerSpaceClient.sendAndAwaitResponse for proper event_id correlation
+            // This avoids the JetStream race condition where consumers can receive wrong messages
+            val response = ownerSpaceClient.sendAndAwaitResponse(
+                messageType = "pin.unlock",
+                payload = requestPayload,
                 timeoutMs = RESPONSE_TIMEOUT_MS
             )
 
-            if (result.isFailure) {
-                Log.e(TAG, "PIN unlock request failed: ${result.exceptionOrNull()?.message}")
-                return@withContext PinVerificationResult.Error
-            }
-
-            val response = result.getOrNull()
             if (response == null) {
-                Log.e(TAG, "PIN unlock request returned null")
+                Log.e(TAG, "PIN unlock request timed out")
                 return@withContext PinVerificationResult.Error
             }
 
-            // Parse response
-            val responseStr = String(response.data)
-            Log.d(TAG, "Raw PIN response: ${responseStr.take(200)}")
+            // Parse response based on type
+            when (response) {
+                is com.vettid.app.core.nats.VaultResponse.HandlerResult -> {
+                    if (response.success && response.result != null) {
+                        val responseJson = response.result
+                        Log.d(TAG, "PIN unlock response: ${responseJson.toString().take(200)}")
 
-            val responseJson = try {
-                gson.fromJson(responseStr, JsonObject::class.java)
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to parse PIN unlock response as JSON: ${e.message}")
-                return@withContext PinVerificationResult.Error
-            }
+                        val status = responseJson.get("status")?.asString
+                        Log.d(TAG, "PIN unlock response status: $status")
 
-            // Validate this is actually a PIN unlock response, not a response from another request
-            // (race condition protection - JetStream consumer sometimes receives wrong message)
+                        if (status == "unlocked" || status == "success" || status == "vault_ready") {
+                            // Remove used UTK from pool
+                            credentialStore.removeUtk(availableUtk.keyId)
 
-            // Check 1: If response has a "type" field that doesn't match pin.unlock or error
-            // Note: "error" type is a legitimate response when PIN is wrong, not a race condition
-            val responseType = responseJson.get("type")?.asString
-            if (responseType != null &&
-                responseType != "pin.unlock" &&
-                responseType != "error" &&
-                !responseType.contains("pin")) {
-                Log.e(TAG, "RACE CONDITION: Wrong response type: $responseType (expected pin.unlock or error)")
-                Log.e(TAG, "Response content: ${responseStr.take(500)}")
-                return@withContext PinVerificationResult.RaceCondition
-            }
+                            // Store any new UTKs from response (format: "ID:base64PublicKey")
+                            val newUtksArray = responseJson.getAsJsonArray("new_utks")
+                            if (newUtksArray != null && newUtksArray.size() > 0) {
+                                Log.d(TAG, "Received ${newUtksArray.size()} new UTKs")
+                                val newKeys = mutableListOf<TransactionKeyInfo>()
+                                for (i in 0 until newUtksArray.size()) {
+                                    val utkString = newUtksArray.get(i).asString
+                                    val parts = utkString.split(":", limit = 2)
+                                    if (parts.size == 2) {
+                                        newKeys.add(TransactionKeyInfo(
+                                            keyId = parts[0],
+                                            publicKey = parts[1],
+                                            algorithm = "X25519"
+                                        ))
+                                    }
+                                }
+                                if (newKeys.isNotEmpty()) {
+                                    credentialStore.addUtks(newKeys)
+                                    Log.i(TAG, "Added ${newKeys.size} new UTKs to pool. Total: ${credentialStore.getUtkCount()}")
+                                }
+                            }
 
-            // Check 2: Response has list-type fields (connections, events, items)
-            if (responseJson.has("connections")) {
-                Log.e(TAG, "RACE CONDITION: Received connections list instead of PIN unlock response")
-                Log.e(TAG, "Response content: ${responseStr.take(500)}")
-                return@withContext PinVerificationResult.RaceCondition
-            }
-            if (responseJson.has("events")) {
-                Log.e(TAG, "RACE CONDITION: Received events list instead of PIN unlock response")
-                return@withContext PinVerificationResult.RaceCondition
-            }
-            if (responseJson.has("items")) {
-                Log.e(TAG, "RACE CONDITION: Received items list instead of PIN unlock response")
-                return@withContext PinVerificationResult.RaceCondition
-            }
-
-            // Check 3: Response has event_id (feed event response, not PIN)
-            if (responseJson.has("event_id")) {
-                Log.e(TAG, "RACE CONDITION: Received feed event response instead of PIN unlock response")
-                Log.e(TAG, "Response content: ${responseStr.take(500)}")
-                return@withContext PinVerificationResult.RaceCondition
-            }
-
-            // Check 3b: Response has profile fields (profile.get response, not PIN)
-            if (responseJson.has("first_name") || responseJson.has("last_name") || responseJson.has("fields")) {
-                Log.e(TAG, "RACE CONDITION: Received profile response instead of PIN unlock response")
-                Log.e(TAG, "Response content: ${responseStr.take(500)}")
-                return@withContext PinVerificationResult.RaceCondition
-            }
-
-            // Check 4: Response has sync-related fields (feed sync response)
-            if (responseJson.has("latest_sequence") || responseJson.has("has_more")) {
-                Log.e(TAG, "RACE CONDITION: Received feed sync response instead of PIN unlock response")
-                return@withContext PinVerificationResult.RaceCondition
-            }
-
-            // Check 5: Verify request_id matches (if present in response)
-            val responseRequestId = responseJson.get("request_id")?.asString
-            if (responseRequestId != null && responseRequestId != requestId) {
-                Log.e(TAG, "RACE CONDITION: Response request_id mismatch. Expected: $requestId, Got: $responseRequestId")
-                return@withContext PinVerificationResult.RaceCondition
-            }
-
-            val status = responseJson.get("status")?.asString
-
-            Log.d(TAG, "PIN unlock response status: $status")
-
-            if (status == "unlocked" || status == "success" || status == "vault_ready") {
-                // Remove used UTK from pool
-                credentialStore.removeUtk(availableUtk.keyId)
-
-                // Store any new UTKs from response (format: "ID:base64PublicKey")
-                val newUtksArray = responseJson.getAsJsonArray("new_utks")
-                if (newUtksArray != null && newUtksArray.size() > 0) {
-                    Log.d(TAG, "Received ${newUtksArray.size()} new UTKs")
-                    val newKeys = mutableListOf<TransactionKeyInfo>()
-                    for (i in 0 until newUtksArray.size()) {
-                        val utkString = newUtksArray.get(i).asString
-                        val parts = utkString.split(":", limit = 2)
-                        if (parts.size == 2) {
-                            newKeys.add(TransactionKeyInfo(
-                                keyId = parts[0],
-                                publicKey = parts[1],
-                                algorithm = "X25519"
-                            ))
+                            return@withContext PinVerificationResult.Success
+                        } else {
+                            val error = responseJson.get("error")?.asString
+                            Log.w(TAG, "PIN unlock failed: $error")
+                            return@withContext PinVerificationResult.InvalidPin
                         }
-                    }
-                    if (newKeys.isNotEmpty()) {
-                        credentialStore.addUtks(newKeys)
-                        Log.i(TAG, "Added ${newKeys.size} new UTKs to pool. Total: ${credentialStore.getUtkCount()}")
+                    } else {
+                        val error = response.error ?: "Unknown error"
+                        Log.w(TAG, "PIN unlock request failed: $error")
+                        // Check if it's an invalid PIN error vs other errors
+                        if (error.contains("invalid", ignoreCase = true) ||
+                            error.contains("wrong", ignoreCase = true) ||
+                            error.contains("incorrect", ignoreCase = true)) {
+                            return@withContext PinVerificationResult.InvalidPin
+                        }
+                        return@withContext PinVerificationResult.Error
                     }
                 }
-
-                return@withContext PinVerificationResult.Success
-            } else {
-                val error = responseJson.get("error")?.asString
-                Log.w(TAG, "PIN unlock failed: $error")
-                return@withContext PinVerificationResult.InvalidPin
+                is com.vettid.app.core.nats.VaultResponse.Error -> {
+                    Log.e(TAG, "PIN unlock error: ${response.code} - ${response.message}")
+                    if (response.message.contains("invalid", ignoreCase = true) ||
+                        response.message.contains("wrong", ignoreCase = true) ||
+                        response.message.contains("incorrect", ignoreCase = true)) {
+                        return@withContext PinVerificationResult.InvalidPin
+                    }
+                    return@withContext PinVerificationResult.Error
+                }
+                else -> {
+                    Log.e(TAG, "Unexpected response type for PIN unlock: ${response::class.simpleName}")
+                    return@withContext PinVerificationResult.Error
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "PIN verification error", e)

@@ -67,6 +67,14 @@ class PersonalDataViewModel @Inject constructor(
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
+    // Custom categories (for dropdown in add/edit dialog)
+    private val _customCategories = MutableStateFlow<List<com.vettid.app.core.storage.CategoryInfo>>(emptyList())
+    val customCategories: StateFlow<List<com.vettid.app.core.storage.CategoryInfo>> = _customCategories.asStateFlow()
+
+    // System fields (first name, last name, email) for profile header
+    private val _systemFields = MutableStateFlow<com.vettid.app.core.storage.SystemPersonalData?>(null)
+    val systemFields: StateFlow<com.vettid.app.core.storage.SystemPersonalData?> = _systemFields.asStateFlow()
+
     // In-memory data store loaded from vault
     private val dataItems = mutableListOf<PersonalDataItem>()
 
@@ -76,6 +84,15 @@ class PersonalDataViewModel @Inject constructor(
     init {
         Log.i(TAG, "PersonalDataViewModel created - starting load")
         loadPersonalData()
+        loadCustomCategories()
+    }
+
+    /**
+     * Load custom categories from local storage.
+     */
+    private fun loadCustomCategories() {
+        _customCategories.value = personalDataStore.getCustomCategories()
+        Log.d(TAG, "Loaded ${_customCategories.value.size} custom categories")
     }
 
     fun onEvent(event: PersonalDataEvent) {
@@ -130,6 +147,9 @@ class PersonalDataViewModel @Inject constructor(
                     _state.value = PersonalDataState.Loaded(items = dataItems.toList())
                 }
                 Log.d(TAG, "Total items loaded: ${dataItems.size}")
+
+                // Update system fields from local storage for profile header
+                _systemFields.value = personalDataStore.getSystemFields()
 
                 // Also fetch the published profile status (non-blocking)
                 if (connectionManager.isConnected()) {
@@ -212,6 +232,9 @@ class PersonalDataViewModel @Inject constructor(
 
         // Load public profile fields set
         loadPublicProfileSettings()
+
+        // Load saved sort order from local storage
+        val savedSortOrder = personalDataStore.getFieldSortOrder()
 
         // Extract system fields (registration info) - at top level
         val systemFirstName = result.get("first_name")?.takeIf { !it.isJsonNull }?.asString
@@ -319,11 +342,12 @@ class PersonalDataViewModel @Inject constructor(
                         category = category,
                         isSystemField = false,
                         isInPublicProfile = isInPublicProfile,
+                        sortOrder = savedSortOrder[namespace] ?: 0,
                         createdAt = updatedAt,
                         updatedAt = updatedAt
                     ))
 
-                    Log.d(TAG, "Added field: $namespace = $displayName ($category)")
+                    Log.d(TAG, "Added field: $namespace = $displayName ($category, sortOrder=${savedSortOrder[namespace] ?: 0})")
                 } catch (e: Exception) {
                     Log.w(TAG, "Error processing field $namespace: ${e.message}")
                 }
@@ -451,6 +475,9 @@ class PersonalDataViewModel @Inject constructor(
     private fun loadFromLocalStorageInto(items: MutableList<PersonalDataItem>) {
         val now = Instant.now()
 
+        // Load saved sort order
+        val savedSortOrder = personalDataStore.getFieldSortOrder()
+
         // Load system fields
         val systemFields = personalDataStore.getSystemFields()
         systemFields?.let { system ->
@@ -503,6 +530,7 @@ class PersonalDataViewModel @Inject constructor(
                     category = category,
                     isSystemField = false,
                     isInPublicProfile = publicFields.contains(namespace),
+                    sortOrder = savedSortOrder[namespace] ?: 0,
                     createdAt = now,
                     updatedAt = now
                 ))
@@ -562,12 +590,13 @@ class PersonalDataViewModel @Inject constructor(
                 category = category,
                 isSystemField = false,
                 isInPublicProfile = publicFields.contains(namespace),
+                sortOrder = savedSortOrder[namespace] ?: 0,
                 createdAt = Instant.ofEpochMilli(customField.createdAt),
                 updatedAt = Instant.ofEpochMilli(customField.updatedAt)
             ))
         }
 
-        Log.d(TAG, "Loaded ${items.size} items from local storage")
+        Log.d(TAG, "Loaded ${items.size} items from local storage with sort order applied")
     }
 
     private fun updateSearchQuery(query: String) {
@@ -1029,6 +1058,9 @@ class PersonalDataViewModel @Inject constructor(
 
         // Refresh state
         _state.value = PersonalDataState.Loaded(items = dataItems.toList())
+
+        // Persist to vault
+        persistSortOrder(category)
     }
 
     /**
@@ -1055,6 +1087,9 @@ class PersonalDataViewModel @Inject constructor(
 
         // Refresh state
         _state.value = PersonalDataState.Loaded(items = dataItems.toList())
+
+        // Persist to vault
+        persistSortOrder(category)
     }
 
     /**
@@ -1068,6 +1103,41 @@ class PersonalDataViewModel @Inject constructor(
     }
 
     /**
+     * Persist field sort order to vault and local storage.
+     * Called after moving items up/down.
+     *
+     * @param category The category that was reordered (for logging)
+     */
+    private fun persistSortOrder(category: DataCategory?) {
+        viewModelScope.launch {
+            try {
+                // Build sort order map from all non-system fields
+                val sortOrderMap = dataItems
+                    .filter { !it.isSystemField }
+                    .associate { it.id to it.sortOrder }
+
+                Log.d(TAG, "Persisting sort order for ${sortOrderMap.size} fields (category: ${category?.displayName ?: "all"})")
+
+                // Always persist to local storage first (guaranteed to work)
+                personalDataStore.updateFieldSortOrder(sortOrderMap)
+                Log.d(TAG, "Sort order saved to local storage")
+
+                // Then try to persist to vault (may fail if backend handler not implemented)
+                val result = ownerSpaceClient.updateFieldSortOrder(sortOrderMap)
+                result.onSuccess {
+                    Log.i(TAG, "Sort order persisted to vault")
+                }.onFailure { error ->
+                    Log.w(TAG, "Failed to persist sort order to vault (local storage succeeded): ${error.message}")
+                    // Don't show error to user - local state is still correct
+                    // Vault sync will eventually be implemented
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error persisting sort order", e)
+            }
+        }
+    }
+
+    /**
      * Create a custom category.
      * Returns the created category info.
      */
@@ -1075,6 +1145,8 @@ class PersonalDataViewModel @Inject constructor(
         Log.i(TAG, "Creating custom category: $name")
         val category = personalDataStore.addCustomCategory(name)
         Log.i(TAG, "Created custom category: ${category.id} - ${category.name}")
+        // Update the StateFlow so UI sees the new category immediately
+        _customCategories.value = personalDataStore.getCustomCategories()
         return category
     }
 

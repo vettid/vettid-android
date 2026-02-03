@@ -12,6 +12,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -34,6 +35,27 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.vettid.app.ui.components.PhoneNumberInput
 import com.vettid.app.ui.components.ProfilePhotoCapture
 import kotlinx.coroutines.flow.collectLatest
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+
+/**
+ * Format ISO 8601 timestamp to local timezone for display.
+ * Input: "2025-02-03T15:30:00Z" or similar ISO format
+ * Output: "Feb 3, 2025 at 10:30 AM" (in user's timezone)
+ */
+private fun formatPublishedTimestamp(isoTimestamp: String?): String? {
+    if (isoTimestamp == null) return null
+    return try {
+        val instant = Instant.parse(isoTimestamp)
+        val localDateTime = instant.atZone(ZoneId.systemDefault())
+        val formatter = DateTimeFormatter.ofPattern("MMM d, yyyy 'at' h:mm a")
+        localDateTime.format(formatter)
+    } catch (e: Exception) {
+        // Fallback to original if parsing fails
+        isoTimestamp
+    }
+}
 
 /**
  * Personal Data screen content for embedding in MainScaffold.
@@ -49,6 +71,8 @@ fun PersonalDataContent(
     val showPhotoCapture by viewModel.showPhotoCapture.collectAsState()
     val editState by viewModel.editState.collectAsState()
     val profilePhoto by viewModel.profilePhoto.collectAsState()
+    val customCategories by viewModel.customCategories.collectAsState()
+    val systemFields by viewModel.systemFields.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
     // Handle effects
@@ -106,11 +130,17 @@ fun PersonalDataContent(
                         hasUnpublishedChanges = hasUnpublishedChanges,
                         lastPublishedAt = publishedProfile?.updatedAt,
                         isProfilePublished = publishedProfile?.isFromVault == true && publishedProfile?.items?.isNotEmpty() == true,
+                        firstName = systemFields?.firstName ?: "",
+                        lastName = systemFields?.lastName ?: "",
+                        profilePhotoBase64 = profilePhoto,
                         onItemClick = { viewModel.onEvent(PersonalDataEvent.ItemClicked(it)) },
                         onDeleteClick = { viewModel.onEvent(PersonalDataEvent.DeleteItem(it)) },
                         onTogglePublicProfile = { viewModel.onEvent(PersonalDataEvent.TogglePublicProfile(it)) },
+                        onMoveUp = { viewModel.onEvent(PersonalDataEvent.MoveItemUp(it)) },
+                        onMoveDown = { viewModel.onEvent(PersonalDataEvent.MoveItemDown(it)) },
                         onPublishClick = { viewModel.publishProfile() },
-                        onPreviewClick = { viewModel.showPublicProfilePreview() }
+                        onPreviewClick = { viewModel.showPublicProfilePreview() },
+                        onEditPhoto = { viewModel.showPhotoCaptureDialog() }
                     )
                 }
             }
@@ -141,6 +171,7 @@ fun PersonalDataContent(
     if (showAddDialog) {
         AddFieldDialog(
             state = editState,
+            customCategories = customCategories,
             onCategoryChange = viewModel::updateEditCategory,
             onNameChange = viewModel::updateEditName,
             onFieldTypeChange = viewModel::updateEditFieldType,
@@ -202,16 +233,23 @@ private fun PersonalDataList(
     hasUnpublishedChanges: Boolean,
     lastPublishedAt: String?,
     isProfilePublished: Boolean,
+    firstName: String,
+    lastName: String,
+    profilePhotoBase64: String?,
     onItemClick: (String) -> Unit,
     onDeleteClick: (String) -> Unit,
     onTogglePublicProfile: (String) -> Unit,
+    onMoveUp: (String) -> Unit,
+    onMoveDown: (String) -> Unit,
     onPublishClick: () -> Unit,
-    onPreviewClick: () -> Unit
+    onPreviewClick: () -> Unit,
+    onEditPhoto: () -> Unit
 ) {
     // Track collapsed categories - start with all categories collapsed
     var collapsedCategories by remember { mutableStateOf(DataCategory.values().toSet()) }
 
-    // Search query state
+    // Search visibility and query state
+    var showSearchBar by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
 
     // Filter items based on search query
@@ -231,12 +269,51 @@ private fun PersonalDataList(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
     ) {
-        // Search bar
+        // Header row with title and search toggle
         item {
-            SearchBar(
-                query = searchQuery,
-                onQueryChange = { searchQuery = it },
-                modifier = Modifier.padding(bottom = 12.dp)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 8.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Personal Data",
+                    style = MaterialTheme.typography.titleLarge
+                )
+                IconButton(
+                    onClick = {
+                        showSearchBar = !showSearchBar
+                        if (!showSearchBar) searchQuery = ""  // Clear search when hiding
+                    }
+                ) {
+                    Icon(
+                        imageVector = if (showSearchBar) Icons.Default.Close else Icons.Default.Search,
+                        contentDescription = if (showSearchBar) "Close search" else "Search"
+                    )
+                }
+            }
+        }
+
+        // Animated search bar (only shown when toggled)
+        if (showSearchBar) {
+            item {
+                SearchBar(
+                    query = searchQuery,
+                    onQueryChange = { searchQuery = it },
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+            }
+        }
+
+        // Profile header with photo/initials
+        item {
+            ProfileHeaderSection(
+                firstName = firstName,
+                lastName = lastName,
+                photoBase64 = profilePhotoBase64,
+                onEditPhoto = onEditPhoto
             )
         }
 
@@ -272,12 +349,18 @@ private fun PersonalDataList(
             }
 
             if (!isCollapsed) {
-                items(categoryItems, key = { it.id }) { item ->
+                itemsIndexed(categoryItems, key = { _, item -> item.id }) { index, item ->
+                    val isFirst = index == 0
+                    val isLast = index == categoryItems.size - 1
                     CompactDataRow(
                         item = item,
+                        isFirst = isFirst,
+                        isLast = isLast,
                         onClick = { onItemClick(item.id) },
                         onDelete = { onDeleteClick(item.id) },
-                        onTogglePublic = { onTogglePublicProfile(item.id) }
+                        onTogglePublic = { onTogglePublicProfile(item.id) },
+                        onMoveUp = { onMoveUp(item.id) },
+                        onMoveDown = { onMoveDown(item.id) }
                     )
                 }
             }
@@ -350,6 +433,114 @@ private fun SearchBar(
         singleLine = true,
         shape = MaterialTheme.shapes.medium
     )
+}
+
+/**
+ * Profile header section showing user's avatar with photo or initials.
+ * Tap to edit photo.
+ */
+@Composable
+private fun ProfileHeaderSection(
+    firstName: String,
+    lastName: String,
+    photoBase64: String?,
+    onEditPhoto: () -> Unit
+) {
+    // Decode Base64 photo if present
+    val photoBitmap = remember(photoBase64) {
+        photoBase64?.let { base64 ->
+            try {
+                val bytes = Base64.decode(base64, Base64.DEFAULT)
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            } catch (e: Exception) {
+                null
+            }
+        }
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Circular avatar with photo or initials
+        Box(
+            modifier = Modifier
+                .size(72.dp)
+                .clip(CircleShape)
+                .clickable { onEditPhoto() }
+        ) {
+            if (photoBitmap != null) {
+                Image(
+                    bitmap = photoBitmap.asImageBitmap(),
+                    contentDescription = "Profile photo",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                // Show initials on colored background
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    tonalElevation = 4.dp
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        val initials = listOf(firstName, lastName)
+                            .mapNotNull { it.firstOrNull()?.uppercaseChar() }
+                            .joinToString("")
+                            .take(2)
+                        Text(
+                            text = initials.ifEmpty { "?" },
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+            }
+            // Camera overlay icon
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(24.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primary
+            ) {
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    Icon(
+                        Icons.Default.CameraAlt,
+                        contentDescription = "Edit photo",
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.onPrimary
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.width(16.dp))
+
+        Column {
+            val fullName = listOf(firstName, lastName)
+                .filter { it.isNotBlank() }
+                .joinToString(" ")
+            Text(
+                text = fullName.ifEmpty { "Your Profile" },
+                style = MaterialTheme.typography.titleMedium
+            )
+            Text(
+                text = "Tap photo to change",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
 }
 
 @Composable
@@ -458,7 +649,7 @@ private fun PublishProfileButton(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = if (lastPublishedAt != null) "Published: $lastPublishedAt" else "Profile published",
+                            text = if (lastPublishedAt != null) "Published: ${formatPublishedTimestamp(lastPublishedAt) ?: lastPublishedAt}" else "Profile published",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
@@ -531,9 +722,13 @@ private fun PublishProfileButton(
 @Composable
 private fun CompactDataRow(
     item: PersonalDataItem,
+    isFirst: Boolean,
+    isLast: Boolean,
     onClick: () -> Unit,
     onDelete: () -> Unit,
-    onTogglePublic: () -> Unit
+    onTogglePublic: () -> Unit,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit
 ) {
     var showMenu by remember { mutableStateOf(false) }
 
@@ -631,6 +826,27 @@ private fun CompactDataRow(
                                 )
                             }
                         )
+                        HorizontalDivider()
+                        // Reorder options
+                        DropdownMenuItem(
+                            text = { Text("Move Up") },
+                            onClick = {
+                                showMenu = false
+                                onMoveUp()
+                            },
+                            leadingIcon = { Icon(Icons.Default.KeyboardArrowUp, null) },
+                            enabled = !isFirst
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Move Down") },
+                            onClick = {
+                                showMenu = false
+                                onMoveDown()
+                            },
+                            leadingIcon = { Icon(Icons.Default.KeyboardArrowDown, null) },
+                            enabled = !isLast
+                        )
+                        HorizontalDivider()
                         DropdownMenuItem(
                             text = { Text("Delete") },
                             onClick = {
@@ -726,6 +942,7 @@ private fun ErrorContent(
 @Composable
 private fun AddFieldDialog(
     state: EditDataItemState,
+    customCategories: List<com.vettid.app.core.storage.CategoryInfo> = emptyList(),
     onCategoryChange: (DataCategory?) -> Unit,
     onNameChange: (String) -> Unit,
     onFieldTypeChange: (FieldType) -> Unit,
@@ -737,6 +954,11 @@ private fun AddFieldDialog(
     var expandedCategory by remember { mutableStateOf(false) }
     var expandedFieldType by remember { mutableStateOf(false) }
     var showNewCategoryDialog by remember { mutableStateOf(false) }
+    // Track selected custom category name (if a custom category is selected)
+    var selectedCustomCategoryName by remember { mutableStateOf<String?>(null) }
+
+    // Determine displayed category name
+    val displayedCategoryName = selectedCustomCategoryName ?: state.category?.displayName ?: "Select category"
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -747,13 +969,13 @@ private fun AddFieldDialog(
             Column(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // 1. Category (first)
+                // 1. Category (first) - includes both enum categories and custom categories
                 ExposedDropdownMenuBox(
                     expanded = expandedCategory,
                     onExpandedChange = { expandedCategory = it }
                 ) {
                     OutlinedTextField(
-                        value = state.category?.displayName ?: "Select category",
+                        value = displayedCategoryName,
                         onValueChange = {},
                         readOnly = true,
                         label = { Text("Category") },
@@ -768,16 +990,39 @@ private fun AddFieldDialog(
                         expanded = expandedCategory,
                         onDismissRequest = { expandedCategory = false }
                     ) {
+                        // Built-in categories
                         DataCategory.values().forEach { category ->
                             DropdownMenuItem(
                                 text = { Text(category.displayName) },
                                 onClick = {
                                     onCategoryChange(category)
+                                    selectedCustomCategoryName = null
                                     expandedCategory = false
                                 }
                             )
                         }
-                        Divider()
+                        // Custom categories (if any)
+                        if (customCategories.isNotEmpty()) {
+                            HorizontalDivider()
+                            Text(
+                                text = "Custom Categories",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                            )
+                            customCategories.forEach { customCat ->
+                                DropdownMenuItem(
+                                    text = { Text(customCat.name) },
+                                    onClick = {
+                                        // Map custom category to OTHER for storage, but track name for display
+                                        onCategoryChange(DataCategory.OTHER)
+                                        selectedCustomCategoryName = customCat.name
+                                        expandedCategory = false
+                                    }
+                                )
+                            }
+                        }
+                        HorizontalDivider()
                         DropdownMenuItem(
                             text = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1448,8 +1693,9 @@ private fun BusinessCardView(
             }
         }
 
-        // Published timestamp
+        // Published timestamp - format to local timezone
         profile.updatedAt?.let { updatedAt ->
+            val formattedTime = formatPublishedTimestamp(updatedAt) ?: updatedAt
             Spacer(modifier = Modifier.height(8.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1464,7 +1710,7 @@ private fun BusinessCardView(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "Profile verified \u2022 Updated $updatedAt",
+                    text = "Profile verified \u2022 Updated $formattedTime",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                 )

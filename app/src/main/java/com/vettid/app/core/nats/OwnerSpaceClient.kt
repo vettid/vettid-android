@@ -351,6 +351,54 @@ class OwnerSpaceClient @Inject constructor(
     }
 
     /**
+     * Update field sort order in the vault.
+     * Persists the sort order of personal data fields for consistent display.
+     *
+     * @param sortOrder Map of field namespace to sort order (0-based index)
+     * @return Result indicating success
+     */
+    suspend fun updateFieldSortOrder(sortOrder: Map<String, Int>): Result<Unit> {
+        return try {
+            val payload = JsonObject().apply {
+                val sortOrderObj = JsonObject()
+                sortOrder.forEach { (namespace, order) ->
+                    sortOrderObj.addProperty(namespace, order)
+                }
+                add("sort_order", sortOrderObj)
+            }
+
+            Log.d(TAG, "Updating field sort order: ${sortOrder.size} fields")
+            val response = sendAndAwaitResponse("personal-data.update-sort-order", payload, 10000L)
+
+            when (response) {
+                is VaultResponse.HandlerResult -> {
+                    if (response.success) {
+                        Log.i(TAG, "Field sort order updated successfully")
+                        Result.success(Unit)
+                    } else {
+                        Log.e(TAG, "updateFieldSortOrder failed: ${response.error}")
+                        Result.failure(Exception(response.error ?: "Update failed"))
+                    }
+                }
+                is VaultResponse.Error -> {
+                    Log.e(TAG, "updateFieldSortOrder error: ${response.code} - ${response.message}")
+                    Result.failure(Exception(response.message))
+                }
+                null -> {
+                    Log.w(TAG, "updateFieldSortOrder timed out")
+                    Result.failure(Exception("Request timed out"))
+                }
+                else -> {
+                    Result.failure(Exception("Unexpected response"))
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "updateFieldSortOrder exception", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Get all categories (predefined + custom).
      *
      * @return Request ID for correlating response

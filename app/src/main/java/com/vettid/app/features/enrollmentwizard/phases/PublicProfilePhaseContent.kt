@@ -184,11 +184,22 @@ fun PublicProfilePhaseContent(
                             color = MaterialTheme.colorScheme.primary
                         )
 
-                        Row {
-                            TextButton(onClick = onSelectAll) {
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            FilledTonalButton(
+                                onClick = onSelectAll,
+                                modifier = Modifier.height(32.dp),
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)
+                            ) {
                                 Text("All", style = MaterialTheme.typography.labelMedium)
                             }
-                            TextButton(onClick = onSelectNone) {
+                            OutlinedButton(
+                                onClick = onSelectNone,
+                                modifier = Modifier.height(32.dp),
+                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)
+                            ) {
                                 Text("None", style = MaterialTheme.typography.labelMedium)
                             }
                         }
