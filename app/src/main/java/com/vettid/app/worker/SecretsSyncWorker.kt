@@ -138,7 +138,7 @@ class SecretsSyncWorker @AssistedInject constructor(
 
                 try {
                     val payload = buildSecretPayload(secretData)
-                    val result = ownerSpaceClient.sendToVault("secrets.datastore.add", payload)
+                    val result = ownerSpaceClient.sendToVault("secrets.add", payload)
 
                     result.fold(
                         onSuccess = {

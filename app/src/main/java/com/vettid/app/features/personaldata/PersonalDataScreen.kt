@@ -36,6 +36,8 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
 import com.vettid.app.ui.components.PhoneNumberInput
 import com.vettid.app.ui.components.ProfilePhotoCapture
 import kotlinx.coroutines.flow.collectLatest
@@ -770,9 +772,7 @@ private fun CompactDataRow(
     var showReorderMenu by remember { mutableStateOf(false) }
 
     Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
         tonalElevation = 1.dp,
         shape = MaterialTheme.shapes.small
@@ -862,9 +862,12 @@ private fun CompactDataRow(
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Field name and value (full text, wrapped)
+            // Field name and value (full text, wrapped) - clickable to edit
             Column(
-                modifier = Modifier.weight(1f)
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable(onClick = onClick)
+                    .padding(vertical = 4.dp)
             ) {
                 Text(
                     text = item.name,
@@ -1401,6 +1404,9 @@ private fun PublicProfileFullScreen(
                     }
                 }
                 else -> {
+                    // QR dialog state for public keys
+                    var qrDialogItem by remember { mutableStateOf<PersonalDataItem?>(null) }
+
                     // Show published profile
                     Column(
                         modifier = Modifier
@@ -1442,7 +1448,8 @@ private fun PublicProfileFullScreen(
                         ) {
                             BusinessCardView(
                                 profile = publishedProfile,
-                                isReadOnly = true
+                                isReadOnly = true,
+                                onShowQR = { item -> qrDialogItem = item }
                             )
                         }
 
@@ -1455,6 +1462,14 @@ private fun PublicProfileFullScreen(
                         ) {
                             Text("Done")
                         }
+                    }
+
+                    // QR Code dialog for public keys
+                    qrDialogItem?.let { item ->
+                        PublicKeyQRDialog(
+                            item = item,
+                            onDismiss = { qrDialogItem = null }
+                        )
                     }
                 }
             }
@@ -1504,7 +1519,8 @@ private fun ProfileInstructionStep(
 private fun BusinessCardView(
     profile: PublishedProfileData,
     isReadOnly: Boolean = false,
-    onEditPhoto: () -> Unit = {}
+    onEditPhoto: () -> Unit = {},
+    onShowQR: (PersonalDataItem) -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -1748,7 +1764,8 @@ private fun BusinessCardView(
                     if (filteredItems.isNotEmpty()) {
                         ProfileCategorySection(
                             category = category,
-                            items = filteredItems
+                            items = filteredItems,
+                            onShowQR = onShowQR
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                     }
@@ -1785,7 +1802,8 @@ private fun BusinessCardView(
 @Composable
 private fun ProfileCategorySection(
     category: DataCategory,
-    items: List<PersonalDataItem>
+    items: List<PersonalDataItem>,
+    onShowQR: (PersonalDataItem) -> Unit = {}
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -1805,14 +1823,17 @@ private fun ProfileCategorySection(
 
             items.forEachIndexed { index, item ->
                 if (index > 0) Spacer(modifier = Modifier.height(8.dp))
-                BusinessCardField(item)
+                BusinessCardField(item, onShowQR = onShowQR)
             }
         }
     }
 }
 
 @Composable
-private fun BusinessCardField(item: PersonalDataItem) {
+private fun BusinessCardField(
+    item: PersonalDataItem,
+    onShowQR: (PersonalDataItem) -> Unit = {}
+) {
     val context = LocalContext.current
 
     // Determine if this field is clickable
@@ -1830,8 +1851,9 @@ private fun BusinessCardField(item: PersonalDataItem) {
                 item.value.startsWith("http://") ||
                 item.value.startsWith("https://") ||
                 item.value.startsWith("www.")
+    val isKey = item.type == DataType.KEY
 
-    val isClickable = isPhone || isEmail || isUrl
+    val isClickable = isPhone || isEmail || isUrl || isKey
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1849,6 +1871,7 @@ private fun BusinessCardField(item: PersonalDataItem) {
             ) {
                 Icon(
                     imageVector = when {
+                        item.type == DataType.KEY -> Icons.Default.VpnKey
                         item.name.contains("Phone", ignoreCase = true) -> Icons.Default.Phone
                         item.name.contains("Address", ignoreCase = true) ||
                         item.name.contains("Street", ignoreCase = true) -> Icons.Default.LocationOn
@@ -1885,38 +1908,172 @@ private fun BusinessCardField(item: PersonalDataItem) {
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
             )
-            Text(
-                text = item.value,
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    textDecoration = if (isClickable) TextDecoration.Underline else TextDecoration.None
-                ),
-                color = if (isClickable) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = if (isClickable) {
-                    Modifier.clickable {
-                        try {
-                            val intent = when {
-                                isPhone -> {
-                                    val phoneNumber = item.value.replace(Regex("[^+0-9]"), "")
-                                    Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phoneNumber"))
-                                }
-                                isEmail -> Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:${item.value}"))
-                                isUrl -> {
-                                    val url = if (item.value.startsWith("http://") || item.value.startsWith("https://")) {
-                                        item.value
-                                    } else {
-                                        "https://${item.value}"
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = if (isKey && item.value.length > 20)
+                        "${item.value.take(12)}...${item.value.takeLast(6)}"
+                    else item.value,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        textDecoration = if (isClickable) TextDecoration.Underline else TextDecoration.None
+                    ),
+                    color = if (isClickable) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = if (isClickable) {
+                        Modifier.clickable {
+                            if (isKey) {
+                                onShowQR(item)
+                            } else {
+                                try {
+                                    val intent = when {
+                                        isPhone -> {
+                                            val phoneNumber = item.value.replace(Regex("[^+0-9]"), "")
+                                            Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phoneNumber"))
+                                        }
+                                        isEmail -> Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:${item.value}"))
+                                        isUrl -> {
+                                            val url = if (item.value.startsWith("http://") || item.value.startsWith("https://")) {
+                                                item.value
+                                            } else {
+                                                "https://${item.value}"
+                                            }
+                                            Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                        }
+                                        else -> null
                                     }
-                                    Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                    intent?.let { context.startActivity(it) }
+                                } catch (e: Exception) {
+                                    // Handle error silently
                                 }
-                                else -> null
                             }
-                            intent?.let { context.startActivity(it) }
-                        } catch (e: Exception) {
-                            // Handle error silently
+                        }
+                    } else Modifier
+                )
+                if (isKey) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Icon(
+                        Icons.Default.QrCode,
+                        contentDescription = "Show QR code",
+                        modifier = Modifier
+                            .size(18.dp)
+                            .clickable { onShowQR(item) },
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * QR code dialog for displaying public key values.
+ */
+@Composable
+private fun PublicKeyQRDialog(
+    item: PersonalDataItem,
+    onDismiss: () -> Unit
+) {
+    val qrBitmap = remember(item.value) {
+        profileGenerateQrCode(item.value, 300)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    Icons.Default.VpnKey,
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = item.name,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        },
+        text = {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                qrBitmap?.let { bitmap ->
+                    Card(
+                        modifier = Modifier.size(280.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface
+                        )
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Image(
+                                bitmap = bitmap.asImageBitmap(),
+                                contentDescription = "QR Code for ${item.name}",
+                                modifier = Modifier.fillMaxSize()
+                            )
                         }
                     }
-                } else Modifier
-            )
+                } ?: run {
+                    Box(
+                        modifier = Modifier.size(280.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Could not generate QR code",
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Full value display
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.small,
+                    color = MaterialTheme.colorScheme.surfaceVariant
+                ) {
+                    androidx.compose.foundation.text.selection.SelectionContainer {
+                        Text(
+                            text = item.value,
+                            modifier = Modifier.padding(12.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                            maxLines = 6,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
         }
+    )
+}
+
+private fun profileGenerateQrCode(content: String, size: Int): android.graphics.Bitmap? {
+    return try {
+        val writer = QRCodeWriter()
+        val bitMatrix = writer.encode(content, BarcodeFormat.QR_CODE, size, size)
+        val bitmap = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.RGB_565)
+        for (x in 0 until size) {
+            for (y in 0 until size) {
+                bitmap.setPixel(
+                    x, y,
+                    if (bitMatrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE
+                )
+            }
+        }
+        bitmap
+    } catch (e: Exception) {
+        null
     }
 }

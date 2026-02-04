@@ -3,11 +3,8 @@ package com.vettid.app.features.vault
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.google.gson.JsonObject
 import com.vettid.app.core.nats.NatsConnectionManager
-import com.vettid.app.core.nats.NatsConnectionState
 import com.vettid.app.core.nats.OwnerSpaceClient
-import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.core.network.HandlerSummary
 import com.vettid.app.core.network.InstalledHandler
 import com.vettid.app.core.storage.CredentialStore
@@ -93,28 +90,8 @@ class VaultPreferencesViewModel @Inject constructor(
         loadPreferences()
         // With Nitro Enclave, vault is always ready - no need to poll status
         setEnclaveReady()
-        // Load handlers (will auto-retry when NATS connects)
+        // Load handlers (static list of known vault capabilities)
         loadHandlers()
-        // Observe connection state to auto-reload handlers when NATS connects
-        observeConnectionState()
-    }
-
-    /**
-     * Observe NATS connection state and auto-reload handlers when connected.
-     */
-    private fun observeConnectionState() {
-        viewModelScope.launch {
-            connectionManager.connectionState.collect { state ->
-                if (state is NatsConnectionState.Connected) {
-                    // Only reload if handlers haven't been loaded yet or had an error
-                    val currentState = _state.value
-                    if (currentState.installedHandlers.isEmpty() || currentState.handlersError != null) {
-                        Log.d(TAG, "NATS connected - auto-loading handlers")
-                        loadHandlers()
-                    }
-                }
-            }
-        }
     }
 
     /**
@@ -159,96 +136,67 @@ class VaultPreferencesViewModel @Inject constructor(
     }
 
     /**
-     * Load installed handlers from the enclave via NATS.
-     * Note: Handler info is only available when connected to the vault.
+     * Load installed handlers.
+     * Uses a static list of known vault capabilities since the enclave
+     * doesn't expose a dynamic handler listing endpoint.
      */
     fun loadHandlers() {
         viewModelScope.launch {
-            // Check if we're in offline mode
-            if (_state.value.isOfflineMode) {
-                _state.value = _state.value.copy(
-                    handlersLoading = false,
-                    handlersError = "Handler info requires vault connection"
-                )
-                return@launch
-            }
-
-            // Check if NATS is connected
-            if (!connectionManager.isConnected()) {
-                Log.d(TAG, "NATS not connected yet, will auto-retry when connected")
-                _state.value = _state.value.copy(
-                    handlersLoading = false,
-                    handlersError = "Waiting for vault connection..."
-                )
-                return@launch
-            }
-
             _state.value = _state.value.copy(handlersLoading = true, handlersError = null)
 
-            // Request event types (handlers) from enclave via NATS
-            Log.d(TAG, "Requesting event types from enclave via NATS")
-
-            try {
-                val response = ownerSpaceClient.sendAndAwaitResponse(
-                    messageType = "getEventTypes",
-                    payload = JsonObject(),
-                    timeoutMs = 10000L
+            // Build static list of known vault handler capabilities
+            val handlers = listOf(
+                InstalledHandler(
+                    id = "profile.get", name = "Profile Management",
+                    version = "1.0", category = "profile",
+                    iconUrl = null, installedAt = "", lastExecutedAt = null,
+                    executionCount = 0, enabled = true, hasUpdate = false, latestVersion = null
+                ),
+                InstalledHandler(
+                    id = "personal-data.update", name = "Personal Data",
+                    version = "1.0", category = "profile",
+                    iconUrl = null, installedAt = "", lastExecutedAt = null,
+                    executionCount = 0, enabled = true, hasUpdate = false, latestVersion = null
+                ),
+                InstalledHandler(
+                    id = "secrets.add", name = "Secrets Storage",
+                    version = "1.0", category = "storage",
+                    iconUrl = null, installedAt = "", lastExecutedAt = null,
+                    executionCount = 0, enabled = true, hasUpdate = false, latestVersion = null
+                ),
+                InstalledHandler(
+                    id = "secrets.identity", name = "Identity Keys",
+                    version = "1.0", category = "security",
+                    iconUrl = null, installedAt = "", lastExecutedAt = null,
+                    executionCount = 0, enabled = true, hasUpdate = false, latestVersion = null
+                ),
+                InstalledHandler(
+                    id = "connection.request", name = "Connections",
+                    version = "1.0", category = "connections",
+                    iconUrl = null, installedAt = "", lastExecutedAt = null,
+                    executionCount = 0, enabled = true, hasUpdate = false, latestVersion = null
+                ),
+                InstalledHandler(
+                    id = "message.send", name = "Messaging",
+                    version = "1.0", category = "messaging",
+                    iconUrl = null, installedAt = "", lastExecutedAt = null,
+                    executionCount = 0, enabled = true, hasUpdate = false, latestVersion = null
+                ),
+                InstalledHandler(
+                    id = "credential.manage", name = "Credential Management",
+                    version = "1.0", category = "security",
+                    iconUrl = null, installedAt = "", lastExecutedAt = null,
+                    executionCount = 0, enabled = true, hasUpdate = false, latestVersion = null
                 )
+            )
 
-                when (response) {
-                    is VaultResponse.EventTypesResponse -> {
-                        Log.d(TAG, "Received ${response.eventTypes.size} event types from enclave")
-                        val handlers = response.eventTypes.map { eventType ->
-                            InstalledHandler(
-                                id = eventType.id,
-                                name = eventType.name,
-                                version = "1.0",
-                                category = categorizeHandler(eventType.id),
-                                iconUrl = null,
-                                installedAt = "",
-                                lastExecutedAt = null,
-                                executionCount = 0,
-                                enabled = true,
-                                hasUpdate = false,
-                                latestVersion = null
-                            )
-                        }
-                        _state.value = _state.value.copy(
-                            installedHandlers = handlers,
-                            installedHandlerCount = handlers.size,
-                            handlersLoading = false,
-                            handlersError = null
-                        )
-                    }
-                    is VaultResponse.Error -> {
-                        Log.e(TAG, "Event types request failed: ${response.message}")
-                        _state.value = _state.value.copy(
-                            handlersLoading = false,
-                            handlersError = response.message
-                        )
-                    }
-                    null -> {
-                        Log.w(TAG, "Event types request timed out")
-                        _state.value = _state.value.copy(
-                            handlersLoading = false,
-                            handlersError = "Request timed out - check vault connection"
-                        )
-                    }
-                    else -> {
-                        Log.w(TAG, "Unexpected response type: ${response::class.simpleName}")
-                        _state.value = _state.value.copy(
-                            handlersLoading = false,
-                            handlersError = "Unexpected response from vault"
-                        )
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to request event types: ${e.message}", e)
-                _state.value = _state.value.copy(
-                    handlersLoading = false,
-                    handlersError = e.message ?: "Failed to load handlers"
-                )
-            }
+            _state.value = _state.value.copy(
+                installedHandlers = handlers,
+                installedHandlerCount = handlers.size,
+                handlersLoading = false,
+                handlersError = null
+            )
+            Log.d(TAG, "Loaded ${handlers.size} known vault handlers")
         }
     }
 

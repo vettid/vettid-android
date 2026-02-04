@@ -297,7 +297,7 @@ class SecretsViewModel @Inject constructor(
                     val payload = JsonObject().apply {
                         addProperty("id", secretId)
                     }
-                    ownerSpaceClient.sendToVault("secrets.datastore.delete", payload)
+                    ownerSpaceClient.sendToVault("secrets.delete", payload)
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to delete from vault (will sync later)", e)
                 }
@@ -410,7 +410,7 @@ class SecretsViewModel @Inject constructor(
                 }
 
                 val response = ownerSpaceClient.sendAndAwaitResponse(
-                    "secrets.datastore.get",
+                    "secrets.retrieve",
                     JsonObject(),
                     15000L
                 )
@@ -506,7 +506,7 @@ class SecretsViewModel @Inject constructor(
 
             // Use the dedicated identity endpoint
             val response = ownerSpaceClient.sendAndAwaitResponse(
-                "secrets.datastore.identity",
+                "secrets.identity",
                 JsonObject(),
                 15000L
             )
