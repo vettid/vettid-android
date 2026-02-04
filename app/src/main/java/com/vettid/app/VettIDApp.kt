@@ -29,6 +29,8 @@ import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import androidx.navigation.navDeepLink
@@ -304,8 +306,13 @@ fun VettIDApp(
                         navController.navigate(Screen.ScanInvitation.createRoute(data))
                     }
                 } else {
-                    navController.navigate(Screen.Main.route) {
-                        popUpTo(0) { inclusive = true }
+                    // Only navigate to Main if not already there
+                    // This prevents resetting drawer state when appState changes
+                    // (e.g., photo upload, NATS status change)
+                    if (currentRoute != Screen.Main.route) {
+                        navController.navigate(Screen.Main.route) {
+                            popUpTo(0) { inclusive = true }
+                        }
                     }
                 }
             }
@@ -1098,7 +1105,18 @@ fun MainScreen(
     appViewModel: AppViewModel = hiltViewModel(),
     badgeCountsViewModel: BadgeCountsViewModel = hiltViewModel()
 ) {
-    var navigationState by remember { mutableStateOf(NavigationState()) }
+    var navigationState by rememberSaveable(
+        stateSaver = listSaver(
+            save = { listOf(it.currentItem.name, it.isDrawerOpen, it.isSettingsOpen) },
+            restore = {
+                NavigationState(
+                    currentItem = DrawerItem.valueOf(it[0] as String),
+                    isDrawerOpen = it[1] as Boolean,
+                    isSettingsOpen = it[2] as Boolean
+                )
+            }
+        )
+    ) { mutableStateOf(NavigationState()) }
     val snackbarHostState = remember { SnackbarHostState() }
     val appState by appViewModel.appState.collectAsState()
 

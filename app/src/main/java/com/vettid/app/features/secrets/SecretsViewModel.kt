@@ -50,6 +50,7 @@ class SecretsViewModel @Inject constructor(
     val showDeleteConfirmDialog: StateFlow<String?> = _showDeleteConfirmDialog.asStateFlow()
 
     init {
+        Log.i(TAG, "SecretsViewModel initialized")
         loadSecrets()
     }
 

@@ -99,6 +99,9 @@ class CredentialStore @Inject constructor(
         private const val KEY_EMERGENCY_RECOVERY_PUBLIC_KEY = "emergency_recovery_public_key"
         // Offline mode
         private const val KEY_OFFLINE_MODE = "offline_mode"
+        // Credential key pair (for enrollment public key in secrets)
+        private const val KEY_CREDENTIAL_PUBLIC_KEY = "credential_public_key"
+        private const val KEY_CREDENTIAL_PRIVATE_KEY = "credential_private_key"
     }
 
     // MARK: - Credential Storage
@@ -1119,6 +1122,51 @@ class CredentialStore @Inject constructor(
      */
     fun getOfflineMode(): Boolean {
         return encryptedPrefs.getBoolean(KEY_OFFLINE_MODE, false)
+    }
+
+    // MARK: - Credential Key Pair (Enrollment Public Key)
+
+    /**
+     * Store credential key pair (X25519) for enrollment public key.
+     * The private key is stored locally, public key is shared via secrets.
+     * Uses commit() (synchronous) for critical data.
+     */
+    fun storeCredentialKeyPair(publicKey: ByteArray, privateKey: ByteArray) {
+        val success = encryptedPrefs.edit().apply {
+            putString(KEY_CREDENTIAL_PUBLIC_KEY, Base64.encodeToString(publicKey, Base64.NO_WRAP))
+            putString(KEY_CREDENTIAL_PRIVATE_KEY, Base64.encodeToString(privateKey, Base64.NO_WRAP))
+        }.commit()
+        if (success) {
+            android.util.Log.d("CredentialStore", "Stored credential key pair (${publicKey.size} bytes public, ${privateKey.size} bytes private)")
+        } else {
+            android.util.Log.e("CredentialStore", "Failed to store credential key pair!")
+        }
+    }
+
+    /**
+     * Get credential public key (X25519).
+     * This is the key shared in the user's public profile.
+     */
+    fun getCredentialPublicKey(): ByteArray? {
+        return encryptedPrefs.getString(KEY_CREDENTIAL_PUBLIC_KEY, null)
+            ?.let { Base64.decode(it, Base64.NO_WRAP) }
+    }
+
+    /**
+     * Get credential private key (X25519).
+     * This key is used to decrypt messages sent to the user.
+     */
+    fun getCredentialPrivateKey(): ByteArray? {
+        return encryptedPrefs.getString(KEY_CREDENTIAL_PRIVATE_KEY, null)
+            ?.let { Base64.decode(it, Base64.NO_WRAP) }
+    }
+
+    /**
+     * Check if credential key pair is stored.
+     */
+    fun hasCredentialKeyPair(): Boolean {
+        return encryptedPrefs.contains(KEY_CREDENTIAL_PUBLIC_KEY) &&
+               encryptedPrefs.contains(KEY_CREDENTIAL_PRIVATE_KEY)
     }
 
     // MARK: - Cleanup

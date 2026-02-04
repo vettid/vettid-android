@@ -131,8 +131,8 @@ fun SecretsContent(
             }
         }
 
-        // FABs
-        if (state is SecretsState.Loaded || state is SecretsState.Empty) {
+        // FABs - always show when not in error state
+        if (state !is SecretsState.Error) {
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
@@ -826,19 +826,7 @@ private fun AddSecretDialog(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Name field
-                OutlinedTextField(
-                    value = state.name,
-                    onValueChange = { onStateChange(state.copy(name = it, nameError = null)) },
-                    label = { Text("Name") },
-                    placeholder = { Text("e.g., Bitcoin Wallet") },
-                    isError = state.nameError != null,
-                    supportingText = state.nameError?.let { { Text(it) } },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                // Category dropdown
+                // Category dropdown (first - helps set context)
                 ExposedDropdownMenuBox(
                     expanded = expandedCategory,
                     onExpandedChange = { expandedCategory = it }
@@ -869,6 +857,18 @@ private fun AddSecretDialog(
                         }
                     }
                 }
+
+                // Name field
+                OutlinedTextField(
+                    value = state.name,
+                    onValueChange = { onStateChange(state.copy(name = it, nameError = null)) },
+                    label = { Text("Name") },
+                    placeholder = { Text("e.g., Bitcoin Wallet") },
+                    isError = state.nameError != null,
+                    supportingText = state.nameError?.let { { Text(it) } },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
 
                 // Type dropdown
                 ExposedDropdownMenuBox(

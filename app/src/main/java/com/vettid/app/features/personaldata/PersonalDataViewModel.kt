@@ -1152,10 +1152,15 @@ class PersonalDataViewModel @Inject constructor(
         updateItemSortOrder(itemId, newSortOrder)
         updateItemSortOrder(itemAbove.id, aboveSortOrder)
 
-        // Refresh state - create completely new list to trigger recomposition
+        // Refresh state - use copy to preserve search query
         val newItems = dataItems.toList()
         Log.d(TAG, "moveItemUp: emitting new state with ${newItems.size} items")
-        _state.value = PersonalDataState.Loaded(items = newItems)
+        val currentState = _state.value
+        _state.value = if (currentState is PersonalDataState.Loaded) {
+            currentState.copy(items = newItems)
+        } else {
+            PersonalDataState.Loaded(items = newItems)
+        }
 
         // Persist to vault
         persistSortOrder(category)
@@ -1193,8 +1198,15 @@ class PersonalDataViewModel @Inject constructor(
         updateItemSortOrder(itemId, newSortOrder)
         updateItemSortOrder(itemBelow.id, belowSortOrder)
 
-        // Refresh state
-        _state.value = PersonalDataState.Loaded(items = dataItems.toList())
+        // Refresh state - use copy to preserve search query
+        val newItems = dataItems.toList()
+        Log.d(TAG, "moveItemDown: emitting new state with ${newItems.size} items")
+        val currentState = _state.value
+        _state.value = if (currentState is PersonalDataState.Loaded) {
+            currentState.copy(items = newItems)
+        } else {
+            PersonalDataState.Loaded(items = newItems)
+        }
 
         // Persist to vault
         persistSortOrder(category)
@@ -1504,6 +1516,23 @@ class PersonalDataViewModel @Inject constructor(
                 isSystemField = true,
                 isInPublicProfile = true,
                 sortOrder = savedSortOrder["_system_email"] ?: 0,
+                createdAt = now,
+                updatedAt = now
+            ))
+        }
+
+        // Identity public key (Ed25519) - always shared as system field
+        result.get("public_key")?.takeIf { !it.isJsonNull }?.asString?.let { publicKey ->
+            items.add(PersonalDataItem(
+                id = "_published_public_key",
+                name = "Identity Public Key",
+                type = DataType.KEY,
+                value = publicKey,
+                category = DataCategory.IDENTITY,
+                isSystemField = true,
+                isInPublicProfile = true,
+                isSensitive = false,
+                sortOrder = savedSortOrder["_system_public_key"] ?: 99,
                 createdAt = now,
                 updatedAt = now
             ))

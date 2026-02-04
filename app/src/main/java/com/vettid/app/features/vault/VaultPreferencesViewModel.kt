@@ -4,6 +4,8 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.JsonObject
+import com.vettid.app.core.nats.NatsConnectionManager
+import com.vettid.app.core.nats.NatsConnectionState
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.core.network.HandlerSummary
@@ -77,7 +79,8 @@ sealed class VaultPreferencesEffect {
 @HiltViewModel
 class VaultPreferencesViewModel @Inject constructor(
     private val credentialStore: CredentialStore,
-    private val ownerSpaceClient: OwnerSpaceClient
+    private val ownerSpaceClient: OwnerSpaceClient,
+    private val connectionManager: NatsConnectionManager
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(VaultPreferencesState())
@@ -90,8 +93,28 @@ class VaultPreferencesViewModel @Inject constructor(
         loadPreferences()
         // With Nitro Enclave, vault is always ready - no need to poll status
         setEnclaveReady()
-        // Load handlers
+        // Load handlers (will auto-retry when NATS connects)
         loadHandlers()
+        // Observe connection state to auto-reload handlers when NATS connects
+        observeConnectionState()
+    }
+
+    /**
+     * Observe NATS connection state and auto-reload handlers when connected.
+     */
+    private fun observeConnectionState() {
+        viewModelScope.launch {
+            connectionManager.connectionState.collect { state ->
+                if (state is NatsConnectionState.Connected) {
+                    // Only reload if handlers haven't been loaded yet or had an error
+                    val currentState = _state.value
+                    if (currentState.installedHandlers.isEmpty() || currentState.handlersError != null) {
+                        Log.d(TAG, "NATS connected - auto-loading handlers")
+                        loadHandlers()
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -146,6 +169,16 @@ class VaultPreferencesViewModel @Inject constructor(
                 _state.value = _state.value.copy(
                     handlersLoading = false,
                     handlersError = "Handler info requires vault connection"
+                )
+                return@launch
+            }
+
+            // Check if NATS is connected
+            if (!connectionManager.isConnected()) {
+                Log.d(TAG, "NATS not connected yet, will auto-retry when connected")
+                _state.value = _state.value.copy(
+                    handlersLoading = false,
+                    handlersError = "Waiting for vault connection..."
                 )
                 return@launch
             }
