@@ -731,7 +731,7 @@ private fun PublishProfileButton(
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("View")
+                Text("Profile")
             }
             Button(
                 onClick = onPublishClick,
@@ -769,8 +769,6 @@ private fun CompactDataRow(
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit
 ) {
-    var showReorderMenu by remember { mutableStateOf(false) }
-
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
@@ -780,54 +778,46 @@ private fun CompactDataRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 12.dp, horizontal = 8.dp),
+                .padding(vertical = 4.dp, horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Drag handle - tap to show reorder options
-            Box {
+            // Up/Down reorder buttons
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
                 IconButton(
-                    onClick = { showReorderMenu = true },
-                    modifier = Modifier.size(40.dp)
+                    onClick = onMoveUp,
+                    enabled = !isFirst,
+                    modifier = Modifier.size(28.dp)
                 ) {
                     Icon(
-                        Icons.Default.DragHandle,
-                        contentDescription = "Reorder",
-                        modifier = Modifier.size(24.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                        Icons.Default.KeyboardArrowUp,
+                        contentDescription = "Move up",
+                        modifier = Modifier.size(20.dp),
+                        tint = if (!isFirst)
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f)
                     )
                 }
-
-                // Reorder dropdown menu
-                DropdownMenu(
-                    expanded = showReorderMenu,
-                    onDismissRequest = { showReorderMenu = false }
+                IconButton(
+                    onClick = onMoveDown,
+                    enabled = !isLast,
+                    modifier = Modifier.size(28.dp)
                 ) {
-                    DropdownMenuItem(
-                        text = { Text("Move Up") },
-                        onClick = {
-                            showReorderMenu = false
-                            onMoveUp()
-                        },
-                        enabled = !isFirst,
-                        leadingIcon = {
-                            Icon(Icons.Default.KeyboardArrowUp, contentDescription = null)
-                        }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Move Down") },
-                        onClick = {
-                            showReorderMenu = false
-                            onMoveDown()
-                        },
-                        enabled = !isLast,
-                        leadingIcon = {
-                            Icon(Icons.Default.KeyboardArrowDown, contentDescription = null)
-                        }
+                    Icon(
+                        Icons.Default.KeyboardArrowDown,
+                        contentDescription = "Move down",
+                        modifier = Modifier.size(20.dp),
+                        tint = if (!isLast)
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f)
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(4.dp))
 
             // Visibility toggle (clickable) or lock icon for system fields
             if (item.isSystemField) {
@@ -1740,6 +1730,71 @@ private fun BusinessCardView(
             Spacer(modifier = Modifier.height(12.dp))
         }
 
+        // Public Keys section (below contact info)
+        val publicKeyItems = profile.items.filter { it.type == DataType.KEY }
+        if (publicKeyItems.isNotEmpty()) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                shape = MaterialTheme.shapes.medium
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "PUBLIC KEYS",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    publicKeyItems.forEachIndexed { index, item ->
+                        if (index > 0) {
+                            HorizontalDivider(
+                                modifier = Modifier.padding(vertical = 8.dp),
+                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                            )
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onShowQR(item) }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.VpnKey,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = item.name,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                )
+                                Text(
+                                    text = "${item.value.take(12)}...${item.value.takeLast(6)}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textDecoration = TextDecoration.Underline
+                                )
+                            }
+                            Icon(
+                                Icons.Default.QrCode,
+                                contentDescription = "Show QR code",
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+
         // Additional fields organized by category
         if (groupedByCategory.isNotEmpty()) {
             val categoryOrder = listOf(
@@ -1754,11 +1809,12 @@ private fun BusinessCardView(
             categoryOrder.forEach { category ->
                 val categoryItems = groupedByCategory[category]
                 if (categoryItems != null && categoryItems.isNotEmpty()) {
-                    // Skip items already shown in Contact card (email and phone)
+                    // Skip items already shown in Contact card or Public Keys section
                     val filteredItems = categoryItems.filter { item ->
                         val isEmailShown = email != null && item.name == "Email" && item.value == email
                         val isPhoneShown = phone != null && item.name.contains("Phone", ignoreCase = true) && item.value == phone
-                        !isEmailShown && !isPhoneShown
+                        val isKeyShown = item.type == DataType.KEY
+                        !isEmailShown && !isPhoneShown && !isKeyShown
                     }
 
                     if (filteredItems.isNotEmpty()) {

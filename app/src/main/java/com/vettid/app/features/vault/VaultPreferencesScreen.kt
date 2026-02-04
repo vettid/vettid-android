@@ -279,6 +279,7 @@ private fun TTLDropdownItem(
     )
 }
 
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ArchiveDropdownItem(
@@ -883,192 +884,310 @@ private fun EventHandlersSection(
         )
     }
 
-    // Handlers list dialog
+    // Handlers full-screen dialog
     if (showHandlersDialog) {
-        EventHandlersDialog(
-            installedHandlers = installedHandlers,
-            availableHandlers = availableHandlers,
-            isLoading = isLoading,
-            error = error,
-            onRefresh = onRefresh,
-            onDismiss = { showHandlersDialog = false }
-        )
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { showHandlersDialog = false },
+            properties = androidx.compose.ui.window.DialogProperties(
+                dismissOnBackPress = true,
+                dismissOnClickOutside = false,
+                usePlatformDefaultWidth = false
+            )
+        ) {
+            EventHandlersFullScreen(
+                installedHandlers = installedHandlers,
+                availableHandlers = availableHandlers,
+                isLoading = isLoading,
+                error = error,
+                onRefresh = onRefresh,
+                onBack = { showHandlersDialog = false }
+            )
+        }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun EventHandlersDialog(
+private fun EventHandlersFullScreen(
     installedHandlers: List<InstalledHandler>,
     availableHandlers: List<HandlerSummary>,
     isLoading: Boolean,
     error: String?,
     onRefresh: () -> Unit,
-    onDismiss: () -> Unit
+    onBack: () -> Unit
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Extension,
-                    contentDescription = null,
-                    modifier = Modifier.size(24.dp)
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            TopAppBar(
+                title = { Text("Event Handlers") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onRefresh) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.surface
                 )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Event Handlers", modifier = Modifier.weight(1f))
-                IconButton(onClick = onRefresh) {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = "Refresh handlers"
-                    )
-                }
-            }
-        },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 450.dp)
-                    .verticalScroll(rememberScrollState())
-            ) {
-                if (isLoading) {
+            )
+
+            when {
+                isLoading -> {
                     Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(32.dp),
+                        modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center
                     ) {
                         CircularProgressIndicator()
                     }
-                } else if (error != null) {
-                    Column(
+                }
+                error != null -> {
+                    Box(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
+                            .fillMaxSize()
+                            .padding(32.dp),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Error,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(48.dp)
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = error,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        OutlinedButton(onClick = onRefresh) {
-                            Icon(Icons.Default.Refresh, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Retry")
-                        }
-                    }
-                } else {
-                    // Installed handlers
-                    Text(
-                        text = "INSTALLED (${installedHandlers.size})",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-
-                    if (installedHandlers.isEmpty()) {
-                        Text(
-                            text = "No handlers installed",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
-                    } else {
-                        installedHandlers.forEachIndexed { index, handler ->
-                            InstalledHandlerItem(handler = handler)
-                            if (index < installedHandlers.size - 1) {
-                                Divider(modifier = Modifier.padding(vertical = 4.dp))
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(16.dp))
-
-                    // Available handlers
-                    Text(
-                        text = "AVAILABLE (${availableHandlers.size})",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-
-                    if (availableHandlers.isEmpty()) {
-                        Text(
-                            text = "No additional handlers available",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(vertical = 8.dp)
-                        )
-                    } else {
-                        availableHandlers.forEachIndexed { index, handler ->
-                            AvailableHandlerItem(handler = handler)
-                            if (index < availableHandlers.size - 1) {
-                                Divider(modifier = Modifier.padding(vertical = 4.dp))
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                imageVector = Icons.Default.Error,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(error, color = MaterialTheme.colorScheme.error)
+                            Spacer(modifier = Modifier.height(16.dp))
+                            OutlinedButton(onClick = onRefresh) {
+                                Text("Retry")
                             }
                         }
                     }
                 }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Close")
+                else -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(16.dp)
+                    ) {
+                        // Summary card
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.primaryContainer
+                            )
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(16.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    Icons.Default.Extension,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column {
+                                    Text(
+                                        text = "${installedHandlers.size} Active Handlers",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                    Text(
+                                        text = "Vault event handlers process NATS messages in the enclave",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(20.dp))
+
+                        // Installed handlers
+                        Text(
+                            text = "ACTIVE HANDLERS",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+
+                        installedHandlers.forEach { handler ->
+                            HandlerDetailCard(handler = handler)
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+
+                        if (availableHandlers.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = "AVAILABLE",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
+                            availableHandlers.forEach { handler ->
+                                AvailableHandlerCard(handler = handler)
+                                Spacer(modifier = Modifier.height(8.dp))
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(16.dp))
+                    }
+                }
             }
         }
-    )
+    }
 }
 
 @Composable
-private fun InstalledHandlerItem(handler: InstalledHandler) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.Top
-    ) {
-        // Category-based icon
-        Icon(
-            imageVector = getCategoryIcon(handler.category),
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.size(24.dp)
+private fun HandlerDetailCard(handler: InstalledHandler) {
+    val description = getHandlerDescription(handler.id)
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
         )
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = handler.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Icon(
-                    imageVector = Icons.Default.CheckCircle,
-                    contentDescription = "Installed",
-                    tint = Color(0xFF4CAF50),
-                    modifier = Modifier.size(16.dp)
-                )
+                Surface(
+                    modifier = Modifier.size(40.dp),
+                    shape = MaterialTheme.shapes.small,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = getCategoryIcon(handler.category),
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = handler.name,
+                        style = MaterialTheme.typography.titleSmall
+                    )
+                    Text(
+                        text = "v${handler.version}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Surface(
+                    shape = MaterialTheme.shapes.small,
+                    color = Color(0xFF4CAF50).copy(alpha = 0.1f)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = Color(0xFF4CAF50),
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "Active",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFF4CAF50)
+                        )
+                    }
+                }
             }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
             Text(
-                text = "v${handler.version} • ${handler.category}",
+                text = description,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            if (handler.executionCount > 0) {
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Handler details
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.small,
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    DetailRow("NATS Topic", handler.id)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    DetailRow("Category", handler.category.replaceFirstChar { it.uppercase() })
+                    if (handler.enabled) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        DetailRow("Status", "Enabled")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DetailRow(label: String, value: String) {
+    Row {
+        Text(
+            text = "$label: ",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.labelSmall,
+            fontFamily = if (label == "NATS Topic") androidx.compose.ui.text.font.FontFamily.Monospace else null,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun AvailableHandlerCard(handler: HandlerSummary) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Icon(
+                imageVector = getCategoryIcon(handler.category),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier.size(24.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "${handler.executionCount} executions",
+                    text = handler.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                )
+                Text(
+                    text = handler.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2
+                )
+                Text(
+                    text = "v${handler.version} • ${handler.publisher}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1077,39 +1196,16 @@ private fun InstalledHandlerItem(handler: InstalledHandler) {
     }
 }
 
-@Composable
-private fun AvailableHandlerItem(handler: HandlerSummary) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.Top
-    ) {
-        Icon(
-            imageVector = getCategoryIcon(handler.category),
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-            modifier = Modifier.size(24.dp)
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = handler.name,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-            )
-            Text(
-                text = handler.description,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2
-            )
-            Text(
-                text = "v${handler.version} • ${handler.publisher}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+private fun getHandlerDescription(handlerId: String): String {
+    return when {
+        handlerId.startsWith("profile.") -> "Manages your public profile data. Handles profile retrieval, updates, and publishing to make your information visible to connections."
+        handlerId.startsWith("personal-data.") -> "Stores and retrieves personal data fields in the encrypted vault. Supports categorized fields with privacy controls."
+        handlerId.startsWith("secrets.add") || handlerId.startsWith("secrets.retrieve") || handlerId.startsWith("secrets.delete") -> "Manages encrypted secrets in the vault datastore. Handles storage, retrieval, and deletion of sensitive credentials."
+        handlerId.startsWith("secrets.identity") -> "Manages cryptographic identity keys. Returns the Ed25519 public key used for signature verification and identity attestation."
+        handlerId.startsWith("connection.") -> "Handles connection requests between users. Manages the connection lifecycle including invitations, acceptance, and key exchange."
+        handlerId.startsWith("message.") -> "Processes encrypted messages between connected users. Handles message routing, delivery, and storage within the vault."
+        handlerId.startsWith("credential.") -> "Manages the Protean Credential lifecycle. Handles credential creation, updates, key rotation, and attestation verification."
+        else -> "Vault event handler for processing NATS messages in the Nitro Enclave."
     }
 }
 

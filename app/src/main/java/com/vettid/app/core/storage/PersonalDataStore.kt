@@ -82,6 +82,9 @@ class PersonalDataStore @Inject constructor(
         private const val KEY_PUBLIC_PROFILE_FIELDS = "public_profile_fields"
         private const val KEY_PUBLIC_PROFILE_VERSION = "public_profile_version"
 
+        // Profile photo (local cache)
+        private const val KEY_PROFILE_PHOTO = "profile_photo_base64"
+
         // Sync status
         private const val KEY_LAST_SYNCED_AT = "last_synced_at"
         private const val KEY_PENDING_SYNC = "pending_sync"
@@ -101,6 +104,27 @@ class PersonalDataStore @Inject constructor(
     }
 
     // MARK: - System Fields (Read-Only)
+
+    /**
+     * Save profile photo locally so it survives app and vault restarts.
+     */
+    fun saveProfilePhoto(base64Photo: String?) {
+        encryptedPrefs.edit().apply {
+            if (base64Photo != null) {
+                putString(KEY_PROFILE_PHOTO, base64Photo)
+            } else {
+                remove(KEY_PROFILE_PHOTO)
+            }
+            commit()
+        }
+    }
+
+    /**
+     * Get locally cached profile photo.
+     */
+    fun getProfilePhoto(): String? {
+        return encryptedPrefs.getString(KEY_PROFILE_PHOTO, null)
+    }
 
     /**
      * Get system fields from registration.

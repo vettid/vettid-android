@@ -3,13 +3,16 @@ package com.vettid.app.features.personaldata
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.vettid.app.core.events.ProfilePhotoEvents
 import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.core.storage.CredentialStore
+import com.vettid.app.core.storage.MinorSecretsStore
 import com.vettid.app.core.storage.PersonalDataStore
+import com.vettid.app.core.storage.SecretType
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -22,6 +25,7 @@ private const val TAG = "PersonalDataViewModel"
 class PersonalDataViewModel @Inject constructor(
     private val credentialStore: CredentialStore,
     private val personalDataStore: PersonalDataStore,
+    private val minorSecretsStore: MinorSecretsStore,
     private val ownerSpaceClient: OwnerSpaceClient,
     private val connectionManager: NatsConnectionManager,
     private val profilePhotoEvents: ProfilePhotoEvents
@@ -129,8 +133,12 @@ class PersonalDataViewModel @Inject constructor(
                     if (vaultLoadSuccess) {
                         Log.d(TAG, "Loaded ${newItems.size} items from vault")
                     } else {
-                        Log.d(TAG, "Vault load failed, falling back to local storage")
+                        Log.d(TAG, "Vault has no data, loading from local storage and re-syncing")
                         loadFromLocalStorageInto(newItems)
+                        // Re-sync local data to the vault so it has the data again
+                        if (newItems.isNotEmpty()) {
+                            reSyncLocalDataToVault(newItems)
+                        }
                     }
                 } else {
                     Log.d(TAG, "Not connected to vault, loading from local storage")
@@ -658,6 +666,63 @@ class PersonalDataViewModel @Inject constructor(
         initializeSortOrdersIfNeeded(items)
     }
 
+    /**
+     * Re-sync all local personal data to the vault.
+     * Called when the vault has empty storage (e.g., after cold restart
+     * before the database persistence fix took effect).
+     */
+    private fun reSyncLocalDataToVault(items: List<PersonalDataItem>) {
+        viewModelScope.launch {
+            try {
+                Log.i(TAG, "Re-syncing ${items.size} local items to vault...")
+
+                // 1. Re-sync system fields via profile.update
+                val systemFields = JsonObject()
+                items.filter { it.isSystemField }.forEach { item ->
+                    systemFields.addProperty(item.id, item.value)
+                }
+                if (systemFields.size() > 0) {
+                    val profilePayload = JsonObject().apply {
+                        add("fields", systemFields)
+                    }
+                    val profileResp = ownerSpaceClient.sendAndAwaitResponse(
+                        "profile.update", profilePayload, 10000L
+                    )
+                    Log.i(TAG, "Re-synced ${systemFields.size()} system fields to vault: ${
+                        when (profileResp) {
+                            is VaultResponse.HandlerResult -> if (profileResp.success) "success" else "failed"
+                            else -> "unknown"
+                        }
+                    }")
+                }
+
+                // 2. Re-sync personal data fields via personal-data.update
+                val dataFields = JsonObject()
+                items.filter { !it.isSystemField && it.value.isNotEmpty() }.forEach { item ->
+                    dataFields.addProperty(item.id, item.value)
+                }
+                if (dataFields.size() > 0) {
+                    val dataPayload = JsonObject().apply {
+                        add("fields", dataFields)
+                    }
+                    val dataResp = ownerSpaceClient.sendAndAwaitResponse(
+                        "personal-data.update", dataPayload, 10000L
+                    )
+                    Log.i(TAG, "Re-synced ${dataFields.size()} personal data fields to vault: ${
+                        when (dataResp) {
+                            is VaultResponse.HandlerResult -> if (dataResp.success) "success" else "failed"
+                            else -> "unknown"
+                        }
+                    }")
+                }
+
+                Log.i(TAG, "Vault re-sync complete")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to re-sync local data to vault: ${e.message}")
+            }
+        }
+    }
+
     private fun updateSearchQuery(query: String) {
         val currentState = _state.value
         if (currentState is PersonalDataState.Loaded) {
@@ -708,9 +773,27 @@ class PersonalDataViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 Log.i(TAG, "Publishing public profile...")
+
+                // Build payload with selected public profile fields
+                val payload = JsonObject()
+                val fieldsArray = JsonArray()
+                publicProfileFields.forEach { fieldsArray.add(it) }
+
+                // Also include public key secrets that are marked for public profile
+                val publicKeySecrets = minorSecretsStore.getPublicProfileSecrets()
+                publicKeySecrets.forEach { secret ->
+                    val secretNamespace = "secrets.public_key.${secret.id}"
+                    if (!publicProfileFields.contains(secretNamespace)) {
+                        fieldsArray.add(secretNamespace)
+                    }
+                }
+
+                payload.add("fields", fieldsArray)
+                Log.d(TAG, "Publishing profile with ${fieldsArray.size()} fields: $fieldsArray")
+
                 val response = ownerSpaceClient.sendAndAwaitResponse(
                     messageType = "profile.publish",
-                    payload = JsonObject(),
+                    payload = payload,
                     timeoutMs = 15000L
                 )
 
@@ -1128,33 +1211,31 @@ class PersonalDataViewModel @Inject constructor(
             Log.w(TAG, "moveItemUp: item not found in dataItems (size=${dataItems.size})")
             return
         }
-        Log.i(TAG, "moveItemUp: found item '${item.name}', isSystemField=${item.isSystemField}, sortOrder=${item.sortOrder}")
 
         val category = item.category
+        // Sort matching display order: sortOrder first, then name as tiebreaker
         val categoryItems = dataItems.filter { it.category == category }
-            .sortedBy { it.sortOrder }
-        Log.i(TAG, "moveItemUp: category=$category has ${categoryItems.size} items")
-        categoryItems.forEachIndexed { i, ci -> Log.d(TAG, "  [$i] ${ci.name} (sortOrder=${ci.sortOrder})") }
+            .sortedWith(compareBy({ it.sortOrder }, { it.name }))
 
         val index = categoryItems.indexOfFirst { it.id == itemId }
-        Log.i(TAG, "moveItemUp: item '${item.name}' at index $index of ${categoryItems.size}")
         if (index <= 0) {
             Log.d(TAG, "moveItemUp: already at top")
             return
         }
 
-        // Swap sort orders with the item above
+        // Normalize sort orders first to ensure they're distinct
+        categoryItems.forEachIndexed { i, ci ->
+            updateItemSortOrder(ci.id, i)
+        }
+
+        // Now swap the target with the item above
         val itemAbove = categoryItems[index - 1]
-        val newSortOrder = itemAbove.sortOrder
-        val aboveSortOrder = item.sortOrder
-        Log.d(TAG, "moveItemUp: swapping '${item.name}' (order=$aboveSortOrder) with '${itemAbove.name}' (order=$newSortOrder)")
+        updateItemSortOrder(itemId, index - 1)
+        updateItemSortOrder(itemAbove.id, index)
+        Log.d(TAG, "moveItemUp: swapped '${item.name}' to position ${index - 1}, '${itemAbove.name}' to $index")
 
-        updateItemSortOrder(itemId, newSortOrder)
-        updateItemSortOrder(itemAbove.id, aboveSortOrder)
-
-        // Refresh state - use copy to preserve search query
+        // Refresh state
         val newItems = dataItems.toList()
-        Log.d(TAG, "moveItemUp: emitting new state with ${newItems.size} items")
         val currentState = _state.value
         _state.value = if (currentState is PersonalDataState.Loaded) {
             currentState.copy(items = newItems)
@@ -1176,31 +1257,31 @@ class PersonalDataViewModel @Inject constructor(
             Log.w(TAG, "moveItemDown: item not found")
             return
         }
-        Log.i(TAG, "moveItemDown: found item '${item.name}', sortOrder=${item.sortOrder}")
 
         val category = item.category
+        // Sort matching display order: sortOrder first, then name as tiebreaker
         val categoryItems = dataItems.filter { it.category == category }
-            .sortedBy { it.sortOrder }
-        Log.i(TAG, "moveItemDown: category=$category has ${categoryItems.size} items")
+            .sortedWith(compareBy({ it.sortOrder }, { it.name }))
 
         val index = categoryItems.indexOfFirst { it.id == itemId }
-        Log.i(TAG, "moveItemDown: item at index $index")
         if (index < 0 || index >= categoryItems.size - 1) {
             Log.d(TAG, "moveItemDown: already at bottom")
             return
         }
 
-        // Swap sort orders with the item below
+        // Normalize sort orders first to ensure they're distinct
+        categoryItems.forEachIndexed { i, ci ->
+            updateItemSortOrder(ci.id, i)
+        }
+
+        // Now swap the target with the item below
         val itemBelow = categoryItems[index + 1]
-        val newSortOrder = itemBelow.sortOrder
-        val belowSortOrder = item.sortOrder
+        updateItemSortOrder(itemId, index + 1)
+        updateItemSortOrder(itemBelow.id, index)
+        Log.d(TAG, "moveItemDown: swapped '${item.name}' to position ${index + 1}, '${itemBelow.name}' to $index")
 
-        updateItemSortOrder(itemId, newSortOrder)
-        updateItemSortOrder(itemBelow.id, belowSortOrder)
-
-        // Refresh state - use copy to preserve search query
+        // Refresh state
         val newItems = dataItems.toList()
-        Log.d(TAG, "moveItemDown: emitting new state with ${newItems.size} items")
         val currentState = _state.value
         _state.value = if (currentState is PersonalDataState.Loaded) {
             currentState.copy(items = newItems)
@@ -1564,9 +1645,47 @@ class PersonalDataViewModel @Inject constructor(
             }
         }
 
+        // Include public keys from secrets store that are marked for public profile
+        val hasIdentityKeyFromVault = items.any { it.id == "_published_public_key" }
+        try {
+            val publicKeySecrets = minorSecretsStore.getPublicProfileSecrets()
+            var addedCount = 0
+            publicKeySecrets.forEach { secret ->
+                // Skip system enrollment key if vault already provided it
+                if (secret.isSystemField && hasIdentityKeyFromVault) return@forEach
+
+                items.add(PersonalDataItem(
+                    id = "_secret_${secret.id}",
+                    name = secret.name,
+                    type = DataType.KEY,
+                    value = secret.value,
+                    category = DataCategory.IDENTITY,
+                    isSystemField = secret.isSystemField,
+                    isInPublicProfile = true,
+                    isSensitive = false,
+                    sortOrder = secret.sortOrder,
+                    createdAt = Instant.ofEpochMilli(secret.createdAt),
+                    updatedAt = Instant.ofEpochMilli(secret.updatedAt)
+                ))
+                addedCount++
+            }
+            if (addedCount > 0) {
+                Log.d(TAG, "Added $addedCount public key(s) from secrets store to profile")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to load public keys from secrets store", e)
+        }
+
         val updatedAt = result.get("updated_at")?.takeIf { !it.isJsonNull }?.asString
         val photo = result.get("photo")?.takeIf { !it.isJsonNull }?.asString
         Log.i(TAG, "Parsed ${items.size} items from published profile, updated_at: $updatedAt, has_photo: ${photo != null}")
+
+        // Update the profile photo for the header and notify app-level state
+        if (photo != null && _profilePhoto.value == null) {
+            _profilePhoto.value = photo
+            profilePhotoEvents.notifyPhotoUpdated(photo)
+            Log.d(TAG, "Set profile photo from published profile data and notified app")
+        }
 
         _publishedProfile.value = PublishedProfileData(
             items = items,
@@ -1586,13 +1705,46 @@ class PersonalDataViewModel @Inject constructor(
             try {
                 val result = ownerSpaceClient.getProfilePhoto()
                 result.onSuccess { photo ->
-                    _profilePhoto.value = photo
-                    Log.d(TAG, "Profile photo loaded: ${photo?.length ?: 0} chars")
+                    if (!photo.isNullOrEmpty()) {
+                        _profilePhoto.value = photo
+                        personalDataStore.saveProfilePhoto(photo)
+                        profilePhotoEvents.notifyPhotoUpdated(photo)
+                        Log.d(TAG, "Profile photo loaded from vault: ${photo.length} chars")
+                    } else {
+                        // Vault has no photo - try local cache
+                        loadPhotoFromLocalCache()
+                    }
                 }.onFailure { error ->
-                    Log.e(TAG, "Failed to fetch profile photo", error)
+                    Log.e(TAG, "Failed to fetch profile photo from vault, trying local cache", error)
+                    loadPhotoFromLocalCache()
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error fetching profile photo", e)
+                Log.e(TAG, "Error fetching profile photo, trying local cache", e)
+                loadPhotoFromLocalCache()
+            }
+        }
+    }
+
+    private fun loadPhotoFromLocalCache() {
+        val localPhoto = personalDataStore.getProfilePhoto()
+        if (!localPhoto.isNullOrEmpty()) {
+            _profilePhoto.value = localPhoto
+            profilePhotoEvents.notifyPhotoUpdated(localPhoto)
+            Log.d(TAG, "Profile photo loaded from local cache: ${localPhoto.length} chars")
+            // Re-upload to vault so it has the photo again
+            reUploadPhotoToVault(localPhoto)
+        } else {
+            Log.d(TAG, "No profile photo in local cache")
+        }
+    }
+
+    private fun reUploadPhotoToVault(base64Photo: String) {
+        viewModelScope.launch {
+            try {
+                ownerSpaceClient.updateProfilePhoto(base64Photo)
+                Log.i(TAG, "Re-uploaded local photo to vault")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to re-upload photo to vault: ${e.message}")
             }
         }
     }
@@ -1631,6 +1783,7 @@ class PersonalDataViewModel @Inject constructor(
                 result.onSuccess {
                     _profilePhoto.value = base64Photo
                     _showPhotoCapture.value = false
+                    personalDataStore.saveProfilePhoto(base64Photo)
                     _effects.emit(PersonalDataEffect.ShowSuccess("Profile photo updated"))
                     // Notify app-level state so header/drawer update
                     profilePhotoEvents.notifyPhotoUpdated(base64Photo)
@@ -1657,6 +1810,7 @@ class PersonalDataViewModel @Inject constructor(
                 val result = ownerSpaceClient.deleteProfilePhoto()
                 result.onSuccess {
                     _profilePhoto.value = null
+                    personalDataStore.saveProfilePhoto(null)
                     _effects.emit(PersonalDataEffect.ShowSuccess("Profile photo removed"))
                     // Notify app-level state so header/drawer update
                     profilePhotoEvents.notifyPhotoUpdated(null)

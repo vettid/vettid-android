@@ -360,21 +360,24 @@ class MinorSecretsStore @Inject constructor(
         val secret = secrets.find { it.id == secretId } ?: return false
 
         val categorySecrets = secrets.filter { it.category == secret.category }
-            .sortedBy { it.sortOrder }
+            .sortedWith(compareBy({ it.sortOrder }, { it.name }))
 
         val index = categorySecrets.indexOfFirst { it.id == secretId }
         if (index <= 0) return false
 
-        val itemAbove = categorySecrets[index - 1]
-        val newSortOrder = itemAbove.sortOrder
-        val aboveSortOrder = secret.sortOrder
+        // Normalize sort orders first to ensure they're distinct
+        categorySecrets.forEachIndexed { i, cs ->
+            val idx = secrets.indexOfFirst { it.id == cs.id }
+            if (idx >= 0) secrets[idx] = secrets[idx].copy(sortOrder = i)
+        }
 
-        // Update both items
+        // Now swap the target with the item above
+        val itemAbove = categorySecrets[index - 1]
         val secretIndex = secrets.indexOfFirst { it.id == secretId }
         val aboveIndex = secrets.indexOfFirst { it.id == itemAbove.id }
 
-        secrets[secretIndex] = secrets[secretIndex].copy(sortOrder = newSortOrder)
-        secrets[aboveIndex] = secrets[aboveIndex].copy(sortOrder = aboveSortOrder)
+        secrets[secretIndex] = secrets[secretIndex].copy(sortOrder = index - 1)
+        secrets[aboveIndex] = secrets[aboveIndex].copy(sortOrder = index)
 
         saveSecrets(secrets)
         return true
@@ -389,21 +392,24 @@ class MinorSecretsStore @Inject constructor(
         val secret = secrets.find { it.id == secretId } ?: return false
 
         val categorySecrets = secrets.filter { it.category == secret.category }
-            .sortedBy { it.sortOrder }
+            .sortedWith(compareBy({ it.sortOrder }, { it.name }))
 
         val index = categorySecrets.indexOfFirst { it.id == secretId }
         if (index < 0 || index >= categorySecrets.size - 1) return false
 
-        val itemBelow = categorySecrets[index + 1]
-        val newSortOrder = itemBelow.sortOrder
-        val belowSortOrder = secret.sortOrder
+        // Normalize sort orders first to ensure they're distinct
+        categorySecrets.forEachIndexed { i, cs ->
+            val idx = secrets.indexOfFirst { it.id == cs.id }
+            if (idx >= 0) secrets[idx] = secrets[idx].copy(sortOrder = i)
+        }
 
-        // Update both items
+        // Now swap the target with the item below
+        val itemBelow = categorySecrets[index + 1]
         val secretIndex = secrets.indexOfFirst { it.id == secretId }
         val belowIndex = secrets.indexOfFirst { it.id == itemBelow.id }
 
-        secrets[secretIndex] = secrets[secretIndex].copy(sortOrder = newSortOrder)
-        secrets[belowIndex] = secrets[belowIndex].copy(sortOrder = belowSortOrder)
+        secrets[secretIndex] = secrets[secretIndex].copy(sortOrder = index + 1)
+        secrets[belowIndex] = secrets[belowIndex].copy(sortOrder = index)
 
         saveSecrets(secrets)
         return true
@@ -447,7 +453,7 @@ class MinorSecretsStore @Inject constructor(
             id = "identity_public_key",
             name = "Identity Public Key",
             value = publicKeyBase64,
-            category = SecretCategory.CERTIFICATE,
+            category = SecretCategory.IDENTITY,
             type = SecretType.PUBLIC_KEY,
             notes = keyDescription,
             isShareable = true,
@@ -504,6 +510,8 @@ data class MinorSecret(
  * Categories for secrets.
  */
 enum class SecretCategory(val displayName: String, val iconName: String) {
+    // Identity & Security
+    IDENTITY("Identity", "fingerprint"),
     // Financial
     CRYPTOCURRENCY("Cryptocurrency", "currency_bitcoin"),
     BANK_ACCOUNT("Bank Account", "account_balance"),

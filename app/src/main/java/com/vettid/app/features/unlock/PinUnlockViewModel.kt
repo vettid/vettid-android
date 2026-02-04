@@ -179,28 +179,47 @@ class PinUnlockViewModel @Inject constructor(
             // Verify PIN with enclave using OwnerSpaceClient (event_id correlation)
             _state.value = PinUnlockState.Verifying
 
-            val result = verifyPinWithEnclave(pin)
+            // Retry up to 3 times if vault is not ready (just started)
+            var retryCount = 0
+            val maxRetries = 3
+            while (true) {
+                val result = verifyPinWithEnclave(pin)
 
-            when (result) {
-                PinVerificationResult.Success -> {
-                    Log.i(TAG, "PIN verification successful")
+                when (result) {
+                    PinVerificationResult.Success -> {
+                        Log.i(TAG, "PIN verification successful")
 
-                    // Get first name for welcome message
-                    val firstName = personalDataStore.getSystemFields()?.firstName
+                        // Get first name for welcome message
+                        val firstName = personalDataStore.getSystemFields()?.firstName
 
-                    // Load profile from vault in background
-                    loadProfileFromVault()
+                        // Load profile from vault in background
+                        loadProfileFromVault()
 
-                    _state.value = PinUnlockState.Success(firstName = firstName)
-                    _effects.emit(PinUnlockEffect.UnlockSuccess)
-                }
-                PinVerificationResult.InvalidPin -> {
-                    Log.w(TAG, "PIN verification failed - invalid PIN")
-                    _state.value = PinUnlockState.EnteringPin(pin = "", error = "Invalid PIN")
-                }
-                is PinVerificationResult.Error -> {
-                    Log.e(TAG, "PIN verification failed - error: ${result.message}")
-                    _state.value = PinUnlockState.Error(result.message)
+                        _state.value = PinUnlockState.Success(firstName = firstName)
+                        _effects.emit(PinUnlockEffect.UnlockSuccess)
+                        return
+                    }
+                    PinVerificationResult.VaultNotReady -> {
+                        retryCount++
+                        if (retryCount >= maxRetries) {
+                            Log.e(TAG, "Vault still not ready after $maxRetries retries")
+                            _state.value = PinUnlockState.Error("Vault is starting up. Please try again.")
+                            return
+                        }
+                        Log.i(TAG, "Vault not ready, retrying in 2s (attempt ${retryCount + 1}/$maxRetries)")
+                        kotlinx.coroutines.delay(2000)
+                        // Continue loop to retry
+                    }
+                    PinVerificationResult.InvalidPin -> {
+                        Log.w(TAG, "PIN verification failed - invalid PIN")
+                        _state.value = PinUnlockState.EnteringPin(pin = "", error = "Invalid PIN")
+                        return
+                    }
+                    is PinVerificationResult.Error -> {
+                        Log.e(TAG, "PIN verification failed - error: ${result.message}")
+                        _state.value = PinUnlockState.Error(result.message)
+                        return
+                    }
                 }
             }
         } catch (e: CancellationException) {
@@ -221,6 +240,7 @@ class PinUnlockViewModel @Inject constructor(
     private sealed class PinVerificationResult {
         data object Success : PinVerificationResult()
         data object InvalidPin : PinVerificationResult()
+        data object VaultNotReady : PinVerificationResult()
         data class Error(val message: String = "Verification error") : PinVerificationResult()
     }
 
@@ -369,7 +389,30 @@ class PinUnlockViewModel @Inject constructor(
                         val status = responseJson.get("status")?.asString
                         Log.d(TAG, "PIN unlock response status: $status")
 
-                        if (status == "unlocked" || status == "success" || status == "vault_ready") {
+                        // Vault returns {status: "unlocked", new_utks: [...]} on first unlock,
+                        // but returns profile data ({first_name, email, ...}) if already unlocked.
+                        // Both indicate successful PIN verification.
+                        val isAlreadyUnlocked = status == null &&
+                            responseJson.has("first_name") && responseJson.has("email")
+                        if (isAlreadyUnlocked) {
+                            Log.i(TAG, "Vault already unlocked - PIN verified via profile response")
+                        }
+
+                        // Detect "vault not ready" response: when the vault just started,
+                        // the pin-unlock handler may not be initialized yet. The vault
+                        // returns a generic response (connections list, events list, etc.)
+                        // instead of a proper pin-unlock result. Detect this by checking
+                        // that NONE of the expected pin-unlock fields are present.
+                        val hasExpectedFields = status != null ||
+                            responseJson.has("encrypted_credential") ||
+                            responseJson.has("first_name") ||
+                            responseJson.has("error")
+                        if (!hasExpectedFields) {
+                            Log.w(TAG, "Vault not ready - got unexpected response: ${responseJson.keySet()}")
+                            return@withContext PinVerificationResult.VaultNotReady
+                        }
+
+                        if (status == "unlocked" || status == "success" || status == "vault_ready" || isAlreadyUnlocked) {
                             // Store any new UTKs from response (format: "ID:base64PublicKey")
                             val newUtksArray = responseJson.getAsJsonArray("new_utks")
                             if (newUtksArray != null && newUtksArray.size() > 0) {

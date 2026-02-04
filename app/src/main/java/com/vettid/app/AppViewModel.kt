@@ -72,7 +72,7 @@ class AppViewModel @Inject constructor(
     private val natsAutoConnector: NatsAutoConnector,
     private val ownerSpaceClient: OwnerSpaceClient,
     private val profilePhotoEvents: ProfilePhotoEvents,
-    private val personalDataStore: PersonalDataStore
+    private val personalDataStore: PersonalDataStore,
 ) : ViewModel() {
 
     private val _appState = MutableStateFlow(AppState())
@@ -312,13 +312,29 @@ class AppViewModel @Inject constructor(
             Log.d(TAG, "Fetching profile photo...")
             ownerSpaceClient.getProfilePhoto()
                 .onSuccess { photo ->
-                    Log.d(TAG, "Profile photo fetched: ${photo?.length ?: 0} chars")
-                    _appState.update { it.copy(profilePhoto = photo) }
-                    Log.d(TAG, "AppState.profilePhoto updated: ${_appState.value.profilePhoto?.length ?: 0} chars")
+                    if (!photo.isNullOrEmpty()) {
+                        Log.d(TAG, "Profile photo fetched from vault: ${photo.length} chars")
+                        _appState.update { it.copy(profilePhoto = photo) }
+                        personalDataStore.saveProfilePhoto(photo)
+                    } else {
+                        Log.d(TAG, "Vault has no photo, loading from local cache")
+                        loadPhotoFromLocalCache()
+                    }
                 }
                 .onFailure { error ->
                     Log.w(TAG, "Failed to fetch profile photo: ${error.message}")
+                    loadPhotoFromLocalCache()
                 }
+        }
+    }
+
+    private fun loadPhotoFromLocalCache() {
+        val localPhoto = personalDataStore.getProfilePhoto()
+        if (!localPhoto.isNullOrEmpty()) {
+            Log.d(TAG, "Profile photo loaded from local cache: ${localPhoto.length} chars")
+            _appState.update { it.copy(profilePhoto = localPhoto) }
+        } else {
+            Log.d(TAG, "No profile photo in local cache")
         }
     }
 

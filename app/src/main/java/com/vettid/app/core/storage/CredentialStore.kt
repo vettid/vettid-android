@@ -36,6 +36,7 @@ class CredentialStore @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
     private val gson = Gson()
+    private val utkLock = Any()
 
     private val masterKey = MasterKey.Builder(context)
         .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
@@ -243,22 +244,26 @@ class CredentialStore @Inject constructor(
      * Remove a used UTK from the pool
      */
     fun removeUtk(keyId: String) {
-        val pool = getUtkPool().toMutableList()
-        pool.removeAll { it.keyId == keyId }
-        encryptedPrefs.edit()
-            .putString(KEY_UTK_POOL, gson.toJson(pool))
-            .apply()
+        synchronized(utkLock) {
+            val pool = getUtkPool().toMutableList()
+            pool.removeAll { it.keyId == keyId }
+            encryptedPrefs.edit()
+                .putString(KEY_UTK_POOL, gson.toJson(pool))
+                .commit()
+        }
     }
 
     /**
      * Add new UTKs to the pool (after replenishment)
      */
     fun addUtks(newKeys: List<TransactionKeyInfo>) {
-        val pool = getUtkPool().toMutableList()
-        pool.addAll(newKeys)
-        encryptedPrefs.edit()
-            .putString(KEY_UTK_POOL, gson.toJson(pool))
-            .apply()
+        synchronized(utkLock) {
+            val pool = getUtkPool().toMutableList()
+            pool.addAll(newKeys)
+            encryptedPrefs.edit()
+                .putString(KEY_UTK_POOL, gson.toJson(pool))
+                .commit()
+        }
     }
 
     /**

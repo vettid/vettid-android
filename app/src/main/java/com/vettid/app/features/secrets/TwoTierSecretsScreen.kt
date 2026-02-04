@@ -743,6 +743,7 @@ private fun RevealedSecretDialog(
 
 private fun getMinorCategoryIcon(category: SecretCategory): ImageVector {
     return when (category) {
+        SecretCategory.IDENTITY -> Icons.Default.Fingerprint
         SecretCategory.CRYPTOCURRENCY -> Icons.Default.CurrencyBitcoin
         SecretCategory.BANK_ACCOUNT -> Icons.Default.AccountBalance
         SecretCategory.CREDIT_CARD -> Icons.Default.CreditCard

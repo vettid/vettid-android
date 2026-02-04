@@ -49,10 +49,8 @@ class ArchiveViewModel @Inject constructor() : ViewModel() {
         viewModelScope.launch {
             _state.value = ArchiveState.Loading
             try {
-                // Initialize with mock data if empty
-                if (archivedItems.isEmpty()) {
-                    archivedItems.addAll(generateMockArchive())
-                }
+                // TODO: Query vault for archived events via NATS
+                // For now, show empty state until vault archive endpoint is implemented
 
                 if (archivedItems.isEmpty()) {
                     _state.value = ArchiveState.Empty
@@ -190,49 +188,4 @@ class ArchiveViewModel @Inject constructor() : ViewModel() {
             }
     }
 
-    private fun generateMockArchive(): List<ArchivedItem> {
-        val now = Instant.now()
-        return listOf(
-            ArchivedItem(
-                id = "archive-1",
-                type = ArchivedItemType.MESSAGE,
-                title = "Message from Carol",
-                subtitle = "Thanks for the update!",
-                archivedAt = now.minusSeconds(86400 * 5),
-                expiresAt = now.plusSeconds(86400 * 25)
-            ),
-            ArchivedItem(
-                id = "archive-2",
-                type = ArchivedItemType.CONNECTION,
-                title = "Connection: Frank",
-                subtitle = "Disconnected on Dec 3",
-                archivedAt = now.minusSeconds(86400 * 11),
-                expiresAt = now.plusSeconds(86400 * 19)
-            ),
-            ArchivedItem(
-                id = "archive-3",
-                type = ArchivedItemType.MESSAGE,
-                title = "Thread with Alice",
-                subtitle = "12 messages",
-                archivedAt = now.minusSeconds(86400 * 16),
-                expiresAt = now.plusSeconds(86400 * 14)
-            ),
-            ArchivedItem(
-                id = "archive-4",
-                type = ArchivedItemType.FILE,
-                title = "report.pdf",
-                subtitle = "2.4 MB",
-                archivedAt = now.minusSeconds(86400 * 29),
-                expiresAt = now.plusSeconds(86400 * 1)
-            ),
-            ArchivedItem(
-                id = "archive-5",
-                type = ArchivedItemType.AUTH_REQUEST,
-                title = "Auth: Service X",
-                subtitle = "Denied on Nov 10",
-                archivedAt = now.minusSeconds(86400 * 34),
-                expiresAt = null
-            )
-        )
-    }
 }

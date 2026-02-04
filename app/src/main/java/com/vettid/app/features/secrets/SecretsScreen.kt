@@ -7,9 +7,12 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -21,6 +24,10 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -31,6 +38,9 @@ import com.vettid.app.core.storage.MinorSecret
 import com.vettid.app.core.storage.SecretCategory
 import com.vettid.app.core.storage.SecretType
 import kotlinx.coroutines.flow.collectLatest
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Locale
 
 /**
  * Secrets screen content for embedding in MainScaffold.
@@ -52,6 +62,10 @@ fun SecretsContent(
 
     // QR code dialog state
     var qrDialogSecret by remember { mutableStateOf<MinorSecret?>(null) }
+
+    // Template chooser and form state
+    var showTemplateChooser by remember { mutableStateOf(false) }
+    var templateFormState by remember { mutableStateOf<TemplateFormState?>(null) }
 
     // Ensure enrollment key is in secrets on first load
     LaunchedEffect(Unit) {
@@ -91,7 +105,7 @@ fun SecretsContent(
 
             is SecretsState.Empty -> {
                 EmptySecretsContent(
-                    onAddClick = { viewModel.onEvent(SecretsEvent.AddSecret) }
+                    onAddClick = { showTemplateChooser = true }
                 )
             }
 
@@ -120,12 +134,11 @@ fun SecretsContent(
                         onSearchQueryChanged = { viewModel.onEvent(SecretsEvent.SearchQueryChanged(it)) },
                         onSearchBarClose = { showSearchBar = false },
                         onSecretClick = { viewModel.onEvent(SecretsEvent.SecretClicked(it)) },
-                        onCopyClick = { viewModel.onEvent(SecretsEvent.CopySecret(it)) },
-                        onDeleteClick = { viewModel.onEvent(SecretsEvent.DeleteSecret(it)) },
                         onTogglePublicProfile = { viewModel.onEvent(SecretsEvent.TogglePublicProfile(it)) },
                         onMoveUp = { viewModel.onEvent(SecretsEvent.MoveSecretUp(it)) },
                         onMoveDown = { viewModel.onEvent(SecretsEvent.MoveSecretDown(it)) },
-                        onPublishClick = { viewModel.onEvent(SecretsEvent.PublishPublicKeys) }
+                        onPublishClick = { viewModel.onEvent(SecretsEvent.PublishPublicKeys) },
+                        onCriticalSecretsTap = { viewModel.onCriticalSecretsEvent(CriticalSecretsEvent.Open) }
                     )
                 }
             }
@@ -155,7 +168,7 @@ fun SecretsContent(
                 }
                 // Add FAB (primary)
                 FloatingActionButton(
-                    onClick = { viewModel.onEvent(SecretsEvent.AddSecret) }
+                    onClick = { showTemplateChooser = true }
                 ) {
                     Icon(Icons.Default.Add, contentDescription = "Add secret")
                 }
@@ -177,7 +190,13 @@ fun SecretsContent(
             state = editState,
             onStateChange = { viewModel.updateEditState(it) },
             onSave = { viewModel.saveSecret() },
-            onDismiss = { viewModel.dismissAddDialog() }
+            onDismiss = { viewModel.dismissAddDialog() },
+            onDelete = {
+                editState.id?.let { id ->
+                    viewModel.onEvent(SecretsEvent.DeleteSecret(id))
+                    viewModel.dismissAddDialog()
+                }
+            }
         )
     }
 
@@ -221,7 +240,53 @@ fun SecretsContent(
             onDismiss = { qrDialogSecret = null },
             onCopy = {
                 viewModel.onEvent(SecretsEvent.CopySecret(secret.id))
+            },
+            onDelete = {
+                viewModel.onEvent(SecretsEvent.DeleteSecret(secret.id))
+                qrDialogSecret = null
             }
+        )
+    }
+
+    // Template chooser dialog
+    if (showTemplateChooser) {
+        TemplateChooserDialog(
+            onCustomField = {
+                showTemplateChooser = false
+                viewModel.onEvent(SecretsEvent.AddSecret)
+            },
+            onTemplateSelected = { template ->
+                showTemplateChooser = false
+                templateFormState = TemplateFormState(template)
+            },
+            onDismiss = { showTemplateChooser = false }
+        )
+    }
+
+    // Template form dialog
+    templateFormState?.let { formState ->
+        TemplateFormDialog(
+            state = formState,
+            onFieldValueChange = { index, value ->
+                templateFormState = formState.copy(
+                    fieldValues = formState.fieldValues + (index to value)
+                )
+            },
+            onSave = {
+                viewModel.saveTemplate(formState)
+                templateFormState = null
+            },
+            onDismiss = { templateFormState = null }
+        )
+    }
+
+    // Critical Secrets bottom sheet
+    val criticalSecretsState by viewModel.criticalSecretsState.collectAsState()
+    if (criticalSecretsState !is CriticalSecretsSheetState.Hidden) {
+        CriticalSecretsSheet(
+            state = criticalSecretsState,
+            onEvent = { viewModel.onCriticalSecretsEvent(it) },
+            onDismiss = { viewModel.onCriticalSecretsEvent(CriticalSecretsEvent.Close) }
         )
     }
 }
@@ -235,12 +300,11 @@ private fun SecretsList(
     onSearchQueryChanged: (String) -> Unit,
     onSearchBarClose: () -> Unit,
     onSecretClick: (String) -> Unit,
-    onCopyClick: (String) -> Unit,
-    onDeleteClick: (String) -> Unit,
     onTogglePublicProfile: (String) -> Unit,
     onMoveUp: (String) -> Unit,
     onMoveDown: (String) -> Unit,
-    onPublishClick: () -> Unit
+    onPublishClick: () -> Unit,
+    onCriticalSecretsTap: () -> Unit = {}
 ) {
     // Track collapsed categories - start with all expanded
     var collapsedCategories by remember { mutableStateOf(emptySet<SecretCategory>()) }
@@ -290,6 +354,12 @@ private fun SecretsList(
             }
         }
 
+        // Critical Secrets card
+        item {
+            CriticalSecretsCard(onClick = onCriticalSecretsTap)
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+
         // Category sections
         filteredGroups.forEach { (category, categoryItems) ->
             val isCollapsed = collapsedCategories.contains(category)
@@ -319,8 +389,6 @@ private fun SecretsList(
                         isFirst = isFirst,
                         isLast = isLast,
                         onClick = { onSecretClick(secret.id) },
-                        onCopy = { onCopyClick(secret.id) },
-                        onDelete = { onDeleteClick(secret.id) },
                         onTogglePublic = { onTogglePublicProfile(secret.id) },
                         onMoveUp = { onMoveUp(secret.id) },
                         onMoveDown = { onMoveDown(secret.id) }
@@ -505,193 +573,135 @@ private fun SecretRow(
     isFirst: Boolean,
     isLast: Boolean,
     onClick: () -> Unit,
-    onCopy: () -> Unit,
-    onDelete: () -> Unit,
     onTogglePublic: () -> Unit,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit
 ) {
-    var showMenu by remember { mutableStateOf(false) }
-
     Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp),
-        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(8.dp),
-        tonalElevation = 1.dp
+        tonalElevation = 1.dp,
+        shape = RoundedCornerShape(8.dp)
     ) {
         Row(
-            modifier = Modifier.padding(12.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp, horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Type icon
-            Surface(
-                modifier = Modifier.size(40.dp),
-                shape = CircleShape,
-                color = if (secret.isSystemField)
-                    MaterialTheme.colorScheme.tertiaryContainer
-                else
-                    MaterialTheme.colorScheme.secondaryContainer
+            // Up/Down reorder buttons
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Box(contentAlignment = Alignment.Center) {
+                IconButton(
+                    onClick = onMoveUp,
+                    enabled = !isFirst,
+                    modifier = Modifier.size(28.dp)
+                ) {
                     Icon(
-                        imageVector = getSecretTypeIcon(secret.type),
-                        contentDescription = null,
-                        tint = if (secret.isSystemField)
-                            MaterialTheme.colorScheme.onTertiaryContainer
+                        Icons.Default.KeyboardArrowUp,
+                        contentDescription = "Move up",
+                        modifier = Modifier.size(20.dp),
+                        tint = if (!isFirst)
+                            MaterialTheme.colorScheme.onSurfaceVariant
                         else
-                            MaterialTheme.colorScheme.onSecondaryContainer,
-                        modifier = Modifier.size(20.dp)
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f)
+                    )
+                }
+                IconButton(
+                    onClick = onMoveDown,
+                    enabled = !isLast,
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        Icons.Default.KeyboardArrowDown,
+                        contentDescription = "Move down",
+                        modifier = Modifier.size(20.dp),
+                        tint = if (!isLast)
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f)
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(4.dp))
 
-            // Name and value preview
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = secret.name,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+            // Visibility toggle or lock icon for system fields
+            if (secret.isSystemField) {
+                Box(
+                    modifier = Modifier.size(36.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = "System field (always shared)",
+                        modifier = Modifier.size(22.dp),
+                        tint = androidx.compose.ui.graphics.Color(0xFFD4A017) // Gold
                     )
-                    if (secret.isSystemField) {
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Icon(
-                            Icons.Default.Lock,
-                            contentDescription = "System field",
-                            modifier = Modifier.size(14.dp),
-                            tint = MaterialTheme.colorScheme.tertiary
-                        )
-                    }
-                    if (secret.isInPublicProfile) {
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Icon(
-                            Icons.Default.Public,
-                            contentDescription = "In public profile",
-                            modifier = Modifier.size(14.dp),
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
                 }
+            } else if (secret.type == SecretType.PUBLIC_KEY) {
+                IconButton(
+                    onClick = onTogglePublic,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = if (secret.isInPublicProfile) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                        contentDescription = if (secret.isInPublicProfile) "In profile (tap to hide)" else "Hidden (tap to show)",
+                        modifier = Modifier.size(22.dp),
+                        tint = if (secret.isInPublicProfile)
+                            MaterialTheme.colorScheme.primary
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    )
+                }
+            } else {
+                Box(
+                    modifier = Modifier.size(36.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.VisibilityOff,
+                        contentDescription = "Private secret",
+                        modifier = Modifier.size(22.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Name and value - clickable to edit (or show QR for public keys)
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable(onClick = onClick)
+                    .padding(vertical = 4.dp)
+            ) {
+                Text(
+                    text = secret.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = truncateValue(secret.value),
                     style = MaterialTheme.typography.bodySmall,
-                    fontFamily = FontFamily.Monospace,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-
-            // QR code button
-            IconButton(onClick = onClick) {
-                Icon(
-                    Icons.Default.QrCode,
-                    contentDescription = "Show QR code",
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
-
-            // Menu button
-            Box {
-                IconButton(onClick = { showMenu = true }) {
-                    Icon(
-                        Icons.Default.MoreVert,
-                        contentDescription = "More options"
-                    )
-                }
-                DropdownMenu(
-                    expanded = showMenu,
-                    onDismissRequest = { showMenu = false }
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("Copy") },
-                        leadingIcon = { Icon(Icons.Default.ContentCopy, null) },
-                        onClick = {
-                            showMenu = false
-                            onCopy()
-                        }
-                    )
-                    if (secret.type == SecretType.PUBLIC_KEY) {
-                        DropdownMenuItem(
-                            text = {
-                                Text(
-                                    if (secret.isInPublicProfile)
-                                        "Remove from profile"
-                                    else
-                                        "Add to profile"
-                                )
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    if (secret.isInPublicProfile)
-                                        Icons.Default.VisibilityOff
-                                    else
-                                        Icons.Default.Visibility,
-                                    null
-                                )
-                            },
-                            onClick = {
-                                showMenu = false
-                                onTogglePublic()
-                            }
-                        )
-                    }
-                    if (!isFirst) {
-                        DropdownMenuItem(
-                            text = { Text("Move up") },
-                            leadingIcon = { Icon(Icons.Default.ArrowUpward, null) },
-                            onClick = {
-                                showMenu = false
-                                onMoveUp()
-                            }
-                        )
-                    }
-                    if (!isLast) {
-                        DropdownMenuItem(
-                            text = { Text("Move down") },
-                            leadingIcon = { Icon(Icons.Default.ArrowDownward, null) },
-                            onClick = {
-                                showMenu = false
-                                onMoveDown()
-                            }
-                        )
-                    }
-                    if (!secret.isSystemField) {
-                        HorizontalDivider()
-                        DropdownMenuItem(
-                            text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Default.Delete,
-                                    null,
-                                    tint = MaterialTheme.colorScheme.error
-                                )
-                            },
-                            onClick = {
-                                showMenu = false
-                                onDelete()
-                            }
-                        )
-                    }
-                }
-            }
         }
     }
+    Spacer(modifier = Modifier.height(6.dp))
 }
 
 @Composable
 private fun SecretQRDialog(
     secret: MinorSecret,
     onDismiss: () -> Unit,
-    onCopy: () -> Unit
+    onCopy: () -> Unit,
+    onDelete: (() -> Unit)? = null
 ) {
     val qrBitmap = remember(secret.value) {
         generateQrCode(secret.value, 300)
@@ -720,9 +730,10 @@ private fun SecretQRDialog(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                // QR code
+                // QR code - tap to copy
                 qrBitmap?.let { bitmap ->
                     Card(
+                        onClick = onCopy,
                         modifier = Modifier.size(280.dp),
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.surface
@@ -736,11 +747,17 @@ private fun SecretQRDialog(
                         ) {
                             Image(
                                 bitmap = bitmap.asImageBitmap(),
-                                contentDescription = "QR Code for ${secret.name}",
+                                contentDescription = "QR Code for ${secret.name} - tap to copy",
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
                     }
+                    Text(
+                        text = "Tap QR code to copy",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
                 } ?: run {
                     Box(
                         modifier = Modifier.size(280.dp),
@@ -801,6 +818,18 @@ private fun SecretQRDialog(
                     Text("Close")
                 }
             }
+        },
+        dismissButton = {
+            if (onDelete != null && !secret.isSystemField) {
+                TextButton(
+                    onClick = onDelete,
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Delete")
+                }
+            }
         }
     )
 }
@@ -811,7 +840,8 @@ private fun AddSecretDialog(
     state: EditSecretState,
     onStateChange: (EditSecretState) -> Unit,
     onSave: () -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onDelete: () -> Unit = {}
 ) {
     var expandedCategory by remember { mutableStateOf(false) }
     var expandedType by remember { mutableStateOf(false) }
@@ -967,8 +997,21 @@ private fun AddSecretDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Delete button (only shown when editing, not for system fields)
+                if (state.isEditing && state.id?.startsWith("enrollment_") != true) {
+                    TextButton(
+                        onClick = onDelete,
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text("Delete")
+                    }
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel")
+                }
             }
         }
     )
@@ -1046,10 +1089,448 @@ private fun ErrorSecretsContent(message: String, onRetry: () -> Unit) {
     }
 }
 
+// MARK: - Template Chooser
+
+@Composable
+private fun TemplateChooserDialog(
+    onCustomField: () -> Unit,
+    onTemplateSelected: (SecretTemplate) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add Secret") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                // Custom field option (always first)
+                Surface(
+                    onClick = onCustomField,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Edit,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Custom Field",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                            Text(
+                                "Add a single field with custom name and value",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    "TEMPLATES",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
+                )
+
+                // Template options
+                SecretTemplate.all.forEach { template ->
+                    Surface(
+                        onClick = { onTemplateSelected(template) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                getCategoryIcon(template.category),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    template.name,
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    template.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text(
+                                "${template.fields.size} fields",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+@OptIn(ExperimentalMaterial3Api::class)
+private fun TemplateFormDialog(
+    state: TemplateFormState,
+    onFieldValueChange: (Int, String) -> Unit,
+    onSave: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    // Track which date picker is open (by field index)
+    var datePickerFieldIndex by remember { mutableIntStateOf(-1) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    getCategoryIcon(state.template.category),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(state.template.name)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                state.template.fields.forEachIndexed { index, field ->
+                    when (field.inputHint) {
+                        FieldInputHint.DATE, FieldInputHint.EXPIRY_DATE -> {
+                            // Date field - read-only text field that opens a date picker
+                            OutlinedTextField(
+                                value = state.getValue(index),
+                                onValueChange = {},
+                                label = { Text(field.name) },
+                                placeholder = {
+                                    Text(if (field.inputHint == FieldInputHint.EXPIRY_DATE) "MM/YYYY" else "MM/DD/YYYY")
+                                },
+                                readOnly = true,
+                                singleLine = true,
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.CalendarMonth,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { datePickerFieldIndex = index }
+                            )
+                        }
+                        FieldInputHint.COUNTRY -> {
+                            DropdownPickerField(
+                                value = state.getValue(index),
+                                onValueChange = { onFieldValueChange(index, it) },
+                                label = field.name,
+                                options = commonCountries,
+                                leadingIcon = Icons.Default.Public
+                            )
+                        }
+                        FieldInputHint.STATE -> {
+                            DropdownPickerField(
+                                value = state.getValue(index),
+                                onValueChange = { onFieldValueChange(index, it) },
+                                label = field.name,
+                                options = usStatesAndTerritories,
+                                leadingIcon = Icons.Default.LocationOn
+                            )
+                        }
+                        else -> {
+                            // Standard text field with appropriate keyboard
+                            val (keyboardType, capitalization, visualTransformation) = when (field.inputHint) {
+                                FieldInputHint.NUMBER -> Triple(
+                                    KeyboardType.Number,
+                                    KeyboardCapitalization.None,
+                                    VisualTransformation.None
+                                )
+                                FieldInputHint.PIN -> Triple(
+                                    KeyboardType.NumberPassword,
+                                    KeyboardCapitalization.None,
+                                    PasswordVisualTransformation()
+                                )
+                                FieldInputHint.PASSWORD -> Triple(
+                                    KeyboardType.Password,
+                                    KeyboardCapitalization.None,
+                                    PasswordVisualTransformation()
+                                )
+                                else -> Triple(
+                                    KeyboardType.Text,
+                                    KeyboardCapitalization.Words,
+                                    VisualTransformation.None
+                                )
+                            }
+                            OutlinedTextField(
+                                value = state.getValue(index),
+                                onValueChange = { onFieldValueChange(index, it) },
+                                label = { Text(field.name) },
+                                placeholder = {
+                                    if (field.placeholder.isNotEmpty()) {
+                                        Text(field.placeholder)
+                                    }
+                                },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = keyboardType,
+                                    capitalization = capitalization
+                                ),
+                                visualTransformation = visualTransformation,
+                                leadingIcon = {
+                                    Icon(
+                                        getSecretTypeIcon(field.type),
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onSave,
+                enabled = !state.isSaving
+            ) {
+                if (state.isSaving) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Text("Save")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+
+    // Date picker dialog
+    if (datePickerFieldIndex >= 0) {
+        val field = state.template.fields[datePickerFieldIndex]
+        val isExpiryOnly = field.inputHint == FieldInputHint.EXPIRY_DATE
+        val datePickerState = rememberDatePickerState()
+
+        DatePickerDialog(
+            onDismissRequest = { datePickerFieldIndex = -1 },
+            confirmButton = {
+                TextButton(onClick = {
+                    datePickerState.selectedDateMillis?.let { millis ->
+                        val cal = Calendar.getInstance().apply { timeInMillis = millis }
+                        val formatted = if (isExpiryOnly) {
+                            SimpleDateFormat("MM/yyyy", Locale.US).format(cal.time)
+                        } else {
+                            SimpleDateFormat("MM/dd/yyyy", Locale.US).format(cal.time)
+                        }
+                        onFieldValueChange(datePickerFieldIndex, formatted)
+                    }
+                    datePickerFieldIndex = -1
+                }) {
+                    Text("OK")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { datePickerFieldIndex = -1 }) {
+                    Text("Cancel")
+                }
+            }
+        ) {
+            DatePicker(state = datePickerState)
+        }
+    }
+}
+
+/**
+ * Dropdown picker field for selecting from a list of options.
+ * Supports filtering by typing.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DropdownPickerField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    options: List<String>,
+    leadingIcon: ImageVector
+) {
+    var expanded by remember { mutableStateOf(false) }
+    var filterText by remember { mutableStateOf("") }
+
+    val filteredOptions = remember(filterText, options) {
+        if (filterText.isBlank()) options
+        else options.filter { it.contains(filterText, ignoreCase = true) }
+    }
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it }
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = {
+                onValueChange(it)
+                filterText = it
+                expanded = true
+            },
+            label = { Text(label) },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.Words
+            ),
+            leadingIcon = {
+                Icon(leadingIcon, contentDescription = null, modifier = Modifier.size(18.dp))
+            },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .fillMaxWidth()
+                .menuAnchor()
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.heightIn(max = 250.dp)
+        ) {
+            filteredOptions.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option) },
+                    onClick = {
+                        onValueChange(option)
+                        filterText = ""
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+}
+
+// MARK: - Picker Data
+
+private val commonCountries = listOf(
+    "United States", "Canada", "United Kingdom", "Australia", "Germany",
+    "France", "Japan", "South Korea", "India", "Brazil",
+    "Mexico", "Italy", "Spain", "Netherlands", "Switzerland",
+    "Sweden", "Norway", "Denmark", "Finland", "Ireland",
+    "New Zealand", "Singapore", "Israel", "South Africa", "Argentina",
+    "Chile", "Colombia", "Peru", "Philippines", "Thailand",
+    "Vietnam", "Indonesia", "Malaysia", "Taiwan", "Hong Kong",
+    "China", "Russia", "Turkey", "Poland", "Czech Republic",
+    "Austria", "Belgium", "Portugal", "Greece", "Romania",
+    "Hungary", "Ukraine", "Egypt", "Nigeria", "Kenya",
+    "Saudi Arabia", "UAE", "Pakistan", "Bangladesh"
+)
+
+private val usStatesAndTerritories = listOf(
+    "Alabama", "Alaska", "Arizona", "Arkansas", "California",
+    "Colorado", "Connecticut", "Delaware", "Florida", "Georgia",
+    "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa",
+    "Kansas", "Kentucky", "Louisiana", "Maine", "Maryland",
+    "Massachusetts", "Michigan", "Minnesota", "Mississippi", "Missouri",
+    "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey",
+    "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio",
+    "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina",
+    "South Dakota", "Tennessee", "Texas", "Utah", "Vermont",
+    "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming",
+    "District of Columbia", "Puerto Rico", "Guam", "U.S. Virgin Islands",
+    // Canadian provinces
+    "Alberta", "British Columbia", "Manitoba", "New Brunswick",
+    "Newfoundland and Labrador", "Nova Scotia", "Ontario",
+    "Prince Edward Island", "Quebec", "Saskatchewan"
+)
+
+@Composable
+private fun CriticalSecretsCard(onClick: () -> Unit) {
+    Card(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
+        ),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.Lock,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.error,
+                modifier = Modifier.size(28.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Critical Secrets",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+                Text(
+                    text = "Secured in your credential",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.8f)
+                )
+            }
+            Icon(
+                Icons.Default.ChevronRight,
+                contentDescription = "Open",
+                tint = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.6f)
+            )
+        }
+    }
+}
+
 // MARK: - Utility Functions
 
 private fun getCategoryIcon(category: SecretCategory): ImageVector {
     return when (category) {
+        SecretCategory.IDENTITY -> Icons.Default.Fingerprint
         SecretCategory.CRYPTOCURRENCY -> Icons.Default.CurrencyBitcoin
         SecretCategory.BANK_ACCOUNT -> Icons.Default.AccountBalance
         SecretCategory.CREDIT_CARD -> Icons.Default.CreditCard
