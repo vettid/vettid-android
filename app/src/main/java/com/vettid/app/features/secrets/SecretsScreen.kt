@@ -52,6 +52,7 @@ fun SecretsContent(
     viewModel: SecretsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
+    val isRefreshing by viewModel.isRefreshing.collectAsState()
     val editState by viewModel.editState.collectAsState()
     val showAddDialog by viewModel.showAddDialog.collectAsState()
     val showDeleteConfirmDialog by viewModel.showDeleteConfirmDialog.collectAsState()
@@ -105,7 +106,8 @@ fun SecretsContent(
 
             is SecretsState.Empty -> {
                 EmptySecretsContent(
-                    onAddClick = { showTemplateChooser = true }
+                    onAddClick = { showTemplateChooser = true },
+                    onCriticalSecretsTap = { viewModel.onCriticalSecretsEvent(CriticalSecretsEvent.Open) }
                 )
             }
 
@@ -122,7 +124,7 @@ fun SecretsContent(
                 }
 
                 PullToRefreshBox(
-                    isRefreshing = false,
+                    isRefreshing = isRefreshing,
                     onRefresh = { viewModel.onEvent(SecretsEvent.Refresh) },
                     modifier = Modifier.fillMaxSize()
                 ) {
@@ -1018,37 +1020,50 @@ private fun AddSecretDialog(
 }
 
 @Composable
-private fun EmptySecretsContent(onAddClick: () -> Unit) {
-    Box(
+private fun EmptySecretsContent(
+    onAddClick: () -> Unit,
+    onCriticalSecretsTap: () -> Unit = {}
+) {
+    Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(32.dp),
-        contentAlignment = Alignment.Center
+            .padding(16.dp)
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                imageVector = Icons.Default.Key,
-                contentDescription = null,
-                modifier = Modifier.size(64.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-            )
-            Spacer(modifier = Modifier.height(24.dp))
-            Text(
-                text = "No Secrets Yet",
-                style = MaterialTheme.typography.headlineSmall
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "Store API keys, passwords, crypto wallets, and other sensitive data securely.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
-            )
-            Spacer(modifier = Modifier.height(24.dp))
-            Button(onClick = onAddClick) {
-                Icon(Icons.Default.Add, null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Add Secret")
+        // Critical Secrets card at top
+        CriticalSecretsCard(onClick = onCriticalSecretsTap)
+
+        // Empty state centered below
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    imageVector = Icons.Default.Key,
+                    contentDescription = null,
+                    modifier = Modifier.size(64.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                Text(
+                    text = "No Secrets Yet",
+                    style = MaterialTheme.typography.headlineSmall
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Store API keys, passwords, crypto wallets, and other sensitive data securely.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                Button(onClick = onAddClick) {
+                    Icon(Icons.Default.Add, null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Add Secret")
+                }
             }
         }
     }

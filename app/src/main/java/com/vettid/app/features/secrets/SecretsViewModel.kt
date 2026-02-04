@@ -43,6 +43,9 @@ class SecretsViewModel @Inject constructor(
     private val _state = MutableStateFlow<SecretsState>(SecretsState.Loading)
     val state: StateFlow<SecretsState> = _state.asStateFlow()
 
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
     private val _editState = MutableStateFlow(EditSecretState())
     val editState: StateFlow<EditSecretState> = _editState.asStateFlow()
 
@@ -97,7 +100,13 @@ class SecretsViewModel @Inject constructor(
 
     private fun loadSecrets() {
         viewModelScope.launch {
-            _state.value = SecretsState.Loading
+            // Only show full-screen loading on initial load, not on refresh
+            val isRefresh = _state.value !is SecretsState.Loading
+            if (!isRefresh) {
+                _state.value = SecretsState.Loading
+            } else {
+                _isRefreshing.value = true
+            }
 
             try {
                 val secrets = minorSecretsStore.getAllSecrets()
@@ -116,6 +125,8 @@ class SecretsViewModel @Inject constructor(
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load secrets", e)
                 _state.value = SecretsState.Error(e.message ?: "Failed to load secrets")
+            } finally {
+                _isRefreshing.value = false
             }
         }
     }
@@ -691,6 +702,8 @@ class SecretsViewModel @Inject constructor(
 
                 val payload = JsonObject().apply {
                     addProperty("encrypted_password_hash", encResult.encryptedPasswordHash)
+                    addProperty("ephemeral_public_key", encResult.ephemeralPublicKey)
+                    addProperty("nonce", encResult.nonce)
                     addProperty("key_id", utk.keyId)
                 }
 
@@ -776,6 +789,8 @@ class SecretsViewModel @Inject constructor(
                     addProperty("encrypted_credential", encryptedCredential)
                     addProperty("id", secretId)
                     addProperty("encrypted_password_hash", encResult.encryptedPasswordHash)
+                    addProperty("ephemeral_public_key", encResult.ephemeralPublicKey)
+                    addProperty("nonce", encResult.nonce)
                     addProperty("key_id", utk.keyId)
                 }
 
