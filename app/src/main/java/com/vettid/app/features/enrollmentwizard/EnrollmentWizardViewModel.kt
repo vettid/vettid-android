@@ -27,6 +27,7 @@ import com.vettid.app.core.storage.CredentialStore
 import com.vettid.app.core.storage.CustomField
 import com.vettid.app.core.storage.FieldCategory
 import com.vettid.app.core.storage.FieldType
+import com.vettid.app.core.storage.MinorSecretsStore
 import com.vettid.app.core.storage.OptionalField
 import com.vettid.app.core.storage.PersonalDataStore
 import com.vettid.app.features.enrollment.AttestationInfo
@@ -67,6 +68,7 @@ class EnrollmentWizardViewModel @Inject constructor(
     private val pcrInitializationService: PcrInitializationService,
     private val postEnrollmentAuthClient: PostEnrollmentAuthClient,
     private val personalDataStore: PersonalDataStore,
+    private val minorSecretsStore: MinorSecretsStore,
     private val ownerSpaceClient: OwnerSpaceClient,
     private val connectionManager: NatsConnectionManager
 ) : ViewModel() {

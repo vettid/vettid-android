@@ -62,7 +62,6 @@ enum class DataCategory(val displayName: String, val iconName: String) {
     ADDRESS("Address", "location_on"),
     FINANCIAL("Financial", "account_balance"),
     MEDICAL("Medical", "medical_services"),
-    CRYPTO("Cryptocurrency", "currency_bitcoin"),
     OTHER("Other", "category")
 }
 
@@ -109,7 +108,6 @@ data class GroupedByCategory(
                 DataCategory.ADDRESS,
                 DataCategory.FINANCIAL,
                 DataCategory.MEDICAL,
-                DataCategory.CRYPTO,
                 DataCategory.OTHER
             ).forEach { category ->
                 grouped[category]?.let { categoryItems ->

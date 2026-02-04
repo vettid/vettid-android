@@ -1732,7 +1732,6 @@ private fun BusinessCardView(
                 DataCategory.ADDRESS,
                 DataCategory.FINANCIAL,
                 DataCategory.MEDICAL,
-                DataCategory.CRYPTO,
                 DataCategory.OTHER
             )
 
@@ -1869,7 +1868,6 @@ private fun BusinessCardField(item: PersonalDataItem) {
                         item.category == DataCategory.ADDRESS -> Icons.Default.Home
                         item.category == DataCategory.FINANCIAL -> Icons.Default.AccountBalance
                         item.category == DataCategory.MEDICAL -> Icons.Default.LocalHospital
-                        item.category == DataCategory.CRYPTO -> Icons.Default.CurrencyBitcoin
                         else -> Icons.Default.Info
                     },
                     contentDescription = null,

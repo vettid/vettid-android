@@ -1,379 +1,968 @@
 package com.vettid.app.features.secrets
 
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.hilt.navigation.compose.hiltViewModel
-import kotlinx.coroutines.launch
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
+import com.vettid.app.core.storage.MinorSecret
+import com.vettid.app.core.storage.SecretCategory
+import com.vettid.app.core.storage.SecretType
+import kotlinx.coroutines.flow.collectLatest
 
 /**
- * Secrets screen with password-only authentication.
- * IMPORTANT: Secrets should NEVER use biometric authentication.
+ * Secrets screen content for embedding in MainScaffold.
+ * Shows secrets organized by category with QR code display.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SecretsScreenFull(
-    viewModel: SecretsViewModel = hiltViewModel(),
-    onBack: () -> Unit,
-    onNavigateToAddSecret: () -> Unit = {}
+fun SecretsContent(
+    viewModel: SecretsViewModel = hiltViewModel()
 ) {
-    val listState by viewModel.listState.collectAsState()
-    val valueState by viewModel.valueState.collectAsState()
-    val selectedSecretId by viewModel.selectedSecretId.collectAsState()
+    val state by viewModel.state.collectAsState()
+    val editState by viewModel.editState.collectAsState()
+    val showAddDialog by viewModel.showAddDialog.collectAsState()
+    val showDeleteConfirmDialog by viewModel.showDeleteConfirmDialog.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
 
-    var showPasswordDialog by remember { mutableStateOf(false) }
-    var showSecretDialog by remember { mutableStateOf(false) }
+    // Search bar visibility
+    var showSearchBar by remember { mutableStateOf(false) }
+
+    // QR code dialog state
+    var qrDialogSecret by remember { mutableStateOf<MinorSecret?>(null) }
+
+    // Ensure enrollment key is in secrets on first load
+    LaunchedEffect(Unit) {
+        viewModel.ensureEnrollmentKeyInSecrets()
+    }
 
     // Handle effects
     LaunchedEffect(Unit) {
-        viewModel.effects.collect { effect ->
+        viewModel.effects.collectLatest { effect ->
             when (effect) {
-                is SecretsEffect.ShowPasswordPrompt -> {
-                    showPasswordDialog = true
-                }
                 is SecretsEffect.ShowSuccess -> {
-                    showSecretDialog = true
-                    showPasswordDialog = false
                     snackbarHostState.showSnackbar(effect.message)
                 }
                 is SecretsEffect.ShowError -> {
                     snackbarHostState.showSnackbar(effect.message)
                 }
-                is SecretsEffect.SecretCopied -> {
-                    snackbarHostState.showSnackbar("Copied to clipboard (auto-clears in 30s)")
+                is SecretsEffect.ShowQRCode -> {
+                    qrDialogSecret = effect.secret
                 }
-                is SecretsEffect.NavigateToEdit -> {
-                    onNavigateToAddSecret()
+                is SecretsEffect.SecretCopied -> {
+                    snackbarHostState.showSnackbar("Copied to clipboard")
                 }
             }
         }
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Secrets") },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { viewModel.onEvent(SecretsEvent.AddSecret) }) {
-                        Icon(Icons.Default.Add, contentDescription = "Add Secret")
-                    }
-                }
-            )
-        },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        floatingActionButton = {
-            FloatingActionButton(
-                onClick = { viewModel.onEvent(SecretsEvent.AddSecret) }
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "Add Secret")
-            }
-        }
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-            // Security notice
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.tertiaryContainer
-                )
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
+    Box(modifier = Modifier.fillMaxSize()) {
+        when (val currentState = state) {
+            is SecretsState.Loading -> {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Security,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onTertiaryContainer
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = "Secrets require password entry. Biometrics are not used for additional security.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onTertiaryContainer
-                    )
+                    CircularProgressIndicator()
                 }
             }
 
-            // Search bar
-            if (listState is SecretsListState.Loaded) {
-                val loaded = listState as SecretsListState.Loaded
-                OutlinedTextField(
-                    value = loaded.searchQuery,
-                    onValueChange = { viewModel.onEvent(SecretsEvent.SearchQueryChanged(it)) },
-                    placeholder = { Text("Search secrets...") },
-                    leadingIcon = { Icon(Icons.Default.Search, null) },
-                    trailingIcon = {
-                        if (loaded.searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { viewModel.onEvent(SecretsEvent.SearchQueryChanged("")) }) {
-                                Icon(Icons.Default.Clear, "Clear")
-                            }
-                        }
-                    },
-                    singleLine = true,
-                    shape = RoundedCornerShape(24.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
+            is SecretsState.Empty -> {
+                EmptySecretsContent(
+                    onAddClick = { viewModel.onEvent(SecretsEvent.AddSecret) }
                 )
             }
 
-            // Content
-            when (val state = listState) {
-                is SecretsListState.Loading -> LoadingContent()
-                is SecretsListState.Empty -> EmptyContent(
-                    onAddSecret = { viewModel.onEvent(SecretsEvent.AddSecret) }
-                )
-                is SecretsListState.Loaded -> {
-                    val filteredSecrets = if (state.searchQuery.isBlank()) {
-                        state.secrets
-                    } else {
-                        state.secrets.filter {
-                            it.name.contains(state.searchQuery, ignoreCase = true) ||
-                            it.notes?.contains(state.searchQuery, ignoreCase = true) == true
-                        }
-                    }
-                    SecretsList(
-                        secrets = filteredSecrets,
-                        onSecretClick = { viewModel.onEvent(SecretsEvent.SecretClicked(it.id)) }
-                    )
-                }
-                is SecretsListState.Error -> ErrorContent(
-                    message = state.message,
+            is SecretsState.Error -> {
+                ErrorSecretsContent(
+                    message = currentState.message,
                     onRetry = { viewModel.onEvent(SecretsEvent.Refresh) }
                 )
             }
-        }
 
-        // Password dialog
-        if (showPasswordDialog) {
-            PasswordDialog(
-                onDismiss = {
-                    showPasswordDialog = false
-                    viewModel.onEvent(SecretsEvent.HideSecret)
-                },
-                onSubmit = { password ->
-                    selectedSecretId?.let { id ->
-                        viewModel.onEvent(SecretsEvent.RevealSecret(id, password))
-                    }
-                },
-                isVerifying = valueState is SecretValueState.Verifying,
-                errorMessage = (valueState as? SecretValueState.Error)?.message
-            )
-        }
-
-        // Revealed secret dialog
-        if (showSecretDialog && valueState is SecretValueState.Revealed) {
-            val revealedState = valueState as SecretValueState.Revealed
-            val selectedSecret = (listState as? SecretsListState.Loaded)?.secrets
-                ?.find { it.id == selectedSecretId }
-
-            RevealedSecretDialog(
-                secretName = selectedSecret?.name ?: "Secret",
-                secretValue = revealedState.value,
-                autoHideSeconds = revealedState.autoHideSeconds,
-                onDismiss = {
-                    showSecretDialog = false
-                    viewModel.onEvent(SecretsEvent.HideSecret)
-                },
-                onCopy = {
-                    selectedSecretId?.let { viewModel.onEvent(SecretsEvent.CopySecret(it)) }
+            is SecretsState.Loaded -> {
+                val groupedByCategory = remember(currentState.items) {
+                    GroupedByCategory.fromItems(currentState.items)
                 }
-            )
+
+                PullToRefreshBox(
+                    isRefreshing = false,
+                    onRefresh = { viewModel.onEvent(SecretsEvent.Refresh) },
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    SecretsList(
+                        groupedByCategory = groupedByCategory,
+                        hasUnpublishedChanges = currentState.hasUnpublishedChanges,
+                        showSearchBar = showSearchBar,
+                        searchQuery = currentState.searchQuery,
+                        onSearchQueryChanged = { viewModel.onEvent(SecretsEvent.SearchQueryChanged(it)) },
+                        onSearchBarClose = { showSearchBar = false },
+                        onSecretClick = { viewModel.onEvent(SecretsEvent.SecretClicked(it)) },
+                        onCopyClick = { viewModel.onEvent(SecretsEvent.CopySecret(it)) },
+                        onDeleteClick = { viewModel.onEvent(SecretsEvent.DeleteSecret(it)) },
+                        onTogglePublicProfile = { viewModel.onEvent(SecretsEvent.TogglePublicProfile(it)) },
+                        onMoveUp = { viewModel.onEvent(SecretsEvent.MoveSecretUp(it)) },
+                        onMoveDown = { viewModel.onEvent(SecretsEvent.MoveSecretDown(it)) },
+                        onPublishClick = { viewModel.onEvent(SecretsEvent.PublishPublicKeys) }
+                    )
+                }
+            }
         }
+
+        // FABs
+        if (state is SecretsState.Loaded || state is SecretsState.Empty) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Search FAB (smaller)
+                SmallFloatingActionButton(
+                    onClick = { showSearchBar = !showSearchBar },
+                    containerColor = if (showSearchBar)
+                        MaterialTheme.colorScheme.primaryContainer
+                    else
+                        MaterialTheme.colorScheme.secondaryContainer
+                ) {
+                    Icon(
+                        if (showSearchBar) Icons.Default.Close else Icons.Default.Search,
+                        contentDescription = if (showSearchBar) "Close search" else "Search"
+                    )
+                }
+                // Add FAB (primary)
+                FloatingActionButton(
+                    onClick = { viewModel.onEvent(SecretsEvent.AddSecret) }
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Add secret")
+                }
+            }
+        }
+
+        // Snackbar host
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 72.dp)
+        )
+    }
+
+    // Add/Edit dialog
+    if (showAddDialog) {
+        AddSecretDialog(
+            state = editState,
+            onStateChange = { viewModel.updateEditState(it) },
+            onSave = { viewModel.saveSecret() },
+            onDismiss = { viewModel.dismissAddDialog() }
+        )
+    }
+
+    // Delete confirmation dialog
+    showDeleteConfirmDialog?.let { secretId ->
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissDeleteConfirmDialog() },
+            icon = {
+                Icon(
+                    Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+            },
+            title = { Text("Delete Secret?") },
+            text = {
+                Text("This action cannot be undone. The secret will be permanently deleted.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = { viewModel.deleteSecret(secretId) },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.dismissDeleteConfirmDialog() }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // QR Code dialog
+    qrDialogSecret?.let { secret ->
+        SecretQRDialog(
+            secret = secret,
+            onDismiss = { qrDialogSecret = null },
+            onCopy = {
+                viewModel.onEvent(SecretsEvent.CopySecret(secret.id))
+            }
+        )
     }
 }
 
 @Composable
 private fun SecretsList(
-    secrets: List<Secret>,
-    onSecretClick: (Secret) -> Unit
+    groupedByCategory: GroupedByCategory,
+    hasUnpublishedChanges: Boolean,
+    showSearchBar: Boolean,
+    searchQuery: String,
+    onSearchQueryChanged: (String) -> Unit,
+    onSearchBarClose: () -> Unit,
+    onSecretClick: (String) -> Unit,
+    onCopyClick: (String) -> Unit,
+    onDeleteClick: (String) -> Unit,
+    onTogglePublicProfile: (String) -> Unit,
+    onMoveUp: (String) -> Unit,
+    onMoveDown: (String) -> Unit,
+    onPublishClick: () -> Unit
 ) {
+    // Track collapsed categories - start with all expanded
+    var collapsedCategories by remember { mutableStateOf(emptySet<SecretCategory>()) }
+
+    // Filter items based on search
+    val filteredGroups: Map<SecretCategory, List<MinorSecret>> = if (searchQuery.isBlank()) {
+        groupedByCategory.categories
+    } else {
+        groupedByCategory.categories.mapNotNull { (category, items) ->
+            val filtered = items.filter { item ->
+                item.name.contains(searchQuery, ignoreCase = true) ||
+                item.notes?.contains(searchQuery, ignoreCase = true) == true ||
+                item.value.contains(searchQuery, ignoreCase = true)
+            }
+            if (filtered.isNotEmpty()) category to filtered else null
+        }.toMap()
+    }
+
+    // Auto-expand categories with search matches
+    LaunchedEffect(searchQuery, filteredGroups) {
+        if (searchQuery.isNotBlank()) {
+            collapsedCategories = collapsedCategories - filteredGroups.keys
+        }
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(vertical = 8.dp)
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
     ) {
-        items(secrets, key = { it.id }) { secret ->
-            SecretListItem(
-                secret = secret,
-                onClick = { onSecretClick(secret) }
+        // Search bar
+        if (showSearchBar) {
+            item {
+                SearchBar(
+                    query = searchQuery,
+                    onQueryChange = onSearchQueryChanged,
+                    onClose = onSearchBarClose,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+            }
+        }
+
+        // Publish banner (if unpublished public keys)
+        if (hasUnpublishedChanges) {
+            item {
+                PublishBanner(onPublishClick = onPublishClick)
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+        }
+
+        // Category sections
+        filteredGroups.forEach { (category, categoryItems) ->
+            val isCollapsed = collapsedCategories.contains(category)
+
+            item(key = "header_${category.name}") {
+                CollapsibleCategoryHeader(
+                    title = category.displayName,
+                    icon = getCategoryIcon(category),
+                    itemCount = categoryItems.size,
+                    isCollapsed = isCollapsed,
+                    onToggle = {
+                        collapsedCategories = if (isCollapsed) {
+                            collapsedCategories - category
+                        } else {
+                            collapsedCategories + category
+                        }
+                    }
+                )
+            }
+
+            if (!isCollapsed) {
+                itemsIndexed(categoryItems, key = { _, item -> item.id }) { index, secret ->
+                    val isFirst = index == 0
+                    val isLast = index == categoryItems.size - 1
+                    SecretRow(
+                        secret = secret,
+                        isFirst = isFirst,
+                        isLast = isLast,
+                        onClick = { onSecretClick(secret.id) },
+                        onCopy = { onCopyClick(secret.id) },
+                        onDelete = { onDeleteClick(secret.id) },
+                        onTogglePublic = { onTogglePublicProfile(secret.id) },
+                        onMoveUp = { onMoveUp(secret.id) },
+                        onMoveDown = { onMoveDown(secret.id) }
+                    )
+                }
+            }
+
+            item(key = "spacer_${category.name}") {
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+        }
+
+        // Empty search results
+        if (filteredGroups.isEmpty() && searchQuery.isNotBlank()) {
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                            Icons.Default.SearchOff,
+                            contentDescription = null,
+                            modifier = Modifier.size(48.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "No results for \"$searchQuery\"",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        // Bottom padding for FAB
+        item { Spacer(modifier = Modifier.height(72.dp)) }
+    }
+}
+
+@Composable
+private fun SearchBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        modifier = modifier.fillMaxWidth(),
+        placeholder = { Text("Search secrets...") },
+        leadingIcon = {
+            Icon(
+                Icons.Default.Search,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        trailingIcon = {
+            IconButton(onClick = {
+                if (query.isNotEmpty()) {
+                    onQueryChange("")
+                } else {
+                    onClose()
+                }
+            }) {
+                Icon(
+                    if (query.isNotEmpty()) Icons.Default.Clear else Icons.Default.Close,
+                    contentDescription = if (query.isNotEmpty()) "Clear search" else "Close search"
+                )
+            }
+        },
+        singleLine = true,
+        shape = MaterialTheme.shapes.medium
+    )
+}
+
+@Composable
+private fun PublishBanner(onPublishClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.CloudUpload,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Unpublished Public Keys",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                Text(
+                    text = "Publish to update your public profile",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                )
+            }
+            Button(
+                onClick = onPublishClick,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary
+                )
+            ) {
+                Text("Publish")
+            }
+        }
+    }
+}
+
+@Composable
+private fun CollapsibleCategoryHeader(
+    title: String,
+    icon: ImageVector,
+    itemCount: Int,
+    isCollapsed: Boolean,
+    onToggle: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        onClick = onToggle,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.weight(1f)
+            )
+            Surface(
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
+            ) {
+                Text(
+                    text = itemCount.toString(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Icon(
+                if (isCollapsed) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
+                contentDescription = if (isCollapsed) "Expand" else "Collapse",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun SecretListItem(
-    secret: Secret,
-    onClick: () -> Unit
+private fun SecretRow(
+    secret: MinorSecret,
+    isFirst: Boolean,
+    isLast: Boolean,
+    onClick: () -> Unit,
+    onCopy: () -> Unit,
+    onDelete: () -> Unit,
+    onTogglePublic: () -> Unit,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit
 ) {
-    ListItem(
+    var showMenu by remember { mutableStateOf(false) }
+
+    Surface(
         modifier = Modifier
-            .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp),
-        headlineContent = {
-            Text(
-                text = secret.name,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        },
-        supportingContent = {
-            Text(
-                text = secret.category.displayName + (secret.notes?.let { " • $it" } ?: ""),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        },
-        leadingContent = {
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        onClick = onClick,
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(8.dp),
+        tonalElevation = 1.dp
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Type icon
             Surface(
-                modifier = Modifier.size(48.dp),
+                modifier = Modifier.size(40.dp),
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.secondaryContainer
+                color = if (secret.isSystemField)
+                    MaterialTheme.colorScheme.tertiaryContainer
+                else
+                    MaterialTheme.colorScheme.secondaryContainer
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
-                        imageVector = getCategoryIcon(secret.category),
+                        imageVector = getSecretTypeIcon(secret.type),
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSecondaryContainer
+                        tint = if (secret.isSystemField)
+                            MaterialTheme.colorScheme.onTertiaryContainer
+                        else
+                            MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            // Name and value preview
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = secret.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (secret.isSystemField) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            Icons.Default.Lock,
+                            contentDescription = "System field",
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.tertiary
+                        )
+                    }
+                    if (secret.isInPublicProfile) {
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(
+                            Icons.Default.Public,
+                            contentDescription = "In public profile",
+                            modifier = Modifier.size(14.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = truncateValue(secret.value),
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // QR code button
+            IconButton(onClick = onClick) {
+                Icon(
+                    Icons.Default.QrCode,
+                    contentDescription = "Show QR code",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            // Menu button
+            Box {
+                IconButton(onClick = { showMenu = true }) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = "More options"
+                    )
+                }
+                DropdownMenu(
+                    expanded = showMenu,
+                    onDismissRequest = { showMenu = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Copy") },
+                        leadingIcon = { Icon(Icons.Default.ContentCopy, null) },
+                        onClick = {
+                            showMenu = false
+                            onCopy()
+                        }
+                    )
+                    if (secret.type == SecretType.PUBLIC_KEY) {
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    if (secret.isInPublicProfile)
+                                        "Remove from profile"
+                                    else
+                                        "Add to profile"
+                                )
+                            },
+                            leadingIcon = {
+                                Icon(
+                                    if (secret.isInPublicProfile)
+                                        Icons.Default.VisibilityOff
+                                    else
+                                        Icons.Default.Visibility,
+                                    null
+                                )
+                            },
+                            onClick = {
+                                showMenu = false
+                                onTogglePublic()
+                            }
+                        )
+                    }
+                    if (!isFirst) {
+                        DropdownMenuItem(
+                            text = { Text("Move up") },
+                            leadingIcon = { Icon(Icons.Default.ArrowUpward, null) },
+                            onClick = {
+                                showMenu = false
+                                onMoveUp()
+                            }
+                        )
+                    }
+                    if (!isLast) {
+                        DropdownMenuItem(
+                            text = { Text("Move down") },
+                            leadingIcon = { Icon(Icons.Default.ArrowDownward, null) },
+                            onClick = {
+                                showMenu = false
+                                onMoveDown()
+                            }
+                        )
+                    }
+                    if (!secret.isSystemField) {
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text("Delete", color = MaterialTheme.colorScheme.error) },
+                            leadingIcon = {
+                                Icon(
+                                    Icons.Default.Delete,
+                                    null,
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            },
+                            onClick = {
+                                showMenu = false
+                                onDelete()
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SecretQRDialog(
+    secret: MinorSecret,
+    onDismiss: () -> Unit,
+    onCopy: () -> Unit
+) {
+    val qrBitmap = remember(secret.value) {
+        generateQrCode(secret.value, 300)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    getSecretTypeIcon(secret.type),
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = secret.name,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        },
+        text = {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                // QR code
+                qrBitmap?.let { bitmap ->
+                    Card(
+                        modifier = Modifier.size(280.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface
+                        )
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Image(
+                                bitmap = bitmap.asImageBitmap(),
+                                contentDescription = "QR Code for ${secret.name}",
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+                } ?: run {
+                    Box(
+                        modifier = Modifier.size(280.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "Could not generate QR code",
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Full value display
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant
+                ) {
+                    SelectionContainer {
+                        Text(
+                            text = secret.value,
+                            modifier = Modifier.padding(12.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 6,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                // Notes if present
+                secret.notes?.let { notes ->
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = notes,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
                     )
                 }
             }
         },
-        trailingContent = {
-            Icon(
-                imageVector = Icons.Default.Lock,
-                contentDescription = "Locked",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+        confirmButton = {
+            Row {
+                TextButton(onClick = onCopy) {
+                    Icon(
+                        Icons.Default.ContentCopy,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Copy")
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                TextButton(onClick = onDismiss) {
+                    Text("Close")
+                }
+            }
         }
     )
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PasswordDialog(
-    onDismiss: () -> Unit,
-    onSubmit: (String) -> Unit,
-    isVerifying: Boolean,
-    errorMessage: String?
+private fun AddSecretDialog(
+    state: EditSecretState,
+    onStateChange: (EditSecretState) -> Unit,
+    onSave: () -> Unit,
+    onDismiss: () -> Unit
 ) {
-    var password by remember { mutableStateOf("") }
-    var showPassword by remember { mutableStateOf(false) }
+    var expandedCategory by remember { mutableStateOf(false) }
+    var expandedType by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        icon = {
-            Icon(
-                imageVector = Icons.Default.Lock,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary
-            )
-        },
         title = {
-            Text("Enter Password")
+            Text(if (state.isEditing) "Edit Secret" else "Add Secret")
         },
         text = {
-            Column {
-                Text(
-                    text = "Password is required to view this secret. Biometrics cannot be used.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                // Name field
                 OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    label = { Text("Password") },
+                    value = state.name,
+                    onValueChange = { onStateChange(state.copy(name = it, nameError = null)) },
+                    label = { Text("Name") },
+                    placeholder = { Text("e.g., Bitcoin Wallet") },
+                    isError = state.nameError != null,
+                    supportingText = state.nameError?.let { { Text(it) } },
                     singleLine = true,
-                    visualTransformation = if (showPassword) {
-                        VisualTransformation.None
-                    } else {
-                        PasswordVisualTransformation()
-                    },
-                    trailingIcon = {
-                        IconButton(onClick = { showPassword = !showPassword }) {
-                            Icon(
-                                imageVector = if (showPassword) {
-                                    Icons.Default.VisibilityOff
-                                } else {
-                                    Icons.Default.Visibility
-                                },
-                                contentDescription = if (showPassword) "Hide" else "Show"
-                            )
-                        }
-                    },
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Password,
-                        imeAction = ImeAction.Done
-                    ),
-                    keyboardActions = KeyboardActions(
-                        onDone = { onSubmit(password) }
-                    ),
-                    isError = errorMessage != null,
-                    supportingText = errorMessage?.let {
-                        { Text(it, color = MaterialTheme.colorScheme.error) }
-                    },
-                    enabled = !isVerifying,
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                if (isVerifying) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                // Category dropdown
+                ExposedDropdownMenuBox(
+                    expanded = expandedCategory,
+                    onExpandedChange = { expandedCategory = it }
+                ) {
+                    OutlinedTextField(
+                        value = state.category.displayName,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Category") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedCategory) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = expandedCategory,
+                        onDismissRequest = { expandedCategory = false }
+                    ) {
+                        SecretCategory.entries.forEach { category ->
+                            DropdownMenuItem(
+                                text = { Text(category.displayName) },
+                                leadingIcon = { Icon(getCategoryIcon(category), null) },
+                                onClick = {
+                                    onStateChange(state.copy(category = category))
+                                    expandedCategory = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // Type dropdown
+                ExposedDropdownMenuBox(
+                    expanded = expandedType,
+                    onExpandedChange = { expandedType = it }
+                ) {
+                    OutlinedTextField(
+                        value = state.type.displayName,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Type") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedType) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor()
+                    )
+                    ExposedDropdownMenu(
+                        expanded = expandedType,
+                        onDismissRequest = { expandedType = false }
+                    ) {
+                        SecretType.entries.forEach { type ->
+                            DropdownMenuItem(
+                                text = { Text(type.displayName) },
+                                leadingIcon = { Icon(getSecretTypeIcon(type), null) },
+                                onClick = {
+                                    onStateChange(state.copy(type = type))
+                                    expandedType = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                // Value field
+                OutlinedTextField(
+                    value = state.value,
+                    onValueChange = { onStateChange(state.copy(value = it, valueError = null)) },
+                    label = { Text("Value") },
+                    placeholder = { Text("Secret value...") },
+                    isError = state.valueError != null,
+                    supportingText = state.valueError?.let { { Text(it) } },
+                    minLines = 2,
+                    maxLines = 4,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // Notes field (optional)
+                OutlinedTextField(
+                    value = state.notes,
+                    onValueChange = { onStateChange(state.copy(notes = it)) },
+                    label = { Text("Notes (optional)") },
+                    placeholder = { Text("Additional notes...") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // Public profile toggle (only for PUBLIC_KEY)
+                if (state.type == SecretType.PUBLIC_KEY) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Public,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Share to public profile",
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Switch(
+                            checked = state.isInPublicProfile,
+                            onCheckedChange = { onStateChange(state.copy(isInPublicProfile = it)) }
+                        )
+                    }
                 }
             }
         },
         confirmButton = {
             Button(
-                onClick = { onSubmit(password) },
-                enabled = password.isNotEmpty() && !isVerifying
+                onClick = onSave,
+                enabled = !state.isSaving
             ) {
-                if (isVerifying) {
+                if (state.isSaving) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(16.dp),
                         strokeWidth = 2.dp
                     )
                 } else {
-                    Text("Unlock")
+                    Text("Save")
                 }
             }
         },
@@ -386,98 +975,7 @@ private fun PasswordDialog(
 }
 
 @Composable
-private fun RevealedSecretDialog(
-    secretName: String,
-    secretValue: String,
-    autoHideSeconds: Int,
-    onDismiss: () -> Unit,
-    onCopy: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        icon = {
-            Icon(
-                imageVector = Icons.Default.LockOpen,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary
-            )
-        },
-        title = {
-            Text(secretName)
-        },
-        text = {
-            Column {
-                // Auto-hide warning
-                Card(
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
-                    )
-                ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Timer,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.error
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Auto-hides in ${autoHideSeconds}s",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Secret value
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant
-                ) {
-                    SelectionContainer {
-                        Text(
-                            text = secretValue,
-                            modifier = Modifier.padding(16.dp),
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            Button(onClick = onCopy) {
-                Icon(Icons.Default.ContentCopy, null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Copy")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Close")
-            }
-        }
-    )
-}
-
-@Composable
-private fun LoadingContent() {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        CircularProgressIndicator()
-    }
-}
-
-@Composable
-private fun EmptyContent(onAddSecret: () -> Unit) {
+private fun EmptySecretsContent(onAddClick: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -486,10 +984,10 @@ private fun EmptyContent(onAddSecret: () -> Unit) {
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(
-                imageVector = Icons.Default.Lock,
+                imageVector = Icons.Default.Key,
                 contentDescription = null,
                 modifier = Modifier.size(64.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
             )
             Spacer(modifier = Modifier.height(24.dp))
             Text(
@@ -498,13 +996,13 @@ private fun EmptyContent(onAddSecret: () -> Unit) {
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Store API keys, passwords, and other sensitive data securely.",
+                text = "Store API keys, passwords, crypto wallets, and other sensitive data securely.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
             Spacer(modifier = Modifier.height(24.dp))
-            Button(onClick = onAddSecret) {
+            Button(onClick = onAddClick) {
                 Icon(Icons.Default.Add, null)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("Add Secret")
@@ -514,7 +1012,7 @@ private fun EmptyContent(onAddSecret: () -> Unit) {
 }
 
 @Composable
-private fun ErrorContent(message: String, onRetry: () -> Unit) {
+private fun ErrorSecretsContent(message: String, onRetry: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -548,13 +1046,93 @@ private fun ErrorContent(message: String, onRetry: () -> Unit) {
     }
 }
 
+// MARK: - Utility Functions
+
 private fun getCategoryIcon(category: SecretCategory): ImageVector {
     return when (category) {
-        SecretCategory.PASSWORD -> Icons.Default.Password
+        SecretCategory.CRYPTOCURRENCY -> Icons.Default.CurrencyBitcoin
+        SecretCategory.BANK_ACCOUNT -> Icons.Default.AccountBalance
+        SecretCategory.CREDIT_CARD -> Icons.Default.CreditCard
+        SecretCategory.INSURANCE -> Icons.Default.HealthAndSafety
+        SecretCategory.DRIVERS_LICENSE -> Icons.Default.Badge
+        SecretCategory.PASSPORT -> Icons.Default.Flight
+        SecretCategory.SSN -> Icons.Default.Security
         SecretCategory.API_KEY -> Icons.Default.Key
+        SecretCategory.PASSWORD -> Icons.Default.Password
+        SecretCategory.WIFI -> Icons.Default.Wifi
         SecretCategory.CERTIFICATE -> Icons.Default.VerifiedUser
-        SecretCategory.CRYPTO_KEY -> Icons.Default.EnhancedEncryption
         SecretCategory.NOTE -> Icons.Default.Notes
-        SecretCategory.OTHER -> Icons.Default.Lock
+        SecretCategory.OTHER -> Icons.Default.Category
+    }
+}
+
+private fun getSecretTypeIcon(type: SecretType): ImageVector {
+    return when (type) {
+        SecretType.PUBLIC_KEY -> Icons.Default.VpnKey
+        SecretType.PRIVATE_KEY -> Icons.Default.Key
+        SecretType.TOKEN -> Icons.Default.Token
+        SecretType.PASSWORD -> Icons.Default.Password
+        SecretType.PIN -> Icons.Default.Pin
+        SecretType.ACCOUNT_NUMBER -> Icons.Default.Numbers
+        SecretType.SEED_PHRASE -> Icons.Default.FormatListNumbered
+        SecretType.TEXT -> Icons.Default.TextFields
+    }
+}
+
+private fun truncateValue(value: String): String {
+    return if (value.length <= 40) {
+        value
+    } else {
+        "${value.take(16)}...${value.takeLast(8)}"
+    }
+}
+
+private fun generateQrCode(content: String, size: Int): Bitmap? {
+    return try {
+        val writer = QRCodeWriter()
+        val bitMatrix = writer.encode(content, BarcodeFormat.QR_CODE, size, size)
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.RGB_565)
+        for (x in 0 until size) {
+            for (y in 0 until size) {
+                bitmap.setPixel(
+                    x, y,
+                    if (bitMatrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE
+                )
+            }
+        }
+        bitmap
+    } catch (e: Exception) {
+        null
+    }
+}
+
+// MARK: - Legacy Compatibility
+
+/**
+ * Full screen version for backwards compatibility.
+ * Use SecretsContent for embedding in MainScaffold.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun SecretsScreenFull(
+    viewModel: SecretsViewModel = hiltViewModel(),
+    onBack: () -> Unit,
+    onNavigateToAddSecret: () -> Unit = {}
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { Text("Secrets") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Box(modifier = Modifier.padding(padding)) {
+            SecretsContent(viewModel = viewModel)
+        }
     }
 }

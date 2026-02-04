@@ -743,11 +743,18 @@ private fun RevealedSecretDialog(
 
 private fun getMinorCategoryIcon(category: SecretCategory): ImageVector {
     return when (category) {
-        SecretCategory.PASSWORD -> Icons.Default.Password
+        SecretCategory.CRYPTOCURRENCY -> Icons.Default.CurrencyBitcoin
+        SecretCategory.BANK_ACCOUNT -> Icons.Default.AccountBalance
+        SecretCategory.CREDIT_CARD -> Icons.Default.CreditCard
+        SecretCategory.INSURANCE -> Icons.Default.HealthAndSafety
+        SecretCategory.DRIVERS_LICENSE -> Icons.Default.Badge
+        SecretCategory.PASSPORT -> Icons.Default.Flight
+        SecretCategory.SSN -> Icons.Default.Security
         SecretCategory.API_KEY -> Icons.Default.Key
+        SecretCategory.PASSWORD -> Icons.Default.Password
         SecretCategory.WIFI -> Icons.Default.Wifi
-        SecretCategory.NOTE -> Icons.Default.Notes
         SecretCategory.CERTIFICATE -> Icons.Default.VerifiedUser
+        SecretCategory.NOTE -> Icons.Default.Notes
         SecretCategory.OTHER -> Icons.Default.Lock
     }
 }

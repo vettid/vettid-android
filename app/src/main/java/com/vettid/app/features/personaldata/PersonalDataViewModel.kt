@@ -437,7 +437,8 @@ class PersonalDataViewModel @Inject constructor(
             namespace.startsWith("address.") -> DataCategory.ADDRESS
             namespace.startsWith("financial.") -> DataCategory.FINANCIAL
             namespace.startsWith("medical.") -> DataCategory.MEDICAL
-            namespace.startsWith("crypto.") -> DataCategory.CRYPTO
+            // Note: crypto.* moved to Secrets screen, map to OTHER for backward compatibility
+            namespace.startsWith("crypto.") -> DataCategory.OTHER
             else -> DataCategory.OTHER
         }
     }
@@ -945,7 +946,6 @@ class PersonalDataViewModel @Inject constructor(
             DataCategory.ADDRESS -> "address.custom"
             DataCategory.FINANCIAL -> "financial.custom"
             DataCategory.MEDICAL -> "medical.custom"
-            DataCategory.CRYPTO -> "crypto.custom"
             DataCategory.OTHER -> "other.custom"
         }
         val sanitizedName = name.lowercase().replace(" ", "_").replace(Regex("[^a-z0-9_]"), "")

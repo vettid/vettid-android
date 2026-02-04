@@ -46,6 +46,7 @@ import com.vettid.app.features.feed.FeedContent
 import com.vettid.app.features.archive.ArchiveScreenFull
 import com.vettid.app.features.archive.ArchiveContent
 import com.vettid.app.features.secrets.SecretsScreenFull
+import com.vettid.app.features.secrets.SecretsContent
 import com.vettid.app.features.secrets.AddSecretScreen
 import com.vettid.app.features.setup.FirstTimeSetupScreen
 import com.vettid.app.features.vault.DeployVaultScreen
@@ -1684,11 +1685,7 @@ private fun PlaceholderScreenWithBack(
 
 @Composable
 private fun SecretsContentEmbedded(onSecretClick: (String) -> Unit = {}) {
-    PlaceholderSection(
-        icon = Icons.Default.Lock,
-        title = "Secrets",
-        description = "Store and manage sensitive secrets with password-only access."
-    )
+    SecretsContent()
 }
 
 @Composable

@@ -1,38 +1,53 @@
 package com.vettid.app.features.secrets
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.vettid.app.core.crypto.CryptoManager
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
+import com.vettid.app.core.nats.NatsConnectionManager
+import com.vettid.app.core.nats.OwnerSpaceClient
+import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.core.storage.CredentialStore
+import com.vettid.app.core.storage.MinorSecret
+import com.vettid.app.core.storage.MinorSecretsStore
+import com.vettid.app.core.storage.SecretCategory
+import com.vettid.app.core.storage.SecretType
+import com.vettid.app.worker.SecretsSyncWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.*
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.*
-import java.time.Instant
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 private const val TAG = "SecretsViewModel"
-private const val AUTO_HIDE_SECONDS = 30
 
 @HiltViewModel
 class SecretsViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val minorSecretsStore: MinorSecretsStore,
+    private val ownerSpaceClient: OwnerSpaceClient,
     private val credentialStore: CredentialStore,
-    private val cryptoManager: CryptoManager
+    private val connectionManager: NatsConnectionManager
 ) : ViewModel() {
 
-    private val _listState = MutableStateFlow<SecretsListState>(SecretsListState.Loading)
-    val listState: StateFlow<SecretsListState> = _listState.asStateFlow()
+    private val _state = MutableStateFlow<SecretsState>(SecretsState.Loading)
+    val state: StateFlow<SecretsState> = _state.asStateFlow()
 
-    private val _valueState = MutableStateFlow<SecretValueState>(SecretValueState.Hidden)
-    val valueState: StateFlow<SecretValueState> = _valueState.asStateFlow()
-
-    private val _selectedSecretId = MutableStateFlow<String?>(null)
-    val selectedSecretId: StateFlow<String?> = _selectedSecretId.asStateFlow()
+    private val _editState = MutableStateFlow(EditSecretState())
+    val editState: StateFlow<EditSecretState> = _editState.asStateFlow()
 
     private val _effects = MutableSharedFlow<SecretsEffect>()
     val effects: SharedFlow<SecretsEffect> = _effects.asSharedFlow()
 
-    private var autoHideJob: Job? = null
+    private val _showAddDialog = MutableStateFlow(false)
+    val showAddDialog: StateFlow<Boolean> = _showAddDialog.asStateFlow()
+
+    private val _showDeleteConfirmDialog = MutableStateFlow<String?>(null)
+    val showDeleteConfirmDialog: StateFlow<String?> = _showDeleteConfirmDialog.asStateFlow()
 
     init {
         loadSecrets()
@@ -41,227 +56,487 @@ class SecretsViewModel @Inject constructor(
     fun onEvent(event: SecretsEvent) {
         when (event) {
             is SecretsEvent.SearchQueryChanged -> updateSearchQuery(event.query)
-            is SecretsEvent.SecretClicked -> selectSecret(event.secretId)
-            is SecretsEvent.RevealSecret -> revealSecret(event.secretId, event.password)
-            is SecretsEvent.CopySecret -> copySecret(event.secretId)
-            is SecretsEvent.HideSecret -> hideSecret()
-            is SecretsEvent.AddSecret -> addSecret()
-            is SecretsEvent.DeleteSecret -> deleteSecret(event.secretId)
+            is SecretsEvent.SecretClicked -> showSecretQRCode(event.secretId)
+            is SecretsEvent.CopySecret -> copySecretToClipboard(event.secretId)
+            is SecretsEvent.ShowQRCode -> showSecretQRCode(event.secretId)
+            is SecretsEvent.AddSecret -> showAddSecretDialog()
+            is SecretsEvent.DeleteSecret -> confirmDeleteSecret(event.secretId)
+            is SecretsEvent.TogglePublicProfile -> togglePublicProfile(event.secretId)
+            is SecretsEvent.MoveSecretUp -> moveSecretUp(event.secretId)
+            is SecretsEvent.MoveSecretDown -> moveSecretDown(event.secretId)
             is SecretsEvent.Refresh -> loadSecrets()
+            is SecretsEvent.PublishPublicKeys -> publishPublicKeys()
         }
     }
+
+    // MARK: - Load Secrets
 
     private fun loadSecrets() {
         viewModelScope.launch {
-            _listState.value = SecretsListState.Loading
-            try {
-                // For now, show mock data to demonstrate the UI
-                // In production, this would fetch from encrypted storage
-                val mockSecrets = generateMockSecrets()
+            _state.value = SecretsState.Loading
 
-                if (mockSecrets.isEmpty()) {
-                    _listState.value = SecretsListState.Empty
+            try {
+                val secrets = minorSecretsStore.getAllSecrets()
+                val hasUnpublished = checkForUnpublishedChanges(secrets)
+
+                if (secrets.isEmpty()) {
+                    _state.value = SecretsState.Empty
                 } else {
-                    _listState.value = SecretsListState.Loaded(secrets = mockSecrets)
+                    _state.value = SecretsState.Loaded(
+                        items = secrets,
+                        hasUnpublishedChanges = hasUnpublished
+                    )
                 }
+
+                Log.d(TAG, "Loaded ${secrets.size} secrets")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load secrets", e)
-                _listState.value = SecretsListState.Error(e.message ?: "Failed to load secrets")
+                _state.value = SecretsState.Error(e.message ?: "Failed to load secrets")
             }
         }
     }
 
+    private fun checkForUnpublishedChanges(secrets: List<MinorSecret>): Boolean {
+        return secrets.any {
+            it.type == SecretType.PUBLIC_KEY &&
+            it.isInPublicProfile &&
+            it.syncStatus == com.vettid.app.core.storage.SyncStatus.PENDING
+        }
+    }
+
+    // MARK: - Search
+
     private fun updateSearchQuery(query: String) {
-        val currentState = _listState.value
-        if (currentState is SecretsListState.Loaded) {
-            _listState.value = currentState.copy(searchQuery = query)
+        val currentState = _state.value
+        if (currentState is SecretsState.Loaded) {
+            if (query.isBlank()) {
+                // Reset to full list
+                val allSecrets = minorSecretsStore.getAllSecrets()
+                _state.value = currentState.copy(
+                    items = allSecrets,
+                    searchQuery = ""
+                )
+            } else {
+                // Filter secrets
+                val filtered = minorSecretsStore.searchSecrets(query)
+                _state.value = currentState.copy(
+                    items = filtered,
+                    searchQuery = query
+                )
+            }
         }
     }
 
-    private fun selectSecret(secretId: String) {
-        _selectedSecretId.value = secretId
-        _valueState.value = SecretValueState.PasswordRequired
+    // MARK: - QR Code Display
+
+    private fun showSecretQRCode(secretId: String) {
         viewModelScope.launch {
-            _effects.emit(SecretsEffect.ShowPasswordPrompt)
+            val secret = minorSecretsStore.getSecret(secretId)
+            if (secret != null) {
+                _effects.emit(SecretsEffect.ShowQRCode(secret))
+            } else {
+                _effects.emit(SecretsEffect.ShowError("Secret not found"))
+            }
         }
     }
 
-    /**
-     * Reveals a secret value after password verification.
-     * IMPORTANT: This ONLY accepts password authentication, never biometrics.
-     */
-    private fun revealSecret(secretId: String, password: String) {
-        viewModelScope.launch {
-            _valueState.value = SecretValueState.Verifying
+    // MARK: - Clipboard
 
+    private fun copySecretToClipboard(secretId: String) {
+        viewModelScope.launch {
+            val secret = minorSecretsStore.getSecret(secretId)
+            if (secret != null) {
+                try {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    val clip = ClipData.newPlainText(secret.name, secret.value)
+                    clipboard.setPrimaryClip(clip)
+                    _effects.emit(SecretsEffect.SecretCopied)
+                    Log.d(TAG, "Copied secret to clipboard: ${secret.name}")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to copy to clipboard", e)
+                    _effects.emit(SecretsEffect.ShowError("Failed to copy"))
+                }
+            }
+        }
+    }
+
+    // MARK: - Add/Edit Secret Dialog
+
+    fun showAddSecretDialog() {
+        _editState.value = EditSecretState()
+        _showAddDialog.value = true
+    }
+
+    fun showEditSecretDialog(secretId: String) {
+        val secret = minorSecretsStore.getSecret(secretId)
+        if (secret != null) {
+            _editState.value = EditSecretState(
+                id = secret.id,
+                name = secret.name,
+                value = secret.value,
+                type = secret.type,
+                category = secret.category,
+                notes = secret.notes ?: "",
+                isInPublicProfile = secret.isInPublicProfile,
+                isEditing = true
+            )
+            _showAddDialog.value = true
+        }
+    }
+
+    fun dismissAddDialog() {
+        _showAddDialog.value = false
+        _editState.value = EditSecretState()
+    }
+
+    fun updateEditState(newState: EditSecretState) {
+        _editState.value = newState
+    }
+
+    fun saveSecret() {
+        val currentEdit = _editState.value
+
+        // Validate
+        var hasError = false
+        var newEditState = currentEdit
+
+        if (currentEdit.name.isBlank()) {
+            newEditState = newEditState.copy(nameError = "Name is required")
+            hasError = true
+        }
+        if (currentEdit.value.isBlank()) {
+            newEditState = newEditState.copy(valueError = "Value is required")
+            hasError = true
+        }
+
+        if (hasError) {
+            _editState.value = newEditState
+            return
+        }
+
+        _editState.value = currentEdit.copy(isSaving = true)
+
+        viewModelScope.launch {
             try {
-                // Verify password against stored hash
-                val isValid = verifyPassword(password)
+                if (currentEdit.isEditing && currentEdit.id != null) {
+                    // Update existing secret
+                    val existing = minorSecretsStore.getSecret(currentEdit.id)
+                    if (existing != null) {
+                        val updated = existing.copy(
+                            name = currentEdit.name,
+                            value = currentEdit.value,
+                            type = currentEdit.type,
+                            category = currentEdit.category,
+                            notes = currentEdit.notes.takeIf { it.isNotBlank() },
+                            isInPublicProfile = if (currentEdit.type == SecretType.PUBLIC_KEY)
+                                currentEdit.isInPublicProfile else false
+                        )
+                        minorSecretsStore.updateSecret(updated)
+                        Log.i(TAG, "Updated secret: ${updated.name}")
+                    }
+                } else {
+                    // Add new secret
+                    val newSecret = minorSecretsStore.addSecret(
+                        name = currentEdit.name,
+                        value = currentEdit.value,
+                        category = currentEdit.category,
+                        type = currentEdit.type,
+                        notes = currentEdit.notes.takeIf { it.isNotBlank() },
+                        isInPublicProfile = if (currentEdit.type == SecretType.PUBLIC_KEY)
+                            currentEdit.isInPublicProfile else false
+                    )
+                    Log.i(TAG, "Added new secret: ${newSecret.name}")
+                }
 
-                if (!isValid) {
-                    _valueState.value = SecretValueState.Error("Invalid password")
-                    _effects.emit(SecretsEffect.ShowError("Invalid password"))
+                // Trigger sync
+                SecretsSyncWorker.scheduleImmediate(context)
+
+                dismissAddDialog()
+                loadSecrets()
+                _effects.emit(SecretsEffect.ShowSuccess("Secret saved"))
+
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to save secret", e)
+                _editState.value = currentEdit.copy(isSaving = false)
+                _effects.emit(SecretsEffect.ShowError(e.message ?: "Failed to save"))
+            }
+        }
+    }
+
+    // MARK: - Delete Secret
+
+    private fun confirmDeleteSecret(secretId: String) {
+        val secret = minorSecretsStore.getSecret(secretId)
+        if (secret?.isSystemField == true) {
+            viewModelScope.launch {
+                _effects.emit(SecretsEffect.ShowError("Cannot delete system fields"))
+            }
+            return
+        }
+        _showDeleteConfirmDialog.value = secretId
+    }
+
+    fun dismissDeleteConfirmDialog() {
+        _showDeleteConfirmDialog.value = null
+    }
+
+    fun deleteSecret(secretId: String) {
+        viewModelScope.launch {
+            try {
+                val secret = minorSecretsStore.getSecret(secretId)
+                if (secret?.isSystemField == true) {
+                    _effects.emit(SecretsEffect.ShowError("Cannot delete system fields"))
                     return@launch
                 }
 
-                // Decrypt and reveal the secret
-                val secretValue = decryptSecret(secretId, password)
+                minorSecretsStore.deleteSecret(secretId)
 
-                _valueState.value = SecretValueState.Revealed(
-                    value = secretValue,
-                    autoHideSeconds = AUTO_HIDE_SECONDS
-                )
+                // Also delete from vault
+                try {
+                    val payload = JsonObject().apply {
+                        addProperty("id", secretId)
+                    }
+                    ownerSpaceClient.sendToVault("secrets.datastore.delete", payload)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to delete from vault (will sync later)", e)
+                }
 
-                // Start auto-hide timer
-                startAutoHideTimer()
-
-                _effects.emit(SecretsEffect.ShowSuccess("Secret revealed"))
-
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to reveal secret", e)
-                _valueState.value = SecretValueState.Error(e.message ?: "Failed to reveal secret")
-                _effects.emit(SecretsEffect.ShowError(e.message ?: "Failed to reveal secret"))
-            }
-        }
-    }
-
-    private fun hideSecret() {
-        autoHideJob?.cancel()
-        _valueState.value = SecretValueState.Hidden
-        _selectedSecretId.value = null
-    }
-
-    private fun copySecret(secretId: String) {
-        viewModelScope.launch {
-            // Would copy to clipboard in production
-            // Note: Should use SecureClipboard and auto-clear after timeout
-            _effects.emit(SecretsEffect.SecretCopied)
-        }
-    }
-
-    private fun addSecret() {
-        viewModelScope.launch {
-            // Navigate to add secret screen
-            _effects.emit(SecretsEffect.NavigateToEdit("new"))
-        }
-    }
-
-    private fun deleteSecret(secretId: String) {
-        viewModelScope.launch {
-            try {
-                // In production, would delete from encrypted storage
+                dismissDeleteConfirmDialog()
                 loadSecrets()
                 _effects.emit(SecretsEffect.ShowSuccess("Secret deleted"))
+                Log.i(TAG, "Deleted secret: $secretId")
+
             } catch (e: Exception) {
-                _effects.emit(SecretsEffect.ShowError("Failed to delete secret"))
+                Log.e(TAG, "Failed to delete secret", e)
+                _effects.emit(SecretsEffect.ShowError(e.message ?: "Failed to delete"))
             }
         }
     }
 
-    private fun startAutoHideTimer() {
-        autoHideJob?.cancel()
-        autoHideJob = viewModelScope.launch {
-            for (remaining in AUTO_HIDE_SECONDS downTo 1) {
-                val currentState = _valueState.value
-                if (currentState is SecretValueState.Revealed) {
-                    _valueState.value = currentState.copy(autoHideSeconds = remaining)
-                }
-                delay(1000)
-            }
-            hideSecret()
-        }
-    }
+    // MARK: - Public Profile Toggle
 
-    /**
-     * Verifies the user's password.
-     * Uses Argon2id hashing to compare against stored hash.
-     *
-     * Note: In production, this would verify against a locally stored password hash
-     * or make a server request to verify. For now, we accept any non-empty password
-     * as the actual password verification happens during enrollment/auth flows.
-     */
-    private suspend fun verifyPassword(password: String): Boolean {
-        return withContext(Dispatchers.Default) {
+    private fun togglePublicProfile(secretId: String) {
+        viewModelScope.launch {
             try {
-                // Get the stored password salt
-                val saltBytes = credentialStore.getPasswordSaltBytes()
-                if (saltBytes == null) {
-                    Log.w(TAG, "No password salt stored, accepting password")
-                    return@withContext password.isNotEmpty()
+                val result = minorSecretsStore.togglePublicProfile(secretId)
+                if (result) {
+                    loadSecrets()
+                    _effects.emit(SecretsEffect.ShowSuccess("Public profile updated"))
+                } else {
+                    _effects.emit(SecretsEffect.ShowError("Only public keys can be shared to profile"))
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to toggle public profile", e)
+                _effects.emit(SecretsEffect.ShowError(e.message ?: "Failed to update"))
+            }
+        }
+    }
+
+    // MARK: - Reordering
+
+    private fun moveSecretUp(secretId: String) {
+        viewModelScope.launch {
+            val result = minorSecretsStore.moveSecretUp(secretId)
+            if (result) {
+                loadSecrets()
+            }
+        }
+    }
+
+    private fun moveSecretDown(secretId: String) {
+        viewModelScope.launch {
+            val result = minorSecretsStore.moveSecretDown(secretId)
+            if (result) {
+                loadSecrets()
+            }
+        }
+    }
+
+    // MARK: - Publish Public Keys
+
+    private fun publishPublicKeys() {
+        viewModelScope.launch {
+            try {
+                val publicSecrets = minorSecretsStore.getPublicProfileSecrets()
+
+                if (publicSecrets.isEmpty()) {
+                    _effects.emit(SecretsEffect.ShowError("No public keys to publish"))
+                    return@launch
                 }
 
-                // Hash the provided password using Argon2id
-                val hash = cryptoManager.hashPassword(password, saltBytes)
+                // Build the list of public key namespaces to publish
+                val namespaces = publicSecrets.map { secret ->
+                    "secrets.public_key.${secret.id}"
+                }
 
-                // For demo: accept if hash was computed successfully
-                // In production: would compare against stored hash or verify with server
-                hash.isNotEmpty()
+                // Call profile.publish with the updated fields
+                val result = ownerSpaceClient.publishProfile(namespaces)
+
+                result.fold(
+                    onSuccess = {
+                        // Mark all public keys as synced
+                        publicSecrets.forEach { secret ->
+                            minorSecretsStore.updateSyncStatus(
+                                secret.id,
+                                com.vettid.app.core.storage.SyncStatus.SYNCED
+                            )
+                        }
+                        loadSecrets()
+                        _effects.emit(SecretsEffect.ShowSuccess("Public keys published"))
+                        Log.i(TAG, "Published ${publicSecrets.size} public keys to profile")
+                    },
+                    onFailure = { error ->
+                        Log.e(TAG, "Failed to publish public keys", error)
+                        _effects.emit(SecretsEffect.ShowError(error.message ?: "Failed to publish"))
+                    }
+                )
+
             } catch (e: Exception) {
-                Log.e(TAG, "Password verification failed", e)
-                // For demo purposes, accept any non-empty password
-                password.isNotEmpty()
+                Log.e(TAG, "Failed to publish public keys", e)
+                _effects.emit(SecretsEffect.ShowError(e.message ?: "Failed to publish"))
+            }
+        }
+    }
+
+    // MARK: - Sync from Vault
+
+    fun syncFromVault() {
+        viewModelScope.launch {
+            try {
+                if (!connectionManager.isConnected()) {
+                    _effects.emit(SecretsEffect.ShowError("Not connected"))
+                    return@launch
+                }
+
+                val response = ownerSpaceClient.sendAndAwaitResponse(
+                    "secrets.datastore.get",
+                    JsonObject(),
+                    15000L
+                )
+
+                when (response) {
+                    is VaultResponse.HandlerResult -> {
+                        if (response.success && response.result != null) {
+                            val secretsArray = response.result.getAsJsonArray("secrets")
+                            if (secretsArray != null) {
+                                val secretsData = parseSecretsFromVault(secretsArray)
+                                minorSecretsStore.importFromSync(secretsData)
+                                loadSecrets()
+                                _effects.emit(SecretsEffect.ShowSuccess("Synced from vault"))
+                                Log.i(TAG, "Synced ${secretsData.size} secrets from vault")
+                            }
+                        } else {
+                            _effects.emit(SecretsEffect.ShowError(response.error ?: "Sync failed"))
+                        }
+                    }
+                    is VaultResponse.Error -> {
+                        _effects.emit(SecretsEffect.ShowError(response.message))
+                    }
+                    null -> {
+                        _effects.emit(SecretsEffect.ShowError("Sync timed out"))
+                    }
+                    else -> {
+                        _effects.emit(SecretsEffect.ShowError("Unexpected response"))
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to sync from vault", e)
+                _effects.emit(SecretsEffect.ShowError(e.message ?: "Sync failed"))
+            }
+        }
+    }
+
+    private fun parseSecretsFromVault(secretsArray: JsonArray): List<Map<String, Any?>> {
+        return secretsArray.mapNotNull { element ->
+            try {
+                val obj = element.asJsonObject
+                mapOf(
+                    "id" to obj.get("id").asString,
+                    "name" to obj.get("name").asString,
+                    "value" to obj.get("value").asString,
+                    "category" to obj.get("category")?.asString,
+                    "type" to obj.get("type")?.asString,
+                    "notes" to obj.get("notes")?.asString,
+                    "isShareable" to obj.get("isShareable")?.asBoolean,
+                    "isInPublicProfile" to obj.get("isInPublicProfile")?.asBoolean,
+                    "isSystemField" to obj.get("isSystemField")?.asBoolean,
+                    "sortOrder" to obj.get("sortOrder")?.asInt,
+                    "createdAt" to obj.get("createdAt")?.asLong,
+                    "updatedAt" to obj.get("updatedAt")?.asLong
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to parse secret from vault", e)
+                null
+            }
+        }
+    }
+
+    // MARK: - User's Unique Public Key
+
+    /**
+     * Ensure the user's unique public key is in the local secrets store.
+     *
+     * The unique key pair is generated by the vault during enrollment:
+     * - Private key is sealed in the credential (enclave-side)
+     * - Public key is stored in the vault's datastore
+     *
+     * This method syncs from vault if the key is not present locally.
+     */
+    fun ensureEnrollmentKeyInSecrets() {
+        viewModelScope.launch {
+            val existingKey = minorSecretsStore.getEnrollmentPublicKey()
+            if (existingKey == null) {
+                Log.d(TAG, "User's public key not found locally, fetching from vault...")
+                fetchUserPublicKeyFromVault()
             }
         }
     }
 
     /**
-     * Decrypts a secret value using the password-derived key.
+     * Fetch the user's unique Ed25519 identity public key from the vault.
+     * The key is generated during enrollment and stored in the credential.
      */
-    private suspend fun decryptSecret(secretId: String, password: String): String {
-        return withContext(Dispatchers.Default) {
-            // In production, this would:
-            // 1. Derive a key from the password using HKDF
-            // 2. Decrypt the secret using ChaCha20-Poly1305
-            // For now, return mock data
-            when (secretId) {
-                "secret-1" -> "sk-proj-aBcDeFgHiJkLmNoPqRsTuVwXyZ123456"
-                "secret-2" -> "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
-                "secret-3" -> "AKIAIOSFODNN7EXAMPLE"
-                "secret-4" -> "This is a very secure note that contains sensitive information."
-                else -> "Secret value for $secretId"
+    private suspend fun fetchUserPublicKeyFromVault() {
+        try {
+            if (!connectionManager.isConnected()) {
+                Log.w(TAG, "Cannot fetch user public key: not connected to vault")
+                return
             }
-        }
-    }
 
-    private fun generateMockSecrets(): List<Secret> {
-        val now = Instant.now()
-        return listOf(
-            Secret(
-                id = "secret-1",
-                name = "OpenAI API Key",
-                category = SecretCategory.API_KEY,
-                createdAt = now.minusSeconds(86400 * 30),
-                updatedAt = now.minusSeconds(86400 * 7),
-                notes = "Production API key"
-            ),
-            Secret(
-                id = "secret-2",
-                name = "GitHub Token",
-                category = SecretCategory.API_KEY,
-                createdAt = now.minusSeconds(86400 * 60),
-                updatedAt = now.minusSeconds(86400 * 14),
-                notes = "Personal access token"
-            ),
-            Secret(
-                id = "secret-3",
-                name = "AWS Access Key",
-                category = SecretCategory.API_KEY,
-                createdAt = now.minusSeconds(86400 * 90),
-                updatedAt = now.minusSeconds(86400 * 30)
-            ),
-            Secret(
-                id = "secret-4",
-                name = "Important Note",
-                category = SecretCategory.NOTE,
-                createdAt = now.minusSeconds(86400 * 5),
-                updatedAt = now.minusSeconds(86400 * 2),
-                notes = "Contains recovery information"
+            // Use the dedicated identity endpoint
+            val response = ownerSpaceClient.sendAndAwaitResponse(
+                "secrets.datastore.identity",
+                JsonObject(),
+                15000L
             )
-        )
-    }
 
-    override fun onCleared() {
-        super.onCleared()
-        autoHideJob?.cancel()
+            when (response) {
+                is VaultResponse.HandlerResult -> {
+                    if (response.success && response.result != null) {
+                        val publicKeyBase64 = response.result.get("public_key")?.asString
+                        val keyType = response.result.get("key_type")?.asString ?: "Ed25519"
+
+                        if (publicKeyBase64 != null) {
+                            minorSecretsStore.setEnrollmentPublicKey(publicKeyBase64, keyType)
+                            loadSecrets()
+                            Log.i(TAG, "Fetched user's $keyType identity public key from vault")
+                            return
+                        }
+                        Log.w(TAG, "Public key not found in identity response")
+                    } else {
+                        Log.w(TAG, "Identity request failed: ${response.error}")
+                    }
+                }
+                is VaultResponse.Error -> {
+                    Log.e(TAG, "Failed to fetch user public key: ${response.message}")
+                }
+                null -> {
+                    Log.w(TAG, "Timeout fetching user public key from vault")
+                }
+                else -> {}
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error fetching user public key from vault", e)
+        }
     }
 }

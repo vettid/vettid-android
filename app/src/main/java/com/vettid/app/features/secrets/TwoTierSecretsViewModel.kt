@@ -177,7 +177,12 @@ class TwoTierSecretsViewModel @Inject constructor(
 
     private suspend fun addMinorSecret(name: String, value: String, category: SecretCategory, notes: String?) {
         try {
-            val secret = minorSecretsStore.addSecret(name, value, category, notes)
+            val secret = minorSecretsStore.addSecret(
+                name = name,
+                value = value,
+                category = category,
+                notes = notes
+            )
             loadAllSecrets()
             _effects.emit(TwoTierSecretsEffect.ShowMessage("Secret added"))
             _effects.emit(TwoTierSecretsEffect.NavigateBack)
