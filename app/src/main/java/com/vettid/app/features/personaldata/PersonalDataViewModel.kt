@@ -242,8 +242,11 @@ class PersonalDataViewModel @Inject constructor(
         val systemEmail = result.get("email")?.takeIf { !it.isJsonNull }?.asString
 
         Log.d(TAG, "System fields: firstName=$systemFirstName, lastName=$systemLastName, email=$systemEmail")
+        Log.i(TAG, "Saved sort orders: $savedSortOrder")
+        Log.i(TAG, "System field sort orders: first_name=${savedSortOrder["_system_first_name"]}, last_name=${savedSortOrder["_system_last_name"]}, email=${savedSortOrder["_system_email"]}")
 
         // Add system fields as items (read-only, always in public profile)
+        // Apply saved sort order so they can be reordered
         if (!systemFirstName.isNullOrEmpty()) {
             items.add(PersonalDataItem(
                 id = "_system_first_name",
@@ -253,6 +256,7 @@ class PersonalDataViewModel @Inject constructor(
                 category = DataCategory.IDENTITY,
                 isSystemField = true,
                 isInPublicProfile = true,
+                sortOrder = savedSortOrder["_system_first_name"] ?: 0,
                 createdAt = now,
                 updatedAt = now
             ))
@@ -266,6 +270,7 @@ class PersonalDataViewModel @Inject constructor(
                 category = DataCategory.IDENTITY,
                 isSystemField = true,
                 isInPublicProfile = true,
+                sortOrder = savedSortOrder["_system_last_name"] ?: 1,
                 createdAt = now,
                 updatedAt = now
             ))
@@ -279,6 +284,7 @@ class PersonalDataViewModel @Inject constructor(
                 category = DataCategory.CONTACT,
                 isSystemField = true,
                 isInPublicProfile = true,
+                sortOrder = savedSortOrder["_system_email"] ?: 0,
                 createdAt = now,
                 updatedAt = now
             ))
@@ -357,8 +363,54 @@ class PersonalDataViewModel @Inject constructor(
         }
 
         Log.i(TAG, "Total items after parsing profile: ${items.size}")
+
+        // Initialize sort orders if all items have default (0) sort order
+        initializeSortOrdersIfNeeded(items)
     }
 
+    /**
+     * Initialize sort orders for items that don't have saved orders.
+     * Assigns sequential sort orders within each category.
+     * Also fixes any duplicate sort orders within the same category.
+     */
+    private fun initializeSortOrdersIfNeeded(items: MutableList<PersonalDataItem>) {
+        // Check each category for duplicate sort orders and fix them
+        val categoriesWithDuplicates = mutableSetOf<DataCategory?>()
+        items.groupBy { it.category }.forEach { (category, categoryItems) ->
+            val sortOrders = categoryItems.map { it.sortOrder }
+            if (sortOrders.size != sortOrders.toSet().size) {
+                // Found duplicates in this category
+                categoriesWithDuplicates.add(category)
+            }
+        }
+
+        if (categoriesWithDuplicates.isEmpty()) {
+            Log.d(TAG, "All categories have unique sort orders, no initialization needed")
+            return
+        }
+
+        Log.i(TAG, "Fixing sort orders for categories with duplicates: $categoriesWithDuplicates")
+
+        // Fix sort orders for categories with duplicates
+        categoriesWithDuplicates.forEach { category ->
+            val categoryItems = items.filter { it.category == category }
+                .sortedBy { it.sortOrder }
+            categoryItems.forEachIndexed { index, item ->
+                val itemIndex = items.indexOfFirst { it.id == item.id }
+                if (itemIndex >= 0) {
+                    items[itemIndex] = item.copy(sortOrder = index)
+                    Log.d(TAG, "Fixed sortOrder=$index for ${item.name} (was ${item.sortOrder})")
+                }
+            }
+        }
+
+        // Save the fixed sort orders
+        val sortOrderMap = items.associate { it.id to it.sortOrder }
+        viewModelScope.launch {
+            personalDataStore.updateFieldSortOrder(sortOrderMap)
+            Log.i(TAG, "Saved fixed sort orders for ${sortOrderMap.size} items")
+        }
+    }
 
     /**
      * Load public profile settings from vault.
@@ -478,7 +530,7 @@ class PersonalDataViewModel @Inject constructor(
         // Load saved sort order
         val savedSortOrder = personalDataStore.getFieldSortOrder()
 
-        // Load system fields
+        // Load system fields with saved sort order
         val systemFields = personalDataStore.getSystemFields()
         systemFields?.let { system ->
             items.add(PersonalDataItem(
@@ -489,6 +541,7 @@ class PersonalDataViewModel @Inject constructor(
                 category = DataCategory.IDENTITY,
                 isSystemField = true,
                 isInPublicProfile = true,
+                sortOrder = savedSortOrder["_system_first_name"] ?: 0,
                 createdAt = now,
                 updatedAt = now
             ))
@@ -500,6 +553,7 @@ class PersonalDataViewModel @Inject constructor(
                 category = DataCategory.IDENTITY,
                 isSystemField = true,
                 isInPublicProfile = true,
+                sortOrder = savedSortOrder["_system_last_name"] ?: 1,
                 createdAt = now,
                 updatedAt = now
             ))
@@ -511,6 +565,7 @@ class PersonalDataViewModel @Inject constructor(
                 category = DataCategory.CONTACT,
                 isSystemField = true,
                 isInPublicProfile = true,
+                sortOrder = savedSortOrder["_system_email"] ?: 0,
                 createdAt = now,
                 updatedAt = now
             ))
@@ -597,6 +652,9 @@ class PersonalDataViewModel @Inject constructor(
         }
 
         Log.d(TAG, "Loaded ${items.size} items from local storage with sort order applied")
+
+        // Initialize sort orders if all items have default (0) sort order
+        initializeSortOrdersIfNeeded(items)
     }
 
     private fun updateSearchQuery(query: String) {
@@ -643,23 +701,45 @@ class PersonalDataViewModel @Inject constructor(
 
     /**
      * Publish public profile to NATS.
+     * Uses sendAndAwaitResponse to ensure publish completes before returning.
      */
     fun publishProfile() {
         viewModelScope.launch {
             try {
                 Log.i(TAG, "Publishing public profile...")
-                val result = ownerSpaceClient.sendToVault("profile.publish", JsonObject())
-                result.fold(
-                    onSuccess = { requestId ->
-                        Log.i(TAG, "Profile publish request sent: $requestId")
+                val response = ownerSpaceClient.sendAndAwaitResponse(
+                    messageType = "profile.publish",
+                    payload = JsonObject(),
+                    timeoutMs = 15000L
+                )
+
+                when (response) {
+                    is VaultResponse.HandlerResult -> {
+                        if (response.success) {
+                            Log.i(TAG, "Profile published successfully")
+                            _hasUnpublishedChanges.value = false
+                            _effects.emit(PersonalDataEffect.ShowSuccess("Public profile published"))
+                        } else {
+                            val errorMsg = response.error ?: "Unknown error"
+                            Log.e(TAG, "Profile publish failed: $errorMsg")
+                            _effects.emit(PersonalDataEffect.ShowError("Failed to publish: $errorMsg"))
+                        }
+                    }
+                    is VaultResponse.Error -> {
+                        Log.e(TAG, "Profile publish error: ${response.message}")
+                        _effects.emit(PersonalDataEffect.ShowError("Failed to publish: ${response.message}"))
+                    }
+                    null -> {
+                        Log.e(TAG, "Profile publish timed out")
+                        _effects.emit(PersonalDataEffect.ShowError("Publish timed out - please try again"))
+                    }
+                    else -> {
+                        Log.w(TAG, "Unexpected response type: ${response::class.simpleName}")
+                        // Assume success if we got an unexpected but not error response
                         _hasUnpublishedChanges.value = false
                         _effects.emit(PersonalDataEffect.ShowSuccess("Public profile published"))
-                    },
-                    onFailure = { error ->
-                        Log.e(TAG, "Failed to publish profile: ${error.message}")
-                        _effects.emit(PersonalDataEffect.ShowError("Failed to publish: ${error.message}"))
                     }
-                )
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Error publishing profile", e)
                 _effects.emit(PersonalDataEffect.ShowError(e.message ?: "Failed to publish"))
@@ -685,6 +765,10 @@ class PersonalDataViewModel @Inject constructor(
 
     fun updateEditCategory(category: DataCategory?) {
         _editState.value = _editState.value.copy(category = category)
+    }
+
+    fun updateEditPublicProfile(isInPublic: Boolean) {
+        _editState.value = _editState.value.copy(isInPublicProfile = isInPublic)
     }
 
     fun saveItem() {
@@ -1038,26 +1122,40 @@ class PersonalDataViewModel @Inject constructor(
      * Move an item up within its category (decrease sort order).
      */
     private fun moveItemUp(itemId: String) {
-        val item = dataItems.find { it.id == itemId } ?: return
-        if (item.isSystemField) return  // System fields can't be reordered
+        Log.i(TAG, "=== moveItemUp called for itemId: $itemId ===")
+        val item = dataItems.find { it.id == itemId }
+        if (item == null) {
+            Log.w(TAG, "moveItemUp: item not found in dataItems (size=${dataItems.size})")
+            return
+        }
+        Log.i(TAG, "moveItemUp: found item '${item.name}', isSystemField=${item.isSystemField}, sortOrder=${item.sortOrder}")
 
         val category = item.category
-        val categoryItems = dataItems.filter { it.category == category && !it.isSystemField }
+        val categoryItems = dataItems.filter { it.category == category }
             .sortedBy { it.sortOrder }
+        Log.i(TAG, "moveItemUp: category=$category has ${categoryItems.size} items")
+        categoryItems.forEachIndexed { i, ci -> Log.d(TAG, "  [$i] ${ci.name} (sortOrder=${ci.sortOrder})") }
 
         val index = categoryItems.indexOfFirst { it.id == itemId }
-        if (index <= 0) return  // Already at top
+        Log.i(TAG, "moveItemUp: item '${item.name}' at index $index of ${categoryItems.size}")
+        if (index <= 0) {
+            Log.d(TAG, "moveItemUp: already at top")
+            return
+        }
 
         // Swap sort orders with the item above
         val itemAbove = categoryItems[index - 1]
         val newSortOrder = itemAbove.sortOrder
         val aboveSortOrder = item.sortOrder
+        Log.d(TAG, "moveItemUp: swapping '${item.name}' (order=$aboveSortOrder) with '${itemAbove.name}' (order=$newSortOrder)")
 
         updateItemSortOrder(itemId, newSortOrder)
         updateItemSortOrder(itemAbove.id, aboveSortOrder)
 
-        // Refresh state
-        _state.value = PersonalDataState.Loaded(items = dataItems.toList())
+        // Refresh state - create completely new list to trigger recomposition
+        val newItems = dataItems.toList()
+        Log.d(TAG, "moveItemUp: emitting new state with ${newItems.size} items")
+        _state.value = PersonalDataState.Loaded(items = newItems)
 
         // Persist to vault
         persistSortOrder(category)
@@ -1067,15 +1165,25 @@ class PersonalDataViewModel @Inject constructor(
      * Move an item down within its category (increase sort order).
      */
     private fun moveItemDown(itemId: String) {
-        val item = dataItems.find { it.id == itemId } ?: return
-        if (item.isSystemField) return  // System fields can't be reordered
+        Log.i(TAG, "=== moveItemDown called for itemId: $itemId ===")
+        val item = dataItems.find { it.id == itemId }
+        if (item == null) {
+            Log.w(TAG, "moveItemDown: item not found")
+            return
+        }
+        Log.i(TAG, "moveItemDown: found item '${item.name}', sortOrder=${item.sortOrder}")
 
         val category = item.category
-        val categoryItems = dataItems.filter { it.category == category && !it.isSystemField }
+        val categoryItems = dataItems.filter { it.category == category }
             .sortedBy { it.sortOrder }
+        Log.i(TAG, "moveItemDown: category=$category has ${categoryItems.size} items")
 
         val index = categoryItems.indexOfFirst { it.id == itemId }
-        if (index < 0 || index >= categoryItems.size - 1) return  // Already at bottom
+        Log.i(TAG, "moveItemDown: item at index $index")
+        if (index < 0 || index >= categoryItems.size - 1) {
+            Log.d(TAG, "moveItemDown: already at bottom")
+            return
+        }
 
         // Swap sort orders with the item below
         val itemBelow = categoryItems[index + 1]
@@ -1111,9 +1219,8 @@ class PersonalDataViewModel @Inject constructor(
     private fun persistSortOrder(category: DataCategory?) {
         viewModelScope.launch {
             try {
-                // Build sort order map from all non-system fields
+                // Build sort order map from all fields (including system fields)
                 val sortOrderMap = dataItems
-                    .filter { !it.isSystemField }
                     .associate { it.id to it.sortOrder }
 
                 Log.d(TAG, "Persisting sort order for ${sortOrderMap.size} fields (category: ${category?.displayName ?: "all"})")
@@ -1176,6 +1283,8 @@ class PersonalDataViewModel @Inject constructor(
      * Fetches the actual published profile from the vault/NATS.
      */
     fun showPublicProfilePreview() {
+        // Set loading state BEFORE opening dialog to avoid flash of "no profile" state
+        _isLoadingPublishedProfile.value = true
         _showPublicProfilePreview.value = true
         fetchPublishedProfile()
     }
@@ -1190,57 +1299,35 @@ class PersonalDataViewModel @Inject constructor(
     /**
      * Fetch the published profile from the vault.
      * This is what connections actually see in the NATS message space.
-     * If no profile has been published yet, shows what would be published based on current selections.
+     * Automatically retries if profile not found (handles eventual consistency).
      *
      * Uses sendAndAwaitResponse() for proper request/response correlation.
      */
     private fun fetchPublishedProfile() {
         viewModelScope.launch {
             _isLoadingPublishedProfile.value = true
+
             try {
-                Log.d(TAG, "Fetching published profile...")
-                val response = ownerSpaceClient.sendAndAwaitResponse("profile.get-published", JsonObject(), 10000L)
+                // Retry up to 3 times with increasing delays for eventual consistency
+                val maxRetries = 3
+                val retryDelays = listOf(500L, 1000L, 1500L)
 
-                when (response) {
-                    is VaultResponse.HandlerResult -> {
-                        if (response.success && response.result != null) {
-                            // Check if profile was actually published by looking for:
-                            // 1. explicit "published" boolean field
-                            // 2. presence of "fields" object with content
-                            // 3. presence of system fields like first_name/email
-                            val hasPublishedFlag = response.result.get("published")?.takeIf { !it.isJsonNull }?.asBoolean ?: false
-                            val hasFields = response.result.has("fields") &&
-                                response.result.get("fields")?.isJsonObject == true &&
-                                response.result.getAsJsonObject("fields").size() > 0
-                            val hasSystemFields = response.result.has("first_name") || response.result.has("email")
+                for (attempt in 0 until maxRetries) {
+                    if (attempt > 0) {
+                        Log.d(TAG, "Retrying fetch published profile (attempt ${attempt + 1}/$maxRetries)")
+                        kotlinx.coroutines.delay(retryDelays[attempt - 1])
+                    }
 
-                            val isPublished = hasPublishedFlag || hasFields || hasSystemFields
-                            Log.d(TAG, "Published profile check: hasPublishedFlag=$hasPublishedFlag, hasFields=$hasFields, hasSystemFields=$hasSystemFields, isPublished=$isPublished")
+                    Log.d(TAG, "Fetching published profile... (attempt ${attempt + 1})")
+                    val response = ownerSpaceClient.sendAndAwaitResponse("profile.get-published", JsonObject(), 10000L)
 
-                            if (isPublished) {
-                                parsePublishedProfile(response.result)
-                            } else {
-                                // No published profile yet - show local items marked for public profile
-                                Log.d(TAG, "No published profile found, showing local preview")
-                                showLocalPreview()
-                            }
-                        } else {
-                            // No published profile yet - show local preview
-                            Log.d(TAG, "Profile request failed, showing local preview")
-                            showLocalPreview()
-                        }
+                    val success = handlePublishedProfileResponse(response, attempt, maxRetries)
+                    if (success) {
+                        return@launch // Found profile, done
                     }
-                    is VaultResponse.Error -> {
-                        Log.e(TAG, "Error fetching published profile: ${response.message}")
-                        // Fall back to local items
-                        showLocalPreview()
-                    }
-                    null -> {
-                        Log.w(TAG, "Published profile request timed out")
-                        showLocalPreview()
-                    }
-                    else -> {
-                        Log.w(TAG, "Unexpected response type: ${response::class.simpleName}")
+                    // If not successful and not the last attempt, loop will continue
+                    if (attempt >= maxRetries - 1) {
+                        // All retries exhausted
                         showLocalPreview()
                     }
                 }
@@ -1249,6 +1336,58 @@ class PersonalDataViewModel @Inject constructor(
                 showLocalPreview()
             } finally {
                 _isLoadingPublishedProfile.value = false
+            }
+        }
+    }
+
+    /**
+     * Handle the response from profile.get-published request.
+     * @return true if profile was successfully loaded, false to retry
+     */
+    private fun handlePublishedProfileResponse(
+        response: VaultResponse?,
+        attempt: Int,
+        maxRetries: Int
+    ): Boolean {
+        when (response) {
+            is VaultResponse.HandlerResult -> {
+                if (response.success && response.result != null) {
+                    // Check if profile was actually published by looking for:
+                    // 1. explicit "published" boolean field
+                    // 2. presence of "fields" object with content
+                    // 3. presence of system fields like first_name/email
+                    val hasPublishedFlag = response.result.get("published")?.takeIf { !it.isJsonNull }?.asBoolean ?: false
+                    val hasFields = response.result.has("fields") &&
+                        response.result.get("fields")?.isJsonObject == true &&
+                        response.result.getAsJsonObject("fields").size() > 0
+                    val hasSystemFields = response.result.has("first_name") || response.result.has("email")
+
+                    val isPublished = hasPublishedFlag || hasFields || hasSystemFields
+                    Log.d(TAG, "Published profile check: hasPublishedFlag=$hasPublishedFlag, hasFields=$hasFields, hasSystemFields=$hasSystemFields, isPublished=$isPublished")
+
+                    if (isPublished) {
+                        parsePublishedProfile(response.result)
+                        return true
+                    } else {
+                        Log.d(TAG, "No published profile found on attempt ${attempt + 1}")
+                        return false
+                    }
+                } else {
+                    Log.d(TAG, "Profile request returned no result on attempt ${attempt + 1}")
+                    return false
+                }
+            }
+            is VaultResponse.Error -> {
+                Log.e(TAG, "Error fetching published profile: ${response.message}")
+                return false
+            }
+            null -> {
+                Log.w(TAG, "Published profile request timed out on attempt ${attempt + 1}")
+                return false
+            }
+            else -> {
+                Log.w(TAG, "Unexpected response type: ${response::class.simpleName}")
+                return false
             }
         }
     }
@@ -1319,9 +1458,12 @@ class PersonalDataViewModel @Inject constructor(
         val items = mutableListOf<PersonalDataItem>()
         val now = Instant.now()
 
+        // Load saved sort order to apply to published items
+        val savedSortOrder = personalDataStore.getFieldSortOrder()
+
         Log.d(TAG, "Parsing published profile: ${result.keySet()}")
 
-        // Always-shared system fields
+        // Always-shared system fields - apply saved sort order
         result.get("first_name")?.takeIf { !it.isJsonNull }?.asString?.let { firstName ->
             items.add(PersonalDataItem(
                 id = "_published_first_name",
@@ -1331,6 +1473,7 @@ class PersonalDataViewModel @Inject constructor(
                 category = DataCategory.IDENTITY,
                 isSystemField = true,
                 isInPublicProfile = true,
+                sortOrder = savedSortOrder["_system_first_name"] ?: 0,
                 createdAt = now,
                 updatedAt = now
             ))
@@ -1345,6 +1488,7 @@ class PersonalDataViewModel @Inject constructor(
                 category = DataCategory.IDENTITY,
                 isSystemField = true,
                 isInPublicProfile = true,
+                sortOrder = savedSortOrder["_system_last_name"] ?: 1,
                 createdAt = now,
                 updatedAt = now
             ))
@@ -1359,6 +1503,7 @@ class PersonalDataViewModel @Inject constructor(
                 category = DataCategory.CONTACT,
                 isSystemField = true,
                 isInPublicProfile = true,
+                sortOrder = savedSortOrder["_system_email"] ?: 0,
                 createdAt = now,
                 updatedAt = now
             ))
@@ -1380,6 +1525,7 @@ class PersonalDataViewModel @Inject constructor(
                         category = categoryFromNamespace(name),
                         isSystemField = false,
                         isInPublicProfile = true,
+                        sortOrder = savedSortOrder[name] ?: 0,
                         createdAt = now,
                         updatedAt = now
                     ))

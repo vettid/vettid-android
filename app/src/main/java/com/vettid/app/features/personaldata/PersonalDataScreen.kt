@@ -8,6 +8,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -23,8 +25,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -35,6 +39,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.vettid.app.ui.components.PhoneNumberInput
 import com.vettid.app.ui.components.ProfilePhotoCapture
 import kotlinx.coroutines.flow.collectLatest
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.rememberReorderableLazyListState
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -74,6 +80,9 @@ fun PersonalDataContent(
     val customCategories by viewModel.customCategories.collectAsState()
     val systemFields by viewModel.systemFields.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // Search bar visibility state (lifted up for FAB control)
+    var showSearchBar by remember { mutableStateOf(false) }
 
     // Handle effects
     LaunchedEffect(Unit) {
@@ -119,6 +128,8 @@ fun PersonalDataContent(
                 val hasUnpublishedChanges by viewModel.hasUnpublishedChanges.collectAsState()
                 val isRefreshing by viewModel.isRefreshing.collectAsState()
                 val publishedProfile by viewModel.publishedProfile.collectAsState()
+                // Compute groupedByCategory directly (no remember) to ensure recomposition on sort order changes
+                val groupedByCategory = GroupedByCategory.fromItems(currentState.items)
                 @OptIn(ExperimentalMaterial3Api::class)
                 PullToRefreshBox(
                     isRefreshing = isRefreshing,
@@ -126,13 +137,15 @@ fun PersonalDataContent(
                     modifier = Modifier.fillMaxSize()
                 ) {
                     PersonalDataList(
-                        groupedByCategory = viewModel.getDataByCategory(),
+                        groupedByCategory = groupedByCategory,
                         hasUnpublishedChanges = hasUnpublishedChanges,
                         lastPublishedAt = publishedProfile?.updatedAt,
                         isProfilePublished = publishedProfile?.isFromVault == true && publishedProfile?.items?.isNotEmpty() == true,
                         firstName = systemFields?.firstName ?: "",
                         lastName = systemFields?.lastName ?: "",
                         profilePhotoBase64 = profilePhoto,
+                        showSearchBar = showSearchBar,
+                        onSearchBarClose = { showSearchBar = false },
                         onItemClick = { viewModel.onEvent(PersonalDataEvent.ItemClicked(it)) },
                         onDeleteClick = { viewModel.onEvent(PersonalDataEvent.DeleteItem(it)) },
                         onTogglePublicProfile = { viewModel.onEvent(PersonalDataEvent.TogglePublicProfile(it)) },
@@ -146,15 +159,34 @@ fun PersonalDataContent(
             }
         }
 
-        // FAB to add new data
+        // FABs for search and add
         if (state is PersonalDataState.Loaded || state is PersonalDataState.Empty) {
-            FloatingActionButton(
-                onClick = { viewModel.onEvent(PersonalDataEvent.AddItem) },
+            Column(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(16.dp)
+                    .padding(16.dp),
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Icon(Icons.Default.Add, contentDescription = "Add personal data")
+                // Search FAB (smaller)
+                SmallFloatingActionButton(
+                    onClick = { showSearchBar = !showSearchBar },
+                    containerColor = if (showSearchBar)
+                        MaterialTheme.colorScheme.primaryContainer
+                    else
+                        MaterialTheme.colorScheme.secondaryContainer
+                ) {
+                    Icon(
+                        if (showSearchBar) Icons.Default.Close else Icons.Default.Search,
+                        contentDescription = if (showSearchBar) "Close search" else "Search"
+                    )
+                }
+                // Add FAB (primary)
+                FloatingActionButton(
+                    onClick = { viewModel.onEvent(PersonalDataEvent.AddItem) }
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Add personal data")
+                }
             }
         }
 
@@ -176,9 +208,16 @@ fun PersonalDataContent(
             onNameChange = viewModel::updateEditName,
             onFieldTypeChange = viewModel::updateEditFieldType,
             onValueChange = viewModel::updateEditValue,
+            onPublicProfileChange = viewModel::updateEditPublicProfile,
             onSave = viewModel::saveItem,
             onDismiss = viewModel::dismissDialog,
-            onCreateCategory = { name -> viewModel.createCustomCategory(name) }
+            onCreateCategory = { name -> viewModel.createCustomCategory(name) },
+            onDelete = {
+                editState.id?.let { id ->
+                    viewModel.onEvent(PersonalDataEvent.DeleteItem(id))
+                    viewModel.dismissDialog()
+                }
+            }
         )
     }
 
@@ -198,11 +237,7 @@ fun PersonalDataContent(
             PublicProfileFullScreen(
                 publishedProfile = publishedProfile,
                 isLoading = isLoadingPublishedProfile,
-                onBack = viewModel::hidePublicProfilePreview,
-                onEditPhoto = {
-                    viewModel.hidePublicProfilePreview()
-                    viewModel.showPhotoCaptureDialog()
-                }
+                onBack = viewModel::hidePublicProfilePreview
             )
         }
     }
@@ -236,6 +271,8 @@ private fun PersonalDataList(
     firstName: String,
     lastName: String,
     profilePhotoBase64: String?,
+    showSearchBar: Boolean,
+    onSearchBarClose: () -> Unit,
     onItemClick: (String) -> Unit,
     onDeleteClick: (String) -> Unit,
     onTogglePublicProfile: (String) -> Unit,
@@ -248,9 +285,13 @@ private fun PersonalDataList(
     // Track collapsed categories - start with all categories collapsed
     var collapsedCategories by remember { mutableStateOf(DataCategory.values().toSet()) }
 
-    // Search visibility and query state
-    var showSearchBar by remember { mutableStateOf(false) }
+    // Search query state
     var searchQuery by remember { mutableStateOf("") }
+
+    // Clear search when bar is hidden
+    LaunchedEffect(showSearchBar) {
+        if (!showSearchBar) searchQuery = ""
+    }
 
     // Filter items based on search query
     val filteredGroups: Map<DataCategory, List<PersonalDataItem>> = if (searchQuery.isBlank()) {
@@ -265,46 +306,40 @@ private fun PersonalDataList(
         }.toMap()
     }
 
+    // Auto-expand categories with search matches
+    LaunchedEffect(searchQuery, filteredGroups) {
+        if (searchQuery.isNotBlank()) {
+            // Expand all categories that have matches
+            collapsedCategories = collapsedCategories - filteredGroups.keys
+        }
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
     ) {
-        // Header row with title and search toggle
-        item {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Personal Data",
-                    style = MaterialTheme.typography.titleLarge
-                )
-                IconButton(
-                    onClick = {
-                        showSearchBar = !showSearchBar
-                        if (!showSearchBar) searchQuery = ""  // Clear search when hiding
-                    }
-                ) {
-                    Icon(
-                        imageVector = if (showSearchBar) Icons.Default.Close else Icons.Default.Search,
-                        contentDescription = if (showSearchBar) "Close search" else "Search"
-                    )
-                }
-            }
-        }
-
-        // Animated search bar (only shown when toggled)
+        // Search bar (only shown when toggled via FAB)
         if (showSearchBar) {
             item {
                 SearchBar(
                     query = searchQuery,
                     onQueryChange = { searchQuery = it },
+                    onClose = onSearchBarClose,
                     modifier = Modifier.padding(bottom = 12.dp)
                 )
             }
+        }
+
+        // Publish button (above photo)
+        item {
+            PublishProfileButton(
+                hasUnpublishedChanges = hasUnpublishedChanges,
+                lastPublishedAt = lastPublishedAt,
+                isProfilePublished = isProfilePublished,
+                onPublishClick = onPublishClick,
+                onPreviewClick = onPreviewClick
+            )
+            Spacer(modifier = Modifier.height(12.dp))
         }
 
         // Profile header with photo/initials
@@ -314,17 +349,6 @@ private fun PersonalDataList(
                 lastName = lastName,
                 photoBase64 = profilePhotoBase64,
                 onEditPhoto = onEditPhoto
-            )
-        }
-
-        // Publish button
-        item {
-            PublishProfileButton(
-                hasUnpublishedChanges = hasUnpublishedChanges,
-                lastPublishedAt = lastPublishedAt,
-                isProfilePublished = isProfilePublished,
-                onPublishClick = onPublishClick,
-                onPreviewClick = onPreviewClick
             )
             Spacer(modifier = Modifier.height(16.dp))
         }
@@ -406,6 +430,7 @@ private fun PersonalDataList(
 private fun SearchBar(
     query: String,
     onQueryChange: (String) -> Unit,
+    onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     OutlinedTextField(
@@ -421,13 +446,17 @@ private fun SearchBar(
             )
         },
         trailingIcon = {
-            if (query.isNotEmpty()) {
-                IconButton(onClick = { onQueryChange("") }) {
-                    Icon(
-                        Icons.Default.Clear,
-                        contentDescription = "Clear search"
-                    )
+            IconButton(onClick = {
+                if (query.isNotEmpty()) {
+                    onQueryChange("")
+                } else {
+                    onClose()
                 }
+            }) {
+                Icon(
+                    if (query.isNotEmpty()) Icons.Default.Clear else Icons.Default.Close,
+                    contentDescription = if (query.isNotEmpty()) "Clear search" else "Close search"
+                )
             }
         },
         singleLine = true,
@@ -712,13 +741,21 @@ private fun PublishProfileButton(
                     modifier = Modifier.size(18.dp)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(if (hasUnpublishedChanges) "Publish" else "Republish")
+                Text("Publish")
             }
         }
     }
 }
 
 
+/**
+ * Redesigned field row with cleaner layout:
+ * - Drag handle on left for reordering
+ * - Clickable visibility toggle
+ * - Full field name and value (no truncation)
+ * - Lock icon for system fields
+ * - Tap anywhere to edit
+ */
 @Composable
 private fun CompactDataRow(
     item: PersonalDataItem,
@@ -730,7 +767,7 @@ private fun CompactDataRow(
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit
 ) {
-    var showMenu by remember { mutableStateOf(false) }
+    var showReorderMenu by remember { mutableStateOf(false) }
 
     Surface(
         modifier = Modifier
@@ -743,126 +780,108 @@ private fun CompactDataRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .padding(vertical = 12.dp, horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Public/Private indicator (display only, not clickable)
-            Icon(
-                imageVector = if (item.isInPublicProfile) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                contentDescription = if (item.isInPublicProfile) "In public profile" else "Not in public profile",
-                modifier = Modifier.size(16.dp),
-                tint = if (item.isInPublicProfile)
-                    MaterialTheme.colorScheme.primary
-                else
-                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-            )
+            // Drag handle - tap to show reorder options
+            Box {
+                IconButton(
+                    onClick = { showReorderMenu = true },
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        Icons.Default.DragHandle,
+                        contentDescription = "Reorder",
+                        modifier = Modifier.size(24.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                }
 
-            Spacer(modifier = Modifier.width(12.dp))
-
-            // Field name
-            Text(
-                text = item.name,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.width(120.dp),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+                // Reorder dropdown menu
+                DropdownMenu(
+                    expanded = showReorderMenu,
+                    onDismissRequest = { showReorderMenu = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Move Up") },
+                        onClick = {
+                            showReorderMenu = false
+                            onMoveUp()
+                        },
+                        enabled = !isFirst,
+                        leadingIcon = {
+                            Icon(Icons.Default.KeyboardArrowUp, contentDescription = null)
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Move Down") },
+                        onClick = {
+                            showReorderMenu = false
+                            onMoveDown()
+                        },
+                        enabled = !isLast,
+                        leadingIcon = {
+                            Icon(Icons.Default.KeyboardArrowDown, contentDescription = null)
+                        }
+                    )
+                }
+            }
 
             Spacer(modifier = Modifier.width(8.dp))
 
-            // Field value
-            Text(
-                text = if (item.isSensitive) maskString(item.value) else item.value,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-
-            // System field lock icon
+            // Visibility toggle (clickable) or lock icon for system fields
             if (item.isSystemField) {
-                Icon(
-                    imageVector = Icons.Default.Lock,
-                    contentDescription = "System field",
-                    modifier = Modifier.size(14.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                )
-            } else {
-                // More options menu
-                Box {
-                    IconButton(
-                        onClick = { showMenu = true },
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.MoreVert,
-                            contentDescription = "More options",
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = showMenu,
-                        onDismissRequest = { showMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Edit") },
-                            onClick = {
-                                showMenu = false
-                                onClick()
-                            },
-                            leadingIcon = { Icon(Icons.Default.Edit, null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text(if (item.isInPublicProfile) "Hide from Profile" else "Show on Profile") },
-                            onClick = {
-                                showMenu = false
-                                onTogglePublic()
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    if (item.isInPublicProfile) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                    null
-                                )
-                            }
-                        )
-                        HorizontalDivider()
-                        // Reorder options
-                        DropdownMenuItem(
-                            text = { Text("Move Up") },
-                            onClick = {
-                                showMenu = false
-                                onMoveUp()
-                            },
-                            leadingIcon = { Icon(Icons.Default.KeyboardArrowUp, null) },
-                            enabled = !isFirst
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Move Down") },
-                            onClick = {
-                                showMenu = false
-                                onMoveDown()
-                            },
-                            leadingIcon = { Icon(Icons.Default.KeyboardArrowDown, null) },
-                            enabled = !isLast
-                        )
-                        HorizontalDivider()
-                        DropdownMenuItem(
-                            text = { Text("Delete") },
-                            onClick = {
-                                showMenu = false
-                                onDelete()
-                            },
-                            leadingIcon = {
-                                Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error)
-                            }
-                        )
-                    }
+                // Gold lock icon for system fields (always shared)
+                Box(
+                    modifier = Modifier.size(36.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = "Required field (always shared)",
+                        modifier = Modifier.size(22.dp),
+                        tint = androidx.compose.ui.graphics.Color(0xFFD4A017) // Gold color
+                    )
                 }
+            } else {
+                IconButton(
+                    onClick = onTogglePublic,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        imageVector = if (item.isInPublicProfile) Icons.Default.Visibility else Icons.Default.VisibilityOff,
+                        contentDescription = if (item.isInPublicProfile) "Visible in profile (tap to hide)" else "Hidden from profile (tap to show)",
+                        modifier = Modifier.size(22.dp),
+                        tint = if (item.isInPublicProfile)
+                            MaterialTheme.colorScheme.primary
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Field name and value (full text, wrapped)
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = item.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = if (item.isSensitive) maskString(item.value) else item.value,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
-    Spacer(modifier = Modifier.height(4.dp))
+    Spacer(modifier = Modifier.height(6.dp))
 }
 
 @Composable
@@ -947,9 +966,11 @@ private fun AddFieldDialog(
     onNameChange: (String) -> Unit,
     onFieldTypeChange: (FieldType) -> Unit,
     onValueChange: (String) -> Unit,
+    onPublicProfileChange: (Boolean) -> Unit,
     onSave: () -> Unit,
     onDismiss: () -> Unit,
-    onCreateCategory: (String) -> Unit = {}
+    onCreateCategory: (String) -> Unit = {},
+    onDelete: () -> Unit = {}
 ) {
     var expandedCategory by remember { mutableStateOf(false) }
     var expandedFieldType by remember { mutableStateOf(false) }
@@ -1138,6 +1159,30 @@ private fun AddFieldDialog(
                         )
                     )
                 }
+
+                // 5. Show in public profile toggle
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Show in public profile",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            text = if (state.isInPublicProfile) "Visible to connections" else "Hidden from profile",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = state.isInPublicProfile,
+                        onCheckedChange = onPublicProfileChange
+                    )
+                }
             }
         },
         confirmButton = {
@@ -1156,8 +1201,21 @@ private fun AddFieldDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Cancel")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Delete button (only shown when editing, not for system fields)
+                if (state.isEditing && state.id?.startsWith("_system_") != true) {
+                    TextButton(
+                        onClick = onDelete,
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Text("Delete")
+                    }
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel")
+                }
             }
         }
     )
@@ -1237,8 +1295,7 @@ private fun maskString(value: String): String {
 private fun PublicProfileFullScreen(
     publishedProfile: PublishedProfileData?,
     isLoading: Boolean,
-    onBack: () -> Unit,
-    onEditPhoto: () -> Unit = {}
+    onBack: () -> Unit
 ) {
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -1281,8 +1338,8 @@ private fun PublicProfileFullScreen(
                         }
                     }
                 }
-                publishedProfile == null || !publishedProfile.isFromVault || publishedProfile.items.isEmpty() -> {
-                    // No published profile yet
+                publishedProfile == null || !publishedProfile.isFromVault || (publishedProfile.items.isEmpty() && publishedProfile.photo == null) -> {
+                    // No published profile yet (no items and no photo)
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
@@ -1377,7 +1434,7 @@ private fun PublicProfileFullScreen(
 
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        // Profile card - scrollable
+                        // Profile card - scrollable (read-only view)
                         Column(
                             modifier = Modifier
                                 .weight(1f)
@@ -1385,7 +1442,7 @@ private fun PublicProfileFullScreen(
                         ) {
                             BusinessCardView(
                                 profile = publishedProfile,
-                                onEditPhoto = onEditPhoto
+                                isReadOnly = true
                             )
                         }
 
@@ -1446,6 +1503,7 @@ private fun ProfileInstructionStep(
 @Composable
 private fun BusinessCardView(
     profile: PublishedProfileData,
+    isReadOnly: Boolean = false,
     onEditPhoto: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -1457,10 +1515,12 @@ private fun BusinessCardView(
     val email = profile.items.find { it.name == "Email" }?.value
     val phone = profile.items.find { it.name.contains("Phone", ignoreCase = true) }?.value
 
-    // Group remaining fields by category (excluding primary fields)
-    val primaryFieldNames = setOf("First Name", "Last Name", "Email")
-    val otherFields = profile.items.filter { it.name !in primaryFieldNames }
-    val groupedByCategory = otherFields.groupBy { it.category ?: DataCategory.OTHER }
+    // Group all fields by category, sorted by sortOrder
+    // Note: First Name and Last Name are shown in header, Email shown in Contact section,
+    // but we still show all identity fields under their category
+    val groupedByCategory = profile.items
+        .groupBy { it.category ?: DataCategory.OTHER }
+        .mapValues { (_, items) -> items.sortedBy { it.sortOrder } }
 
     // Helper to open intents
     fun openEmail(emailAddress: String) {
@@ -1502,7 +1562,7 @@ private fun BusinessCardView(
                     modifier = Modifier
                         .size(100.dp)
                         .clip(CircleShape)
-                        .clickable { onEditPhoto() }
+                        .then(if (!isReadOnly) Modifier.clickable { onEditPhoto() } else Modifier)
                 ) {
                     if (photoBitmap != null) {
                         Image(
@@ -1534,24 +1594,26 @@ private fun BusinessCardView(
                             }
                         }
                     }
-                    // Camera icon overlay
-                    Surface(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .size(28.dp),
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.primary
-                    ) {
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier.fillMaxSize()
+                    // Camera icon overlay (only shown when not read-only)
+                    if (!isReadOnly) {
+                        Surface(
+                            modifier = Modifier
+                                .align(Alignment.BottomEnd)
+                                .size(28.dp),
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.primary
                         ) {
-                            Icon(
-                                Icons.Default.CameraAlt,
-                                contentDescription = "Edit photo",
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.onPrimary
-                            )
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.fillMaxSize()
+                            ) {
+                                Icon(
+                                    Icons.Default.CameraAlt,
+                                    contentDescription = "Edit photo",
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.onPrimary
+                                )
+                            }
                         }
                     }
                 }
@@ -1677,10 +1739,12 @@ private fun BusinessCardView(
             categoryOrder.forEach { category ->
                 val categoryItems = groupedByCategory[category]
                 if (categoryItems != null && categoryItems.isNotEmpty()) {
-                    // Skip phone if already shown in header
-                    val filteredItems = if (phone != null) {
-                        categoryItems.filter { !it.name.contains("Phone", ignoreCase = true) || it.value != phone }
-                    } else categoryItems
+                    // Skip items already shown in Contact card (email and phone)
+                    val filteredItems = categoryItems.filter { item ->
+                        val isEmailShown = email != null && item.name == "Email" && item.value == email
+                        val isPhoneShown = phone != null && item.name.contains("Phone", ignoreCase = true) && item.value == phone
+                        !isEmailShown && !isPhoneShown
+                    }
 
                     if (filteredItems.isNotEmpty()) {
                         ProfileCategorySection(

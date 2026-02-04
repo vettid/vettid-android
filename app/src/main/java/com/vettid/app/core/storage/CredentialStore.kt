@@ -97,6 +97,8 @@ class CredentialStore @Inject constructor(
         private const val KEY_ENROLLMENT_PCR_VERSION = "enrollment_pcr_version"
         // Emergency recovery (for enclave migration disaster scenarios)
         private const val KEY_EMERGENCY_RECOVERY_PUBLIC_KEY = "emergency_recovery_public_key"
+        // Offline mode
+        private const val KEY_OFFLINE_MODE = "offline_mode"
     }
 
     // MARK: - Credential Storage
@@ -1098,6 +1100,25 @@ class CredentialStore @Inject constructor(
         encryptedPrefs.edit()
             .putString(KEY_EMERGENCY_RECOVERY_PUBLIC_KEY, publicKey)
             .apply()
+    }
+
+    // MARK: - Offline Mode
+
+    /**
+     * Set offline mode preference.
+     * When offline, the app will not connect to the vault enclave.
+     */
+    fun setOfflineMode(enabled: Boolean) {
+        encryptedPrefs.edit()
+            .putBoolean(KEY_OFFLINE_MODE, enabled)
+            .apply()
+    }
+
+    /**
+     * Get offline mode preference.
+     */
+    fun getOfflineMode(): Boolean {
+        return encryptedPrefs.getBoolean(KEY_OFFLINE_MODE, false)
     }
 
     // MARK: - Cleanup

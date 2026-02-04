@@ -29,20 +29,22 @@ import kotlinx.coroutines.flow.collectLatest
  * PIN unlock screen for app authentication.
  *
  * Shows a 6-digit PIN entry with numeric keypad.
- * Verifies PIN against the vault enclave via NATS.
+ * User can choose to work online or offline via a toggle.
+ * PIN is always required to unlock the app.
  */
 @Composable
 fun PinUnlockScreen(
-    onUnlocked: () -> Unit,
+    onUnlocked: (offlineMode: Boolean) -> Unit,
     viewModel: PinUnlockViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
+    var offlineMode by remember { mutableStateOf(false) }
 
     // Handle effects
     LaunchedEffect(Unit) {
         viewModel.effects.collectLatest { effect ->
             when (effect) {
-                is PinUnlockEffect.UnlockSuccess -> onUnlocked()
+                is PinUnlockEffect.UnlockSuccess -> onUnlocked(offlineMode)
             }
         }
     }
@@ -54,20 +56,20 @@ fun PinUnlockScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(24.dp),
+                .padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Spacer(modifier = Modifier.height(48.dp))
+            Spacer(modifier = Modifier.height(32.dp))
 
             // App icon/logo
             Icon(
                 imageVector = Icons.Default.Lock,
                 contentDescription = null,
-                modifier = Modifier.size(64.dp),
+                modifier = Modifier.size(48.dp),
                 tint = MaterialTheme.colorScheme.primary
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
             // Title
             Text(
@@ -76,7 +78,7 @@ fun PinUnlockScreen(
                 fontWeight = FontWeight.Bold
             )
 
-            Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
             // Subtitle based on state
             Text(
@@ -91,7 +93,34 @@ fun PinUnlockScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
-            Spacer(modifier = Modifier.height(48.dp))
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Online/Offline mode toggle
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 32.dp)
+            ) {
+                Icon(
+                    imageVector = if (offlineMode) Icons.Default.CloudOff else Icons.Default.Cloud,
+                    contentDescription = null,
+                    tint = if (offlineMode) MaterialTheme.colorScheme.onSurfaceVariant else Color(0xFF4CAF50),
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (offlineMode) "Offline Mode" else "Online Mode",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = offlineMode,
+                    onCheckedChange = { offlineMode = it }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
 
             when (val currentState = state) {
                 is PinUnlockState.EnteringPin -> {
@@ -141,7 +170,7 @@ private fun PinEntryContent(
             maxLength = PinUnlockViewModel.PIN_LENGTH
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         // Error message
         AnimatedVisibility(
@@ -157,7 +186,7 @@ private fun PinEntryContent(
             )
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
         // Numeric keypad
         NumericKeypad(

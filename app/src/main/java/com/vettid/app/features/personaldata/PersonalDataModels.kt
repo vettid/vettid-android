@@ -24,6 +24,7 @@ data class PersonalDataItem(
     val isSystemField: Boolean = false,
     val isInPublicProfile: Boolean = false,  // Whether to include in public profile
     val isSensitive: Boolean = false,  // Whether to mask value (PASSWORD type fields)
+    val sortOrder: Int = 0,  // Order within category (lower = higher up)
     val createdAt: Instant,
     val updatedAt: Instant
 )
@@ -100,7 +101,7 @@ data class GroupedByCategory(
     companion object {
         fun fromItems(items: List<PersonalDataItem>): GroupedByCategory {
             val grouped = items.groupBy { it.category ?: DataCategory.OTHER }
-            // Sort categories in a logical order
+            // Sort categories in a logical order, and sort items within each category by sortOrder
             val orderedCategories = linkedMapOf<DataCategory, List<PersonalDataItem>>()
             listOf(
                 DataCategory.IDENTITY,
@@ -111,7 +112,12 @@ data class GroupedByCategory(
                 DataCategory.CRYPTO,
                 DataCategory.OTHER
             ).forEach { category ->
-                grouped[category]?.let { orderedCategories[category] = it }
+                grouped[category]?.let { categoryItems ->
+                    // Sort items within category by sortOrder, then by name as tiebreaker
+                    orderedCategories[category] = categoryItems.sortedWith(
+                        compareBy({ it.sortOrder }, { it.name })
+                    )
+                }
             }
             return GroupedByCategory(orderedCategories)
         }
@@ -137,6 +143,8 @@ sealed class PersonalDataEvent {
     object AddItem : PersonalDataEvent()
     data class DeleteItem(val itemId: String) : PersonalDataEvent()
     data class TogglePublicProfile(val itemId: String) : PersonalDataEvent()
+    data class MoveItemUp(val itemId: String) : PersonalDataEvent()
+    data class MoveItemDown(val itemId: String) : PersonalDataEvent()
     object Refresh : PersonalDataEvent()
 }
 
@@ -150,7 +158,9 @@ data class EditDataItemState(
     val type: DataType = DataType.PRIVATE,
     val fieldType: FieldType = FieldType.TEXT,
     val category: DataCategory? = null,
+    val originalCategory: DataCategory? = null,  // Track original category for detecting changes
     val isInPublicProfile: Boolean = false,
+    val sortOrder: Int = 0,
     val isEditing: Boolean = false,
     val isSaving: Boolean = false,
     val nameError: String? = null,

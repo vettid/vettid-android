@@ -687,15 +687,49 @@ class EnrollmentWizardViewModel @Inject constructor(
                         response.utks?.let { nitroUtks = it }
 
                         // Store ECIES public key for PIN unlock (different from attestation key!)
-                        response.eciesPublicKey?.let { eciesKeyB64 ->
-                            try {
-                                val eciesKeyBytes = android.util.Base64.decode(eciesKeyB64, android.util.Base64.NO_WRAP)
-                                credentialStore.storeEnclavePublicKey(eciesKeyBytes)
-                                Log.i(TAG, "Stored ECIES public key for PIN unlock (${eciesKeyBytes.size} bytes)")
-                            } catch (e: Exception) {
-                                Log.e(TAG, "Failed to decode ECIES public key", e)
+                        // CRITICAL: This key is required for PIN unlock after restart - fail enrollment if missing
+                        val eciesKeyB64 = response.eciesPublicKey
+                        if (eciesKeyB64 == null) {
+                            Log.e(TAG, "CRITICAL: No ECIES public key in PIN setup response - cannot continue")
+                            _state.value = current.copy(
+                                isSubmitting = false,
+                                error = "Enrollment error: Missing security key from server. Please try again."
+                            )
+                            return@fold
+                        }
+
+                        try {
+                            val eciesKeyBytes = android.util.Base64.decode(eciesKeyB64, android.util.Base64.NO_WRAP)
+                            credentialStore.storeEnclavePublicKey(eciesKeyBytes)
+                            Log.i(TAG, "Stored ECIES public key for PIN unlock (${eciesKeyBytes.size} bytes)")
+
+                            // Verify critical data was persisted (commit() is sync, so this should work)
+                            val storedKey = credentialStore.getEnclavePublicKey()
+                            if (storedKey == null) {
+                                Log.e(TAG, "CRITICAL: Enclave public key failed to persist after commit()!")
+                                _state.value = current.copy(
+                                    isSubmitting = false,
+                                    error = "Enrollment error: Failed to save security key. Please try again."
+                                )
+                                return@fold
+                            } else if (!storedKey.contentEquals(eciesKeyBytes)) {
+                                Log.e(TAG, "CRITICAL: Stored enclave public key doesn't match!")
+                                _state.value = current.copy(
+                                    isSubmitting = false,
+                                    error = "Enrollment error: Security key verification failed. Please try again."
+                                )
+                                return@fold
+                            } else {
+                                Log.i(TAG, "Verified: Enclave public key persisted correctly")
                             }
-                        } ?: Log.w(TAG, "No ECIES public key in PIN setup response")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to decode ECIES public key", e)
+                            _state.value = current.copy(
+                                isSubmitting = false,
+                                error = "Enrollment error: Invalid security key format. Please try again."
+                            )
+                            return@fold
+                        }
 
                         passwordSalt = cryptoManager.generateSalt()
 

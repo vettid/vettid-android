@@ -2,6 +2,7 @@ package com.vettid.app.ui.navigation
 
 import android.graphics.BitmapFactory
 import android.util.Base64
+import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
@@ -26,21 +27,16 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
+private const val TAG = "DrawerView"
+
 @Composable
 fun DrawerView(
     isOpen: Boolean,
     onClose: () -> Unit,
-    currentSection: AppSection,
-    onSectionChange: (AppSection) -> Unit,
-    userName: String = "VettID User",
+    currentItem: DrawerItem,
+    onItemSelected: (DrawerItem) -> Unit,
+    userName: String,
     userEmail: String = "",
-    vaultStatus: VaultStatus = VaultStatus.ACTIVE,
-    isDarkTheme: Boolean = false,
-    notificationsEnabled: Boolean = true,
-    onThemeToggle: () -> Unit = {},
-    onNotificationsToggle: () -> Unit = {},
-    onHelpClick: () -> Unit = {},
-    onSignOut: () -> Unit,
     profilePhotoBase64: String? = null
 ) {
     AnimatedVisibility(
@@ -49,11 +45,11 @@ fun DrawerView(
         exit = slideOutHorizontally(targetOffsetX = { -it })
     ) {
         Row(modifier = Modifier.fillMaxSize()) {
-            // Drawer content (70% width)
+            // Drawer content (75% width)
             Surface(
                 modifier = Modifier
                     .fillMaxHeight()
-                    .fillMaxWidth(0.7f),
+                    .fillMaxWidth(0.75f),
                 color = MaterialTheme.colorScheme.surface,
                 tonalElevation = 8.dp
             ) {
@@ -64,74 +60,27 @@ fun DrawerView(
                     DrawerHeader(
                         userName = userName,
                         userEmail = userEmail,
-                        vaultStatus = vaultStatus,
                         profilePhotoBase64 = profilePhotoBase64
                     )
 
-                    Divider()
+                    HorizontalDivider()
 
-                    // Section navigation
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    AppSection.entries.forEach { section ->
-                        DrawerSectionItem(
-                            icon = section.icon,
-                            title = section.title,
-                            selected = currentSection == section,
+                    // Main navigation items
+                    DrawerItem.entries.forEach { item ->
+                        DrawerNavigationItem(
+                            icon = item.icon,
+                            title = item.title,
+                            selected = currentItem == item,
                             onClick = {
-                                onSectionChange(section)
-                                onClose()
+                                Log.d(TAG, "Drawer item clicked: $item")
+                                onItemSelected(item)
                             }
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Divider()
-                    Spacer(modifier = Modifier.height(8.dp))
-
-                    // Quick Settings section per mobile-ui-plan.md Section 2.2
-                    Text(
-                        text = "Quick Settings",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
-                    )
-
-                    // Theme toggle
-                    QuickSettingToggle(
-                        icon = if (isDarkTheme) Icons.Default.DarkMode else Icons.Default.LightMode,
-                        title = "Dark Theme",
-                        checked = isDarkTheme,
-                        onCheckedChange = { onThemeToggle() }
-                    )
-
-                    // Notifications toggle
-                    QuickSettingToggle(
-                        icon = if (notificationsEnabled) Icons.Default.Notifications else Icons.Default.NotificationsOff,
-                        title = "Notifications",
-                        checked = notificationsEnabled,
-                        onCheckedChange = { onNotificationsToggle() }
-                    )
-
-                    // Help & Support
-                    DrawerSectionItem(
-                        icon = Icons.Default.Help,
-                        title = "Help & Support",
-                        selected = false,
-                        onClick = onHelpClick
-                    )
-
                     Spacer(modifier = Modifier.weight(1f))
-
-                    Divider()
-
-                    // Sign out
-                    DrawerSectionItem(
-                        icon = Icons.Default.Logout,
-                        title = "Sign Out",
-                        selected = false,
-                        onClick = onSignOut
-                    )
 
                     Spacer(modifier = Modifier.height(16.dp))
                 }
@@ -156,16 +105,20 @@ fun DrawerView(
 private fun DrawerHeader(
     userName: String,
     userEmail: String,
-    vaultStatus: VaultStatus,
     profilePhotoBase64: String? = null
 ) {
     // Decode profile photo if available
+    Log.d(TAG, "DrawerHeader - profilePhotoBase64 length: ${profilePhotoBase64?.length ?: 0}")
     val profileBitmap = remember(profilePhotoBase64) {
         profilePhotoBase64?.let { base64 ->
             try {
                 val bytes = Base64.decode(base64, Base64.DEFAULT)
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                Log.d(TAG, "Decoded ${bytes.size} bytes for profile photo")
+                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                Log.d(TAG, "Bitmap decoded: ${bitmap != null}, size: ${bitmap?.width}x${bitmap?.height}")
+                bitmap
             } catch (e: Exception) {
+                Log.e(TAG, "Failed to decode profile photo", e)
                 null
             }
         }
@@ -182,24 +135,37 @@ private fun DrawerHeader(
                 bitmap = profileBitmap.asImageBitmap(),
                 contentDescription = "Profile photo",
                 modifier = Modifier
-                    .size(64.dp)
+                    .size(72.dp)
                     .clip(CircleShape),
                 contentScale = ContentScale.Crop
             )
         } else {
             Surface(
                 modifier = Modifier
-                    .size(64.dp)
+                    .size(72.dp)
                     .clip(CircleShape),
                 color = MaterialTheme.colorScheme.primaryContainer
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = Icons.Default.Person,
-                        contentDescription = null,
-                        modifier = Modifier.size(36.dp),
-                        tint = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
+                    // Show initials if we have a name
+                    val initials = userName.split(" ")
+                        .mapNotNull { it.firstOrNull()?.uppercaseChar() }
+                        .take(2)
+                        .joinToString("")
+                    if (initials.isNotEmpty()) {
+                        Text(
+                            text = initials,
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Person,
+                            contentDescription = null,
+                            modifier = Modifier.size(40.dp),
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
                 }
             }
         }
@@ -208,45 +174,17 @@ private fun DrawerHeader(
 
         // User name
         Text(
-            text = userName,
-            style = MaterialTheme.typography.titleMedium,
+            text = userName.ifBlank { "VettID User" },
+            style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.SemiBold
         )
 
         // User email
         if (userEmail.isNotBlank()) {
+            Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = userEmail,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Vault status
-        Row(
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = when (vaultStatus) {
-                    VaultStatus.ACTIVE -> Icons.Default.CheckCircle
-                    VaultStatus.INACTIVE -> Icons.Default.Cancel
-                    VaultStatus.STARTING -> Icons.Default.HourglassTop
-                    VaultStatus.STOPPING -> Icons.Default.HourglassBottom
-                },
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-                tint = when (vaultStatus) {
-                    VaultStatus.ACTIVE -> MaterialTheme.colorScheme.primary
-                    VaultStatus.INACTIVE -> MaterialTheme.colorScheme.error
-                    VaultStatus.STARTING, VaultStatus.STOPPING -> MaterialTheme.colorScheme.tertiary
-                }
-            )
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = "Vault ${vaultStatus.displayName}",
-                style = MaterialTheme.typography.bodySmall,
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
@@ -254,7 +192,7 @@ private fun DrawerHeader(
 }
 
 @Composable
-private fun DrawerSectionItem(
+private fun DrawerNavigationItem(
     icon: ImageVector,
     title: String,
     selected: Boolean,
@@ -263,7 +201,7 @@ private fun DrawerSectionItem(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
+            .padding(horizontal = 12.dp, vertical = 2.dp),
         shape = MaterialTheme.shapes.medium,
         color = if (selected) {
             MaterialTheme.colorScheme.secondaryContainer
@@ -275,7 +213,7 @@ private fun DrawerSectionItem(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
@@ -301,45 +239,7 @@ private fun DrawerSectionItem(
     }
 }
 
-@Composable
-private fun QuickSettingToggle(
-    icon: ImageVector,
-    title: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp),
-        shape = MaterialTheme.shapes.medium,
-        color = Color.Transparent
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.width(16.dp))
-            Text(
-                text = title,
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.weight(1f)
-            )
-            Switch(
-                checked = checked,
-                onCheckedChange = onCheckedChange
-            )
-        }
-    }
-}
-
+// Keep for backwards compatibility
 enum class VaultStatus(val displayName: String) {
     ACTIVE("Active"),
     INACTIVE("Inactive"),

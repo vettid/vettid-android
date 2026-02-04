@@ -7,6 +7,7 @@ import com.vettid.app.core.events.ProfilePhotoEvents
 import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.storage.CredentialStore
+import com.vettid.app.core.storage.PersonalDataStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -28,9 +29,16 @@ data class AppState(
     val natsOwnerSpaceId: String? = null,
     val natsMessageSpaceId: String? = null,
     val natsCredentialsExpiry: String? = null,
+    // User profile info
+    val firstName: String = "",
+    val lastName: String = "",
+    val userEmail: String = "",
     // Profile photo (Base64 encoded)
     val profilePhoto: String? = null
-)
+) {
+    val displayName: String
+        get() = listOf(firstName, lastName).filter { it.isNotBlank() }.joinToString(" ")
+}
 
 enum class VaultStatus {
     PENDING_ENROLLMENT,
@@ -63,7 +71,8 @@ class AppViewModel @Inject constructor(
     private val credentialStore: CredentialStore,
     private val natsAutoConnector: NatsAutoConnector,
     private val ownerSpaceClient: OwnerSpaceClient,
-    private val profilePhotoEvents: ProfilePhotoEvents
+    private val profilePhotoEvents: ProfilePhotoEvents,
+    private val personalDataStore: PersonalDataStore
 ) : ViewModel() {
 
     private val _appState = MutableStateFlow(AppState())
@@ -73,6 +82,32 @@ class AppViewModel @Inject constructor(
         refreshCredentialStatus()
         observeNatsConnectionState()
         observeProfilePhotoUpdates()
+        loadUserProfile()
+    }
+
+    /**
+     * Load user profile info from local storage.
+     */
+    private fun loadUserProfile() {
+        viewModelScope.launch {
+            val systemFields = personalDataStore.getSystemFields()
+            val existingPhoto = _appState.value.profilePhoto
+            _appState.update {
+                it.copy(
+                    firstName = systemFields?.firstName ?: "",
+                    lastName = systemFields?.lastName ?: "",
+                    userEmail = systemFields?.email ?: ""
+                )
+            }
+            Log.d(TAG, "Loaded user profile: ${systemFields?.firstName ?: ""} ${systemFields?.lastName ?: ""}, photo preserved: ${_appState.value.profilePhoto?.length ?: 0} (was: ${existingPhoto?.length ?: 0})")
+        }
+    }
+
+    /**
+     * Refresh user profile info (called after enrollment or profile update).
+     */
+    fun refreshUserProfile() {
+        loadUserProfile()
     }
 
     fun refreshCredentialStatus() {
@@ -88,8 +123,30 @@ class AppViewModel @Inject constructor(
     fun setAuthenticated(authenticated: Boolean) {
         _appState.update { it.copy(isAuthenticated = authenticated) }
 
-        if (authenticated) {
-            // Attempt NATS auto-connect after successful authentication
+        if (authenticated && !credentialStore.getOfflineMode()) {
+            // Attempt NATS auto-connect after successful authentication (unless offline)
+            connectToNats()
+        }
+    }
+
+    /**
+     * Set offline mode preference and update connection state accordingly.
+     */
+    fun setOfflineMode(enabled: Boolean) {
+        credentialStore.setOfflineMode(enabled)
+        if (enabled) {
+            // Disconnect from NATS when going offline
+            _appState.update {
+                it.copy(
+                    natsConnectionState = NatsConnectionState.Idle,
+                    natsError = null
+                )
+            }
+            viewModelScope.launch {
+                natsAutoConnector.disconnect()
+            }
+        } else {
+            // Attempt to reconnect when coming online
             connectToNats()
         }
     }
@@ -252,9 +309,12 @@ class AppViewModel @Inject constructor(
      */
     private fun fetchProfilePhoto() {
         viewModelScope.launch {
+            Log.d(TAG, "Fetching profile photo...")
             ownerSpaceClient.getProfilePhoto()
                 .onSuccess { photo ->
+                    Log.d(TAG, "Profile photo fetched: ${photo?.length ?: 0} chars")
                     _appState.update { it.copy(profilePhoto = photo) }
+                    Log.d(TAG, "AppState.profilePhoto updated: ${_appState.value.profilePhoto?.length ?: 0} chars")
                 }
                 .onFailure { error ->
                     Log.w(TAG, "Failed to fetch profile photo: ${error.message}")

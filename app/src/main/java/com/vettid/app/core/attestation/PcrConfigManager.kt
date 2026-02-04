@@ -9,9 +9,7 @@ import androidx.security.crypto.MasterKey
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import dagger.hilt.android.qualifiers.ApplicationContext
-import org.bouncycastle.jce.provider.BouncyCastleProvider
 import java.security.KeyFactory
-import java.security.Security
 import java.security.Signature
 import java.security.spec.X509EncodedKeySpec
 import javax.inject.Inject
@@ -348,11 +346,6 @@ class PcrConfigManager @Inject constructor(
         // The signing key must be properly configured before release
 
         try {
-            // Ensure Bouncy Castle provider is registered
-            if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
-                Security.addProvider(BouncyCastleProvider())
-            }
-
             // SECURITY: Validate signing key is properly configured
             val publicKeyBytes = try {
                 Base64.decode(VETTID_SIGNING_KEY_BASE64, Base64.NO_WRAP)
@@ -367,7 +360,10 @@ class PcrConfigManager @Inject constructor(
                 return false
             }
             val keySpec = X509EncodedKeySpec(publicKeyBytes)
-            val keyFactory = KeyFactory.getInstance("EC", BouncyCastleProvider.PROVIDER_NAME)
+
+            // Use default provider for EC operations (Android's default handles EC well)
+            // Note: Do NOT explicitly specify BouncyCastle - it may not have "EC" on all devices
+            val keyFactory = KeyFactory.getInstance("EC")
             val publicKey = keyFactory.generatePublic(keySpec)
 
             // Build the message that was signed (canonical JSON without signature/public_key)
@@ -378,7 +374,8 @@ class PcrConfigManager @Inject constructor(
             val hash = digest.digest(messageBytes)
 
             // Verify ECDSA signature (DER-encoded from KMS)
-            val signature = Signature.getInstance("SHA256withECDSA", BouncyCastleProvider.PROVIDER_NAME)
+            // Use default provider for signature verification
+            val signature = Signature.getInstance("SHA256withECDSA")
             signature.initVerify(publicKey)
             signature.update(hash)
 

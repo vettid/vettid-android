@@ -48,6 +48,7 @@ fun FeedContent(
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val syncState by viewModel.syncState.collectAsState()
     val isOnline by viewModel.isOnline.collectAsState()
+    val isOfflineModeEnabled by viewModel.isOfflineModeEnabled.collectAsState()
 
     // Snackbar state for action feedback
     val snackbarHostState = remember { SnackbarHostState() }
@@ -95,8 +96,8 @@ fun FeedContent(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Offline banner
-        val showOffline = !isOnline || (state as? FeedState.Loaded)?.isOffline == true
+        // Don't show offline banner if user intentionally chose offline mode
+        val showOffline = !isOfflineModeEnabled && (!isOnline || (state as? FeedState.Loaded)?.isOffline == true)
         if (showOffline) {
             OfflineBanner(
                 isSyncing = syncState == SyncState.SYNCING,
@@ -106,11 +107,24 @@ fun FeedContent(
 
         Box(modifier = Modifier.weight(1f)) {
             when (val currentState = state) {
-                is FeedState.Loading -> LoadingContent()
-                is FeedState.Empty -> EmptyContent(
-                    isRefreshing = isRefreshing,
-                    onRefresh = { viewModel.refresh() }
-                )
+                is FeedState.Loading -> {
+                    // If in offline mode, don't show loading - show empty or cached
+                    if (isOfflineModeEnabled) {
+                        OfflineModeContent()
+                    } else {
+                        LoadingContent()
+                    }
+                }
+                is FeedState.Empty -> {
+                    if (isOfflineModeEnabled) {
+                        OfflineModeContent()
+                    } else {
+                        EmptyContent(
+                            isRefreshing = isRefreshing,
+                            onRefresh = { viewModel.refresh() }
+                        )
+                    }
+                }
                 is FeedState.Loaded -> FeedList(
                     events = currentState.events,
                     isRefreshing = isRefreshing,
@@ -120,10 +134,17 @@ fun FeedContent(
                     onDelete = { viewModel.deleteEvent(it.eventId) },
                     onAction = { event, action -> viewModel.executeAction(event.eventId, action) }
                 )
-                is FeedState.Error -> ErrorContent(
-                    message = currentState.message,
-                    onRetry = { viewModel.loadFeed() }
-                )
+                is FeedState.Error -> {
+                    // If in offline mode, show friendly offline content instead of error
+                    if (isOfflineModeEnabled) {
+                        OfflineModeContent()
+                    } else {
+                        ErrorContent(
+                            message = currentState.message,
+                            onRetry = { viewModel.loadFeed() }
+                        )
+                    }
+                }
             }
 
             SnackbarHost(
@@ -170,6 +191,43 @@ private fun OfflineBanner(
             ) {
                 Text(if (isSyncing) "Refresh" else "Retry")
             }
+        }
+    }
+}
+
+/**
+ * Content shown when user has intentionally chosen offline mode.
+ * Shows a friendly message instead of error state.
+ */
+@Composable
+private fun OfflineModeContent() {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(32.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.CloudOff,
+                contentDescription = null,
+                modifier = Modifier.size(64.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "Offline Mode",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "You're working offline. Go online to see your feed.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }

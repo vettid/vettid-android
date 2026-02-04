@@ -184,23 +184,19 @@ fun PublicProfilePhaseContent(
                             color = MaterialTheme.colorScheme.primary
                         )
 
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                        run {
+                            val allSelected = availableFields.filter { !it.isSensitive }
+                                .all { selectedFields.contains(it.namespace) }
+
                             FilledTonalButton(
-                                onClick = onSelectAll,
+                                onClick = { if (allSelected) onSelectNone() else onSelectAll() },
                                 modifier = Modifier.height(32.dp),
                                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)
                             ) {
-                                Text("All", style = MaterialTheme.typography.labelMedium)
-                            }
-                            OutlinedButton(
-                                onClick = onSelectNone,
-                                modifier = Modifier.height(32.dp),
-                                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp)
-                            ) {
-                                Text("None", style = MaterialTheme.typography.labelMedium)
+                                Text(
+                                    text = if (allSelected) "None" else "All",
+                                    style = MaterialTheme.typography.labelMedium
+                                )
                             }
                         }
                     }

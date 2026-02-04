@@ -2,6 +2,7 @@ package com.vettid.app.ui.components
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -14,14 +15,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import com.vettid.app.NatsConnectionState
 
 /**
- * Small status indicator showing NATS connection state.
- * Designed to fit in an app bar or header.
+ * Cloud icon status indicator showing NATS connection state.
+ * Designed to fit in an app bar or header. Opens settings when clicked.
  */
 @Composable
 fun NatsConnectionStatusIndicator(
@@ -35,7 +38,7 @@ fun NatsConnectionStatusIndicator(
             NatsConnectionState.Connecting, NatsConnectionState.Checking -> Color(0xFFFFC107) // Amber
             NatsConnectionState.CredentialsExpired -> Color(0xFFFF9800) // Orange
             NatsConnectionState.Failed -> Color(0xFFF44336) // Red
-            NatsConnectionState.Idle -> Color(0xFF9E9E9E) // Gray
+            NatsConnectionState.Idle -> Color(0xFF757575) // Dark gray for offline
         },
         animationSpec = tween(300),
         label = "statusColor"
@@ -56,20 +59,50 @@ fun NatsConnectionStatusIndicator(
     val isConnecting = connectionState == NatsConnectionState.Connecting ||
                        connectionState == NatsConnectionState.Checking
 
-    Box(
+    // Choose cloud icon based on state
+    val cloudIcon = when (connectionState) {
+        NatsConnectionState.Connected -> Icons.Default.CloudDone
+        NatsConnectionState.Connecting, NatsConnectionState.Checking -> Icons.Default.CloudSync
+        NatsConnectionState.Failed -> Icons.Default.CloudOff
+        NatsConnectionState.Idle -> Icons.Default.Cloud  // Gray filled cloud with red slash overlay
+        else -> Icons.Default.Cloud
+    }
+
+    IconButton(
+        onClick = onClick,
         modifier = modifier
-            .clip(CircleShape)
-            .clickable(onClick = onClick)
-            .padding(8.dp),
-        contentAlignment = Alignment.Center
     ) {
-        Box(
-            modifier = Modifier
-                .size(10.dp)
-                .graphicsLayer { alpha = if (isConnecting) pulseAlpha else 1f }
-                .clip(CircleShape)
-                .background(statusColor)
-        )
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = cloudIcon,
+                contentDescription = when (connectionState) {
+                    NatsConnectionState.Connected -> "Connected to vault"
+                    NatsConnectionState.Connecting -> "Connecting to vault"
+                    NatsConnectionState.Checking -> "Checking credentials"
+                    NatsConnectionState.CredentialsExpired -> "Session expired"
+                    NatsConnectionState.Failed -> "Connection failed"
+                    NatsConnectionState.Idle -> "Offline mode"
+                },
+                tint = statusColor,
+                modifier = Modifier
+                    .size(24.dp)
+                    .graphicsLayer { alpha = if (isConnecting) pulseAlpha else 1f }
+            )
+
+            // Add red slash overlay for offline/idle state
+            if (connectionState == NatsConnectionState.Idle) {
+                Canvas(modifier = Modifier.size(24.dp)) {
+                    val strokeWidth = 2.5.dp.toPx()
+                    drawLine(
+                        color = Color(0xFFE53935), // Red
+                        start = Offset(size.width * 0.15f, size.height * 0.85f),
+                        end = Offset(size.width * 0.85f, size.height * 0.15f),
+                        strokeWidth = strokeWidth,
+                        cap = StrokeCap.Round
+                    )
+                }
+            }
+        }
     }
 }
 

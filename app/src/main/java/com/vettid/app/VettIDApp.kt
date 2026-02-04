@@ -10,7 +10,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Help
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -41,11 +44,13 @@ import com.vettid.app.features.auth.BiometricAuthManager
 import com.vettid.app.features.enrollment.EnrollmentScreen
 import com.vettid.app.features.feed.FeedContent
 import com.vettid.app.features.archive.ArchiveScreenFull
+import com.vettid.app.features.archive.ArchiveContent
 import com.vettid.app.features.secrets.SecretsScreenFull
 import com.vettid.app.features.secrets.AddSecretScreen
 import com.vettid.app.features.setup.FirstTimeSetupScreen
 import com.vettid.app.features.vault.DeployVaultScreen
 import com.vettid.app.features.vault.VaultPreferencesScreenFull
+import com.vettid.app.features.vault.VaultPreferencesContent
 import kotlinx.coroutines.launch
 import com.vettid.app.features.handlers.HandlerDetailScreen
 import com.vettid.app.features.handlers.HandlerDiscoveryScreen
@@ -66,6 +71,7 @@ import com.vettid.app.features.debug.CredentialDebugScreen
 import com.vettid.app.features.voting.MyVotesScreen
 import com.vettid.app.features.voting.ProposalDetailScreen
 import com.vettid.app.features.voting.ProposalsScreen
+import com.vettid.app.features.voting.ProposalsContent
 import com.vettid.app.features.transfer.TransferRequestScreen
 import com.vettid.app.features.transfer.TransferApprovalScreen
 import com.vettid.app.features.postenrollment.PostEnrollmentScreen
@@ -387,9 +393,12 @@ fun VettIDApp(
             )
         }
         composable(Screen.Authentication.route) {
-            // Use PIN unlock instead of biometric authentication
+            // Use PIN unlock with online/offline mode toggle
             PinUnlockScreen(
-                onUnlocked = { appViewModel.setAuthenticated(true) }
+                onUnlocked = { offlineMode ->
+                    appViewModel.setOfflineMode(offlineMode)
+                    appViewModel.setAuthenticated(true)
+                }
             )
         }
         composable(Screen.Main.route) {
@@ -454,9 +463,7 @@ fun VettIDApp(
                 onNavigateToSecurityAuditLog = {
                     navController.navigate(Screen.SecurityAuditLog.route)
                 },
-                onSignOut = {
-                    appViewModel.signOut()
-                }
+                appViewModel = appViewModel
             )
         }
         composable(Screen.HandlerDiscovery.route) {
@@ -1083,9 +1090,10 @@ fun MainScreen(
     onNavigateToPinSetup: () -> Unit = {},
     onNavigateToCredentialDebug: () -> Unit = {},
     onNavigateToProposals: () -> Unit = {},
+    onNavigateToProposalDetail: (String) -> Unit = {},
     onNavigateToMyVotes: () -> Unit = {},
+    onNavigateToSecretDetail: (String) -> Unit = {},
     onNavigateToSecurityAuditLog: () -> Unit = {},
-    onSignOut: () -> Unit = {},
     appViewModel: AppViewModel = hiltViewModel(),
     badgeCountsViewModel: BadgeCountsViewModel = hiltViewModel()
 ) {
@@ -1120,82 +1128,45 @@ fun MainScreen(
     MainScaffold(
         navigationState = navigationState,
         onNavigationStateChange = { navigationState = it },
-        userName = "VettID User",
-        userEmail = "",
-        vaultStatus = com.vettid.app.ui.navigation.VaultStatus.ACTIVE,
+        userName = appState.displayName,
+        userEmail = appState.userEmail,
         profilePhotoBase64 = appState.profilePhoto,
         // NATS connection state
         natsConnectionState = appState.natsConnectionState,
         natsErrorMessage = appState.natsError,
         onNatsRetry = { appViewModel.retryNatsConnection() },
         onNatsStatusClick = { showConnectionDetailsDialog = true },
-        onSignOutVaultOnly = { /* Lock vault only */ },
-        onSignOutVaultServices = onSignOut,
-        onHeaderAction = {
-            // Handle header action based on current screen
-            when (navigationState.currentSection) {
-                AppSection.VAULT -> when (navigationState.vaultTab) {
-                    VaultTab.CONNECTIONS -> onNavigateToCreateInvitation()
-                    VaultTab.FEED -> { /* No action for feed */ }
-                    VaultTab.MORE -> { }
-                }
-                AppSection.VAULT_SERVICES -> when (navigationState.vaultServicesTab) {
-                    VaultServicesTab.STATUS -> { /* Refresh vault status */ }
-                    VaultServicesTab.BACKUPS -> { /* Backup actions */ }
-                    VaultServicesTab.MANAGE -> { /* Manage vault actions */ }
-                }
-                AppSection.APP_SETTINGS -> { /* No header actions for settings */ }
-            }
-        },
-        onSearchClick = {
-            // Handle search based on current screen
-        },
-        onNavigateToPersonalData = onNavigateToPersonalData,
-        onNavigateToSecrets = onNavigateToSecrets,
-        onNavigateToArchive = onNavigateToArchive,
-        onNavigateToVoting = onNavigateToProposals,
-        onNavigateToPreferences = onNavigateToPreferences,
-        // Badge counts from real data
-        pendingConnectionsCount = pendingConnectionsCount,
-        unreadFeedCount = unreadFeedCount,
-        // Vault section content
-        vaultConnectionsContent = {
-            ConnectionsContentEmbedded(
-                onConnectionClick = onNavigateToConnectionDetail,
-                onCreateInvitation = onNavigateToCreateInvitation,
-                onScanInvitation = onNavigateToScanInvitation
-            )
-        },
-        vaultFeedContent = {
+        // Content for each drawer item
+        feedContent = {
             FeedContent(
                 onNavigateToConversation = onNavigateToConversation,
                 onNavigateToHandler = onNavigateToHandlerDetail,
                 onNavigateToBackup = { onNavigateToBackups() }
             )
         },
-        // Vault Services section content
-        vaultServicesStatusContent = {
-            VaultStatusContentEmbedded()
-        },
-        vaultServicesBackupsContent = {
-            VaultServicesBackupsContent()
-        },
-        vaultServicesManageContent = {
-            VaultServicesManageContent()
-        },
-        // App Settings section content
-        appSettingsGeneralContent = {
-            AppSettingsGeneralContent(
-                onNavigateToCredentialDebug = onNavigateToCredentialDebug
+        connectionsContent = {
+            ConnectionsContentEmbedded(
+                onConnectionClick = onNavigateToConnectionDetail,
+                onCreateInvitation = onNavigateToCreateInvitation,
+                onScanInvitation = onNavigateToScanInvitation
             )
         },
-        appSettingsSecurityContent = {
-            AppSettingsSecurityContent(
-                onNavigateToSecurityAuditLog = onNavigateToSecurityAuditLog
+        personalDataContent = {
+            PersonalDataContent()
+        },
+        secretsContent = {
+            SecretsContentEmbedded(onSecretClick = onNavigateToSecretDetail)
+        },
+        archiveContent = {
+            ArchiveContentEmbedded()
+        },
+        votingContent = {
+            ProposalsContent(
+                onNavigateToProposal = { proposalId -> onNavigateToProposalDetail(proposalId) }
             )
         },
-        appSettingsBackupContent = {
-            AppSettingsBackupContent()
+        settingsContent = {
+            SettingsContent()
         },
         snackbarHostState = snackbarHostState
     )
@@ -1707,5 +1678,27 @@ private fun PlaceholderScreenWithBack(
             }
         }
     }
+}
+
+// Embedded content composables for simplified navigation
+
+@Composable
+private fun SecretsContentEmbedded(onSecretClick: (String) -> Unit = {}) {
+    PlaceholderSection(
+        icon = Icons.Default.Lock,
+        title = "Secrets",
+        description = "Store and manage sensitive secrets with password-only access."
+    )
+}
+
+@Composable
+private fun ArchiveContentEmbedded() {
+    ArchiveContent()
+}
+
+@Composable
+private fun SettingsContent() {
+    // Settings content now includes About and Help & Support in the scrollable list
+    VaultPreferencesContent()
 }
 

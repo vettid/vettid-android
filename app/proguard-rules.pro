@@ -134,6 +134,11 @@
 # Keep Signal Argon2 library
 -keep class org.signal.argon2.** { *; }
 
+# Keep BouncyCastle - required for PCR manifest signature verification and attestation
+-keep class org.bouncycastle.** { *; }
+-keep interface org.bouncycastle.** { *; }
+-keepclassmembers class org.bouncycastle.** { *; }
+
 # Keep NATS client
 -keep class io.nats.client.** { *; }
 

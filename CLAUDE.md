@@ -2,6 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## IMPORTANT: Always Use Scripts First
+
+**Before running individual AWS, adb, or other CLI commands, ALWAYS check for existing scripts in the `scripts/` directory.** This project has well-tested scripts for common operations like:
+- Vault decommission/reset
+- Deployment
+- Log viewing
+
+Running individual commands (like `aws s3 rm` or direct Lambda invocations) instead of using the proper scripts can cause incomplete operations, data inconsistencies, or missed cleanup steps. The scripts handle all edge cases and proper sequencing.
+
 ## Build Commands
 
 ```bash

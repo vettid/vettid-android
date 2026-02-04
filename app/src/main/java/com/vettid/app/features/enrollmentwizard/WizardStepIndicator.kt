@@ -21,7 +21,7 @@ import androidx.compose.ui.unit.dp
 fun WizardStepIndicator(
     currentStep: Int,
     totalSteps: Int = WizardPhase.TOTAL_STEPS,
-    stepLabels: List<String> = listOf("Start", "Verify", "PIN", "Password", "Confirm", "Profile", "Done"),
+    stepLabels: List<String> = WizardPhase.entries.map { it.label },
     modifier: Modifier = Modifier
 ) {
     val stepLabel = stepLabels.getOrNull(currentStep) ?: ""

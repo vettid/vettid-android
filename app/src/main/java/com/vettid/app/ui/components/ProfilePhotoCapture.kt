@@ -434,7 +434,7 @@ private fun PhotoPreview(
             ) {
                 Icon(Icons.Default.Check, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Use Photo")
+                Text("Save to Profile")
             }
         }
 
@@ -506,9 +506,11 @@ private fun processAndCompressPhoto(imageProxy: ImageProxy): Pair<Bitmap, ByteAr
         val rotationDegrees = imageProxy.imageInfo.rotationDegrees
         val matrix = Matrix()
 
-        // Front camera images are mirrored, so flip horizontally
-        matrix.preScale(-1f, 1f)
+        // For front camera selfie: rotate by camera degrees, then mirror horizontally
+        // The rotation corrects the camera sensor orientation
+        // The horizontal mirror makes it look like a selfie (not reversed)
         matrix.postRotate(rotationDegrees.toFloat())
+        matrix.postScale(-1f, 1f)  // Mirror horizontally only for selfie effect
 
         val rotatedBitmap = Bitmap.createBitmap(
             originalBitmap,

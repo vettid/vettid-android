@@ -13,6 +13,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.vettid.app.core.network.HandlerSummary
+import com.vettid.app.core.network.InstalledHandler
 import kotlinx.coroutines.flow.collectLatest
 
 /**
@@ -63,6 +65,8 @@ fun VaultPreferencesContent(
                 natsEndpoint = state.natsEndpoint,
                 actionInProgress = state.vaultActionInProgress,
                 errorMessage = state.vaultErrorMessage,
+                pcrVersion = state.pcrVersion,
+                pcr0Hash = state.pcr0Hash,
                 onStartClick = { viewModel.startVault() },
                 onStopClick = { viewModel.stopVault() },
                 onRefreshClick = { viewModel.refreshVaultStatus() }
@@ -92,14 +96,16 @@ fun VaultPreferencesContent(
             Spacer(modifier = Modifier.height(24.dp))
 
             // Event Handlers
-            PreferencesSection(title = "EVENT HANDLERS") {
-                PreferencesItem(
-                    icon = Icons.Default.Extension,
-                    title = "Manage Handlers",
-                    subtitle = "${state.installedHandlerCount} installed, ${state.availableHandlerCount} available",
-                    onClick = { viewModel.onManageHandlersClick() }
-                )
-            }
+            EventHandlersSection(
+                installedCount = state.installedHandlerCount,
+                availableCount = state.availableHandlerCount,
+                installedHandlers = state.installedHandlers,
+                availableHandlers = state.availableHandlers,
+                isLoading = state.handlersLoading,
+                error = state.handlersError,
+                onManageClick = { viewModel.onManageHandlersClick() },
+                onRefresh = { viewModel.loadHandlers() }
+            )
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -150,6 +156,18 @@ fun VaultPreferencesContent(
                     )
                 }
             }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // About section
+            AboutSection()
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Help & Support section
+            HelpSupportSection()
+
+            Spacer(modifier = Modifier.height(16.dp))
         }
 
         // Snackbar host
@@ -352,13 +370,18 @@ private fun VaultServerSection(
     natsEndpoint: String?,
     actionInProgress: Boolean,
     errorMessage: String?,
+    pcrVersion: String?,
+    pcr0Hash: String?,
     onStartClick: () -> Unit,
     onStopClick: () -> Unit,
     onRefreshClick: () -> Unit
 ) {
-    PreferencesSection(title = "VAULT SERVER") {
-        // Status Row
+    var showLogsDialog by remember { mutableStateOf(false) }
+
+    PreferencesSection(title = "VAULT") {
+        // Status Row - clickable to show logs
         ListItem(
+            modifier = Modifier.clickable { showLogsDialog = true },
             headlineContent = { Text("Status") },
             supportingContent = {
                 Text(
@@ -443,6 +466,41 @@ private fun VaultServerSection(
             )
         }
 
+        // PCR Attestation Info
+        if (pcrVersion != null || pcr0Hash != null) {
+            Divider()
+            ListItem(
+                headlineContent = { Text("Enclave Attestation") },
+                supportingContent = {
+                    Column {
+                        if (pcrVersion != null) {
+                            Text("PCR Version: $pcrVersion")
+                        }
+                        if (pcr0Hash != null) {
+                            // Show full PCR0 hash with word wrap
+                            Text(
+                                text = "PCR0:",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text(
+                                text = pcr0Hash,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                softWrap = true
+                            )
+                        }
+                    }
+                },
+                leadingContent = {
+                    Icon(
+                        imageVector = Icons.Default.VerifiedUser,
+                        contentDescription = null,
+                        tint = Color(0xFF4CAF50)
+                    )
+                }
+            )
+        }
+
         // Only show start/stop buttons for legacy EC2 mode (not Nitro Enclave)
         if (status != VaultServerStatus.ENCLAVE_READY) {
             Divider()
@@ -518,5 +576,555 @@ private fun VaultServerSection(
                 }
             }
         }
+    }
+
+    // Vault logs dialog
+    if (showLogsDialog) {
+        VaultLogsDialog(onDismiss = { showLogsDialog = false })
+    }
+}
+
+@Composable
+private fun VaultLogsDialog(onDismiss: () -> Unit) {
+    var logs by remember { mutableStateOf("Loading vault logs...") }
+
+    // Load vault-related logs
+    LaunchedEffect(Unit) {
+        logs = try {
+            val process = Runtime.getRuntime().exec(
+                arrayOf("logcat", "-d", "-t", "150", "-s",
+                    "NitroEnrollmentClient:*",
+                    "NitroAttestation:*",
+                    "NitroWebSocket:*",
+                    "VaultManager:*",
+                    "CredentialStore:*",
+                    "CryptoManager:*",
+                    "PinUnlockViewModel:*",
+                    "EnrollmentWizardVM:*"
+                )
+            )
+            val output = process.inputStream.bufferedReader().readText()
+            if (output.isBlank()) {
+                "No recent vault logs found.\n\nTry performing a vault operation to generate logs."
+            } else {
+                output
+            }
+        } catch (e: Exception) {
+            "Failed to load vault logs: ${e.message}"
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Terminal,
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Vault Manager Logs")
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 400.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = logs,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
+}
+
+// MARK: - About Section
+
+@Composable
+private fun AboutSection() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var showLogsDialog by remember { mutableStateOf(false) }
+
+    // Get app version info
+    val versionName = remember {
+        try {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "Unknown"
+        } catch (e: Exception) {
+            "Unknown"
+        }
+    }
+    val versionCode = remember {
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                context.packageManager.getPackageInfo(context.packageName, 0).longVersionCode.toString()
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(context.packageName, 0).versionCode.toString()
+            }
+        } catch (e: Exception) {
+            "Unknown"
+        }
+    }
+
+    PreferencesSection(title = "ABOUT") {
+        ListItem(
+            headlineContent = { Text("Version") },
+            supportingContent = { Text("$versionName ($versionCode)") },
+            leadingContent = {
+                Icon(
+                    imageVector = Icons.Default.Info,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        )
+
+        Divider()
+
+        ListItem(
+            modifier = Modifier.clickable { showLogsDialog = true },
+            headlineContent = { Text("App Logs") },
+            supportingContent = { Text("View recent app activity") },
+            leadingContent = {
+                Icon(
+                    imageVector = Icons.Default.Terminal,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            trailingContent = {
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        )
+    }
+
+    // Logs dialog
+    if (showLogsDialog) {
+        AppLogsDialog(onDismiss = { showLogsDialog = false })
+    }
+}
+
+@Composable
+private fun AppLogsDialog(onDismiss: () -> Unit) {
+    var logs by remember { mutableStateOf("Loading logs...") }
+
+    // Load logs
+    LaunchedEffect(Unit) {
+        logs = try {
+            val process = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-t", "100", "--pid=${android.os.Process.myPid()}"))
+            process.inputStream.bufferedReader().readText()
+        } catch (e: Exception) {
+            "Failed to load logs: ${e.message}"
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("App Logs") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 400.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                Text(
+                    text = logs,
+                    style = MaterialTheme.typography.bodySmall,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
+}
+
+// MARK: - Help & Support Section
+
+@Composable
+private fun HelpSupportSection() {
+    val context = androidx.compose.ui.platform.LocalContext.current
+
+    PreferencesSection(title = "HELP & SUPPORT") {
+        ListItem(
+            modifier = Modifier.clickable {
+                // Open support URL or email
+                try {
+                    val intent = android.content.Intent(
+                        android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse("https://vettid.com/support")
+                    )
+                    context.startActivity(intent)
+                } catch (e: Exception) {
+                    // Ignore
+                }
+            },
+            headlineContent = { Text("Get Help") },
+            supportingContent = { Text("FAQs, guides, and contact support") },
+            leadingContent = {
+                Icon(
+                    imageVector = Icons.Default.Help,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            trailingContent = {
+                Icon(
+                    imageVector = Icons.Default.OpenInNew,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        )
+
+        Divider()
+
+        ListItem(
+            modifier = Modifier.clickable {
+                // Open feedback email
+                try {
+                    val intent = android.content.Intent(android.content.Intent.ACTION_SENDTO).apply {
+                        data = android.net.Uri.parse("mailto:support@vettid.com")
+                        putExtra(android.content.Intent.EXTRA_SUBJECT, "VettID App Feedback")
+                    }
+                    context.startActivity(intent)
+                } catch (e: Exception) {
+                    // Ignore
+                }
+            },
+            headlineContent = { Text("Send Feedback") },
+            supportingContent = { Text("Report issues or suggest improvements") },
+            leadingContent = {
+                Icon(
+                    imageVector = Icons.Default.Feedback,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            trailingContent = {
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        )
+    }
+}
+
+// MARK: - Event Handlers Section
+
+@Composable
+private fun EventHandlersSection(
+    installedCount: Int,
+    availableCount: Int,
+    installedHandlers: List<InstalledHandler>,
+    availableHandlers: List<HandlerSummary>,
+    isLoading: Boolean,
+    error: String?,
+    onManageClick: () -> Unit,
+    onRefresh: () -> Unit
+) {
+    var showHandlersDialog by remember { mutableStateOf(false) }
+
+    PreferencesSection(title = "EVENT HANDLERS") {
+        ListItem(
+            modifier = Modifier.clickable { showHandlersDialog = true },
+            headlineContent = { Text("Manage Handlers") },
+            supportingContent = {
+                if (isLoading) {
+                    Text("Loading...")
+                } else if (error != null) {
+                    Text("Tap to retry", color = MaterialTheme.colorScheme.error)
+                } else {
+                    Text("$installedCount installed, $availableCount available")
+                }
+            },
+            leadingContent = {
+                Icon(
+                    imageVector = Icons.Default.Extension,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            trailingContent = {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.ChevronRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        )
+    }
+
+    // Handlers list dialog
+    if (showHandlersDialog) {
+        EventHandlersDialog(
+            installedHandlers = installedHandlers,
+            availableHandlers = availableHandlers,
+            isLoading = isLoading,
+            error = error,
+            onRefresh = onRefresh,
+            onDismiss = { showHandlersDialog = false }
+        )
+    }
+}
+
+@Composable
+private fun EventHandlersDialog(
+    installedHandlers: List<InstalledHandler>,
+    availableHandlers: List<HandlerSummary>,
+    isLoading: Boolean,
+    error: String?,
+    onRefresh: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Extension,
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Event Handlers", modifier = Modifier.weight(1f))
+                IconButton(onClick = onRefresh) {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = "Refresh handlers"
+                    )
+                }
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 450.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                if (isLoading) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(32.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                } else if (error != null) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Error,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = error,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        OutlinedButton(onClick = onRefresh) {
+                            Icon(Icons.Default.Refresh, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Retry")
+                        }
+                    }
+                } else {
+                    // Installed handlers
+                    Text(
+                        text = "INSTALLED (${installedHandlers.size})",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+
+                    if (installedHandlers.isEmpty()) {
+                        Text(
+                            text = "No handlers installed",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                    } else {
+                        installedHandlers.forEachIndexed { index, handler ->
+                            InstalledHandlerItem(handler = handler)
+                            if (index < installedHandlers.size - 1) {
+                                Divider(modifier = Modifier.padding(vertical = 4.dp))
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Available handlers
+                    Text(
+                        text = "AVAILABLE (${availableHandlers.size})",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+
+                    if (availableHandlers.isEmpty()) {
+                        Text(
+                            text = "No additional handlers available",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                    } else {
+                        availableHandlers.forEachIndexed { index, handler ->
+                            AvailableHandlerItem(handler = handler)
+                            if (index < availableHandlers.size - 1) {
+                                Divider(modifier = Modifier.padding(vertical = 4.dp))
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
+}
+
+@Composable
+private fun InstalledHandlerItem(handler: InstalledHandler) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        // Category-based icon
+        Icon(
+            imageVector = getCategoryIcon(handler.category),
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(24.dp)
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = handler.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = "Installed",
+                    tint = Color(0xFF4CAF50),
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            Text(
+                text = "v${handler.version} • ${handler.category}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            if (handler.executionCount > 0) {
+                Text(
+                    text = "${handler.executionCount} executions",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun AvailableHandlerItem(handler: HandlerSummary) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.Top
+    ) {
+        Icon(
+            imageVector = getCategoryIcon(handler.category),
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+            modifier = Modifier.size(24.dp)
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = handler.name,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+            )
+            Text(
+                text = handler.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2
+            )
+            Text(
+                text = "v${handler.version} • ${handler.publisher}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+private fun getCategoryIcon(category: String): androidx.compose.ui.graphics.vector.ImageVector {
+    return when (category.lowercase()) {
+        "authentication", "auth" -> Icons.Default.Fingerprint
+        "sync", "data" -> Icons.Default.Sync
+        "notification", "notifications" -> Icons.Default.Notifications
+        "share", "profile" -> Icons.Default.Share
+        "file", "transfer" -> Icons.Default.AttachFile
+        "voice", "call" -> Icons.Default.Call
+        "video" -> Icons.Default.Videocam
+        "messaging", "chat" -> Icons.Default.Chat
+        "security" -> Icons.Default.Security
+        "storage" -> Icons.Default.Storage
+        else -> Icons.Default.Extension
     }
 }

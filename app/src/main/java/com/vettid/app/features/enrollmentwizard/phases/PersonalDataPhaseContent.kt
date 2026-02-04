@@ -1144,7 +1144,8 @@ private fun AddCustomFieldDialog(
                         expanded = typeExpanded,
                         onDismissRequest = { typeExpanded = false }
                     ) {
-                        FieldType.entries.forEach { type ->
+                        // Filter out PASSWORD type - it's for minor secrets, not personal data
+                        FieldType.entries.filter { it != FieldType.PASSWORD }.forEach { type ->
                             DropdownMenuItem(
                                 text = {
                                     Column {
@@ -1213,12 +1214,10 @@ private fun AddCustomFieldDialog(
                         )
                     }
                     FieldType.PHONE -> {
-                        OutlinedTextField(
+                        PhoneNumberInput(
                             value = value,
                             onValueChange = { value = it },
-                            label = { Text("Value") },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                            label = "Phone Number",
                             modifier = Modifier.fillMaxWidth()
                         )
                     }
@@ -1477,7 +1476,8 @@ private fun EditCustomFieldDialog(
                             expanded = typeExpanded,
                             onDismissRequest = { typeExpanded = false }
                         ) {
-                            FieldType.entries.forEach { type ->
+                            // Filter out PASSWORD type - it's for minor secrets, not personal data
+                            FieldType.entries.filter { it != FieldType.PASSWORD }.forEach { type ->
                                 DropdownMenuItem(
                                     text = {
                                         Column {
@@ -1546,12 +1546,10 @@ private fun EditCustomFieldDialog(
                             )
                         }
                         FieldType.PHONE -> {
-                            OutlinedTextField(
+                            PhoneNumberInput(
                                 value = value,
                                 onValueChange = { value = it },
-                                label = { Text("Value") },
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                                label = "Phone Number",
                                 modifier = Modifier.fillMaxWidth()
                             )
                         }

@@ -7,6 +7,7 @@ import com.vettid.app.core.nats.FeedClient
 import com.vettid.app.core.nats.FeedEvent
 import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.NatsConnectionState
+import com.vettid.app.core.storage.CredentialStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -23,7 +24,8 @@ class FeedViewModel @Inject constructor(
     private val feedClient: FeedClient,
     private val feedRepository: FeedRepository,
     private val feedNotificationService: FeedNotificationService,
-    private val connectionManager: NatsConnectionManager
+    private val connectionManager: NatsConnectionManager,
+    private val credentialStore: CredentialStore
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<FeedState>(FeedState.Loading)
@@ -38,6 +40,10 @@ class FeedViewModel @Inject constructor(
     // Expose sync state for UI
     val syncState: StateFlow<SyncState> = feedRepository.syncState
     val isOnline: StateFlow<Boolean> = feedRepository.isOnline
+
+    // Check if user intentionally chose offline mode
+    private val _isOfflineModeEnabled = MutableStateFlow(credentialStore.getOfflineMode())
+    val isOfflineModeEnabled: StateFlow<Boolean> = _isOfflineModeEnabled.asStateFlow()
 
     // In-app notifications for snackbar display
     private val _inAppNotification = MutableSharedFlow<InAppFeedNotification>()

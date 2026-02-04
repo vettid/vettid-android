@@ -1,11 +1,11 @@
 package com.vettid.app.ui.navigation
 
+import android.util.Log
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlin.math.abs
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
@@ -13,115 +13,100 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.vettid.app.NatsConnectionState
 import com.vettid.app.ui.components.NatsConnectionStatusBanner
-import kotlinx.coroutines.launch
+
+private const val TAG = "MainScaffold"
 
 /**
- * Main scaffold with drawer, contextual header, and bottom navigation.
- * This is the primary navigation shell for the authenticated app experience.
+ * Simplified main scaffold with drawer navigation (no bottom bar).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScaffold(
     navigationState: NavigationState,
     onNavigationStateChange: (NavigationState) -> Unit,
-    userName: String = "VettID User",
+    userName: String = "",
     userEmail: String = "",
-    vaultStatus: VaultStatus = VaultStatus.ACTIVE,
     profilePhotoBase64: String? = null,
     // NATS connection state
     natsConnectionState: NatsConnectionState = NatsConnectionState.Idle,
     natsErrorMessage: String? = null,
     onNatsRetry: () -> Unit = {},
     onNatsStatusClick: () -> Unit = {},
-    onSignOutVaultOnly: () -> Unit,
-    onSignOutVaultServices: () -> Unit,
-    onHeaderAction: () -> Unit,
-    onSearchClick: () -> Unit,
-    // Navigation callbacks for more sheet
-    onNavigateToPersonalData: () -> Unit,
-    onNavigateToSecrets: () -> Unit,
-    onNavigateToArchive: () -> Unit,
-    onNavigateToVoting: () -> Unit = {},
-    onNavigateToPreferences: () -> Unit,
-    // Badge counts
-    pendingConnectionsCount: Int = 0,
-    unreadFeedCount: Int = 0,
-    // Content slots for each tab
-    vaultConnectionsContent: @Composable () -> Unit,
-    vaultFeedContent: @Composable () -> Unit,
-    vaultServicesStatusContent: @Composable () -> Unit,
-    vaultServicesBackupsContent: @Composable () -> Unit,
-    vaultServicesManageContent: @Composable () -> Unit,
-    appSettingsGeneralContent: @Composable () -> Unit,
-    appSettingsSecurityContent: @Composable () -> Unit,
-    appSettingsBackupContent: @Composable () -> Unit,
+    onHeaderAction: () -> Unit = {},
+    // Content slots
+    feedContent: @Composable () -> Unit,
+    connectionsContent: @Composable () -> Unit,
+    personalDataContent: @Composable () -> Unit,
+    secretsContent: @Composable () -> Unit,
+    archiveContent: @Composable () -> Unit,
+    votingContent: @Composable () -> Unit,
+    settingsContent: @Composable () -> Unit,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() }
 ) {
-    val scope = rememberCoroutineScope()
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     val density = LocalDensity.current
 
-    // Sign out bottom sheet state
-    var showSignOutSheet by remember { mutableStateOf(false) }
+    // Track cumulative drag for swipe detection
+    var cumulativeDrag by remember { mutableFloatStateOf(0f) }
 
-    // Get header config for current screen
-    val headerConfig = getHeaderConfig(
-        section = navigationState.currentSection,
-        vaultTab = navigationState.vaultTab,
-        vaultServicesTab = navigationState.vaultServicesTab,
-        appSettingsTab = navigationState.appSettingsTab
-    )
+    // Get ordered list of drawer items for cycling
+    val drawerItems = remember { DrawerItem.entries.toList() }
+    val currentIndex = drawerItems.indexOf(navigationState.currentItem)
+
+    Log.d(TAG, "Current navigation item: ${navigationState.currentItem}, index: $currentIndex, photoLength: ${profilePhotoBase64?.length ?: 0}")
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(Unit) {
-                detectHorizontalDragGestures { _, dragAmount ->
-                    val threshold = with(density) { 50.dp.toPx() }
-                    if (dragAmount > threshold && !navigationState.isDrawerOpen) {
-                        onNavigationStateChange(navigationState.copy(isDrawerOpen = true))
+            .pointerInput(navigationState.currentItem) {
+                detectHorizontalDragGestures(
+                    onDragStart = { cumulativeDrag = 0f },
+                    onDragEnd = {
+                        val threshold = with(density) { 100.dp.toPx() }
+                        // Only allow swiping when not in drawer or settings
+                        if (!navigationState.isDrawerOpen && !navigationState.isSettingsOpen) {
+                            when {
+                                // Swipe left - go to next screen
+                                cumulativeDrag < -threshold -> {
+                                    val nextIndex = (currentIndex + 1) % drawerItems.size
+                                    val nextItem = drawerItems[nextIndex]
+                                    Log.d(TAG, "Swiping to next screen: $nextItem")
+                                    onNavigationStateChange(navigationState.copy(currentItem = nextItem))
+                                }
+                                // Swipe right - go to previous screen
+                                cumulativeDrag > threshold -> {
+                                    val prevIndex = if (currentIndex > 0) currentIndex - 1 else drawerItems.size - 1
+                                    val prevItem = drawerItems[prevIndex]
+                                    Log.d(TAG, "Swiping to previous screen: $prevItem")
+                                    onNavigationStateChange(navigationState.copy(currentItem = prevItem))
+                                }
+                            }
+                        }
+                        cumulativeDrag = 0f
+                    },
+                    onHorizontalDrag = { _, dragAmount ->
+                        cumulativeDrag += dragAmount
                     }
-                }
+                )
             }
     ) {
         Scaffold(
             modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
             topBar = {
                 HeaderView(
-                    title = headerConfig.title,
+                    title = if (navigationState.isSettingsOpen) "Settings" else navigationState.currentItem.title,
                     onProfileClick = {
-                        onNavigationStateChange(navigationState.copy(isDrawerOpen = true))
+                        if (!navigationState.isSettingsOpen) {
+                            onNavigationStateChange(navigationState.copy(isDrawerOpen = true))
+                        }
                     },
                     natsConnectionState = natsConnectionState,
-                    onNatsStatusClick = onNatsStatusClick,
-                    actionIcon = headerConfig.actionIcon,
-                    onActionClick = onHeaderAction,
-                    showSearch = headerConfig.showSearch,
-                    onSearchClick = onSearchClick,
+                    onNatsStatusClick = {
+                        // Toggle Settings when cloud icon is clicked
+                        onNavigationStateChange(navigationState.copy(isSettingsOpen = !navigationState.isSettingsOpen))
+                    },
                     scrollBehavior = scrollBehavior,
                     profilePhotoBase64 = profilePhotoBase64
-                )
-            },
-            bottomBar = {
-                ContextualBottomNav(
-                    section = navigationState.currentSection,
-                    vaultTab = navigationState.vaultTab,
-                    vaultServicesTab = navigationState.vaultServicesTab,
-                    appSettingsTab = navigationState.appSettingsTab,
-                    onVaultTabSelected = { tab ->
-                        onNavigationStateChange(navigationState.copy(vaultTab = tab))
-                    },
-                    onVaultServicesTabSelected = { tab ->
-                        onNavigationStateChange(navigationState.copy(vaultServicesTab = tab))
-                    },
-                    onAppSettingsTabSelected = { tab ->
-                        onNavigationStateChange(navigationState.copy(appSettingsTab = tab))
-                    },
-                    onMoreClick = {
-                        onNavigationStateChange(navigationState.copy(isMoreSheetOpen = true))
-                    },
-                    pendingConnectionsCount = pendingConnectionsCount,
-                    unreadFeedCount = unreadFeedCount
                 )
             },
             snackbarHost = { SnackbarHost(snackbarHostState) }
@@ -151,35 +136,20 @@ fun MainScaffold(
                     )
                 }
 
-                // Main content
+                // Main content based on current drawer item or settings overlay
                 Box(modifier = Modifier.fillMaxSize()) {
-                    // Render content based on current section and tab
-                    when (navigationState.currentSection) {
-                    AppSection.VAULT -> {
-                        when (navigationState.vaultTab) {
-                            VaultTab.CONNECTIONS -> vaultConnectionsContent()
-                            VaultTab.FEED -> vaultFeedContent()
-                            VaultTab.MORE -> {
-                                // More tab just opens the sheet, show connections by default
-                                vaultConnectionsContent()
-                            }
+                    if (navigationState.isSettingsOpen) {
+                        settingsContent()
+                    } else {
+                        when (navigationState.currentItem) {
+                            DrawerItem.FEED -> feedContent()
+                            DrawerItem.CONNECTIONS -> connectionsContent()
+                            DrawerItem.PERSONAL_DATA -> personalDataContent()
+                            DrawerItem.SECRETS -> secretsContent()
+                            DrawerItem.ARCHIVE -> archiveContent()
+                            DrawerItem.VOTING -> votingContent()
                         }
                     }
-                    AppSection.VAULT_SERVICES -> {
-                        when (navigationState.vaultServicesTab) {
-                            VaultServicesTab.STATUS -> vaultServicesStatusContent()
-                            VaultServicesTab.BACKUPS -> vaultServicesBackupsContent()
-                            VaultServicesTab.MANAGE -> vaultServicesManageContent()
-                        }
-                    }
-                    AppSection.APP_SETTINGS -> {
-                        when (navigationState.appSettingsTab) {
-                            AppSettingsTab.GENERAL -> appSettingsGeneralContent()
-                            AppSettingsTab.SECURITY -> appSettingsSecurityContent()
-                            AppSettingsTab.BACKUP -> appSettingsBackupContent()
-                        }
-                    }
-                }
                 }
             }
         }
@@ -190,49 +160,18 @@ fun MainScaffold(
             onClose = {
                 onNavigationStateChange(navigationState.copy(isDrawerOpen = false))
             },
-            currentSection = navigationState.currentSection,
-            onSectionChange = { section ->
+            currentItem = navigationState.currentItem,
+            onItemSelected = { item ->
                 onNavigationStateChange(
                     navigationState.copy(
-                        currentSection = section,
+                        currentItem = item,
                         isDrawerOpen = false
                     )
                 )
             },
             userName = userName,
             userEmail = userEmail,
-            vaultStatus = vaultStatus,
-            onSignOut = {
-                onNavigationStateChange(navigationState.copy(isDrawerOpen = false))
-                showSignOutSheet = true
-            },
             profilePhotoBase64 = profilePhotoBase64
-        )
-
-        // More bottom sheet
-        MoreBottomSheet(
-            isOpen = navigationState.isMoreSheetOpen,
-            onDismiss = {
-                onNavigationStateChange(navigationState.copy(isMoreSheetOpen = false))
-            },
-            onItemClick = { item ->
-                when (item) {
-                    VaultMoreItem.PERSONAL_DATA -> onNavigateToPersonalData()
-                    VaultMoreItem.SECRETS -> onNavigateToSecrets()
-                    VaultMoreItem.ARCHIVE -> onNavigateToArchive()
-                    VaultMoreItem.VOTING -> onNavigateToVoting()
-                    VaultMoreItem.PREFERENCES -> onNavigateToPreferences()
-                }
-            }
-        )
-
-        // Sign out bottom sheet
-        SignOutBottomSheet(
-            isOpen = showSignOutSheet,
-            onDismiss = { showSignOutSheet = false },
-            onSignOutVaultOnly = onSignOutVaultOnly,
-            onSignOutVaultServices = onSignOutVaultServices,
-            isVaultActive = vaultStatus == VaultStatus.ACTIVE
         )
     }
 }

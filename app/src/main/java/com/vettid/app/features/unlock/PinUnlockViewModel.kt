@@ -198,9 +198,9 @@ class PinUnlockViewModel @Inject constructor(
                     Log.w(TAG, "PIN verification failed - invalid PIN")
                     _state.value = PinUnlockState.EnteringPin(pin = "", error = "Invalid PIN")
                 }
-                PinVerificationResult.Error -> {
-                    Log.e(TAG, "PIN verification failed - error")
-                    _state.value = PinUnlockState.Error("Verification error")
+                is PinVerificationResult.Error -> {
+                    Log.e(TAG, "PIN verification failed - error: ${result.message}")
+                    _state.value = PinUnlockState.Error(result.message)
                 }
             }
         } catch (e: CancellationException) {
@@ -218,10 +218,10 @@ class PinUnlockViewModel @Inject constructor(
     /**
      * Result of PIN verification attempt.
      */
-    private enum class PinVerificationResult {
-        Success,
-        InvalidPin,
-        Error
+    private sealed class PinVerificationResult {
+        data object Success : PinVerificationResult()
+        data object InvalidPin : PinVerificationResult()
+        data class Error(val message: String = "Verification error") : PinVerificationResult()
     }
 
     private fun retry() {
@@ -282,15 +282,15 @@ class PinUnlockViewModel @Inject constructor(
         // Verify owner space is set (connection was established)
         if (ownerSpace == null) {
             Log.e(TAG, "Owner space not set - connection not established")
-            return@withContext PinVerificationResult.Error
+            return@withContext PinVerificationResult.Error()
         }
 
         try {
             // Get enclave public key
             val enclavePublicKey = credentialStore.getEnclavePublicKey()
             if (enclavePublicKey == null) {
-                Log.e(TAG, "Missing enclave public key")
-                return@withContext PinVerificationResult.Error
+                Log.e(TAG, "CRITICAL: Enclave public key missing - user must re-enroll")
+                return@withContext PinVerificationResult.Error("Security key missing. Please contact support or re-enroll.")
             }
 
             // Get an available UTK
@@ -299,7 +299,7 @@ class PinUnlockViewModel @Inject constructor(
 
             if (availableUtk == null) {
                 Log.e(TAG, "No available UTKs")
-                return@withContext PinVerificationResult.Error
+                return@withContext PinVerificationResult.Error()
             }
 
             Log.d(TAG, "Using UTK: ${availableUtk.keyId}")
@@ -325,11 +325,12 @@ class PinUnlockViewModel @Inject constructor(
             val encryptedCredential = credentialStore.getEncryptedBlob()
             if (encryptedCredential == null) {
                 Log.e(TAG, "Missing encrypted credential")
-                return@withContext PinVerificationResult.Error
+                return@withContext PinVerificationResult.Error()
             }
 
-            // Build request payload for OwnerSpaceClient
+            // Build request payload matching old format expected by enclave
             val requestPayload = JsonObject().apply {
+                addProperty("type", "pin.unlock")
                 addProperty("utk_id", availableUtk.keyId)
                 addProperty("encrypted_payload", encryptedPayloadBase64)
                 addProperty("encrypted_credential", encryptedCredential)
@@ -341,16 +342,21 @@ class PinUnlockViewModel @Inject constructor(
             ownerSpaceClient.subscribeToVault()
 
             // Use OwnerSpaceClient.sendAndAwaitResponse for proper event_id correlation
-            // This avoids the JetStream race condition where consumers can receive wrong messages
+            // Use pin-unlock (hyphen) topic to match enclave expectations
             val response = ownerSpaceClient.sendAndAwaitResponse(
-                messageType = "pin.unlock",
+                messageType = "pin-unlock",
                 payload = requestPayload,
                 timeoutMs = RESPONSE_TIMEOUT_MS
             )
 
+            // Remove used UTK immediately - UTKs are single-use tokens
+            // Must be removed regardless of success/failure to prevent reuse
+            credentialStore.removeUtk(availableUtk.keyId)
+            Log.d(TAG, "Removed used UTK: ${availableUtk.keyId}")
+
             if (response == null) {
                 Log.e(TAG, "PIN unlock request timed out")
-                return@withContext PinVerificationResult.Error
+                return@withContext PinVerificationResult.Error()
             }
 
             // Parse response based on type
@@ -364,9 +370,6 @@ class PinUnlockViewModel @Inject constructor(
                         Log.d(TAG, "PIN unlock response status: $status")
 
                         if (status == "unlocked" || status == "success" || status == "vault_ready") {
-                            // Remove used UTK from pool
-                            credentialStore.removeUtk(availableUtk.keyId)
-
                             // Store any new UTKs from response (format: "ID:base64PublicKey")
                             val newUtksArray = responseJson.getAsJsonArray("new_utks")
                             if (newUtksArray != null && newUtksArray.size() > 0) {
@@ -404,7 +407,7 @@ class PinUnlockViewModel @Inject constructor(
                             error.contains("incorrect", ignoreCase = true)) {
                             return@withContext PinVerificationResult.InvalidPin
                         }
-                        return@withContext PinVerificationResult.Error
+                        return@withContext PinVerificationResult.Error()
                     }
                 }
                 is com.vettid.app.core.nats.VaultResponse.Error -> {
@@ -414,16 +417,16 @@ class PinUnlockViewModel @Inject constructor(
                         response.message.contains("incorrect", ignoreCase = true)) {
                         return@withContext PinVerificationResult.InvalidPin
                     }
-                    return@withContext PinVerificationResult.Error
+                    return@withContext PinVerificationResult.Error()
                 }
                 else -> {
                     Log.e(TAG, "Unexpected response type for PIN unlock: ${response::class.simpleName}")
-                    return@withContext PinVerificationResult.Error
+                    return@withContext PinVerificationResult.Error()
                 }
             }
         } catch (e: Exception) {
             Log.e(TAG, "PIN verification error", e)
-            return@withContext PinVerificationResult.Error
+            return@withContext PinVerificationResult.Error()
         }
     }
 
