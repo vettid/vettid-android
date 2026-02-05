@@ -12,7 +12,6 @@ import com.vettid.app.core.attestation.PcrConfigManager
 import com.vettid.app.core.attestation.PcrInitializationService
 import com.vettid.app.core.attestation.VerifiedAttestation
 import com.vettid.app.core.crypto.CryptoManager
-import com.vettid.app.core.nats.CustomCategoryDto
 import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.NitroEnrollmentClient
 import com.vettid.app.core.nats.OwnerSpaceClient
@@ -22,13 +21,8 @@ import com.vettid.app.core.nats.UtkInfo
 import com.vettid.app.core.network.EnrollmentQRData
 import com.vettid.app.core.network.NatsConnectionInfo
 import com.vettid.app.core.network.VaultServiceClient
-import com.vettid.app.core.storage.CategoryInfo
 import com.vettid.app.core.storage.CredentialStore
-import com.vettid.app.core.storage.CustomField
-import com.vettid.app.core.storage.FieldCategory
-import com.vettid.app.core.storage.FieldType
 import com.vettid.app.core.storage.MinorSecretsStore
-import com.vettid.app.core.storage.OptionalField
 import com.vettid.app.core.storage.PersonalDataStore
 import com.vettid.app.features.enrollment.AttestationInfo
 import com.vettid.app.features.enrollment.NatsBootstrapInfo
@@ -51,9 +45,9 @@ import javax.inject.Inject
 /**
  * ViewModel for the unified enrollment wizard.
  *
- * Manages state transitions through all 7 phases:
- * 1. Start (QR/Manual) → 2. Attestation → 3. PIN Setup → 4. Password Setup →
- * 5. Verify Credential → 6. Personal Data → 7. Complete
+ * Manages state transitions through all 8 steps:
+ * 1. Start (QR/Manual) → 2. Attestation → 3. Confirm Identity → 4. PIN Setup →
+ * 5. Password Setup → 6. Verify Credential → 7. Confirm Profile → 8. Complete
  */
 @HiltViewModel
 class EnrollmentWizardViewModel @Inject constructor(
@@ -167,27 +161,11 @@ class EnrollmentWizardViewModel @Inject constructor(
                 is WizardEvent.VerifyPasswordChanged -> updateVerifyPassword(event.password)
                 is WizardEvent.TogglePasswordVisibility -> togglePasswordVisibility()
                 is WizardEvent.SubmitVerifyPassword -> submitVerifyPassword()
-                is WizardEvent.ContinueAfterVerification -> continueToPersonalData()
+                is WizardEvent.ContinueAfterVerification -> continueToConfirmProfile()
 
-                // Personal data phase events
-                is WizardEvent.UpdateOptionalField -> updateOptionalField(event.field, event.value)
-                is WizardEvent.AddCustomField -> addCustomField(event.name, event.value, event.category, event.fieldType)
-                is WizardEvent.UpdateCustomField -> updateCustomField(event.field)
-                is WizardEvent.RemoveCustomField -> removeCustomField(event.fieldId)
-                is WizardEvent.CreateCategory -> createCategory(event.name)
-                is WizardEvent.SyncPersonalData -> syncPersonalData()
-                is WizardEvent.ShowAddFieldDialog -> showAddFieldDialog()
-                is WizardEvent.HideAddFieldDialog -> hideAddFieldDialog()
-                is WizardEvent.ShowEditFieldDialog -> showEditFieldDialog(event.field)
-                is WizardEvent.HideEditFieldDialog -> hideEditFieldDialog()
+                // Confirm profile phase events
+                is WizardEvent.ConfirmProfile -> confirmProfile()
                 is WizardEvent.DismissError -> dismissError()
-
-                // Public profile phase events
-                is WizardEvent.TogglePublicProfileField -> togglePublicProfileField(event.fieldNamespace)
-                is WizardEvent.SelectAllPublicFields -> selectAllPublicFields()
-                is WizardEvent.SelectNoPublicFields -> selectNoPublicFields()
-                is WizardEvent.PublishProfile -> publishPublicProfile()
-                is WizardEvent.SkipPublicProfile -> skipPublicProfile()
 
                 // Complete phase events
                 is WizardEvent.NavigateToMain -> navigateToMain()
@@ -199,9 +177,8 @@ class EnrollmentWizardViewModel @Inject constructor(
 
     private suspend fun handleNextStep() {
         when (val current = _state.value) {
-            is WizardState.VerificationSuccess -> continueToPersonalData()
-            is WizardState.PersonalData -> continueToPublicProfile()
-            is WizardState.SetupPublicProfile -> completeWizard()
+            is WizardState.VerificationSuccess -> continueToConfirmProfile()
+            is WizardState.ConfirmProfile -> confirmProfile()
             is WizardState.Complete -> navigateToMain()
             else -> { /* No-op for states with specific submit actions */ }
         }
@@ -220,9 +197,6 @@ class EnrollmentWizardViewModel @Inject constructor(
             is WizardState.VerifyingPassword -> {
                 // Can't go back from verification - credential is already created
             }
-            is WizardState.PersonalData -> {
-                // Can't go back from personal data - credential verification is done
-            }
             else -> { /* No-op */ }
         }
     }
@@ -230,18 +204,13 @@ class EnrollmentWizardViewModel @Inject constructor(
     private suspend fun handleSkip() {
         when (val current = _state.value) {
             is WizardState.VerifyingPassword -> {
-                // Skip verification and go directly to personal data
+                // Skip verification and go directly to confirm profile
                 Log.i(TAG, "User skipped credential verification")
-                continueToPersonalData()
+                continueToConfirmProfile()
             }
-            is WizardState.PersonalData -> {
-                // Skip personal data and go to public profile
-                Log.i(TAG, "User skipped personal data")
-                continueToPublicProfile()
-            }
-            is WizardState.SetupPublicProfile -> {
-                // Skip public profile and complete
-                Log.i(TAG, "User skipped public profile")
+            is WizardState.ConfirmProfile -> {
+                // Skip profile confirmation and complete
+                Log.i(TAG, "User skipped profile confirmation")
                 completeWizard()
             }
             else -> { /* No-op */ }
@@ -272,8 +241,7 @@ class EnrollmentWizardViewModel @Inject constructor(
                 WizardPhase.PIN_SETUP -> _state.value = WizardState.SettingPin(attestationInfo = storedAttestationInfo)
                 WizardPhase.PASSWORD_SETUP -> _state.value = WizardState.SettingPassword(utks = nitroUtks)
                 WizardPhase.VERIFY_CREDENTIAL -> _state.value = WizardState.VerifyingPassword()
-                WizardPhase.PERSONAL_DATA -> loadPersonalData()
-                WizardPhase.PUBLIC_PROFILE -> loadPublicProfile()
+                WizardPhase.CONFIRM_PROFILE -> continueToConfirmProfile()
                 WizardPhase.COMPLETE -> completeWizard()
             }
         }
@@ -1124,693 +1092,62 @@ class EnrollmentWizardViewModel @Inject constructor(
         }
     }
 
-    private suspend fun continueToPersonalData() {
-        loadPersonalData()
-    }
-
-    // ============== PERSONAL DATA PHASE ==============
-
-    private fun loadPersonalData() {
-        viewModelScope.launch {
-            _state.value = WizardState.PersonalData(isLoading = true)
-
-            try {
-                val systemFields = personalDataStore.getSystemFields()
-                val optionalFields = personalDataStore.getOptionalFields()
-                val customFields = personalDataStore.getCustomFields()
-                val customCategories = loadCustomCategoriesFromVault()
-                val hasPendingSync = personalDataStore.hasPendingSync()
-
-                _state.value = WizardState.PersonalData(
-                    isLoading = false,
-                    systemFields = systemFields,
-                    optionalFields = optionalFields,
-                    customFields = customFields,
-                    customCategories = customCategories,
-                    hasPendingSync = hasPendingSync
-                )
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load personal data", e)
-                _state.value = WizardState.PersonalData(
-                    isLoading = false,
-                    error = "Failed to load personal data: ${e.message}"
-                )
-            }
-        }
-    }
-
-    private suspend fun loadCustomCategoriesFromVault(): List<CategoryInfo> {
-        return try {
-            // Use enrollment client during enrollment, otherwise use ownerSpaceClient
-            val useEnrollmentClient = nitroEnrollmentClient.isConnected
-            val result = if (useEnrollmentClient) {
-                nitroEnrollmentClient.sendToVault("profile.categories.get", com.google.gson.JsonObject())
-            } else {
-                ownerSpaceClient.getCategories()
-            }
-            if (result.isSuccess) {
-                val json = com.google.gson.JsonParser.parseString(result.getOrNull() ?: "{}").asJsonObject
-                val customArray = json.getAsJsonArray("custom") ?: return emptyList()
-                customArray.mapNotNull { element ->
-                    val obj = element.asJsonObject
-                    CategoryInfo(
-                        id = obj.get("id")?.asString ?: return@mapNotNull null,
-                        name = obj.get("name")?.asString ?: return@mapNotNull null,
-                        icon = obj.get("icon")?.asString ?: "more",
-                        createdAt = obj.get("created_at")?.asLong ?: 0
-                    )
-                }
-            } else {
-                Log.w(TAG, "Failed to load custom categories: ${result.exceptionOrNull()?.message}")
-                emptyList()
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error loading custom categories", e)
-            emptyList()
-        }
-    }
-
-    private fun createCategory(name: String) {
-        val current = _state.value
-        if (current !is WizardState.PersonalData) return
-
-        viewModelScope.launch {
-            try {
-                // Create the new category
-                val newCategory = CategoryInfo(
-                    id = name.lowercase().replace(" ", "_").replace(Regex("[^a-z0-9_]"), ""),
-                    name = name,
-                    icon = "more",
-                    createdAt = System.currentTimeMillis()
-                )
-
-                // Get existing custom categories and add new one
-                val updatedCategories = current.customCategories + newCategory
-
-                // Sync to vault - use enrollment client during enrollment
-                val useEnrollmentClient = nitroEnrollmentClient.isConnected
-                val payload = com.google.gson.JsonObject().apply {
-                    val categoriesArray = com.google.gson.JsonArray()
-                    updatedCategories.forEach { cat ->
-                        val categoryObj = com.google.gson.JsonObject().apply {
-                            addProperty("id", cat.id)
-                            addProperty("name", cat.name)
-                            addProperty("icon", cat.icon)
-                            addProperty("created_at", cat.createdAt)
-                        }
-                        categoriesArray.add(categoryObj)
-                    }
-                    add("categories", categoriesArray)
-                }
-                val syncResult = if (useEnrollmentClient) {
-                    nitroEnrollmentClient.sendToVault("profile.categories.update", payload)
-                } else {
-                    ownerSpaceClient.sendToVault("profile.categories.update", payload)
-                }
-                if (syncResult.isFailure) {
-                    Log.w(TAG, "Failed to sync categories to vault: ${syncResult.exceptionOrNull()?.message}")
-                }
-
-                // Update state with new category
-                _state.value = current.copy(customCategories = updatedCategories)
-
-                Log.i(TAG, "Created custom category: ${newCategory.name}")
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to create category", e)
-                _state.value = current.copy(error = "Failed to create category: ${e.message}")
-            }
-        }
-    }
-
-    private fun updateOptionalField(field: OptionalField, value: String?) {
-        personalDataStore.updateOptionalField(field, value?.takeIf { it.isNotBlank() })
-        val current = _state.value
-        if (current is WizardState.PersonalData) {
-            _state.value = current.copy(
-                optionalFields = personalDataStore.getOptionalFields(),
-                hasPendingSync = true
-            )
-        }
-    }
-
-    private fun addCustomField(name: String, value: String, category: FieldCategory, fieldType: FieldType) {
-        val current = _state.value
-        if (current !is WizardState.PersonalData) return
-
-        // Validate field name
-        val validationError = personalDataStore.validateFieldName(name)
-        if (validationError != null) {
-            _state.value = current.copy(error = validationError)
-            return
-        }
-
-        // Check for duplicate names
-        if (personalDataStore.isFieldNameTaken(name)) {
-            _state.value = current.copy(error = "A field with this name already exists")
-            return
-        }
-
-        personalDataStore.addCustomField(name, value, category, fieldType)
-        _state.value = current.copy(
-            customFields = personalDataStore.getCustomFields(),
-            hasPendingSync = true,
-            showAddFieldDialog = false
+    private suspend fun continueToConfirmProfile() {
+        val systemFields = personalDataStore.getSystemFields()
+        _state.value = WizardState.ConfirmProfile(
+            firstName = systemFields?.firstName ?: pendingRegistrationProfile?.firstName ?: "",
+            lastName = systemFields?.lastName ?: pendingRegistrationProfile?.lastName ?: "",
+            email = systemFields?.email ?: pendingRegistrationProfile?.email ?: ""
         )
     }
 
-    private fun updateCustomField(field: CustomField) {
+    // ============== CONFIRM PROFILE PHASE ==============
+
+    private suspend fun confirmProfile() {
         val current = _state.value
-        if (current !is WizardState.PersonalData) return
-
-        // Validate field name
-        val validationError = personalDataStore.validateFieldName(field.name)
-        if (validationError != null) {
-            _state.value = current.copy(error = validationError)
-            return
-        }
-
-        // Check for duplicate names (exclude this field's ID)
-        if (personalDataStore.isFieldNameTaken(field.name, excludeId = field.id)) {
-            _state.value = current.copy(error = "A field with this name already exists")
-            return
-        }
-
-        // Normalize the field name before saving
-        val normalizedField = field.copy(name = personalDataStore.normalizeFieldName(field.name))
-        personalDataStore.updateCustomField(normalizedField)
-        _state.value = current.copy(
-            customFields = personalDataStore.getCustomFields(),
-            hasPendingSync = true,
-            editingField = null
-        )
-    }
-
-    private fun removeCustomField(fieldId: String) {
-        personalDataStore.removeCustomField(fieldId)
-        val current = _state.value
-        if (current is WizardState.PersonalData) {
-            _state.value = current.copy(
-                customFields = personalDataStore.getCustomFields(),
-                hasPendingSync = true,
-                editingField = null
-            )
-        }
-    }
-
-    private suspend fun syncPersonalData() {
-        val current = _state.value
-        if (current !is WizardState.PersonalData) return
-
-        // Check which connection is available
-        val useEnrollmentClient = nitroEnrollmentClient.isConnected
-        val useConnectionManager = connectionManager.isConnected()
-
-        if (!useEnrollmentClient && !useConnectionManager) {
-            _state.value = current.copy(error = "Not connected to vault. Changes will sync when connection is restored.")
-            return
-        }
-
-        _state.value = current.copy(isSyncing = true)
-
-        try {
-            // Use exportFieldsMapForPersonalData() which excludes system fields
-            val fieldsMap = personalDataStore.exportFieldsMapForPersonalData()
-
-            if (fieldsMap.isEmpty()) {
-                _state.update {
-                    if (it is WizardState.PersonalData) {
-                        it.copy(isSyncing = false, hasPendingSync = false)
-                    } else it
-                }
-                _effects.emit(WizardEffect.ShowToast("No personal data to sync"))
-                return
-            }
-
-            // Build payload for personal-data.update
-            val fieldsObject = com.google.gson.JsonObject().apply {
-                fieldsMap.forEach { (key, value) ->
-                    addProperty(key, value)
-                }
-            }
-            val payload = com.google.gson.JsonObject().apply {
-                add("fields", fieldsObject)
-            }
-
-            Log.d(TAG, "Syncing personal data: ${fieldsMap.size} fields")
-            fieldsMap.forEach { (key, value) ->
-                Log.d(TAG, "  Field: $key = ${value.take(30)}${if (value.length > 30) "..." else ""}")
-            }
-
-            // Send to personal-data.update (not profile.update)
-            val result = if (useEnrollmentClient) {
-                nitroEnrollmentClient.sendToVault("personal-data.update", payload)
-            } else {
-                ownerSpaceClient.sendToVault("personal-data.update", payload)
-            }
-
-            result.fold(
-                onSuccess = {
-                    personalDataStore.markSyncComplete()
-                    _state.update {
-                        if (it is WizardState.PersonalData) {
-                            it.copy(
-                                isSyncing = false,
-                                hasPendingSync = false
-                            )
-                        } else it
-                    }
-                    _effects.emit(WizardEffect.ShowToast("Personal data synced successfully"))
-                },
-                onFailure = { error ->
-                    _state.update {
-                        if (it is WizardState.PersonalData) {
-                            it.copy(
-                                isSyncing = false,
-                                error = "Sync failed: ${error.message}"
-                            )
-                        } else it
-                    }
-                }
-            )
-        } catch (e: Exception) {
-            _state.update {
-                if (it is WizardState.PersonalData) {
-                    it.copy(
-                        isSyncing = false,
-                        error = "Sync error: ${e.message}"
-                    )
-                } else it
-            }
-        }
-    }
-
-    private fun showAddFieldDialog() {
-        val current = _state.value
-        if (current is WizardState.PersonalData) {
-            _state.value = current.copy(showAddFieldDialog = true)
-        }
-    }
-
-    private fun hideAddFieldDialog() {
-        val current = _state.value
-        if (current is WizardState.PersonalData) {
-            _state.value = current.copy(showAddFieldDialog = false)
-        }
-    }
-
-    private fun showEditFieldDialog(field: CustomField) {
-        val current = _state.value
-        if (current is WizardState.PersonalData) {
-            _state.value = current.copy(editingField = field)
-        }
-    }
-
-    private fun hideEditFieldDialog() {
-        val current = _state.value
-        if (current is WizardState.PersonalData) {
-            _state.value = current.copy(editingField = null)
-        }
-    }
-
-    private fun dismissError() {
-        val current = _state.value
-        when (current) {
-            is WizardState.PersonalData -> _state.value = current.copy(error = null)
-            is WizardState.SetupPublicProfile -> _state.value = current.copy(error = null)
-            else -> { /* No-op */ }
-        }
-    }
-
-    // ============== PUBLIC PROFILE PHASE ==============
-
-    private suspend fun continueToPublicProfile() {
-        // Always sync personal data to vault before moving to public profile
-        Log.d(TAG, "continueToPublicProfile: hasPendingSync=${personalDataStore.hasPendingSync()}")
-
-        val fieldsMap = personalDataStore.exportFieldsMapForProfileUpdate()
-        Log.d(TAG, "continueToPublicProfile: ${fieldsMap.size} fields to sync")
-        fieldsMap.forEach { (key, value) ->
-            Log.d(TAG, "  Field: $key = ${value.take(20)}...")
-        }
-
-        // Force sync all personal data
-        syncPersonalDataAndWait()
-
-        loadPublicProfile()
-    }
-
-    private suspend fun syncPersonalDataAndWait() {
-        // Check which NATS connection is available:
-        // During enrollment, nitroEnrollmentClient is connected but connectionManager is not
-        // After enrollment, connectionManager is used
-        val useEnrollmentClient = nitroEnrollmentClient.isConnected
-        val useConnectionManager = connectionManager.isConnected()
-
-        if (!useEnrollmentClient && !useConnectionManager) {
-            Log.w(TAG, "Cannot sync personal data - not connected to vault")
-            return
-        }
-
-        try {
-            // Use exportFieldsMapForPersonalData() which excludes system fields
-            // System fields are already stored in profile/_system_* during PIN setup
-            val fieldsMap = personalDataStore.exportFieldsMapForPersonalData()
-            if (fieldsMap.isEmpty()) {
-                Log.d(TAG, "No personal data fields to sync (system fields excluded)")
-                return
-            }
-
-            val fieldsObject = com.google.gson.JsonObject().apply {
-                fieldsMap.forEach { (key, value) ->
-                    addProperty(key, value)
-                }
-            }
-            val payload = com.google.gson.JsonObject().apply {
-                add("fields", fieldsObject)
-            }
-
-            Log.i(TAG, "Syncing ${fieldsMap.size} personal data fields to vault via ${if (useEnrollmentClient) "enrollment client" else "connection manager"}")
-            fieldsMap.forEach { (key, value) ->
-                Log.d(TAG, "  Field: $key = ${value.take(30)}${if (value.length > 30) "..." else ""}")
-            }
-
-            // Use the enrollment client's connection during enrollment, otherwise use ownerSpaceClient
-            val result = if (useEnrollmentClient) {
-                nitroEnrollmentClient.sendToVault("personal-data.update", payload)
-            } else {
-                ownerSpaceClient.sendToVault("personal-data.update", payload)
-            }
-
-            result.fold(
-                onSuccess = { requestId ->
-                    Log.i(TAG, "Personal data sync sent: $requestId, waiting for vault to process...")
-
-                    // Wait for vault to process the data before continuing
-                    // The vault needs time to store the data before we can read it back
-                    delay(1500)
-
-                    Log.i(TAG, "Personal data sync complete after delay")
-                    personalDataStore.markSyncComplete()
-                },
-                onFailure = { error ->
-                    Log.e(TAG, "Personal data sync failed: ${error.message}")
-                }
-            )
-        } catch (e: Exception) {
-            Log.e(TAG, "Error syncing personal data", e)
-        }
-    }
-
-    private fun loadPublicProfile() {
-        viewModelScope.launch {
-            _state.value = WizardState.SetupPublicProfile(isLoading = true)
-
-            try {
-                val systemFields = personalDataStore.getSystemFields()
-                val optionalFields = personalDataStore.getOptionalFields()
-                val customFields = personalDataStore.getCustomFields()
-
-                // Build list of available fields for public profile
-                // Field naming convention: {category}.{subcategory}.{field_name}
-                val availableFields = mutableListOf<PublicProfileField>()
-
-                // Identity fields (personal.legal.* and personal.info.*)
-                optionalFields.prefix?.let {
-                    availableFields.add(PublicProfileField(
-                        namespace = "personal.legal.prefix",
-                        displayName = "Name Prefix",
-                        value = it,
-                        fieldType = FieldType.TEXT,
-                        category = "identity"
-                    ))
-                }
-                optionalFields.firstName?.let {
-                    availableFields.add(PublicProfileField(
-                        namespace = "personal.legal.first_name",
-                        displayName = "Legal First Name",
-                        value = it,
-                        fieldType = FieldType.TEXT,
-                        category = "identity"
-                    ))
-                }
-                optionalFields.middleName?.let {
-                    availableFields.add(PublicProfileField(
-                        namespace = "personal.legal.middle_name",
-                        displayName = "Middle Name",
-                        value = it,
-                        fieldType = FieldType.TEXT,
-                        category = "identity"
-                    ))
-                }
-                optionalFields.lastName?.let {
-                    availableFields.add(PublicProfileField(
-                        namespace = "personal.legal.last_name",
-                        displayName = "Legal Last Name",
-                        value = it,
-                        fieldType = FieldType.TEXT,
-                        category = "identity"
-                    ))
-                }
-                optionalFields.suffix?.let {
-                    availableFields.add(PublicProfileField(
-                        namespace = "personal.legal.suffix",
-                        displayName = "Name Suffix",
-                        value = it,
-                        fieldType = FieldType.TEXT,
-                        category = "identity"
-                    ))
-                }
-                optionalFields.birthday?.let {
-                    availableFields.add(PublicProfileField(
-                        namespace = "personal.info.birthday",
-                        displayName = "Birthday",
-                        value = it,
-                        fieldType = FieldType.DATE,
-                        category = "identity"
-                    ))
-                }
-
-                // Contact fields (contact.phone.*)
-                optionalFields.phone?.let {
-                    availableFields.add(PublicProfileField(
-                        namespace = "contact.phone.mobile",
-                        displayName = "Mobile Phone",
-                        value = it,
-                        fieldType = FieldType.PHONE,
-                        category = "contact"
-                    ))
-                }
-
-                // Address fields (address.home.*)
-                optionalFields.street?.let {
-                    availableFields.add(PublicProfileField(
-                        namespace = "address.home.street",
-                        displayName = "Street Address",
-                        value = it,
-                        fieldType = FieldType.TEXT,
-                        category = "address"
-                    ))
-                }
-                optionalFields.street2?.let {
-                    availableFields.add(PublicProfileField(
-                        namespace = "address.home.street2",
-                        displayName = "Street Address 2",
-                        value = it,
-                        fieldType = FieldType.TEXT,
-                        category = "address"
-                    ))
-                }
-                optionalFields.city?.let {
-                    availableFields.add(PublicProfileField(
-                        namespace = "address.home.city",
-                        displayName = "City",
-                        value = it,
-                        fieldType = FieldType.TEXT,
-                        category = "address"
-                    ))
-                }
-                optionalFields.state?.let {
-                    availableFields.add(PublicProfileField(
-                        namespace = "address.home.state",
-                        displayName = "State",
-                        value = it,
-                        fieldType = FieldType.TEXT,
-                        category = "address"
-                    ))
-                }
-                optionalFields.postalCode?.let {
-                    availableFields.add(PublicProfileField(
-                        namespace = "address.home.postal_code",
-                        displayName = "Postal Code",
-                        value = it,
-                        fieldType = FieldType.TEXT,
-                        category = "address"
-                    ))
-                }
-                optionalFields.country?.let {
-                    availableFields.add(PublicProfileField(
-                        namespace = "address.home.country",
-                        displayName = "Country",
-                        value = it,
-                        fieldType = FieldType.TEXT,
-                        category = "address"
-                    ))
-                }
-
-                // Social/Web fields (social.*.*)
-                optionalFields.website?.let {
-                    availableFields.add(PublicProfileField(
-                        namespace = "social.website.personal",
-                        displayName = "Personal Website",
-                        value = it,
-                        fieldType = FieldType.URL,
-                        category = "social"
-                    ))
-                }
-                optionalFields.linkedin?.let {
-                    availableFields.add(PublicProfileField(
-                        namespace = "social.linkedin.url",
-                        displayName = "LinkedIn",
-                        value = it,
-                        fieldType = FieldType.URL,
-                        category = "social"
-                    ))
-                }
-                optionalFields.twitter?.let {
-                    availableFields.add(PublicProfileField(
-                        namespace = "social.twitter.handle",
-                        displayName = "X/Twitter",
-                        value = it,
-                        fieldType = FieldType.TEXT,
-                        category = "social"
-                    ))
-                }
-                optionalFields.instagram?.let {
-                    availableFields.add(PublicProfileField(
-                        namespace = "social.instagram.handle",
-                        displayName = "Instagram",
-                        value = it,
-                        fieldType = FieldType.TEXT,
-                        category = "social"
-                    ))
-                }
-                optionalFields.github?.let {
-                    availableFields.add(PublicProfileField(
-                        namespace = "social.github.username",
-                        displayName = "GitHub",
-                        value = it,
-                        fieldType = FieldType.URL,
-                        category = "social"
-                    ))
-                }
-
-                // Add custom fields
-                customFields.forEach { field ->
-                    val namespace = personalDataStore.generateNamespace(
-                        field.category.name.lowercase(),
-                        field.name
-                    )
-                    availableFields.add(PublicProfileField(
-                        namespace = namespace,
-                        displayName = field.name,
-                        value = field.value,
-                        fieldType = field.fieldType,
-                        category = field.category.name.lowercase(),
-                        isSensitive = field.fieldType == FieldType.PASSWORD
-                    ))
-                }
-
-                // Load previously selected fields
-                val selectedFields = personalDataStore.getPublicProfileFields().toSet()
-
-                _state.value = WizardState.SetupPublicProfile(
-                    isLoading = false,
-                    systemFields = systemFields,
-                    availableFields = availableFields,
-                    selectedFields = selectedFields
-                )
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load public profile data", e)
-                _state.value = WizardState.SetupPublicProfile(
-                    isLoading = false,
-                    error = "Failed to load profile data: ${e.message}"
-                )
-            }
-        }
-    }
-
-    private fun togglePublicProfileField(namespace: String) {
-        val current = _state.value
-        if (current !is WizardState.SetupPublicProfile) return
-
-        val newSelected = if (current.selectedFields.contains(namespace)) {
-            current.selectedFields - namespace
-        } else {
-            current.selectedFields + namespace
-        }
-
-        _state.value = current.copy(selectedFields = newSelected)
-    }
-
-    private fun selectAllPublicFields() {
-        val current = _state.value
-        if (current !is WizardState.SetupPublicProfile) return
-
-        val allNonSensitive = current.availableFields
-            .filter { !it.isSensitive }
-            .map { it.namespace }
-            .toSet()
-
-        _state.value = current.copy(selectedFields = allNonSensitive)
-    }
-
-    private fun selectNoPublicFields() {
-        val current = _state.value
-        if (current !is WizardState.SetupPublicProfile) return
-
-        _state.value = current.copy(selectedFields = emptySet())
-    }
-
-    private suspend fun publishPublicProfile() {
-        val current = _state.value
-        if (current !is WizardState.SetupPublicProfile) return
+        if (current !is WizardState.ConfirmProfile) return
 
         _state.value = current.copy(isPublishing = true, error = null)
 
         try {
-            // Save selected fields locally
-            personalDataStore.updatePublicProfileFields(current.selectedFields.toList())
+            // Auto-publish default public profile with system fields (first name, last name, email)
+            val defaultFields = listOf(
+                "_system_first_name",
+                "_system_last_name",
+                "_system_email"
+            )
 
-            // Build payload with selected fields
+            // Save selected fields locally
+            personalDataStore.updatePublicProfileFields(defaultFields)
+
+            // Build payload with default fields
             val payload = com.google.gson.JsonObject().apply {
                 val fieldsArray = com.google.gson.JsonArray()
-                current.selectedFields.forEach { fieldsArray.add(it) }
+                defaultFields.forEach { fieldsArray.add(it) }
                 add("fields", fieldsArray)
             }
 
-            Log.d(TAG, "Publishing profile with ${current.selectedFields.size} selected fields: ${current.selectedFields}")
+            Log.d(TAG, "Publishing default profile with system fields")
 
             // Use enrollment client if connected (during enrollment), otherwise use ownerSpaceClient
             val useEnrollmentClient = nitroEnrollmentClient.isConnected
             val useConnectionManager = connectionManager.isConnected()
 
             if (useEnrollmentClient) {
-                Log.d(TAG, "Publishing via nitroEnrollmentClient")
                 val result = nitroEnrollmentClient.sendToVault("profile.publish", payload)
                 result.fold(
                     onSuccess = { requestId ->
-                        Log.i(TAG, "Public profile publish request sent via enrollment client: $requestId")
+                        Log.i(TAG, "Default profile published via enrollment client: $requestId")
                     },
                     onFailure = { error ->
                         Log.w(TAG, "Failed to publish profile via enrollment client: ${error.message}")
                     }
                 )
             } else if (useConnectionManager) {
-                Log.d(TAG, "Publishing via ownerSpaceClient")
-                val result = ownerSpaceClient.publishProfile(current.selectedFields.toList())
+                val result = ownerSpaceClient.publishProfile(defaultFields)
                 result.fold(
                     onSuccess = { requestId ->
-                        Log.i(TAG, "Public profile publish request sent via ownerSpaceClient: $requestId")
+                        Log.i(TAG, "Default profile published via ownerSpaceClient: $requestId")
                     },
                     onFailure = { error ->
                         Log.w(TAG, "Failed to publish profile via ownerSpaceClient: ${error.message}")
@@ -1820,20 +1157,23 @@ class EnrollmentWizardViewModel @Inject constructor(
                 Log.w(TAG, "Not connected to vault - profile settings saved locally only")
             }
 
-            _effects.emit(WizardEffect.ShowToast("Public profile saved"))
+            _effects.emit(WizardEffect.ShowToast("Profile confirmed"))
             completeWizard()
         } catch (e: Exception) {
-            Log.e(TAG, "Error publishing profile", e)
+            Log.e(TAG, "Error confirming profile", e)
             _state.value = current.copy(
                 isPublishing = false,
-                error = "Failed to save profile: ${e.message}"
+                error = "Failed to confirm profile: ${e.message}"
             )
         }
     }
 
-    private suspend fun skipPublicProfile() {
-        Log.i(TAG, "User skipped public profile setup")
-        completeWizard()
+    private fun dismissError() {
+        val current = _state.value
+        when (current) {
+            is WizardState.ConfirmProfile -> _state.value = current.copy(error = null)
+            else -> { /* No-op */ }
+        }
     }
 
     // ============== COMPLETE PHASE ==============

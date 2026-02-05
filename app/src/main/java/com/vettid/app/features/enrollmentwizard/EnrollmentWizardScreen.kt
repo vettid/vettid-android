@@ -116,8 +116,7 @@ fun EnrollmentWizardScreen(
                         is WizardState.VerifyingPassword,
                         is WizardState.Authenticating,
                         is WizardState.VerificationSuccess -> "verify"
-                        is WizardState.PersonalData -> "personal"
-                        is WizardState.SetupPublicProfile -> "public_profile"
+                        is WizardState.ConfirmProfile -> "confirm_profile"
                         is WizardState.Complete -> "complete"
                         is WizardState.Error -> "error_${targetState.previousPhase}"
                     }
@@ -279,54 +278,17 @@ fun EnrollmentWizardScreen(
                             )
                         }
 
-                        // Personal Data Phase
-                        is WizardState.PersonalData -> {
-                            PersonalDataPhaseContent(
-                                isLoading = currentState.isLoading,
-                                isSyncing = currentState.isSyncing,
-                                systemFields = currentState.systemFields,
-                                optionalFields = currentState.optionalFields,
-                                customFields = currentState.customFields,
-                                customCategories = currentState.customCategories,
-                                hasPendingSync = currentState.hasPendingSync,
+                        // Confirm Profile Phase
+                        is WizardState.ConfirmProfile -> {
+                            ConfirmProfilePhaseContent(
+                                firstName = currentState.firstName,
+                                lastName = currentState.lastName,
+                                email = currentState.email,
+                                isPublishing = currentState.isPublishing,
                                 error = currentState.error,
-                                showAddFieldDialog = currentState.showAddFieldDialog,
-                                editingField = currentState.editingField,
-                                onUpdateOptionalField = { field, value ->
-                                    viewModel.onEvent(WizardEvent.UpdateOptionalField(field, value))
-                                },
-                                onAddCustomField = { name, value, category, fieldType ->
-                                    viewModel.onEvent(WizardEvent.AddCustomField(name, value, category, fieldType))
-                                },
-                                onUpdateCustomField = { viewModel.onEvent(WizardEvent.UpdateCustomField(it)) },
-                                onRemoveCustomField = { viewModel.onEvent(WizardEvent.RemoveCustomField(it)) },
-                                onCreateCategory = { viewModel.onEvent(WizardEvent.CreateCategory(it)) },
-                                onSyncNow = { viewModel.onEvent(WizardEvent.SyncPersonalData) },
-                                onShowAddDialog = { viewModel.onEvent(WizardEvent.ShowAddFieldDialog) },
-                                onHideAddDialog = { viewModel.onEvent(WizardEvent.HideAddFieldDialog) },
-                                onShowEditDialog = { viewModel.onEvent(WizardEvent.ShowEditFieldDialog(it)) },
-                                onHideEditDialog = { viewModel.onEvent(WizardEvent.HideEditFieldDialog) },
                                 onDismissError = { viewModel.onEvent(WizardEvent.DismissError) },
                                 onSkip = { viewModel.onEvent(WizardEvent.Skip) },
-                                onContinue = { viewModel.onEvent(WizardEvent.NextStep) }
-                            )
-                        }
-
-                        // Public Profile Phase
-                        is WizardState.SetupPublicProfile -> {
-                            PublicProfilePhaseContent(
-                                isLoading = currentState.isLoading,
-                                isPublishing = currentState.isPublishing,
-                                systemFields = currentState.systemFields,
-                                availableFields = currentState.availableFields,
-                                selectedFields = currentState.selectedFields,
-                                error = currentState.error,
-                                onToggleField = { viewModel.onEvent(WizardEvent.TogglePublicProfileField(it)) },
-                                onSelectAll = { viewModel.onEvent(WizardEvent.SelectAllPublicFields) },
-                                onSelectNone = { viewModel.onEvent(WizardEvent.SelectNoPublicFields) },
-                                onDismissError = { viewModel.onEvent(WizardEvent.DismissError) },
-                                onSkip = { viewModel.onEvent(WizardEvent.SkipPublicProfile) },
-                                onPublish = { viewModel.onEvent(WizardEvent.PublishProfile) }
+                                onConfirm = { viewModel.onEvent(WizardEvent.ConfirmProfile) }
                             )
                         }
 

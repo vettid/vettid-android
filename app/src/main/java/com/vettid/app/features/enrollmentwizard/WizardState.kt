@@ -1,25 +1,8 @@
 package com.vettid.app.features.enrollmentwizard
 
 import com.vettid.app.core.nats.UtkInfo
-import com.vettid.app.core.storage.CategoryInfo
-import com.vettid.app.core.storage.CustomField
-import com.vettid.app.core.storage.OptionalPersonalData
-import com.vettid.app.core.storage.SystemPersonalData
-import com.vettid.app.core.storage.FieldType
 import com.vettid.app.features.enrollment.AttestationInfo
 import com.vettid.app.features.enrollment.PasswordStrength
-
-/**
- * Represents a field that can be included in the public profile.
- */
-data class PublicProfileField(
-    val namespace: String,       // Dotted namespace: "contact.phone.mobile"
-    val displayName: String,     // Human-readable: "Mobile Phone"
-    val value: String,           // Current value
-    val fieldType: FieldType,    // Field type for display
-    val category: String,        // Category ID
-    val isSensitive: Boolean = false  // If true, cannot be shared publicly
-)
 
 /**
  * Wizard phase enumeration for step indicator
@@ -31,12 +14,11 @@ enum class WizardPhase(val stepIndex: Int, val label: String) {
     PIN_SETUP(3, "PIN"),
     PASSWORD_SETUP(4, "Password"),
     VERIFY_CREDENTIAL(5, "Confirm"),
-    PERSONAL_DATA(6, "Data"),
-    PUBLIC_PROFILE(7, "Share"),
-    COMPLETE(8, "Done");
+    CONFIRM_PROFILE(6, "Profile"),
+    COMPLETE(7, "Done");
 
     companion object {
-        const val TOTAL_STEPS = 9
+        const val TOTAL_STEPS = 8
 
         fun fromIndex(index: Int): WizardPhase? = entries.find { it.stepIndex == index }
     }
@@ -180,39 +162,20 @@ sealed class WizardState {
         override val phase = WizardPhase.VERIFY_CREDENTIAL
     }
 
-    // ============== PHASE 7: PERSONAL DATA ==============
+    // ============== PHASE 7: CONFIRM PROFILE ==============
 
-    /** Personal data collection */
-    data class PersonalData(
-        val isLoading: Boolean = false,
-        val isSyncing: Boolean = false,
-        val systemFields: SystemPersonalData? = null,
-        val optionalFields: OptionalPersonalData = OptionalPersonalData(),
-        val customFields: List<CustomField> = emptyList(),
-        val customCategories: List<CategoryInfo> = emptyList(),
-        val hasPendingSync: Boolean = false,
-        val error: String? = null,
-        val showAddFieldDialog: Boolean = false,
-        val editingField: CustomField? = null
-    ) : WizardState() {
-        override val phase = WizardPhase.PERSONAL_DATA
-    }
-
-    // ============== PHASE 8: PUBLIC PROFILE ==============
-
-    /** Public profile setup - select fields to share with connections */
-    data class SetupPublicProfile(
-        val isLoading: Boolean = false,
+    /** Confirm default public profile - read-only preview with confirm/skip */
+    data class ConfirmProfile(
+        val firstName: String = "",
+        val lastName: String = "",
+        val email: String = "",
         val isPublishing: Boolean = false,
-        val systemFields: SystemPersonalData? = null,
-        val availableFields: List<PublicProfileField> = emptyList(),
-        val selectedFields: Set<String> = emptySet(),
         val error: String? = null
     ) : WizardState() {
-        override val phase = WizardPhase.PUBLIC_PROFILE
+        override val phase = WizardPhase.CONFIRM_PROFILE
     }
 
-    // ============== PHASE 9: COMPLETE ==============
+    // ============== PHASE 8: COMPLETE ==============
 
     /** Enrollment complete */
     data class Complete(

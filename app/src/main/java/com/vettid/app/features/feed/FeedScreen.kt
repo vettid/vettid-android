@@ -42,7 +42,8 @@ fun FeedContent(
     onNavigateToConversation: (String) -> Unit = {},
     onNavigateToConnectionRequest: (String) -> Unit = {},
     onNavigateToHandler: (String) -> Unit = {},
-    onNavigateToBackup: (String) -> Unit = {}
+    onNavigateToBackup: (String) -> Unit = {},
+    onNavigateToGuide: (guideId: String, eventId: String, userName: String) -> Unit = { _, _, _ -> }
 ) {
     val state by viewModel.state.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
@@ -64,6 +65,7 @@ fun FeedContent(
                 is FeedEffect.NavigateToConnectionRequest -> onNavigateToConnectionRequest(effect.requestId)
                 is FeedEffect.NavigateToHandler -> onNavigateToHandler(effect.handlerId)
                 is FeedEffect.NavigateToBackup -> onNavigateToBackup(effect.backupId)
+                is FeedEffect.NavigateToGuide -> onNavigateToGuide(effect.guideId, effect.eventId, effect.userName)
                 is FeedEffect.ShowEventDetail -> selectedEvent = effect.event
                 is FeedEffect.ShowError -> snackbarHostState.showSnackbar(effect.message)
                 is FeedEffect.ShowActionSuccess -> snackbarHostState.showSnackbar(effect.message)
@@ -534,6 +536,7 @@ private fun getEventIconAndColor(eventType: String): Pair<ImageVector, Color> {
         EventTypes.BACKUP_COMPLETE -> Icons.Default.Backup to MaterialTheme.colorScheme.primaryContainer
         EventTypes.VAULT_STATUS -> Icons.Default.Cloud to MaterialTheme.colorScheme.secondaryContainer
         EventTypes.HANDLER_COMPLETE -> Icons.Default.CheckCircle to MaterialTheme.colorScheme.primaryContainer
+        EventTypes.GUIDE -> Icons.Default.School to Color(0xFF9C27B0).copy(alpha = 0.2f)
         else -> Icons.Default.Notifications to MaterialTheme.colorScheme.surfaceVariant
     }
 }

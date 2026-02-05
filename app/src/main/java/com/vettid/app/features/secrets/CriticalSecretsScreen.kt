@@ -7,12 +7,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -20,94 +20,161 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 
 /**
- * Bottom sheet for critical secrets (embedded in the Protean Credential).
+ * Full-screen critical secrets viewer.
  *
  * Flow:
- *   PasswordPrompt -> Authenticating -> MetadataList
+ *   PasswordPrompt -> Authenticating -> MetadataList (with search + FAB)
  *     -> tap secret -> SecondPasswordPrompt -> Retrieving -> Revealed (30s countdown)
  *     -> timer expires -> back to MetadataList
+ *
+ * No local caching - all state is in ViewModel memory, cleared on navigate away.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CriticalSecretsSheet(
-    state: CriticalSecretsSheetState,
-    onEvent: (CriticalSecretsEvent) -> Unit,
-    onDismiss: () -> Unit
+fun CriticalSecretsScreen(
+    viewModel: CriticalSecretsViewModel = hiltViewModel(),
+    onBack: () -> Unit,
+    onNavigateToAddSecret: () -> Unit = {}
 ) {
-    ModalBottomSheet(
-        onDismissRequest = { onEvent(CriticalSecretsEvent.Close) },
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ) {
-        Column(
+    val state by viewModel.state.collectAsState()
+    var showSearch by remember { mutableStateOf(false) }
+
+    Scaffold(
+        topBar = {
+            if (showSearch && state is CriticalSecretsState.MetadataList) {
+                val metadataState = state as CriticalSecretsState.MetadataList
+                SearchBar(
+                    query = metadataState.searchQuery,
+                    onQueryChange = { viewModel.onEvent(CriticalSecretsScreenEvent.SearchQueryChanged(it)) },
+                    onClose = {
+                        showSearch = false
+                        viewModel.onEvent(CriticalSecretsScreenEvent.SearchQueryChanged(""))
+                    }
+                )
+            } else {
+                TopAppBar(
+                    title = { Text("Critical Secrets") },
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    },
+                    actions = {
+                        if (state is CriticalSecretsState.MetadataList) {
+                            IconButton(onClick = { showSearch = true }) {
+                                Icon(Icons.Default.Search, contentDescription = "Search")
+                            }
+                        }
+                    }
+                )
+            }
+        },
+        floatingActionButton = {
+            if (state is CriticalSecretsState.MetadataList) {
+                FloatingActionButton(
+                    onClick = onNavigateToAddSecret,
+                    containerColor = MaterialTheme.colorScheme.primary
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Add critical secret")
+                }
+            }
+        }
+    ) { padding ->
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 24.dp)
-                .padding(bottom = 32.dp)
+                .fillMaxSize()
+                .padding(padding)
         ) {
-            when (state) {
-                is CriticalSecretsSheetState.PasswordPrompt -> {
+            when (val currentState = state) {
+                is CriticalSecretsState.PasswordPrompt -> {
                     PasswordPromptContent(
                         title = "Critical Secrets",
                         subtitle = "Enter your credential password to view secrets stored in your credential.",
-                        onSubmit = { onEvent(CriticalSecretsEvent.SubmitPassword(it)) },
-                        onCancel = { onEvent(CriticalSecretsEvent.Close) }
+                        onSubmit = { viewModel.onEvent(CriticalSecretsScreenEvent.SubmitPassword(it)) },
+                        onCancel = onBack
                     )
                 }
 
-                is CriticalSecretsSheetState.Authenticating -> {
+                is CriticalSecretsState.Authenticating -> {
                     LoadingContent(message = "Authenticating...")
                 }
 
-                is CriticalSecretsSheetState.MetadataList -> {
+                is CriticalSecretsState.MetadataList -> {
                     MetadataListContent(
-                        secrets = state.secrets,
-                        cryptoKeys = state.cryptoKeys,
-                        credentialInfo = state.credentialInfo,
+                        secrets = currentState.secrets,
+                        cryptoKeys = currentState.cryptoKeys,
+                        credentialInfo = currentState.credentialInfo,
+                        searchQuery = currentState.searchQuery,
                         onSecretTap = { id, name ->
-                            onEvent(CriticalSecretsEvent.RevealSecret(id, name))
-                        },
-                        onClose = { onEvent(CriticalSecretsEvent.Close) }
+                            viewModel.onEvent(CriticalSecretsScreenEvent.RevealSecret(id, name))
+                        }
                     )
                 }
 
-                is CriticalSecretsSheetState.SecondPasswordPrompt -> {
+                is CriticalSecretsState.SecondPasswordPrompt -> {
                     PasswordPromptContent(
-                        title = "Reveal: ${state.secretName}",
+                        title = "Reveal: ${currentState.secretName}",
                         subtitle = "Re-enter your password to view the secret value.",
-                        onSubmit = { onEvent(CriticalSecretsEvent.SubmitRevealPassword(it)) },
-                        onCancel = { onEvent(CriticalSecretsEvent.BackToList) }
+                        onSubmit = { viewModel.onEvent(CriticalSecretsScreenEvent.SubmitRevealPassword(it)) },
+                        onCancel = { viewModel.onEvent(CriticalSecretsScreenEvent.BackToList) }
                     )
                 }
 
-                is CriticalSecretsSheetState.Retrieving -> {
-                    LoadingContent(message = "Retrieving ${state.secretName}...")
+                is CriticalSecretsState.Retrieving -> {
+                    LoadingContent(message = "Retrieving ${currentState.secretName}...")
                 }
 
-                is CriticalSecretsSheetState.Revealed -> {
+                is CriticalSecretsState.Revealed -> {
                     RevealedContent(
-                        secretName = state.secretName,
-                        value = state.value,
-                        remainingSeconds = state.remainingSeconds,
-                        onBack = { onEvent(CriticalSecretsEvent.BackToList) }
+                        secretName = currentState.secretName,
+                        value = currentState.value,
+                        remainingSeconds = currentState.remainingSeconds,
+                        onBack = { viewModel.onEvent(CriticalSecretsScreenEvent.BackToList) }
                     )
                 }
 
-                is CriticalSecretsSheetState.Error -> {
+                is CriticalSecretsState.Error -> {
                     ErrorContent(
-                        message = state.message,
-                        onRetry = { onEvent(CriticalSecretsEvent.BackToList) },
-                        onClose = { onEvent(CriticalSecretsEvent.Close) }
+                        message = currentState.message,
+                        onRetry = { viewModel.onEvent(CriticalSecretsScreenEvent.BackToList) },
+                        onClose = onBack
                     )
-                }
-
-                is CriticalSecretsSheetState.Hidden -> {
-                    // Should not be shown
                 }
             }
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SearchBar(
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onClose: () -> Unit
+) {
+    TopAppBar(
+        title = {
+            OutlinedTextField(
+                value = query,
+                onValueChange = onQueryChange,
+                placeholder = { Text("Search secrets...") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)
+                )
+            )
+        },
+        navigationIcon = {
+            IconButton(onClick = onClose) {
+                Icon(Icons.Default.Close, contentDescription = "Close search")
+            }
+        }
+    )
 }
 
 @Composable
@@ -121,16 +188,19 @@ private fun PasswordPromptContent(
     var passwordVisible by remember { mutableStateOf(false) }
 
     Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
         Icon(
             Icons.Default.Lock,
             contentDescription = null,
-            modifier = Modifier.size(48.dp),
+            modifier = Modifier.size(64.dp),
             tint = MaterialTheme.colorScheme.primary
         )
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(24.dp))
         Text(
             text = title,
             style = MaterialTheme.typography.headlineSmall,
@@ -143,7 +213,7 @@ private fun PasswordPromptContent(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(32.dp))
 
         OutlinedTextField(
             value = password,
@@ -186,19 +256,19 @@ private fun PasswordPromptContent(
 
 @Composable
 private fun LoadingContent(message: String) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 48.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
     ) {
-        CircularProgressIndicator()
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            CircularProgressIndicator()
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 
@@ -207,40 +277,32 @@ private fun MetadataListContent(
     secrets: List<CriticalSecretItem>,
     cryptoKeys: List<CryptoKeyItem>,
     credentialInfo: CredentialInfoItem?,
-    onSecretTap: (String, String) -> Unit,
-    onClose: () -> Unit
+    searchQuery: String,
+    onSecretTap: (String, String) -> Unit
 ) {
-    Column(modifier = Modifier.fillMaxWidth()) {
-        // Header
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                Icons.Default.Shield,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(28.dp)
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Text(
-                text = "Critical Secrets",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f)
-            )
-            IconButton(onClick = onClose) {
-                Icon(Icons.Default.Close, contentDescription = "Close")
-            }
+    // Filter items based on search query
+    val filteredSecrets = if (searchQuery.isBlank()) secrets else {
+        secrets.filter {
+            it.name.contains(searchQuery, ignoreCase = true) ||
+            it.category.contains(searchQuery, ignoreCase = true) ||
+            it.description?.contains(searchQuery, ignoreCase = true) == true
         }
+    }
+    val filteredKeys = if (searchQuery.isBlank()) cryptoKeys else {
+        cryptoKeys.filter {
+            it.label.contains(searchQuery, ignoreCase = true) ||
+            it.type.contains(searchQuery, ignoreCase = true)
+        }
+    }
+    val showCredentialInfo = searchQuery.isBlank()
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        LazyColumn(
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.heightIn(max = 500.dp)
-        ) {
-            // Credential info
+    LazyColumn(
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        // Credential info (not searchable)
+        if (showCredentialInfo) {
             credentialInfo?.let { info ->
                 item {
                     SectionHeader("Credential")
@@ -249,48 +311,54 @@ private fun MetadataListContent(
                     CredentialInfoCard(info)
                 }
             }
+        }
 
-            // Crypto keys
-            if (cryptoKeys.isNotEmpty()) {
-                item {
-                    SectionHeader("Crypto Keys")
-                }
-                items(cryptoKeys, key = { it.id }) { key ->
-                    CryptoKeyCard(key)
-                }
+        // Crypto keys
+        if (filteredKeys.isNotEmpty()) {
+            item {
+                SectionHeader("Crypto Keys")
             }
+            items(filteredKeys, key = { it.id }) { key ->
+                CryptoKeyCard(key)
+            }
+        }
 
-            // Secrets
-            if (secrets.isNotEmpty()) {
-                item {
-                    SectionHeader("Secrets")
-                }
-                items(secrets, key = { it.id }) { secret ->
-                    SecretMetadataCard(
-                        secret = secret,
-                        onClick = { onSecretTap(secret.id, secret.name) }
+        // Secrets
+        if (filteredSecrets.isNotEmpty()) {
+            item {
+                SectionHeader("Secrets")
+            }
+            items(filteredSecrets, key = { it.id }) { secret ->
+                SecretMetadataCard(
+                    secret = secret,
+                    onClick = { onSecretTap(secret.id, secret.name) }
+                )
+            }
+        }
+
+        // Empty state
+        if (filteredSecrets.isEmpty() && filteredKeys.isEmpty()) {
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(32.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = if (searchQuery.isNotBlank()) "No results for \"$searchQuery\""
+                               else "No critical secrets stored in your credential.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
                     )
                 }
             }
+        }
 
-            // Empty state
-            if (secrets.isEmpty() && cryptoKeys.isEmpty()) {
-                item {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(32.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = "No critical secrets stored in your credential.",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center
-                        )
-                    }
-                }
-            }
+        // Bottom spacing for FAB
+        item {
+            Spacer(modifier = Modifier.height(72.dp))
         }
     }
 }
@@ -420,36 +488,39 @@ private fun RevealedContent(
     onBack: () -> Unit
 ) {
     Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
     ) {
         // Countdown indicator
         val progress = remainingSeconds / 30f
         CircularProgressIndicator(
             progress = { progress },
-            modifier = Modifier.size(64.dp),
+            modifier = Modifier.size(80.dp),
             color = if (remainingSeconds <= 10) MaterialTheme.colorScheme.error
                     else MaterialTheme.colorScheme.primary,
             trackColor = MaterialTheme.colorScheme.surfaceVariant,
-            strokeWidth = 4.dp
+            strokeWidth = 5.dp
         )
-        Spacer(modifier = Modifier.height(4.dp))
+        Spacer(modifier = Modifier.height(8.dp))
         Text(
             text = "${remainingSeconds}s",
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.titleMedium,
             color = if (remainingSeconds <= 10) MaterialTheme.colorScheme.error
                     else MaterialTheme.colorScheme.onSurfaceVariant
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
         Text(
             text = secretName,
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.SemiBold
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(24.dp))
 
         // Value display
         Surface(
@@ -468,7 +539,7 @@ private fun RevealedContent(
             }
         }
 
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(modifier = Modifier.height(12.dp))
 
         Text(
             text = "This value will auto-hide when the timer expires.",
@@ -477,10 +548,10 @@ private fun RevealedContent(
             textAlign = TextAlign.Center
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(32.dp))
 
         TextButton(onClick = onBack) {
-            Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.size(18.dp))
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, modifier = Modifier.size(18.dp))
             Spacer(modifier = Modifier.width(4.dp))
             Text("Back to list")
         }
@@ -493,39 +564,42 @@ private fun ErrorContent(
     onRetry: () -> Unit,
     onClose: () -> Unit
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
     ) {
-        Icon(
-            Icons.Default.Error,
-            contentDescription = null,
-            modifier = Modifier.size(48.dp),
-            tint = MaterialTheme.colorScheme.error
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = "Error",
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.error
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-        Spacer(modifier = Modifier.height(24.dp))
-        Row {
-            TextButton(onClick = onClose) {
-                Text("Close")
-            }
-            Spacer(modifier = Modifier.width(8.dp))
-            Button(onClick = onRetry) {
-                Text("Try again")
+        Column(
+            modifier = Modifier.padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(
+                Icons.Default.Error,
+                contentDescription = null,
+                modifier = Modifier.size(64.dp),
+                tint = MaterialTheme.colorScheme.error
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "Error",
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.error
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            Row {
+                TextButton(onClick = onClose) {
+                    Text("Close")
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(onClick = onRetry) {
+                    Text("Try again")
+                }
             }
         }
     }

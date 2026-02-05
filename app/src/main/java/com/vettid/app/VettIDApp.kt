@@ -82,6 +82,9 @@ import com.vettid.app.features.postenrollment.PersonalDataCollectionScreen
 import com.vettid.app.features.migration.EmergencyRecoveryScreen
 import com.vettid.app.features.migration.SecurityAuditLogScreen
 import com.vettid.app.features.enrollmentwizard.EnrollmentWizardScreen
+import com.vettid.app.features.feed.GuideDetailScreen
+import com.vettid.app.features.feed.NavigationTarget
+import com.vettid.app.features.secrets.CriticalSecretsScreen
 import com.vettid.app.features.unlock.PinUnlockScreen
 import com.vettid.app.features.personaldata.PersonalDataContent
 
@@ -172,6 +175,15 @@ sealed class Screen(val route: String) {
     // Migration screens (Issue #18: Enclave migration support)
     object SecurityAuditLog : Screen("security-audit-log")
     object EmergencyRecovery : Screen("emergency-recovery")
+    // Critical Secrets full screen
+    object CriticalSecrets : Screen("critical-secrets")
+    // Guide detail screen
+    object Guide : Screen("guide/{guideId}?eventId={eventId}&userName={userName}") {
+        fun createRoute(guideId: String, eventId: String = "", userName: String = ""): String {
+            val encodedName = java.net.URLEncoder.encode(userName, "UTF-8")
+            return "guide/$guideId?eventId=$eventId&userName=$encodedName"
+        }
+    }
 }
 
 @Composable
@@ -409,8 +421,18 @@ fun VettIDApp(
                 }
             )
         }
-        composable(Screen.Main.route) {
+        composable(Screen.Main.route) { backStackEntry ->
+            // Handle navigation from guide screens via saved state
+            val drawerItemResult = backStackEntry.savedStateHandle.get<String>("drawerItem")
+            val openSettingsResult = backStackEntry.savedStateHandle.get<Boolean>("openSettings")
+
             MainScreen(
+                initialDrawerItem = drawerItemResult,
+                initialOpenSettings = openSettingsResult == true,
+                onConsumeNavResult = {
+                    backStackEntry.savedStateHandle.remove<String>("drawerItem")
+                    backStackEntry.savedStateHandle.remove<Boolean>("openSettings")
+                },
                 onNavigateToHandlers = {
                     navController.navigate(Screen.HandlerDiscovery.route)
                 },
@@ -470,6 +492,12 @@ fun VettIDApp(
                 },
                 onNavigateToSecurityAuditLog = {
                     navController.navigate(Screen.SecurityAuditLog.route)
+                },
+                onNavigateToGuide = { guideId, eventId, userName ->
+                    navController.navigate(Screen.Guide.createRoute(guideId, eventId, userName))
+                },
+                onNavigateToCriticalSecrets = {
+                    navController.navigate(Screen.CriticalSecrets.route)
                 },
                 appViewModel = appViewModel
             )
@@ -825,6 +853,70 @@ fun VettIDApp(
                 }
             )
         }
+        // Critical Secrets full screen
+        composable(Screen.CriticalSecrets.route) {
+            CriticalSecretsScreen(
+                onBack = { navController.popBackStack() },
+                onNavigateToAddSecret = {
+                    navController.navigate(Screen.AddSecret.createRoute(isCritical = true))
+                }
+            )
+        }
+        // Guide detail screen
+        composable(
+            route = Screen.Guide.route,
+            arguments = listOf(
+                navArgument("guideId") { type = NavType.StringType },
+                navArgument("eventId") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                },
+                navArgument("userName") {
+                    type = NavType.StringType
+                    defaultValue = ""
+                }
+            )
+        ) { backStackEntry ->
+            val guideId = backStackEntry.arguments?.getString("guideId") ?: return@composable
+            val eventId = backStackEntry.arguments?.getString("eventId") ?: ""
+            val userName = backStackEntry.arguments?.getString("userName")?.let {
+                java.net.URLDecoder.decode(it, "UTF-8")
+            } ?: ""
+            val feedViewModel: com.vettid.app.features.feed.FeedViewModel = hiltViewModel()
+            GuideDetailScreen(
+                guideId = guideId,
+                userName = userName,
+                onBack = { navController.popBackStack() },
+                onNavigate = { target ->
+                    when (target) {
+                        is NavigationTarget.DrawerNav -> {
+                            // Set the desired drawer item in saved state so MainScreen picks it up
+                            navController.previousBackStackEntry
+                                ?.savedStateHandle
+                                ?.set("drawerItem", target.item.name)
+                            navController.popBackStack()
+                        }
+                        is NavigationTarget.ScreenNav -> {
+                            // For settings, toggle settings overlay via saved state
+                            if (target.route == "settings") {
+                                navController.previousBackStackEntry
+                                    ?.savedStateHandle
+                                    ?.set("openSettings", true)
+                                navController.popBackStack()
+                            } else {
+                                navController.popBackStack()
+                                navController.navigate(target.route)
+                            }
+                        }
+                    }
+                },
+                onMarkAsRead = {
+                    if (eventId.isNotEmpty()) {
+                        feedViewModel.markAsRead(eventId)
+                    }
+                }
+            )
+        }
     }
 }
 
@@ -1080,6 +1172,9 @@ class UnlockViewModel @javax.inject.Inject constructor(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(
+    initialDrawerItem: String? = null,
+    initialOpenSettings: Boolean = false,
+    onConsumeNavResult: () -> Unit = {},
     onNavigateToHandlers: () -> Unit = {},
     onNavigateToConnections: () -> Unit = {},
     onNavigateToProfile: () -> Unit = {},
@@ -1102,6 +1197,8 @@ fun MainScreen(
     onNavigateToMyVotes: () -> Unit = {},
     onNavigateToSecretDetail: (String) -> Unit = {},
     onNavigateToSecurityAuditLog: () -> Unit = {},
+    onNavigateToGuide: (guideId: String, eventId: String, userName: String) -> Unit = { _, _, _ -> },
+    onNavigateToCriticalSecrets: () -> Unit = {},
     appViewModel: AppViewModel = hiltViewModel(),
     badgeCountsViewModel: BadgeCountsViewModel = hiltViewModel()
 ) {
@@ -1117,6 +1214,21 @@ fun MainScreen(
             }
         )
     ) { mutableStateOf(NavigationState()) }
+
+    // Handle navigation results from guide screens
+    LaunchedEffect(initialDrawerItem, initialOpenSettings) {
+        if (initialDrawerItem != null) {
+            val item = try { DrawerItem.valueOf(initialDrawerItem) } catch (_: Exception) { null }
+            if (item != null) {
+                navigationState = navigationState.copy(currentItem = item, isSettingsOpen = false)
+            }
+            onConsumeNavResult()
+        } else if (initialOpenSettings) {
+            navigationState = navigationState.copy(isSettingsOpen = true)
+            onConsumeNavResult()
+        }
+    }
+
     val snackbarHostState = remember { SnackbarHostState() }
     val appState by appViewModel.appState.collectAsState()
 
@@ -1160,7 +1272,8 @@ fun MainScreen(
             FeedContent(
                 onNavigateToConversation = onNavigateToConversation,
                 onNavigateToHandler = onNavigateToHandlerDetail,
-                onNavigateToBackup = { onNavigateToBackups() }
+                onNavigateToBackup = { onNavigateToBackups() },
+                onNavigateToGuide = onNavigateToGuide
             )
         },
         connectionsContent = {
@@ -1174,7 +1287,10 @@ fun MainScreen(
             PersonalDataContent()
         },
         secretsContent = {
-            SecretsContentEmbedded(onSecretClick = onNavigateToSecretDetail)
+            SecretsContentEmbedded(
+                onSecretClick = onNavigateToSecretDetail,
+                onNavigateToCriticalSecrets = onNavigateToCriticalSecrets
+            )
         },
         archiveContent = {
             ArchiveContentEmbedded()
@@ -1702,8 +1818,11 @@ private fun PlaceholderScreenWithBack(
 // Embedded content composables for simplified navigation
 
 @Composable
-private fun SecretsContentEmbedded(onSecretClick: (String) -> Unit = {}) {
-    SecretsContent()
+private fun SecretsContentEmbedded(
+    onSecretClick: (String) -> Unit = {},
+    onNavigateToCriticalSecrets: () -> Unit = {}
+) {
+    SecretsContent(onNavigateToCriticalSecrets = onNavigateToCriticalSecrets)
 }
 
 @Composable

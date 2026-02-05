@@ -1,10 +1,5 @@
 package com.vettid.app.features.enrollmentwizard
 
-import com.vettid.app.core.storage.CustomField
-import com.vettid.app.core.storage.FieldCategory
-import com.vettid.app.core.storage.FieldType
-import com.vettid.app.core.storage.OptionalField
-
 /**
  * All possible events in the enrollment wizard.
  * Unified event system for all phases.
@@ -88,62 +83,13 @@ sealed class WizardEvent {
     /** Continue after successful verification */
     object ContinueAfterVerification : WizardEvent()
 
-    // ============== PERSONAL DATA PHASE EVENTS ==============
+    // ============== CONFIRM PROFILE PHASE EVENTS ==============
 
-    /** Update optional field */
-    data class UpdateOptionalField(val field: OptionalField, val value: String?) : WizardEvent()
-
-    /** Add custom field */
-    data class AddCustomField(
-        val name: String,
-        val value: String,
-        val category: FieldCategory,
-        val fieldType: FieldType
-    ) : WizardEvent()
-
-    /** Update existing custom field */
-    data class UpdateCustomField(val field: CustomField) : WizardEvent()
-
-    /** Remove custom field */
-    data class RemoveCustomField(val fieldId: String) : WizardEvent()
-
-    /** Create a new custom category */
-    data class CreateCategory(val name: String) : WizardEvent()
-
-    /** Sync personal data to vault */
-    object SyncPersonalData : WizardEvent()
-
-    /** Show add field dialog */
-    object ShowAddFieldDialog : WizardEvent()
-
-    /** Hide add field dialog */
-    object HideAddFieldDialog : WizardEvent()
-
-    /** Show edit field dialog */
-    data class ShowEditFieldDialog(val field: CustomField) : WizardEvent()
-
-    /** Hide edit field dialog */
-    object HideEditFieldDialog : WizardEvent()
+    /** Confirm default public profile and publish */
+    object ConfirmProfile : WizardEvent()
 
     /** Dismiss error message */
     object DismissError : WizardEvent()
-
-    // ============== PUBLIC PROFILE PHASE EVENTS ==============
-
-    /** Toggle a field for public profile inclusion */
-    data class TogglePublicProfileField(val fieldNamespace: String) : WizardEvent()
-
-    /** Select all fields for public profile */
-    object SelectAllPublicFields : WizardEvent()
-
-    /** Deselect all fields for public profile */
-    object SelectNoPublicFields : WizardEvent()
-
-    /** Publish public profile to NATS */
-    object PublishProfile : WizardEvent()
-
-    /** Skip public profile setup */
-    object SkipPublicProfile : WizardEvent()
 
     // ============== COMPLETE PHASE EVENTS ==============
 

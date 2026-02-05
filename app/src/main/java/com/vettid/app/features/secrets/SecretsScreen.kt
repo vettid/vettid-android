@@ -49,7 +49,8 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SecretsContent(
-    viewModel: SecretsViewModel = hiltViewModel()
+    viewModel: SecretsViewModel = hiltViewModel(),
+    onNavigateToCriticalSecrets: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
@@ -107,7 +108,7 @@ fun SecretsContent(
             is SecretsState.Empty -> {
                 EmptySecretsContent(
                     onAddClick = { showTemplateChooser = true },
-                    onCriticalSecretsTap = { viewModel.onCriticalSecretsEvent(CriticalSecretsEvent.Open) }
+                    onCriticalSecretsTap = onNavigateToCriticalSecrets
                 )
             }
 
@@ -140,7 +141,7 @@ fun SecretsContent(
                         onMoveUp = { viewModel.onEvent(SecretsEvent.MoveSecretUp(it)) },
                         onMoveDown = { viewModel.onEvent(SecretsEvent.MoveSecretDown(it)) },
                         onPublishClick = { viewModel.onEvent(SecretsEvent.PublishPublicKeys) },
-                        onCriticalSecretsTap = { viewModel.onCriticalSecretsEvent(CriticalSecretsEvent.Open) }
+                        onCriticalSecretsTap = onNavigateToCriticalSecrets
                     )
                 }
             }
@@ -282,15 +283,6 @@ fun SecretsContent(
         )
     }
 
-    // Critical Secrets bottom sheet
-    val criticalSecretsState by viewModel.criticalSecretsState.collectAsState()
-    if (criticalSecretsState !is CriticalSecretsSheetState.Hidden) {
-        CriticalSecretsSheet(
-            state = criticalSecretsState,
-            onEvent = { viewModel.onCriticalSecretsEvent(it) },
-            onDismiss = { viewModel.onCriticalSecretsEvent(CriticalSecretsEvent.Close) }
-        )
-    }
 }
 
 @Composable

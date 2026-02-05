@@ -8,12 +8,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
-import com.vettid.app.core.crypto.CryptoManager
 import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.core.storage.CredentialStore
-import com.vettid.app.core.storage.CriticalSecretMetadataStore
 import com.vettid.app.core.storage.MinorSecret
 import com.vettid.app.core.storage.MinorSecretsStore
 import com.vettid.app.core.storage.SecretCategory
@@ -21,8 +19,6 @@ import com.vettid.app.core.storage.SecretType
 import com.vettid.app.worker.SecretsSyncWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -35,9 +31,7 @@ class SecretsViewModel @Inject constructor(
     private val minorSecretsStore: MinorSecretsStore,
     private val ownerSpaceClient: OwnerSpaceClient,
     private val credentialStore: CredentialStore,
-    private val connectionManager: NatsConnectionManager,
-    private val cryptoManager: CryptoManager,
-    private val criticalSecretMetadataStore: CriticalSecretMetadataStore
+    private val connectionManager: NatsConnectionManager
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<SecretsState>(SecretsState.Loading)
@@ -57,23 +51,6 @@ class SecretsViewModel @Inject constructor(
 
     private val _showDeleteConfirmDialog = MutableStateFlow<String?>(null)
     val showDeleteConfirmDialog: StateFlow<String?> = _showDeleteConfirmDialog.asStateFlow()
-
-    // Critical secrets state
-    private val _criticalSecretsState = MutableStateFlow<CriticalSecretsSheetState>(CriticalSecretsSheetState.Hidden)
-    val criticalSecretsState: StateFlow<CriticalSecretsSheetState> = _criticalSecretsState.asStateFlow()
-
-    // Cached metadata list for returning from reveal
-    private var cachedMetadataList: CriticalSecretsSheetState.MetadataList? = null
-
-    // Pending secret ID for reveal after second password
-    private var pendingRevealSecretId: String? = null
-
-    // Auto-hide countdown job
-    private var countdownJob: Job? = null
-
-    companion object {
-        private const val REVEAL_DURATION_SECONDS = 30
-    }
 
     init {
         Log.i(TAG, "SecretsViewModel initialized")
@@ -627,313 +604,4 @@ class SecretsViewModel @Inject constructor(
         }
     }
 
-    // MARK: - Critical Secrets
-
-    fun onCriticalSecretsEvent(event: CriticalSecretsEvent) {
-        when (event) {
-            is CriticalSecretsEvent.Open -> {
-                _criticalSecretsState.value = CriticalSecretsSheetState.PasswordPrompt
-            }
-            is CriticalSecretsEvent.Close -> {
-                countdownJob?.cancel()
-                _criticalSecretsState.value = CriticalSecretsSheetState.Hidden
-                cachedMetadataList = null
-                pendingRevealSecretId = null
-            }
-            is CriticalSecretsEvent.SubmitPassword -> {
-                authenticateAndLoadMetadata(event.password)
-            }
-            is CriticalSecretsEvent.RevealSecret -> {
-                pendingRevealSecretId = event.secretId
-                _criticalSecretsState.value = CriticalSecretsSheetState.SecondPasswordPrompt(
-                    secretId = event.secretId,
-                    secretName = event.secretName
-                )
-            }
-            is CriticalSecretsEvent.SubmitRevealPassword -> {
-                pendingRevealSecretId?.let { secretId ->
-                    revealSecretValue(secretId, event.password)
-                }
-            }
-            is CriticalSecretsEvent.TimerExpired -> {
-                countdownJob?.cancel()
-                cachedMetadataList?.let {
-                    _criticalSecretsState.value = it
-                } ?: run {
-                    _criticalSecretsState.value = CriticalSecretsSheetState.Hidden
-                }
-            }
-            is CriticalSecretsEvent.BackToList -> {
-                countdownJob?.cancel()
-                cachedMetadataList?.let {
-                    _criticalSecretsState.value = it
-                } ?: run {
-                    _criticalSecretsState.value = CriticalSecretsSheetState.PasswordPrompt
-                }
-            }
-        }
-    }
-
-    private fun authenticateAndLoadMetadata(password: String) {
-        viewModelScope.launch {
-            _criticalSecretsState.value = CriticalSecretsSheetState.Authenticating
-
-            try {
-                if (!connectionManager.isConnected()) {
-                    _criticalSecretsState.value = CriticalSecretsSheetState.Error("Not connected to vault")
-                    return@launch
-                }
-
-                // Encrypt password for vault
-                val salt = credentialStore.getPasswordSaltBytes()
-                if (salt == null) {
-                    _criticalSecretsState.value = CriticalSecretsSheetState.Error("Password salt not found")
-                    return@launch
-                }
-
-                val utkPool = credentialStore.getUtkPool()
-                if (utkPool.isEmpty()) {
-                    _criticalSecretsState.value = CriticalSecretsSheetState.Error("No UTKs available")
-                    return@launch
-                }
-
-                val utk = utkPool.first()
-                val encResult = cryptoManager.encryptPasswordForServer(password, salt, utk.publicKey)
-
-                val payload = JsonObject().apply {
-                    addProperty("encrypted_password_hash", encResult.encryptedPasswordHash)
-                    addProperty("ephemeral_public_key", encResult.ephemeralPublicKey)
-                    addProperty("nonce", encResult.nonce)
-                    addProperty("key_id", utk.keyId)
-                }
-
-                val response = ownerSpaceClient.sendAndAwaitResponse(
-                    "credential.secret.list",
-                    payload,
-                    15000L
-                )
-
-                // Consume UTK
-                credentialStore.removeUtk(utk.keyId)
-
-                when (response) {
-                    is VaultResponse.HandlerResult -> {
-                        if (response.success && response.result != null) {
-                            val metadata = parseCriticalSecretsMetadata(response.result)
-                            cachedMetadataList = metadata
-                            _criticalSecretsState.value = metadata
-                            Log.i(TAG, "Loaded critical secrets metadata")
-                        } else {
-                            _criticalSecretsState.value = CriticalSecretsSheetState.Error(
-                                response.error ?: "Failed to load secrets"
-                            )
-                        }
-                    }
-                    is VaultResponse.Error -> {
-                        _criticalSecretsState.value = CriticalSecretsSheetState.Error(response.message)
-                    }
-                    null -> {
-                        _criticalSecretsState.value = CriticalSecretsSheetState.Error("Request timed out")
-                    }
-                    else -> {
-                        _criticalSecretsState.value = CriticalSecretsSheetState.Error("Unexpected response")
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to authenticate for critical secrets", e)
-                _criticalSecretsState.value = CriticalSecretsSheetState.Error(
-                    e.message ?: "Authentication failed"
-                )
-            }
-        }
-    }
-
-    private fun revealSecretValue(secretId: String, password: String) {
-        viewModelScope.launch {
-            val currentState = _criticalSecretsState.value
-            val secretName = when (currentState) {
-                is CriticalSecretsSheetState.SecondPasswordPrompt -> currentState.secretName
-                else -> "Secret"
-            }
-            _criticalSecretsState.value = CriticalSecretsSheetState.Retrieving(secretName)
-
-            try {
-                if (!connectionManager.isConnected()) {
-                    _criticalSecretsState.value = CriticalSecretsSheetState.Error("Not connected to vault")
-                    return@launch
-                }
-
-                val salt = credentialStore.getPasswordSaltBytes()
-                if (salt == null) {
-                    _criticalSecretsState.value = CriticalSecretsSheetState.Error("Password salt not found")
-                    return@launch
-                }
-
-                val utkPool = credentialStore.getUtkPool()
-                if (utkPool.isEmpty()) {
-                    _criticalSecretsState.value = CriticalSecretsSheetState.Error("No UTKs available")
-                    return@launch
-                }
-
-                val utk = utkPool.first()
-                val encResult = cryptoManager.encryptPasswordForServer(password, salt, utk.publicKey)
-
-                // Get encrypted credential blob for the vault
-                val encryptedCredential = credentialStore.getEncryptedBlob()
-                if (encryptedCredential == null) {
-                    _criticalSecretsState.value = CriticalSecretsSheetState.Error("Credential not found")
-                    return@launch
-                }
-
-                val payload = JsonObject().apply {
-                    addProperty("encrypted_credential", encryptedCredential)
-                    addProperty("id", secretId)
-                    addProperty("encrypted_password_hash", encResult.encryptedPasswordHash)
-                    addProperty("ephemeral_public_key", encResult.ephemeralPublicKey)
-                    addProperty("nonce", encResult.nonce)
-                    addProperty("key_id", utk.keyId)
-                }
-
-                val response = ownerSpaceClient.sendAndAwaitResponse(
-                    "credential.secret.get",
-                    payload,
-                    15000L
-                )
-
-                // Consume UTK
-                credentialStore.removeUtk(utk.keyId)
-
-                when (response) {
-                    is VaultResponse.HandlerResult -> {
-                        if (response.success && response.result != null) {
-                            val valueBase64 = response.result.get("value")?.asString
-                            val name = response.result.get("name")?.asString ?: secretName
-
-                            if (valueBase64 != null) {
-                                val value = String(
-                                    android.util.Base64.decode(valueBase64, android.util.Base64.DEFAULT),
-                                    Charsets.UTF_8
-                                )
-
-                                // Record access
-                                criticalSecretMetadataStore.recordAccess(secretId)
-
-                                // Start countdown
-                                startRevealCountdown(secretId, name, value)
-                                Log.i(TAG, "Revealed critical secret: $secretId")
-                            } else {
-                                _criticalSecretsState.value = CriticalSecretsSheetState.Error("No value returned")
-                            }
-                        } else {
-                            _criticalSecretsState.value = CriticalSecretsSheetState.Error(
-                                response.error ?: "Failed to retrieve secret"
-                            )
-                        }
-                    }
-                    is VaultResponse.Error -> {
-                        _criticalSecretsState.value = CriticalSecretsSheetState.Error(response.message)
-                    }
-                    null -> {
-                        _criticalSecretsState.value = CriticalSecretsSheetState.Error("Request timed out")
-                    }
-                    else -> {
-                        _criticalSecretsState.value = CriticalSecretsSheetState.Error("Unexpected response")
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to reveal critical secret", e)
-                _criticalSecretsState.value = CriticalSecretsSheetState.Error(
-                    e.message ?: "Failed to retrieve secret"
-                )
-            }
-        }
-    }
-
-    private fun startRevealCountdown(secretId: String, secretName: String, value: String) {
-        countdownJob?.cancel()
-        _criticalSecretsState.value = CriticalSecretsSheetState.Revealed(
-            secretId = secretId,
-            secretName = secretName,
-            value = value,
-            remainingSeconds = REVEAL_DURATION_SECONDS
-        )
-
-        countdownJob = viewModelScope.launch {
-            for (remaining in REVEAL_DURATION_SECONDS - 1 downTo 0) {
-                delay(1000)
-                val current = _criticalSecretsState.value
-                if (current is CriticalSecretsSheetState.Revealed && current.secretId == secretId) {
-                    if (remaining == 0) {
-                        onCriticalSecretsEvent(CriticalSecretsEvent.TimerExpired)
-                    } else {
-                        _criticalSecretsState.value = current.copy(remainingSeconds = remaining)
-                    }
-                } else {
-                    break
-                }
-            }
-        }
-    }
-
-    private fun parseCriticalSecretsMetadata(result: JsonObject): CriticalSecretsSheetState.MetadataList {
-        val secrets = mutableListOf<CriticalSecretItem>()
-        val cryptoKeys = mutableListOf<CryptoKeyItem>()
-        var credentialInfo: CredentialInfoItem? = null
-
-        // Parse secrets
-        result.getAsJsonArray("secrets")?.forEach { element ->
-            try {
-                val obj = element.asJsonObject
-                secrets.add(CriticalSecretItem(
-                    id = obj.get("id").asString,
-                    name = obj.get("name").asString,
-                    category = obj.get("category")?.asString ?: "OTHER",
-                    description = obj.get("description")?.asString,
-                    owner = obj.get("owner")?.asString,
-                    createdAt = obj.get("created_at")?.asString ?: ""
-                ))
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to parse critical secret", e)
-            }
-        }
-
-        // Parse crypto keys
-        result.getAsJsonArray("crypto_keys")?.forEach { element ->
-            try {
-                val obj = element.asJsonObject
-                cryptoKeys.add(CryptoKeyItem(
-                    id = obj.get("id").asString,
-                    label = obj.get("label").asString,
-                    type = obj.get("type").asString,
-                    publicKey = obj.get("public_key")?.asString,
-                    derivationPath = obj.get("derivation_path")?.asString,
-                    createdAt = obj.get("created_at")?.asString ?: ""
-                ))
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to parse crypto key", e)
-            }
-        }
-
-        // Parse credential info
-        result.getAsJsonObject("credential")?.let { cred ->
-            try {
-                credentialInfo = CredentialInfoItem(
-                    identityFingerprint = cred.get("identity_fingerprint")?.asString ?: "",
-                    vaultId = cred.get("vault_id")?.asString,
-                    boundAt = cred.get("bound_at")?.asString,
-                    version = cred.get("version")?.asInt ?: 0,
-                    createdAt = cred.get("created_at")?.asString ?: "",
-                    lastModified = cred.get("last_modified")?.asString ?: ""
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to parse credential info", e)
-            }
-        }
-
-        return CriticalSecretsSheetState.MetadataList(
-            secrets = secrets,
-            cryptoKeys = cryptoKeys,
-            credentialInfo = credentialInfo
-        )
-    }
 }

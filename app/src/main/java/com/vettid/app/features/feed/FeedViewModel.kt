@@ -7,7 +7,9 @@ import com.vettid.app.core.nats.FeedClient
 import com.vettid.app.core.nats.FeedEvent
 import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.NatsConnectionState
+import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.storage.CredentialStore
+import com.vettid.app.core.storage.PersonalDataStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -25,7 +27,9 @@ class FeedViewModel @Inject constructor(
     private val feedRepository: FeedRepository,
     private val feedNotificationService: FeedNotificationService,
     private val connectionManager: NatsConnectionManager,
-    private val credentialStore: CredentialStore
+    private val credentialStore: CredentialStore,
+    private val ownerSpaceClient: OwnerSpaceClient,
+    private val personalDataStore: PersonalDataStore
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<FeedState>(FeedState.Loading)
@@ -92,6 +96,7 @@ class FeedViewModel @Inject constructor(
                     Log.d(TAG, "NATS connected, loading feed (initial)")
                     // Small delay to let connection stabilize
                     delay(1000)
+                    syncGuides()
                     loadFeed()
                 }
             }
@@ -321,6 +326,15 @@ class FeedViewModel @Inject constructor(
                         _effects.emit(FeedEffect.ShowEventDetail(event))
                     }
                 }
+                EventTypes.GUIDE -> {
+                    val guideId = event.metadata?.get("guide_id")
+                    val userName = event.metadata?.get("user_name") ?: ""
+                    if (guideId != null) {
+                        _effects.emit(FeedEffect.NavigateToGuide(guideId, event.eventId, userName))
+                    } else {
+                        _effects.emit(FeedEffect.ShowEventDetail(event))
+                    }
+                }
                 else -> {
                     // Default: show event detail dialog
                     _effects.emit(FeedEffect.ShowEventDetail(event))
@@ -445,6 +459,48 @@ class FeedViewModel @Inject constructor(
                     Log.e(TAG, "Failed to execute action", it)
                     _effects.emit(FeedEffect.ShowError("Action failed: ${it.message}"))
                 }
+        }
+    }
+
+    /**
+     * Sync guide catalog to vault. Idempotent - vault only creates events
+     * for new/updated guides.
+     */
+    private fun syncGuides() {
+        viewModelScope.launch {
+            try {
+                val systemFields = personalDataStore.getSystemFields()
+                val userName = systemFields?.firstName ?: ""
+
+                val guidesPayload = com.google.gson.JsonObject().apply {
+                    val guidesArray = com.google.gson.JsonArray()
+                    GuideCatalog.guides.forEach { guide ->
+                        val guideObj = com.google.gson.JsonObject().apply {
+                            addProperty("guide_id", guide.guideId)
+                            addProperty("title", guide.title)
+                            addProperty("message", guide.message)
+                            addProperty("order", guide.order)
+                            addProperty("priority", guide.priority)
+                            addProperty("version", guide.version)
+                            addProperty("user_name", userName)
+                        }
+                        guidesArray.add(guideObj)
+                    }
+                    add("guides", guidesArray)
+                }
+
+                val result = ownerSpaceClient.sendToVault("guide.sync", guidesPayload)
+                result.fold(
+                    onSuccess = { response ->
+                        Log.i(TAG, "Guide sync complete: $response")
+                    },
+                    onFailure = { error ->
+                        Log.w(TAG, "Guide sync failed: ${error.message}")
+                    }
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "Error syncing guides", e)
+            }
         }
     }
 }

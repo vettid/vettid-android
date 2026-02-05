@@ -265,47 +265,6 @@ data class TemplateFormState(
 
 // MARK: - Critical Secrets (Credential-Embedded Secrets)
 
-/**
- * State for the critical secrets bottom sheet.
- */
-sealed class CriticalSecretsSheetState {
-    /** Sheet is hidden. */
-    object Hidden : CriticalSecretsSheetState()
-
-    /** Password prompt to authenticate. */
-    object PasswordPrompt : CriticalSecretsSheetState()
-
-    /** Authenticating with vault. */
-    object Authenticating : CriticalSecretsSheetState()
-
-    /** Metadata list showing credential contents. */
-    data class MetadataList(
-        val secrets: List<CriticalSecretItem>,
-        val cryptoKeys: List<CryptoKeyItem>,
-        val credentialInfo: CredentialInfoItem?
-    ) : CriticalSecretsSheetState()
-
-    /** Second password prompt to reveal a specific secret value. */
-    data class SecondPasswordPrompt(
-        val secretId: String,
-        val secretName: String
-    ) : CriticalSecretsSheetState()
-
-    /** Retrieving secret value from vault. */
-    data class Retrieving(val secretName: String) : CriticalSecretsSheetState()
-
-    /** Revealed secret value with countdown timer. */
-    data class Revealed(
-        val secretId: String,
-        val secretName: String,
-        val value: String,
-        val remainingSeconds: Int
-    ) : CriticalSecretsSheetState()
-
-    /** Error state. */
-    data class Error(val message: String) : CriticalSecretsSheetState()
-}
-
 /** A critical secret item for display in the metadata list. */
 data class CriticalSecretItem(
     val id: String,
@@ -335,32 +294,6 @@ data class CredentialInfoItem(
     val createdAt: String,
     val lastModified: String
 )
-
-/**
- * Events for the critical secrets feature.
- */
-sealed class CriticalSecretsEvent {
-    /** Open the critical secrets sheet. */
-    object Open : CriticalSecretsEvent()
-
-    /** Close the critical secrets sheet. */
-    object Close : CriticalSecretsEvent()
-
-    /** Submit password for authentication. */
-    data class SubmitPassword(val password: String) : CriticalSecretsEvent()
-
-    /** Tap a secret to reveal its value. */
-    data class RevealSecret(val secretId: String, val secretName: String) : CriticalSecretsEvent()
-
-    /** Submit password for secret reveal. */
-    data class SubmitRevealPassword(val password: String) : CriticalSecretsEvent()
-
-    /** Timer expired, hide value. */
-    object TimerExpired : CriticalSecretsEvent()
-
-    /** Go back to metadata list from reveal/prompt. */
-    object BackToList : CriticalSecretsEvent()
-}
 
 // Legacy compatibility - keep old model names as aliases
 typealias Secret = MinorSecret
