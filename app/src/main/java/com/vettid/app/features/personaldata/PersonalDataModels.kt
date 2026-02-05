@@ -66,6 +66,74 @@ enum class DataCategory(val displayName: String, val iconName: String) {
 }
 
 /**
+ * Template for common personal data fields.
+ * Provides standardized naming conventions and appropriate field types.
+ */
+data class PersonalDataTemplate(
+    val name: String,
+    val category: DataCategory,
+    val fieldType: FieldType,
+    val description: String
+)
+
+/**
+ * Standard templates for common personal data fields.
+ * Using consistent naming helps with data interoperability and sharing.
+ */
+object PersonalDataTemplates {
+    val templates = listOf(
+        // Identity
+        PersonalDataTemplate("Date of Birth", DataCategory.IDENTITY, FieldType.DATE, "Your birth date"),
+        PersonalDataTemplate("Social Security Number", DataCategory.IDENTITY, FieldType.TEXT, "SSN (US)"),
+        PersonalDataTemplate("National ID", DataCategory.IDENTITY, FieldType.TEXT, "Government-issued ID number"),
+        PersonalDataTemplate("Passport Number", DataCategory.IDENTITY, FieldType.TEXT, "Passport document number"),
+        PersonalDataTemplate("Driver License", DataCategory.IDENTITY, FieldType.TEXT, "Driver's license number"),
+        PersonalDataTemplate("Place of Birth", DataCategory.IDENTITY, FieldType.TEXT, "City/country of birth"),
+        PersonalDataTemplate("Nationality", DataCategory.IDENTITY, FieldType.TEXT, "Your nationality/citizenship"),
+        PersonalDataTemplate("Gender", DataCategory.IDENTITY, FieldType.TEXT, "Your gender identity"),
+
+        // Contact
+        PersonalDataTemplate("Mobile Phone", DataCategory.CONTACT, FieldType.PHONE, "Primary mobile number"),
+        PersonalDataTemplate("Home Phone", DataCategory.CONTACT, FieldType.PHONE, "Home landline number"),
+        PersonalDataTemplate("Work Phone", DataCategory.CONTACT, FieldType.PHONE, "Work/office number"),
+        PersonalDataTemplate("Personal Email", DataCategory.CONTACT, FieldType.EMAIL, "Personal email address"),
+        PersonalDataTemplate("Work Email", DataCategory.CONTACT, FieldType.EMAIL, "Work/business email"),
+        PersonalDataTemplate("Website", DataCategory.CONTACT, FieldType.URL, "Personal website URL"),
+        PersonalDataTemplate("LinkedIn", DataCategory.CONTACT, FieldType.URL, "LinkedIn profile URL"),
+
+        // Address
+        PersonalDataTemplate("Home Address", DataCategory.ADDRESS, FieldType.NOTE, "Full residential address"),
+        PersonalDataTemplate("Mailing Address", DataCategory.ADDRESS, FieldType.NOTE, "Postal/mailing address"),
+        PersonalDataTemplate("Work Address", DataCategory.ADDRESS, FieldType.NOTE, "Office/work address"),
+        PersonalDataTemplate("City", DataCategory.ADDRESS, FieldType.TEXT, "City of residence"),
+        PersonalDataTemplate("State/Province", DataCategory.ADDRESS, FieldType.TEXT, "State or province"),
+        PersonalDataTemplate("Postal Code", DataCategory.ADDRESS, FieldType.TEXT, "ZIP or postal code"),
+        PersonalDataTemplate("Country", DataCategory.ADDRESS, FieldType.TEXT, "Country of residence"),
+
+        // Financial
+        PersonalDataTemplate("Bank Name", DataCategory.FINANCIAL, FieldType.TEXT, "Primary bank name"),
+        PersonalDataTemplate("Bank Account", DataCategory.FINANCIAL, FieldType.TEXT, "Account number"),
+        PersonalDataTemplate("Routing Number", DataCategory.FINANCIAL, FieldType.TEXT, "Bank routing/ABA number"),
+        PersonalDataTemplate("IBAN", DataCategory.FINANCIAL, FieldType.TEXT, "International bank account number"),
+        PersonalDataTemplate("Tax ID", DataCategory.FINANCIAL, FieldType.TEXT, "Tax identification number"),
+
+        // Medical
+        PersonalDataTemplate("Blood Type", DataCategory.MEDICAL, FieldType.TEXT, "Your blood type (e.g., A+, O-)"),
+        PersonalDataTemplate("Allergies", DataCategory.MEDICAL, FieldType.NOTE, "Known allergies"),
+        PersonalDataTemplate("Medical Conditions", DataCategory.MEDICAL, FieldType.NOTE, "Relevant medical conditions"),
+        PersonalDataTemplate("Emergency Contact", DataCategory.MEDICAL, FieldType.TEXT, "Emergency contact name"),
+        PersonalDataTemplate("Emergency Phone", DataCategory.MEDICAL, FieldType.PHONE, "Emergency contact phone"),
+        PersonalDataTemplate("Insurance Provider", DataCategory.MEDICAL, FieldType.TEXT, "Health insurance company"),
+        PersonalDataTemplate("Insurance ID", DataCategory.MEDICAL, FieldType.TEXT, "Insurance policy/member ID"),
+        PersonalDataTemplate("Primary Physician", DataCategory.MEDICAL, FieldType.TEXT, "Primary care doctor's name")
+    )
+
+    /** Get templates for a specific category */
+    fun forCategory(category: DataCategory): List<PersonalDataTemplate> =
+        templates.filter { it.category == category }
+}
+
+/**
  * State for the personal data list screen.
  */
 sealed class PersonalDataState {

@@ -967,9 +967,13 @@ private fun AddFieldDialog(
 ) {
     var expandedCategory by remember { mutableStateOf(false) }
     var expandedFieldType by remember { mutableStateOf(false) }
+    var expandedTemplates by remember { mutableStateOf(false) }
     var showNewCategoryDialog by remember { mutableStateOf(false) }
     // Track selected custom category name (if a custom category is selected)
     var selectedCustomCategoryName by remember { mutableStateOf<String?>(null) }
+
+    // Get templates for the selected category
+    val categoryTemplates = state.category?.let { PersonalDataTemplates.forCategory(it) } ?: emptyList()
 
     // Determine displayed category name
     val displayedCategoryName = selectedCustomCategoryName ?: state.category?.displayName ?: "Select category"
@@ -1053,20 +1057,70 @@ private fun AddFieldDialog(
                     }
                 }
 
-                // 2. Field name
-                OutlinedTextField(
-                    value = state.name,
-                    onValueChange = onNameChange,
-                    label = { Text("Field Name") },
-                    placeholder = { Text("e.g., Social Security, Driver License") },
-                    isError = state.nameError != null,
-                    supportingText = state.nameError?.let { { Text(it) } },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(
-                        capitalization = KeyboardCapitalization.Words
+                // 2. Field name with template suggestions
+                ExposedDropdownMenuBox(
+                    expanded = expandedTemplates && categoryTemplates.isNotEmpty() && state.name.isEmpty() && !state.isEditing,
+                    onExpandedChange = { if (categoryTemplates.isNotEmpty() && state.name.isEmpty() && !state.isEditing) expandedTemplates = it }
+                ) {
+                    OutlinedTextField(
+                        value = state.name,
+                        onValueChange = { newValue ->
+                            onNameChange(newValue)
+                            expandedTemplates = newValue.isEmpty() && categoryTemplates.isNotEmpty()
+                        },
+                        label = { Text("Field Name") },
+                        placeholder = {
+                            Text(
+                                if (categoryTemplates.isNotEmpty()) "Select template or type custom name"
+                                else "e.g., Social Security, Driver License"
+                            )
+                        },
+                        trailingIcon = {
+                            if (categoryTemplates.isNotEmpty() && state.name.isEmpty() && !state.isEditing) {
+                                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedTemplates)
+                            }
+                        },
+                        isError = state.nameError != null,
+                        supportingText = state.nameError?.let { { Text(it) } },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Words
+                        )
                     )
-                )
+                    ExposedDropdownMenu(
+                        expanded = expandedTemplates && categoryTemplates.isNotEmpty() && state.name.isEmpty() && !state.isEditing,
+                        onDismissRequest = { expandedTemplates = false }
+                    ) {
+                        Text(
+                            text = "Common Fields",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                        )
+                        categoryTemplates.forEach { template ->
+                            DropdownMenuItem(
+                                text = {
+                                    Column {
+                                        Text(template.name)
+                                        Text(
+                                            template.description,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    onNameChange(template.name)
+                                    onFieldTypeChange(template.fieldType)
+                                    expandedTemplates = false
+                                }
+                            )
+                        }
+                    }
+                }
 
                 // 3. Field type
                 ExposedDropdownMenuBox(

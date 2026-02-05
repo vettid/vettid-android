@@ -797,20 +797,8 @@ private fun SecretQRDialog(
             }
         },
         confirmButton = {
-            Row {
-                TextButton(onClick = onCopy) {
-                    Icon(
-                        Icons.Default.ContentCopy,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Copy")
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                TextButton(onClick = onDismiss) {
-                    Text("Close")
-                }
+            TextButton(onClick = onDismiss) {
+                Text("Close")
             }
         },
         dismissButton = {
