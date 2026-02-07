@@ -3,8 +3,6 @@ package com.vettid.app.core.nats
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.*
 import org.junit.Assert.*
 import org.junit.Before
@@ -16,13 +14,10 @@ class ConnectionsClientTest {
 
     private lateinit var ownerSpaceClient: OwnerSpaceClient
     private lateinit var connectionsClient: ConnectionsClient
-    private lateinit var vaultResponses: MutableSharedFlow<VaultResponse>
 
     @Before
     fun setup() {
         ownerSpaceClient = mock()
-        vaultResponses = MutableSharedFlow()
-        whenever(ownerSpaceClient.vaultResponses).thenReturn(vaultResponses)
         connectionsClient = ConnectionsClient(ownerSpaceClient)
     }
 
@@ -31,43 +26,39 @@ class ConnectionsClientTest {
     @Test
     fun `createInvite sends correct message type and payload`() = runTest {
         // Arrange
-        val requestId = "req-123"
-        whenever(ownerSpaceClient.sendToVault(any(), any()))
-            .thenReturn(Result.success(requestId))
-
-        // Emit response in background
-        backgroundScope.launch {
-            vaultResponses.emit(VaultResponse.HandlerResult(
-                requestId = requestId,
-                handlerId = null,
-                success = true,
-                result = JsonObject().apply {
-                    addProperty("connection_id", "conn-abc")
-                    addProperty("nats_credentials", "-----BEGIN NATS USER JWT-----")
-                    addProperty("owner_space_id", "OwnerSpace.123")
-                    addProperty("message_space_id", "MessageSpace.123")
-                    addProperty("expires_at", "2025-12-23T15:30:00Z")
-                },
-                error = null
-            ))
-        }
+        val response = VaultResponse.HandlerResult(
+            requestId = "req-123",
+            handlerId = null,
+            success = true,
+            result = JsonObject().apply {
+                addProperty("connection_id", "conn-abc")
+                addProperty("nats_credentials", "-----BEGIN NATS USER JWT-----")
+                addProperty("owner_space_id", "OwnerSpace.123")
+                addProperty("message_space_id", "MessageSpace.123")
+                addProperty("expires_at", "2025-12-23T15:30:00Z")
+            },
+            error = null
+        )
+        whenever(ownerSpaceClient.sendAndAwaitResponse(any(), any(), any()))
+            .thenReturn(response)
 
         // Act
         val result = connectionsClient.createInvite(
             peerGuid = "user-456",
             label = "Alice's Vault",
-            expiresInHours = 48
+            expiresInMinutes = 48 * 60
         )
 
         // Assert
         assertTrue(result.isSuccess)
-        verify(ownerSpaceClient).sendToVault(
+        verify(ownerSpaceClient).sendAndAwaitResponse(
             eq("connection.create-invite"),
             argThat { payload ->
                 payload.get("peer_guid")?.asString == "user-456" &&
                 payload.get("label")?.asString == "Alice's Vault" &&
                 payload.get("expires_in_hours")?.asInt == 48
-            }
+            },
+            any()
         )
 
         val invitation = result.getOrNull()!!
@@ -82,9 +73,9 @@ class ConnectionsClientTest {
 
     @Test
     fun `createInvite returns failure when send fails`() = runTest {
-        // Arrange
-        whenever(ownerSpaceClient.sendToVault(any(), any()))
-            .thenReturn(Result.failure(NatsException("Connection lost")))
+        // Arrange - sendAndAwaitResponse throws exception
+        whenever(ownerSpaceClient.sendAndAwaitResponse(any(), any(), any()))
+            .thenAnswer { throw NatsException("Connection lost") }
 
         // Act
         val result = connectionsClient.createInvite("user-456", "Test")
@@ -97,19 +88,15 @@ class ConnectionsClientTest {
     @Test
     fun `createInvite returns failure when handler fails`() = runTest {
         // Arrange
-        val requestId = "req-123"
-        whenever(ownerSpaceClient.sendToVault(any(), any()))
-            .thenReturn(Result.success(requestId))
-
-        backgroundScope.launch {
-            vaultResponses.emit(VaultResponse.HandlerResult(
-                requestId = requestId,
-                handlerId = null,
-                success = false,
-                result = null,
-                error = "Peer not found"
-            ))
-        }
+        val response = VaultResponse.HandlerResult(
+            requestId = "req-123",
+            handlerId = null,
+            success = false,
+            result = null,
+            error = "Peer not found"
+        )
+        whenever(ownerSpaceClient.sendAndAwaitResponse(any(), any(), any()))
+            .thenReturn(response)
 
         // Act
         val result = connectionsClient.createInvite("user-456", "Test")
@@ -124,26 +111,22 @@ class ConnectionsClientTest {
     @Test
     fun `storeCredentials sends correct payload and parses response`() = runTest {
         // Arrange
-        val requestId = "req-456"
-        whenever(ownerSpaceClient.sendToVault(any(), any()))
-            .thenReturn(Result.success(requestId))
-
-        backgroundScope.launch {
-            vaultResponses.emit(VaultResponse.HandlerResult(
-                requestId = requestId,
-                handlerId = null,
-                success = true,
-                result = JsonObject().apply {
-                    addProperty("connection_id", "conn-xyz")
-                    addProperty("peer_guid", "user-789")
-                    addProperty("label", "Bob's Vault")
-                    addProperty("status", "active")
-                    addProperty("direction", "inbound")
-                    addProperty("created_at", "2025-12-22T10:00:00Z")
-                },
-                error = null
-            ))
-        }
+        val response = VaultResponse.HandlerResult(
+            requestId = "req-456",
+            handlerId = null,
+            success = true,
+            result = JsonObject().apply {
+                addProperty("connection_id", "conn-xyz")
+                addProperty("peer_guid", "user-789")
+                addProperty("label", "Bob's Vault")
+                addProperty("status", "active")
+                addProperty("direction", "inbound")
+                addProperty("created_at", "2025-12-22T10:00:00Z")
+            },
+            error = null
+        )
+        whenever(ownerSpaceClient.sendAndAwaitResponse(any(), any(), any()))
+            .thenReturn(response)
 
         // Act
         val result = connectionsClient.storeCredentials(
@@ -157,13 +140,14 @@ class ConnectionsClientTest {
 
         // Assert
         assertTrue(result.isSuccess)
-        verify(ownerSpaceClient).sendToVault(
+        verify(ownerSpaceClient).sendAndAwaitResponse(
             eq("connection.store-credentials"),
             argThat { payload ->
                 payload.get("connection_id")?.asString == "conn-xyz" &&
                 payload.get("peer_guid")?.asString == "user-789" &&
                 payload.get("nats_credentials")?.asString == "-----BEGIN NATS-----"
-            }
+            },
+            any()
         )
 
         val record = result.getOrNull()!!
@@ -178,36 +162,33 @@ class ConnectionsClientTest {
     @Test
     fun `rotate sends connection_id and returns updated record`() = runTest {
         // Arrange
-        val requestId = "req-rotate"
-        whenever(ownerSpaceClient.sendToVault(any(), any()))
-            .thenReturn(Result.success(requestId))
-
-        backgroundScope.launch {
-            vaultResponses.emit(VaultResponse.HandlerResult(
-                requestId = requestId,
-                handlerId = null,
-                success = true,
-                result = JsonObject().apply {
-                    addProperty("connection_id", "conn-abc")
-                    addProperty("peer_guid", "user-123")
-                    addProperty("label", "Test Connection")
-                    addProperty("status", "active")
-                    addProperty("direction", "outbound")
-                    addProperty("created_at", "2025-12-20T10:00:00Z")
-                    addProperty("last_rotated_at", "2025-12-22T16:00:00Z")
-                },
-                error = null
-            ))
-        }
+        val response = VaultResponse.HandlerResult(
+            requestId = "req-rotate",
+            handlerId = null,
+            success = true,
+            result = JsonObject().apply {
+                addProperty("connection_id", "conn-abc")
+                addProperty("peer_guid", "user-123")
+                addProperty("label", "Test Connection")
+                addProperty("status", "active")
+                addProperty("direction", "outbound")
+                addProperty("created_at", "2025-12-20T10:00:00Z")
+                addProperty("last_rotated_at", "2025-12-22T16:00:00Z")
+            },
+            error = null
+        )
+        whenever(ownerSpaceClient.sendAndAwaitResponse(any(), any(), any()))
+            .thenReturn(response)
 
         // Act
         val result = connectionsClient.rotate("conn-abc")
 
         // Assert
         assertTrue(result.isSuccess)
-        verify(ownerSpaceClient).sendToVault(
+        verify(ownerSpaceClient).sendAndAwaitResponse(
             eq("connection.rotate"),
-            argThat { payload -> payload.get("connection_id")?.asString == "conn-abc" }
+            argThat { payload -> payload.get("connection_id")?.asString == "conn-abc" },
+            any()
         )
 
         val record = result.getOrNull()!!
@@ -219,21 +200,17 @@ class ConnectionsClientTest {
     @Test
     fun `revoke sends connection_id and returns success`() = runTest {
         // Arrange
-        val requestId = "req-revoke"
-        whenever(ownerSpaceClient.sendToVault(any(), any()))
-            .thenReturn(Result.success(requestId))
-
-        backgroundScope.launch {
-            vaultResponses.emit(VaultResponse.HandlerResult(
-                requestId = requestId,
-                handlerId = null,
-                success = true,
-                result = JsonObject().apply {
-                    addProperty("success", true)
-                },
-                error = null
-            ))
-        }
+        val response = VaultResponse.HandlerResult(
+            requestId = "req-revoke",
+            handlerId = null,
+            success = true,
+            result = JsonObject().apply {
+                addProperty("success", true)
+            },
+            error = null
+        )
+        whenever(ownerSpaceClient.sendAndAwaitResponse(any(), any(), any()))
+            .thenReturn(response)
 
         // Act
         val result = connectionsClient.revoke("conn-abc")
@@ -241,9 +218,10 @@ class ConnectionsClientTest {
         // Assert
         assertTrue(result.isSuccess)
         assertTrue(result.getOrNull()!!)
-        verify(ownerSpaceClient).sendToVault(
+        verify(ownerSpaceClient).sendAndAwaitResponse(
             eq("connection.revoke"),
-            argThat { payload -> payload.get("connection_id")?.asString == "conn-abc" }
+            argThat { payload -> payload.get("connection_id")?.asString == "conn-abc" },
+            any()
         )
     }
 
@@ -252,52 +230,49 @@ class ConnectionsClientTest {
     @Test
     fun `list sends filters and parses paginated response`() = runTest {
         // Arrange
-        val requestId = "req-list"
-        whenever(ownerSpaceClient.sendToVault(any(), any()))
-            .thenReturn(Result.success(requestId))
-
-        backgroundScope.launch {
-            val items = JsonArray().apply {
-                add(JsonObject().apply {
-                    addProperty("connection_id", "conn-1")
-                    addProperty("peer_guid", "user-1")
-                    addProperty("label", "Connection 1")
-                    addProperty("status", "active")
-                    addProperty("direction", "outbound")
-                    addProperty("created_at", "2025-12-20T10:00:00Z")
-                })
-                add(JsonObject().apply {
-                    addProperty("connection_id", "conn-2")
-                    addProperty("peer_guid", "user-2")
-                    addProperty("label", "Connection 2")
-                    addProperty("status", "active")
-                    addProperty("direction", "inbound")
-                    addProperty("created_at", "2025-12-21T10:00:00Z")
-                })
-            }
-            vaultResponses.emit(VaultResponse.HandlerResult(
-                requestId = requestId,
-                handlerId = null,
-                success = true,
-                result = JsonObject().apply {
-                    add("items", items)
-                    addProperty("next_cursor", "cursor-abc")
-                },
-                error = null
-            ))
+        val items = JsonArray().apply {
+            add(JsonObject().apply {
+                addProperty("connection_id", "conn-1")
+                addProperty("peer_guid", "user-1")
+                addProperty("label", "Connection 1")
+                addProperty("status", "active")
+                addProperty("direction", "outbound")
+                addProperty("created_at", "2025-12-20T10:00:00Z")
+            })
+            add(JsonObject().apply {
+                addProperty("connection_id", "conn-2")
+                addProperty("peer_guid", "user-2")
+                addProperty("label", "Connection 2")
+                addProperty("status", "active")
+                addProperty("direction", "inbound")
+                addProperty("created_at", "2025-12-21T10:00:00Z")
+            })
         }
+        val response = VaultResponse.HandlerResult(
+            requestId = "req-list",
+            handlerId = null,
+            success = true,
+            result = JsonObject().apply {
+                add("items", items)
+                addProperty("next_cursor", "cursor-abc")
+            },
+            error = null
+        )
+        whenever(ownerSpaceClient.sendAndAwaitResponse(any(), any(), any()))
+            .thenReturn(response)
 
         // Act
         val result = connectionsClient.list(status = "active", limit = 10)
 
         // Assert
         assertTrue(result.isSuccess)
-        verify(ownerSpaceClient).sendToVault(
+        verify(ownerSpaceClient).sendAndAwaitResponse(
             eq("connection.list"),
             argThat { payload ->
                 payload.get("status")?.asString == "active" &&
                 payload.get("limit")?.asInt == 10
-            }
+            },
+            any()
         )
 
         val listResult = result.getOrNull()!!
@@ -310,33 +285,30 @@ class ConnectionsClientTest {
     @Test
     fun `list with no filters sends only limit`() = runTest {
         // Arrange
-        val requestId = "req-list-all"
-        whenever(ownerSpaceClient.sendToVault(any(), any()))
-            .thenReturn(Result.success(requestId))
-
-        backgroundScope.launch {
-            vaultResponses.emit(VaultResponse.HandlerResult(
-                requestId = requestId,
-                handlerId = null,
-                success = true,
-                result = JsonObject().apply {
-                    add("items", JsonArray())
-                },
-                error = null
-            ))
-        }
+        val response = VaultResponse.HandlerResult(
+            requestId = "req-list-all",
+            handlerId = null,
+            success = true,
+            result = JsonObject().apply {
+                add("items", JsonArray())
+            },
+            error = null
+        )
+        whenever(ownerSpaceClient.sendAndAwaitResponse(any(), any(), any()))
+            .thenReturn(response)
 
         // Act
         val result = connectionsClient.list()
 
         // Assert
         assertTrue(result.isSuccess)
-        verify(ownerSpaceClient).sendToVault(
+        verify(ownerSpaceClient).sendAndAwaitResponse(
             eq("connection.list"),
             argThat { payload ->
                 !payload.has("status") &&
                 payload.get("limit")?.asInt == 50
-            }
+            },
+            any()
         )
     }
 
@@ -345,32 +317,29 @@ class ConnectionsClientTest {
     @Test
     fun `getCredentials returns connection credentials`() = runTest {
         // Arrange
-        val requestId = "req-creds"
-        whenever(ownerSpaceClient.sendToVault(any(), any()))
-            .thenReturn(Result.success(requestId))
-
-        backgroundScope.launch {
-            vaultResponses.emit(VaultResponse.HandlerResult(
-                requestId = requestId,
-                handlerId = null,
-                success = true,
-                result = JsonObject().apply {
-                    addProperty("nats_credentials", "-----BEGIN NATS USER JWT-----\ntest")
-                    addProperty("peer_message_space_id", "MessageSpace.peer123")
-                    addProperty("expires_at", "2025-12-25T00:00:00Z")
-                },
-                error = null
-            ))
-        }
+        val response = VaultResponse.HandlerResult(
+            requestId = "req-creds",
+            handlerId = null,
+            success = true,
+            result = JsonObject().apply {
+                addProperty("nats_credentials", "-----BEGIN NATS USER JWT-----\ntest")
+                addProperty("peer_message_space_id", "MessageSpace.peer123")
+                addProperty("expires_at", "2025-12-25T00:00:00Z")
+            },
+            error = null
+        )
+        whenever(ownerSpaceClient.sendAndAwaitResponse(any(), any(), any()))
+            .thenReturn(response)
 
         // Act
         val result = connectionsClient.getCredentials("conn-abc")
 
         // Assert
         assertTrue(result.isSuccess)
-        verify(ownerSpaceClient).sendToVault(
+        verify(ownerSpaceClient).sendAndAwaitResponse(
             eq("connection.get-credentials"),
-            argThat { payload -> payload.get("connection_id")?.asString == "conn-abc" }
+            argThat { payload -> payload.get("connection_id")?.asString == "conn-abc" },
+            any()
         )
 
         val creds = result.getOrNull()!!
@@ -385,23 +354,19 @@ class ConnectionsClientTest {
     @Test
     fun `returns failure when vault returns error response`() = runTest {
         // Arrange
-        val requestId = "req-error"
-        whenever(ownerSpaceClient.sendToVault(any(), any()))
-            .thenReturn(Result.success(requestId))
-
-        backgroundScope.launch {
-            vaultResponses.emit(VaultResponse.Error(
-                requestId = requestId,
-                code = "NOT_FOUND",
-                message = "Connection not found"
-            ))
-        }
+        val response = VaultResponse.Error(
+            requestId = "req-error",
+            code = "NOT_FOUND",
+            message = "Connection not found"
+        )
+        whenever(ownerSpaceClient.sendAndAwaitResponse(any(), any(), any()))
+            .thenReturn(response)
 
         // Act
         val result = connectionsClient.getCredentials("conn-nonexistent")
 
         // Assert
         assertTrue(result.isFailure)
-        assertTrue(result.exceptionOrNull()?.message?.contains("NOT_FOUND") == true)
+        assertTrue(result.exceptionOrNull()?.message?.contains("Connection not found") == true)
     }
 }

@@ -1,10 +1,14 @@
 package com.vettid.app
 
+import com.vettid.app.core.events.ProfilePhotoEvents
 import com.vettid.app.core.nats.NatsAutoConnector
+import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.network.NatsConnectionInfo
 import com.vettid.app.core.storage.CredentialStore
+import com.vettid.app.core.storage.PersonalDataStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.*
@@ -20,6 +24,9 @@ class AppViewModelTest {
     private lateinit var viewModel: AppViewModel
     private lateinit var credentialStore: CredentialStore
     private lateinit var natsAutoConnector: NatsAutoConnector
+    private lateinit var ownerSpaceClient: OwnerSpaceClient
+    private lateinit var profilePhotoEvents: ProfilePhotoEvents
+    private lateinit var personalDataStore: PersonalDataStore
 
     private val testDispatcher = StandardTestDispatcher()
     private val connectionStateFlow = MutableStateFlow<NatsAutoConnector.AutoConnectState>(
@@ -36,11 +43,15 @@ class AppViewModelTest {
 
         credentialStore = mock()
         natsAutoConnector = mock()
+        ownerSpaceClient = mock()
+        profilePhotoEvents = mock()
+        personalDataStore = mock()
 
         // Default mock behavior
         whenever(credentialStore.hasStoredCredential()).thenReturn(false)
         whenever(natsAutoConnector.connectionState).thenReturn(connectionStateFlow)
         whenever(natsAutoConnector.isConnected()).thenReturn(false)
+        whenever(profilePhotoEvents.photoUpdated).thenReturn(MutableSharedFlow())
     }
 
     @After
@@ -49,7 +60,7 @@ class AppViewModelTest {
     }
 
     private fun createViewModel(): AppViewModel {
-        return AppViewModel(credentialStore, natsAutoConnector)
+        return AppViewModel(credentialStore, natsAutoConnector, ownerSpaceClient, profilePhotoEvents, personalDataStore)
     }
 
     // MARK: - refreshNatsCredentials Tests
