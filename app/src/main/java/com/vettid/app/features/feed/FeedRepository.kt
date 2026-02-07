@@ -248,21 +248,11 @@ class FeedRepository @Inject constructor(
     }
 
     /**
-     * Update local cache when an event is modified.
-     * Call after markRead, archive, delete actions.
+     * Update a cached event in place.
      */
-    fun updateEventLocally(eventId: String, updater: (FeedEvent) -> FeedEvent?) {
-        val events = getCachedEvents().toMutableList()
-        val index = events.indexOfFirst { it.eventId == eventId }
-        if (index >= 0) {
-            val updated = updater(events[index])
-            if (updated != null) {
-                events[index] = updated
-            } else {
-                events.removeAt(index)
-            }
-            saveEvents(events)
-        }
+    fun updateEventLocally(eventId: String, transform: (FeedEvent) -> FeedEvent) {
+        val events = getCachedEvents().map { if (it.eventId == eventId) transform(it) else it }
+        saveEvents(events)
     }
 
     /**

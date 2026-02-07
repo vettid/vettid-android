@@ -38,10 +38,10 @@ object GuideCatalog {
         GuideDef(
             guideId = "settings",
             title = "Customize Your Settings",
-            message = "Review the settings you can change to personalize your experience.",
+            message = "Theme (light/dark/auto), session TTL, archive timing, event handlers, and password — find them all in Preferences.",
             order = 3,
             priority = 0,
-            version = 1
+            version = 2
         ),
         GuideDef(
             guideId = "personal_data",

@@ -103,10 +103,13 @@ class FeedViewModel @Inject constructor(
     }
 
     /**
-     * Filter events for display based on audit toggle and search query.
+     * Filter events for display based on status, audit toggle, and search query.
      */
     private fun filterForDisplay(events: List<FeedEvent>): List<FeedEvent> {
         var filtered = events
+        // Always exclude archived and deleted events
+        filtered = filtered.filter { it.feedStatus != FeedStatus.ARCHIVED && it.feedStatus != FeedStatus.DELETED }
+        // Exclude audit-only (hidden) events unless toggle is on
         if (!_showAuditEvents.value) {
             filtered = filtered.filter { it.feedStatus != FeedStatus.HIDDEN }
         }
@@ -415,13 +418,13 @@ class FeedViewModel @Inject constructor(
         viewModelScope.launch {
             feedClient.markRead(eventId)
                 .onSuccess {
-                    // Update local state
+                    // Update local state with read status
                     val currentState = _state.value
                     if (currentState is FeedState.Loaded) {
+                        val now = System.currentTimeMillis() / 1000
                         val updatedEvents = currentState.events.map { event ->
                             if (event.eventId == eventId) {
-                                // Create a copy with read status (using copy would require data class changes)
-                                event
+                                event.copy(feedStatus = FeedStatus.READ, readAt = now)
                             } else {
                                 event
                             }
@@ -430,6 +433,8 @@ class FeedViewModel @Inject constructor(
                             events = updatedEvents,
                             unreadCount = updatedEvents.count { it.isUnread }
                         )
+                        // Also update the repository cache
+                        feedRepository.updateEventLocally(eventId) { it.copy(feedStatus = FeedStatus.READ, readAt = now) }
                     }
                 }
                 .onFailure {
@@ -461,21 +466,24 @@ class FeedViewModel @Inject constructor(
         viewModelScope.launch {
             feedClient.archiveEvent(eventId)
                 .onSuccess {
-                    // Update local repository cache
-                    feedRepository.removeEventLocally(eventId)
+                    // Mark as archived in cache (keeps it so sync doesn't re-add as new)
+                    val now = System.currentTimeMillis() / 1000
+                    feedRepository.updateEventLocally(eventId) {
+                        it.copy(feedStatus = FeedStatus.ARCHIVED, archivedAt = now)
+                    }
 
-                    // Update UI state
-                    val currentState = _state.value
-                    if (currentState is FeedState.Loaded) {
-                        val updatedEvents = currentState.events.filter { it.eventId != eventId }
-                        _state.value = if (updatedEvents.isEmpty()) {
-                            FeedState.Empty
-                        } else {
-                            currentState.copy(
-                                events = updatedEvents,
-                                unreadCount = updatedEvents.count { it.isUnread }
-                            )
-                        }
+                    // Update UI state - filterForDisplay excludes archived
+                    val allCached = feedRepository.getCachedEvents()
+                    val filtered = filterForDisplay(allCached)
+                    _state.value = if (filtered.isEmpty()) {
+                        FeedState.Empty
+                    } else {
+                        FeedState.Loaded(
+                            events = filtered,
+                            hasMore = false,
+                            unreadCount = filtered.count { it.isUnread },
+                            isOffline = !feedRepository.isOnline.value
+                        )
                     }
                     _effects.emit(FeedEffect.ShowActionSuccess("Event archived"))
                 }
@@ -490,21 +498,24 @@ class FeedViewModel @Inject constructor(
         viewModelScope.launch {
             feedClient.deleteEvent(eventId)
                 .onSuccess {
-                    // Update local repository cache
-                    feedRepository.removeEventLocally(eventId)
+                    // Mark as deleted in cache (don't remove, or sync will re-add)
+                    val now = System.currentTimeMillis() / 1000
+                    feedRepository.updateEventLocally(eventId) {
+                        it.copy(feedStatus = FeedStatus.DELETED)
+                    }
 
-                    // Update UI state
-                    val currentState = _state.value
-                    if (currentState is FeedState.Loaded) {
-                        val updatedEvents = currentState.events.filter { it.eventId != eventId }
-                        _state.value = if (updatedEvents.isEmpty()) {
-                            FeedState.Empty
-                        } else {
-                            currentState.copy(
-                                events = updatedEvents,
-                                unreadCount = updatedEvents.count { it.isUnread }
-                            )
-                        }
+                    // Re-filter from cache to update UI
+                    val allCached = feedRepository.getCachedEvents()
+                    val filtered = filterForDisplay(allCached)
+                    _state.value = if (filtered.isEmpty()) {
+                        FeedState.Empty
+                    } else {
+                        FeedState.Loaded(
+                            events = filtered,
+                            hasMore = false,
+                            unreadCount = filtered.count { it.isUnread },
+                            isOffline = !feedRepository.isOnline.value
+                        )
                     }
                     _effects.emit(FeedEffect.ShowActionSuccess("Event deleted"))
                 }

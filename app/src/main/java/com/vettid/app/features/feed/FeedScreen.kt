@@ -458,8 +458,9 @@ private fun EventCard(
                 }
             }
 
-            // Action buttons based on actionType
-            if (event.requiresAction && event.actionType != null) {
+            // Action buttons based on actionType (only for accept/decline and reply)
+            if (event.requiresAction && event.actionType != null &&
+                event.actionType != ActionTypes.VIEW && event.actionType != ActionTypes.ACKNOWLEDGE) {
                 Spacer(modifier = Modifier.height(8.dp))
                 ActionButtons(
                     actionType = event.actionType,
@@ -572,16 +573,21 @@ private fun getPriorityColor(priority: EventPriority): Color {
 private fun formatTimestamp(epochMillis: Long): String {
     val now = System.currentTimeMillis()
     val diff = now - epochMillis
+    val instant = Instant.ofEpochMilli(epochMillis)
+    val zoned = instant.atZone(ZoneId.systemDefault())
 
     return when {
         diff < TimeUnit.MINUTES.toMillis(1) -> "Just now"
         diff < TimeUnit.HOURS.toMillis(1) -> "${TimeUnit.MILLISECONDS.toMinutes(diff)}m ago"
-        diff < TimeUnit.DAYS.toMillis(1) -> "${TimeUnit.MILLISECONDS.toHours(diff)}h ago"
-        diff < TimeUnit.DAYS.toMillis(7) -> "${TimeUnit.MILLISECONDS.toDays(diff)}d ago"
+        diff < TimeUnit.DAYS.toMillis(1) -> {
+            val hours = TimeUnit.MILLISECONDS.toHours(diff)
+            "${hours}h ago · ${zoned.format(DateTimeFormatter.ofPattern("h:mm a"))}"
+        }
+        diff < TimeUnit.DAYS.toMillis(7) -> {
+            "${TimeUnit.MILLISECONDS.toDays(diff)}d ago · ${zoned.format(DateTimeFormatter.ofPattern("MMM d, h:mm a"))}"
+        }
         else -> {
-            val instant = Instant.ofEpochMilli(epochMillis)
-            val formatter = DateTimeFormatter.ofPattern("MMM d")
-            instant.atZone(ZoneId.systemDefault()).format(formatter)
+            zoned.format(DateTimeFormatter.ofPattern("MMM d, h:mm a"))
         }
     }
 }
