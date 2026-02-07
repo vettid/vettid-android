@@ -30,6 +30,7 @@ import com.vettid.app.features.calling.CallManager
 import com.vettid.app.core.network.ApiClient
 import com.vettid.app.core.network.VaultLifecycleClient
 import com.vettid.app.core.network.VaultServiceClient
+import com.vettid.app.core.storage.AppPreferencesStore
 import com.vettid.app.core.storage.ContractStore
 import com.vettid.app.core.storage.CredentialStore
 import com.vettid.app.core.storage.ProteanCredentialManager
@@ -48,6 +49,12 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object AppModule {
+
+    @Provides
+    @Singleton
+    fun provideAppPreferencesStore(@ApplicationContext context: Context): AppPreferencesStore {
+        return AppPreferencesStore(context)
+    }
 
     @Provides
     @Singleton

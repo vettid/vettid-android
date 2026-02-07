@@ -3,6 +3,7 @@ package com.vettid.app.features.settings
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.app.core.storage.AppPreferencesStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -11,7 +12,9 @@ import javax.inject.Inject
 private const val TAG = "SettingsViewModel"
 
 @HiltViewModel
-class SettingsViewModel @Inject constructor() : ViewModel() {
+class SettingsViewModel @Inject constructor(
+    private val appPreferencesStore: AppPreferencesStore
+) : ViewModel() {
 
     private val _state = MutableStateFlow(AppSettingsState())
     val state: StateFlow<AppSettingsState> = _state.asStateFlow()
@@ -25,9 +28,8 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
 
     private fun loadSettings() {
         viewModelScope.launch {
-            // In production, load from SharedPreferences or DataStore
             _state.value = AppSettingsState(
-                theme = AppTheme.AUTO,
+                theme = appPreferencesStore.getTheme(),
                 appLockEnabled = false,
                 lockMethod = LockMethod.BIOMETRIC,
                 autoLockTimeout = AutoLockTimeout.FIVE_MINUTES,
@@ -40,8 +42,8 @@ class SettingsViewModel @Inject constructor() : ViewModel() {
     fun updateTheme(theme: AppTheme) {
         viewModelScope.launch {
             try {
+                appPreferencesStore.setTheme(theme)
                 _state.value = _state.value.copy(theme = theme)
-                // In production, persist to storage and apply theme
                 _effects.emit(SettingsEffect.ShowSuccess("Theme updated"))
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to update theme", e)

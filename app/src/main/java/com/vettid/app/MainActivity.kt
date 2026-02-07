@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -13,6 +14,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import com.vettid.app.core.security.RuntimeProtection
 import com.vettid.app.core.security.SecureClipboard
+import com.vettid.app.core.storage.AppPreferencesStore
+import com.vettid.app.features.settings.AppTheme
 import com.vettid.app.ui.theme.VettIDTheme
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -41,6 +44,9 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var secureClipboard: SecureClipboard
 
+    @Inject
+    lateinit var appPreferencesStore: AppPreferencesStore
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -58,8 +64,15 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             var currentDeepLink by remember { mutableStateOf(deepLinkData) }
+            val themePreference by appPreferencesStore.themeFlow.collectAsState()
+            val systemDark = isSystemInDarkTheme()
+            val darkTheme = when (themePreference) {
+                AppTheme.AUTO -> systemDark
+                AppTheme.LIGHT -> false
+                AppTheme.DARK -> true
+            }
 
-            VettIDTheme {
+            VettIDTheme(darkTheme = darkTheme) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background

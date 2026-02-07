@@ -98,8 +98,8 @@ fun VettIDTheme(
         SideEffect {
             val window = (view.context as Activity).window
             // Status bar matches the theme
-            window.statusBarColor = if (darkTheme) VettidBlack.toArgb() else VettidBlack.toArgb()
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false
+            window.statusBarColor = if (darkTheme) VettidBlack.toArgb() else VettidWhite.toArgb()
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
         }
     }
 

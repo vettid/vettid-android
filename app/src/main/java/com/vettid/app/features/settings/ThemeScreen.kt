@@ -14,8 +14,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import com.vettid.app.ui.theme.*
 import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.flow.collectLatest
 
@@ -132,17 +134,18 @@ private fun ThemeOption(
 
 @Composable
 private fun ThemePreviewCard(theme: AppTheme) {
+    val systemDark = isSystemInDarkTheme()
     val isDark = when (theme) {
-        AppTheme.AUTO -> false // Would check system setting in production
+        AppTheme.AUTO -> systemDark
         AppTheme.LIGHT -> false
         AppTheme.DARK -> true
     }
 
-    val backgroundColor = if (isDark) Color(0xFF1C1B1F) else Color(0xFFFFFBFE)
-    val surfaceColor = if (isDark) Color(0xFF2B2930) else Color.White
-    val primaryColor = if (isDark) Color(0xFFD0BCFF) else Color(0xFF6750A4)
-    val textColor = if (isDark) Color.White else Color.Black
-    val subtitleColor = if (isDark) Color(0xFFCAC4D0) else Color(0xFF49454F)
+    val backgroundColor = if (isDark) VettidBlack else VettidWhite
+    val surfaceColor = if (isDark) VettidDarkGray else VettidOffWhite
+    val primaryColor = if (isDark) VettidGold else VettidBlack
+    val textColor = if (isDark) VettidWhite else VettidBlack
+    val subtitleColor = if (isDark) VettidLightGray else VettidDarkGray
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -210,7 +213,7 @@ private fun ThemePreviewCard(theme: AppTheme) {
             ) {
                 Text(
                     text = "Button",
-                    color = if (isDark) Color.Black else Color.White,
+                    color = if (isDark) VettidBlack else VettidWhite,
                     style = MaterialTheme.typography.labelLarge
                 )
             }
