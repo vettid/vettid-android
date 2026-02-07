@@ -341,19 +341,10 @@ class PinUnlockViewModel @Inject constructor(
             val combined = ephemeralPubKeyBytes + nonceBytes + ciphertextBytes
             val encryptedPayloadBase64 = android.util.Base64.encodeToString(combined, android.util.Base64.NO_WRAP)
 
-            // Get encrypted credential for vault state restoration
-            val encryptedCredential = credentialStore.getEncryptedBlob()
-            if (encryptedCredential == null) {
-                Log.e(TAG, "Missing encrypted credential")
-                return@withContext PinVerificationResult.Error()
-            }
-
-            // Build request payload matching old format expected by enclave
+            // Build request payload for enclave pin-unlock handler
             val requestPayload = JsonObject().apply {
-                addProperty("type", "pin.unlock")
                 addProperty("utk_id", availableUtk.keyId)
                 addProperty("encrypted_payload", encryptedPayloadBase64)
-                addProperty("encrypted_credential", encryptedCredential)
             }
 
             Log.d(TAG, "Sending PIN unlock request via OwnerSpaceClient (event_id correlation)")
