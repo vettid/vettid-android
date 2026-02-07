@@ -47,6 +47,9 @@ sealed class WizardEvent {
     /** Confirm identity and proceed to PIN setup */
     object ConfirmIdentity : WizardEvent()
 
+    /** User reports identity mismatch - "This is not my account" */
+    object RejectIdentity : WizardEvent()
+
     // ============== PIN PHASE EVENTS ==============
 
     /** PIN field changed */

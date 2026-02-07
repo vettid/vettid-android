@@ -125,7 +125,7 @@ class NitroEnrollmentClient @Inject constructor(
         val client = natsClient
             ?: return Result.failure(NatsException("Not connected to NATS"))
         val space = ownerSpace
-            ?: return Result.failure(NatsException("Owner space not set"))
+            ?: return Result.failure(NatsException("OwnerSpace not set"))
 
         // Generate random nonce for replay protection
         val nonce = ByteArray(NONCE_SIZE)
@@ -346,7 +346,7 @@ class NitroEnrollmentClient @Inject constructor(
      */
     suspend fun setupPin(pin: String, profile: RegistrationProfile? = null): Result<PinSetupResponse> {
         val space = ownerSpace
-            ?: return Result.failure(NatsException("Owner space not set"))
+            ?: return Result.failure(NatsException("OwnerSpace not set"))
         val attestation = verifiedAttestation
             ?: return Result.failure(NatsException("Attestation not completed"))
 
@@ -451,7 +451,7 @@ class NitroEnrollmentClient @Inject constructor(
         val client = natsClient
             ?: return Result.failure(NatsException("Not connected to NATS"))
         val space = ownerSpace
-            ?: return Result.failure(NatsException("Owner space not set"))
+            ?: return Result.failure(NatsException("OwnerSpace not set"))
 
         val responseTopic = "$space.forApp.vault.ready"
 
@@ -549,7 +549,7 @@ class NitroEnrollmentClient @Inject constructor(
         utk: UtkInfo
     ): Result<CredentialResponse> {
         val space = ownerSpace
-            ?: return Result.failure(NatsException("Owner space not set"))
+            ?: return Result.failure(NatsException("OwnerSpace not set"))
 
         Log.d(TAG, "Creating credential via JetStream...")
 
@@ -649,7 +649,7 @@ class NitroEnrollmentClient @Inject constructor(
         val client = natsClient
             ?: return Result.failure(NatsException("Not connected to NATS"))
         val space = ownerSpace
-            ?: return Result.failure(NatsException("Owner space not set"))
+            ?: return Result.failure(NatsException("OwnerSpace not set"))
 
         Log.d(TAG, "Verifying enrollment...")
 

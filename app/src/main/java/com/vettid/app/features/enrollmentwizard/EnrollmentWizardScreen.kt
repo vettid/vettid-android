@@ -111,6 +111,7 @@ fun EnrollmentWizardScreen(
                         is WizardState.RequestingAttestation,
                         is WizardState.AttestationVerified -> "attestation"
                         is WizardState.ConfirmIdentity -> "confirm_identity"
+                        is WizardState.IdentityRejected -> "identity_rejected"
                         is WizardState.SettingPin -> "pin"
                         is WizardState.SettingPassword, is WizardState.CreatingCredential -> "password"
                         is WizardState.VerifyingPassword,
@@ -205,7 +206,16 @@ fun EnrollmentWizardScreen(
                                 email = currentState.email,
                                 attestationInfo = currentState.attestationInfo,
                                 onConfirm = { viewModel.onEvent(WizardEvent.ConfirmIdentity) },
-                                onCancel = { viewModel.onEvent(WizardEvent.Cancel) }
+                                onCancel = { viewModel.onEvent(WizardEvent.RejectIdentity) }
+                            )
+                        }
+
+                        // Identity Rejected - mismatch reported
+                        is WizardState.IdentityRejected -> {
+                            IdentityRejectedPhaseContent(
+                                message = currentState.message,
+                                isReporting = currentState.isReporting,
+                                onAcknowledge = { viewModel.onEvent(WizardEvent.Cancel) }
                             )
                         }
 

@@ -146,6 +146,7 @@ class EnrollmentWizardViewModel @Inject constructor(
 
                 // Confirm identity phase events
                 is WizardEvent.ConfirmIdentity -> confirmIdentityAndContinue()
+                is WizardEvent.RejectIdentity -> handleRejectIdentity()
 
                 // PIN phase events
                 is WizardEvent.PinChanged -> updatePin(event.pin)
@@ -285,6 +286,40 @@ class EnrollmentWizardViewModel @Inject constructor(
 
         // Proceed to PIN setup
         _state.value = WizardState.SettingPin(attestationInfo = current.attestationInfo)
+    }
+
+    /**
+     * User reports identity mismatch - "This is not my account".
+     * Reports the mismatch to the enclave for admin notification, then shows confirmation.
+     */
+    private suspend fun handleRejectIdentity() {
+        val current = _state.value
+        if (current !is WizardState.ConfirmIdentity) return
+
+        // Show reporting state
+        _state.value = WizardState.IdentityRejected(isReporting = true)
+
+        // Best-effort: report identity mismatch to enclave
+        try {
+            val payload = com.google.gson.JsonObject().apply {
+                addProperty("user_guid", userGuid ?: "unknown")
+                addProperty("reported_at", java.time.Instant.now().toString())
+            }
+            val result = nitroEnrollmentClient.sendToVault("enrollment.identity-mismatch", payload)
+            result.fold(
+                onSuccess = { requestId ->
+                    Log.i(TAG, "Identity mismatch reported to enclave, requestId: $requestId")
+                },
+                onFailure = { error ->
+                    Log.w(TAG, "Failed to report identity mismatch (best-effort): ${error.message}")
+                }
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Error reporting identity mismatch (best-effort)", e)
+        }
+
+        // Show the confirmation message
+        _state.value = WizardState.IdentityRejected(isReporting = false)
     }
 
     /**

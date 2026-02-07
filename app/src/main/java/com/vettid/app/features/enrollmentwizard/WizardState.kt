@@ -99,6 +99,14 @@ sealed class WizardState {
         override val phase = WizardPhase.CONFIRM_IDENTITY
     }
 
+    /** Identity mismatch reported - showing confirmation to user */
+    data class IdentityRejected(
+        val message: String = "The problem has been reported. Please request a new enrollment link from your account page.",
+        val isReporting: Boolean = false
+    ) : WizardState() {
+        override val phase = WizardPhase.CONFIRM_IDENTITY
+    }
+
     // ============== PHASE 4: PIN SETUP ==============
 
     /** PIN entry and confirmation */
