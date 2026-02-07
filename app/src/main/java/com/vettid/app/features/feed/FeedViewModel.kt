@@ -173,16 +173,50 @@ class FeedViewModel @Inject constructor(
 
     /**
      * Periodically refresh feed every 30 seconds when online.
+     * Uses silentRefresh() to avoid triggering the pull-to-refresh indicator.
      */
     private fun startPeriodicRefresh() {
         viewModelScope.launch {
             while (isActive) {
                 delay(30_000) // 30 seconds
                 if (isOnline.value && _state.value is FeedState.Loaded) {
-                    Log.d(TAG, "Periodic feed refresh")
-                    refresh()
+                    Log.d(TAG, "Periodic feed refresh (silent)")
+                    silentRefresh()
                 }
             }
+        }
+    }
+
+    /**
+     * Silent refresh for periodic/background syncs.
+     * Does NOT set _isRefreshing, so the pull-to-refresh indicator won't show.
+     */
+    private fun silentRefresh() {
+        viewModelScope.launch {
+            try {
+                feedRepository.sync()
+                    .onSuccess { result ->
+                        Log.d(TAG, "Silent sync complete: +${result.newEvents} new, ${result.updatedEvents} updated")
+                        val events = feedRepository.getCachedEvents()
+                        val filtered = filterForDisplay(events)
+                        if (filtered.isEmpty()) {
+                            _state.value = FeedState.Empty
+                        } else {
+                            _state.value = FeedState.Loaded(
+                                events = filtered,
+                                hasMore = result.hasMore,
+                                unreadCount = filtered.count { it.isUnread },
+                                isOffline = false
+                            )
+                        }
+                    }
+                    .onFailure { error ->
+                        if (error is CancellationException) throw error
+                        Log.e(TAG, "Silent sync failed", error)
+                    }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) { }
         }
     }
 

@@ -3,6 +3,10 @@ package com.vettid.app.features.archive
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.app.core.nats.FeedClient
+import com.vettid.app.core.nats.FeedEvent
+import com.vettid.app.features.feed.FeedRepository
+import com.vettid.app.features.feed.FeedStatus
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -14,7 +18,10 @@ import javax.inject.Inject
 private const val TAG = "ArchiveViewModel"
 
 @HiltViewModel
-class ArchiveViewModel @Inject constructor() : ViewModel() {
+class ArchiveViewModel @Inject constructor(
+    private val feedRepository: FeedRepository,
+    private val feedClient: FeedClient
+) : ViewModel() {
 
     private val _state = MutableStateFlow<ArchiveState>(ArchiveState.Loading)
     val state: StateFlow<ArchiveState> = _state.asStateFlow()
@@ -49,8 +56,24 @@ class ArchiveViewModel @Inject constructor() : ViewModel() {
         viewModelScope.launch {
             _state.value = ArchiveState.Loading
             try {
-                // TODO: Query vault for archived events via NATS
-                // For now, show empty state until vault archive endpoint is implemented
+                // First try cached events
+                val cached = feedRepository.getCachedEvents()
+                    .filter { it.feedStatus == FeedStatus.ARCHIVED }
+
+                if (cached.isNotEmpty()) {
+                    archivedItems.clear()
+                    archivedItems.addAll(cached.map { it.toArchivedItem() })
+                } else {
+                    // Try fetching archived events from vault
+                    feedClient.listFeed(status = "archived")
+                        .onSuccess { response ->
+                            archivedItems.clear()
+                            archivedItems.addAll(response.events.map { it.toArchivedItem() })
+                        }
+                        .onFailure {
+                            Log.w(TAG, "Failed to fetch archived events from vault", it)
+                        }
+                }
 
                 if (archivedItems.isEmpty()) {
                     _state.value = ArchiveState.Empty
@@ -66,6 +89,37 @@ class ArchiveViewModel @Inject constructor() : ViewModel() {
                 _state.value = ArchiveState.Error(e.message ?: "Failed to load archive")
             }
         }
+    }
+
+    /**
+     * Convert a FeedEvent to an ArchivedItem for display.
+     */
+    private fun FeedEvent.toArchivedItem(): ArchivedItem {
+        val itemType = when {
+            eventType.startsWith("message.") -> ArchivedItemType.MESSAGE
+            eventType.startsWith("connection.") -> ArchivedItemType.CONNECTION
+            eventType.startsWith("security.") || eventType.startsWith("credential.") -> ArchivedItemType.AUTH_REQUEST
+            else -> ArchivedItemType.EVENT
+        }
+        val archivedInstant = if (archivedAt != null && archivedAt > 0) {
+            Instant.ofEpochMilli(archivedAt)
+        } else {
+            Instant.ofEpochMilli(createdAt)
+        }
+        val expiresInstant = if (expiresAt != null && expiresAt > 0) {
+            Instant.ofEpochMilli(expiresAt)
+        } else {
+            null
+        }
+        return ArchivedItem(
+            id = eventId,
+            type = itemType,
+            title = title,
+            subtitle = message,
+            archivedAt = archivedInstant,
+            expiresAt = expiresInstant,
+            metadata = metadata ?: emptyMap()
+        )
     }
 
     private fun updateSearchQuery(query: String) {
@@ -172,10 +226,15 @@ class ArchiveViewModel @Inject constructor() : ViewModel() {
             val currentState = _state.value
             if (currentState is ArchiveState.Loaded && currentState.selectedIds.isNotEmpty()) {
                 val count = currentState.selectedIds.size
-                // In production, this would move items back to their original location
+                var restored = 0
+                for (id in currentState.selectedIds) {
+                    feedClient.executeAction(id, "restore")
+                        .onSuccess { restored++ }
+                        .onFailure { Log.w(TAG, "Failed to restore event $id", it) }
+                }
                 archivedItems.removeAll { it.id in currentState.selectedIds }
                 loadArchive()
-                _effects.emit(ArchiveEffect.ShowSuccess("$count item${if (count > 1) "s" else ""} restored"))
+                _effects.emit(ArchiveEffect.ShowSuccess("$restored item${if (restored > 1) "s" else ""} restored"))
             }
         }
     }

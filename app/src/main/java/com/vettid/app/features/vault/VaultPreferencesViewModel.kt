@@ -6,6 +6,8 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.crypto.CryptoManager
 import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.OwnerSpaceClient
+import com.vettid.app.core.network.BackupApiClient
+import com.vettid.app.core.network.BackupSettings
 import com.vettid.app.core.network.HandlerSummary
 import com.vettid.app.core.network.InstalledHandler
 import com.vettid.app.core.storage.AppPreferencesStore
@@ -64,7 +66,9 @@ data class VaultPreferencesState(
     val installedHandlers: List<InstalledHandler> = emptyList(),
     val availableHandlers: List<HandlerSummary> = emptyList(),
     val handlersLoading: Boolean = false,
-    val handlersError: String? = null
+    val handlersError: String? = null,
+    // Backup
+    val backupEnabled: Boolean = true
 )
 
 /**
@@ -83,7 +87,8 @@ class VaultPreferencesViewModel @Inject constructor(
     private val ownerSpaceClient: OwnerSpaceClient,
     private val connectionManager: NatsConnectionManager,
     private val appPreferencesStore: AppPreferencesStore,
-    private val cryptoManager: CryptoManager
+    private val cryptoManager: CryptoManager,
+    private val backupApiClient: BackupApiClient
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(VaultPreferencesState())
@@ -98,6 +103,8 @@ class VaultPreferencesViewModel @Inject constructor(
         setEnclaveReady()
         // Load handlers (static list of known vault capabilities)
         loadHandlers()
+        // Load backup settings
+        loadBackupSettings()
     }
 
     /**
@@ -250,6 +257,58 @@ class VaultPreferencesViewModel @Inject constructor(
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to update delete setting", e)
                 _effects.emit(VaultPreferencesEffect.ShowError("Failed to update setting"))
+            }
+        }
+    }
+
+    // MARK: - Backup Settings
+
+    private fun loadBackupSettings() {
+        viewModelScope.launch {
+            try {
+                backupApiClient.getBackupSettings()
+                    .onSuccess { settings ->
+                        _state.update { it.copy(backupEnabled = settings.autoBackupEnabled) }
+                    }
+                    .onFailure {
+                        // Default to enabled if we can't reach the server
+                        Log.w(TAG, "Failed to load backup settings, defaulting to enabled", it)
+                    }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error loading backup settings", e)
+            }
+        }
+    }
+
+    fun toggleBackup(enabled: Boolean) {
+        viewModelScope.launch {
+            try {
+                val currentSettings = backupApiClient.getBackupSettings().getOrNull()
+                val updatedSettings = currentSettings?.copy(autoBackupEnabled = enabled)
+                    ?: BackupSettings(
+                        autoBackupEnabled = enabled,
+                        backupFrequency = com.vettid.app.core.network.BackupFrequency.DAILY,
+                        backupTimeUtc = "03:00",
+                        retentionDays = 30,
+                        includeMessages = true,
+                        wifiOnly = false
+                    )
+
+                backupApiClient.updateBackupSettings(updatedSettings)
+                    .onSuccess {
+                        _state.update { it.copy(backupEnabled = enabled) }
+                        _effects.emit(VaultPreferencesEffect.ShowSuccess(
+                            if (enabled) "Backup enabled" else "Backup disabled"
+                        ))
+                    }
+                    .onFailure { error ->
+                        _effects.emit(VaultPreferencesEffect.ShowError(
+                            "Failed to update backup setting: ${error.message}"
+                        ))
+                    }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error toggling backup", e)
+                _effects.emit(VaultPreferencesEffect.ShowError("Failed to update backup setting"))
             }
         }
     }

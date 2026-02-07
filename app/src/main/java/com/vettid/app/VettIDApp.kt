@@ -83,6 +83,7 @@ import com.vettid.app.features.migration.EmergencyRecoveryScreen
 import com.vettid.app.features.migration.SecurityAuditLogScreen
 import com.vettid.app.features.enrollmentwizard.EnrollmentWizardScreen
 import com.vettid.app.features.feed.GuideDetailScreen
+import com.vettid.app.features.settings.AppDetailsScreen
 import com.vettid.app.features.feed.NavigationTarget
 import com.vettid.app.features.secrets.CriticalSecretsScreen
 import com.vettid.app.features.unlock.PinUnlockScreen
@@ -177,6 +178,8 @@ sealed class Screen(val route: String) {
     object EmergencyRecovery : Screen("emergency-recovery")
     // Critical Secrets full screen
     object CriticalSecrets : Screen("critical-secrets")
+    // App details screen
+    object AppDetails : Screen("app-details")
     // Guide detail screen
     object Guide : Screen("guide/{guideId}?eventId={eventId}&userName={userName}") {
         fun createRoute(guideId: String, eventId: String = "", userName: String = ""): String {
@@ -511,6 +514,9 @@ fun VettIDApp(
                 onNavigateToCriticalSecrets = {
                     navController.navigate(Screen.CriticalSecrets.route)
                 },
+                onNavigateToAppDetails = {
+                    navController.navigate(Screen.AppDetails.route)
+                },
                 appViewModel = appViewModel
             )
         }
@@ -696,6 +702,12 @@ fun VettIDApp(
         }
         composable(Screen.VaultPreferences.route) {
             VaultPreferencesScreenFull(
+                onBack = { navController.popBackStack() },
+                onNavigateToAppDetails = { navController.navigate(Screen.AppDetails.route) }
+            )
+        }
+        composable(Screen.AppDetails.route) {
+            AppDetailsScreen(
                 onBack = { navController.popBackStack() }
             )
         }
@@ -1211,6 +1223,7 @@ fun MainScreen(
     onNavigateToSecurityAuditLog: () -> Unit = {},
     onNavigateToGuide: (guideId: String, eventId: String, userName: String) -> Unit = { _, _, _ -> },
     onNavigateToCriticalSecrets: () -> Unit = {},
+    onNavigateToAppDetails: () -> Unit = {},
     appViewModel: AppViewModel = hiltViewModel(),
     badgeCountsViewModel: BadgeCountsViewModel = hiltViewModel()
 ) {
@@ -1313,7 +1326,7 @@ fun MainScreen(
             )
         },
         settingsContent = {
-            SettingsContent()
+            SettingsContent(onNavigateToAppDetails = onNavigateToAppDetails)
         },
         snackbarHostState = snackbarHostState
     )
@@ -1843,8 +1856,8 @@ private fun ArchiveContentEmbedded() {
 }
 
 @Composable
-private fun SettingsContent() {
+private fun SettingsContent(onNavigateToAppDetails: () -> Unit = {}) {
     // Settings content now includes About and Help & Support in the scrollable list
-    VaultPreferencesContent()
+    VaultPreferencesContent(onNavigateToAppDetails = onNavigateToAppDetails)
 }
 

@@ -304,8 +304,8 @@ private fun FeedList(
             }
         }
 
-        // Pull indicator at top
-        if (pullDistance > 0 || isRefreshing) {
+        // Pull indicator at top — only show during user-initiated pull or active refresh from pull
+        if (pullDistance > 20 || (isRefreshing && pullDistance > 0)) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -320,7 +320,7 @@ private fun FeedList(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.primary
                     )
-                } else if (pullDistance > 20) {
+                } else {
                     Text(
                         "Pull to refresh",
                         style = MaterialTheme.typography.bodySmall,

@@ -1,5 +1,6 @@
 package com.vettid.app.features.archive
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
@@ -9,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -49,6 +51,11 @@ fun ArchiveContent(
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
+            // Search bar
+            ArchiveToolbar(
+                onSearchQueryChanged = { viewModel.onEvent(ArchiveEvent.SearchQueryChanged(it)) }
+            )
+
             // Selection mode header
             val currentState = state
             if (currentState is ArchiveState.Loaded && currentState.isSelectionMode) {
@@ -308,6 +315,64 @@ private fun ArchiveItemCard(
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ArchiveToolbar(
+    onSearchQueryChanged: (String) -> Unit
+) {
+    var searchExpanded by rememberSaveable { mutableStateOf(false) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Spacer(modifier = Modifier.weight(1f))
+
+            IconButton(onClick = {
+                searchExpanded = !searchExpanded
+                if (!searchExpanded) {
+                    searchQuery = ""
+                    onSearchQueryChanged("")
+                }
+            }) {
+                Icon(
+                    imageVector = if (searchExpanded) Icons.Default.SearchOff else Icons.Default.Search,
+                    contentDescription = if (searchExpanded) "Close search" else "Search archive"
+                )
+            }
+        }
+
+        AnimatedVisibility(visible = searchExpanded) {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = {
+                    searchQuery = it
+                    onSearchQueryChanged(it)
+                },
+                placeholder = { Text("Search archived items...") },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = {
+                            searchQuery = ""
+                            onSearchQueryChanged("")
+                        }) {
+                            Icon(Icons.Default.Clear, contentDescription = "Clear search")
+                        }
+                    }
+                }
+            )
         }
     }
 }

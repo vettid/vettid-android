@@ -20,6 +20,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import kotlinx.coroutines.flow.collectLatest
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 
 /**
  * Vault Preferences screen content.
@@ -29,7 +32,8 @@ import kotlinx.coroutines.flow.collectLatest
 fun VaultPreferencesContent(
     viewModel: VaultPreferencesViewModel = hiltViewModel(),
     onManageHandlers: () -> Unit = {},
-    onChangePassword: () -> Unit = {}
+    onChangePassword: () -> Unit = {},
+    onNavigateToAppDetails: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -74,7 +78,8 @@ fun VaultPreferencesContent(
                 pcr0Hash = state.pcr0Hash,
                 onStartClick = { viewModel.startVault() },
                 onStopClick = { viewModel.stopVault() },
-                onRefreshClick = { viewModel.refreshVaultStatus() }
+                onRefreshClick = { viewModel.refreshVaultStatus() },
+                onChangePinClick = { showChangePinDialog = true }
             )
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -95,16 +100,6 @@ fun VaultPreferencesContent(
                     title = "Change Password",
                     subtitle = "Update your vault credential password",
                     onClick = { viewModel.onChangePasswordClick() }
-                )
-
-                Divider()
-
-                // Change PIN
-                PreferencesItem(
-                    icon = Icons.Default.Pin,
-                    title = "Change PIN",
-                    subtitle = "Update your vault unlock PIN (4-8 digits)",
-                    onClick = { showChangePinDialog = true }
                 )
             }
 
@@ -145,6 +140,34 @@ fun VaultPreferencesContent(
 
             Spacer(modifier = Modifier.height(24.dp))
 
+            // Backup section
+            PreferencesSection(title = "BACKUP") {
+                ListItem(
+                    headlineContent = { Text("Credential Backup") },
+                    supportingContent = {
+                        Text(
+                            if (state.backupEnabled) "Credentials backed up on use"
+                            else "Backups disabled"
+                        )
+                    },
+                    leadingContent = {
+                        Icon(
+                            imageVector = Icons.Default.CloudUpload,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    },
+                    trailingContent = {
+                        Switch(
+                            checked = state.backupEnabled,
+                            onCheckedChange = { viewModel.toggleBackup(it) }
+                        )
+                    }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
             // Appearance section
             AppearanceSection(
                 currentTheme = state.theme,
@@ -154,7 +177,7 @@ fun VaultPreferencesContent(
             Spacer(modifier = Modifier.height(24.dp))
 
             // About section
-            AboutSection()
+            AboutSection(onNavigateToAppDetails = onNavigateToAppDetails)
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -381,44 +404,39 @@ private fun PreferencesItem(
     )
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AppearanceSection(
     currentTheme: AppTheme,
     onThemeChange: (AppTheme) -> Unit
 ) {
     PreferencesSection(title = "APPEARANCE") {
-        AppTheme.values().forEach { theme ->
-            ListItem(
-                modifier = Modifier.clickable { onThemeChange(theme) },
-                headlineContent = { Text(theme.displayName) },
-                leadingContent = {
-                    RadioButton(
+        Row(
+            modifier = Modifier
+                .padding(16.dp)
+                .fillMaxWidth()
+        ) {
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                AppTheme.values().forEachIndexed { index, theme ->
+                    SegmentedButton(
                         selected = currentTheme == theme,
-                        onClick = { onThemeChange(theme) }
-                    )
-                },
-                trailingContent = {
-                    when (theme) {
-                        AppTheme.AUTO -> Icon(
-                            Icons.Default.BrightnessAuto,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        AppTheme.LIGHT -> Icon(
-                            Icons.Default.LightMode,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        AppTheme.DARK -> Icon(
-                            Icons.Default.DarkMode,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        onClick = { onThemeChange(theme) },
+                        shape = SegmentedButtonDefaults.itemShape(index, AppTheme.values().size),
+                        icon = {
+                            Icon(
+                                imageVector = when (theme) {
+                                    AppTheme.AUTO -> Icons.Default.BrightnessAuto
+                                    AppTheme.LIGHT -> Icons.Default.LightMode
+                                    AppTheme.DARK -> Icons.Default.DarkMode
+                                },
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    ) {
+                        Text(theme.displayName.substringBefore(" ("))
                     }
                 }
-            )
-            if (theme != AppTheme.values().last()) {
-                Divider(modifier = Modifier.padding(horizontal = 16.dp))
             }
         }
     }
@@ -539,7 +557,8 @@ private fun ArchiveDropdownItem(
 @Composable
 fun VaultPreferencesScreenFull(
     viewModel: VaultPreferencesViewModel = hiltViewModel(),
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onNavigateToAppDetails: () -> Unit = {}
 ) {
     Scaffold(
         topBar = {
@@ -554,7 +573,10 @@ fun VaultPreferencesScreenFull(
         }
     ) { padding ->
         Box(modifier = Modifier.padding(padding)) {
-            VaultPreferencesContent(viewModel = viewModel)
+            VaultPreferencesContent(
+                viewModel = viewModel,
+                onNavigateToAppDetails = onNavigateToAppDetails
+            )
         }
     }
 }
@@ -573,7 +595,8 @@ private fun VaultServerSection(
     pcr0Hash: String?,
     onStartClick: () -> Unit,
     onStopClick: () -> Unit,
-    onRefreshClick: () -> Unit
+    onRefreshClick: () -> Unit,
+    onChangePinClick: () -> Unit = {}
 ) {
     var showLogsDialog by remember { mutableStateOf(false) }
 
@@ -699,6 +722,15 @@ private fun VaultServerSection(
                 }
             )
         }
+
+        // Change PIN
+        Divider()
+        PreferencesItem(
+            icon = Icons.Default.Pin,
+            title = "Change PIN",
+            subtitle = "Update your vault unlock PIN (4-8 digits)",
+            onClick = onChangePinClick
+        )
 
         // Only show start/stop buttons for legacy EC2 mode (not Nitro Enclave)
         if (status != VaultServerStatus.ENCLAVE_READY) {
@@ -851,9 +883,8 @@ private fun VaultLogsDialog(onDismiss: () -> Unit) {
 // MARK: - About Section
 
 @Composable
-private fun AboutSection() {
+private fun AboutSection(onNavigateToAppDetails: () -> Unit = {}) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    var showLogsDialog by remember { mutableStateOf(false) }
 
     // Get app version info
     val versionName = remember {
@@ -878,26 +909,12 @@ private fun AboutSection() {
 
     PreferencesSection(title = "ABOUT") {
         ListItem(
+            modifier = Modifier.clickable { onNavigateToAppDetails() },
             headlineContent = { Text("Version") },
             supportingContent = { Text("$versionName ($versionCode)") },
             leadingContent = {
                 Icon(
                     imageVector = Icons.Default.Info,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        )
-
-        Divider()
-
-        ListItem(
-            modifier = Modifier.clickable { showLogsDialog = true },
-            headlineContent = { Text("App Logs") },
-            supportingContent = { Text("View recent app activity") },
-            leadingContent = {
-                Icon(
-                    imageVector = Icons.Default.Terminal,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -911,50 +928,6 @@ private fun AboutSection() {
             }
         )
     }
-
-    // Logs dialog
-    if (showLogsDialog) {
-        AppLogsDialog(onDismiss = { showLogsDialog = false })
-    }
-}
-
-@Composable
-private fun AppLogsDialog(onDismiss: () -> Unit) {
-    var logs by remember { mutableStateOf("Loading logs...") }
-
-    // Load logs
-    LaunchedEffect(Unit) {
-        logs = try {
-            val process = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-t", "100", "--pid=${android.os.Process.myPid()}"))
-            process.inputStream.bufferedReader().readText()
-        } catch (e: Exception) {
-            "Failed to load logs: ${e.message}"
-        }
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("App Logs") },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 400.dp)
-                    .verticalScroll(rememberScrollState())
-            ) {
-                Text(
-                    text = logs,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Close")
-            }
-        }
-    )
 }
 
 // MARK: - Help & Support Section
