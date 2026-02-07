@@ -350,8 +350,8 @@ class NitroEnrollmentClient @Inject constructor(
         val attestation = verifiedAttestation
             ?: return Result.failure(NatsException("Attestation not completed"))
 
-        if (pin.length != 6 || !pin.all { it.isDigit() }) {
-            return Result.failure(NatsException("PIN must be exactly 6 digits"))
+        if (pin.length !in 4..8 || !pin.all { it.isDigit() }) {
+            return Result.failure(NatsException("PIN must be 4-8 digits"))
         }
 
         Log.d(TAG, "Setting up PIN via JetStream...")

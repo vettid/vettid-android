@@ -546,6 +546,129 @@ class OwnerSpaceClient @Inject constructor(
         }
     }
 
+    // MARK: - PIN Change
+
+    /**
+     * Change the vault unlock PIN.
+     *
+     * Encrypts old and new PIN to the enclave's public key, sends via pin.change
+     * topic, and handles UTK lifecycle and new UTK storage on success.
+     *
+     * @param oldPin Current PIN (4-8 digits)
+     * @param newPin New PIN (4-8 digits)
+     * @param cryptoManager CryptoManager for public key encryption
+     * @return Result with PINChangeResult
+     */
+    suspend fun changePIN(
+        oldPin: String,
+        newPin: String,
+        cryptoManager: com.vettid.app.core.crypto.CryptoManager
+    ): Result<PINChangeResult> {
+        return try {
+            // Get enclave public key
+            val enclavePublicKey = credentialStore.getEnclavePublicKey()
+                ?: return Result.failure(Exception("Enclave public key missing. Please re-enroll."))
+
+            // Get an available UTK (single-use)
+            val utkPool = credentialStore.getUtkPool()
+            val availableUtk = utkPool.firstOrNull()
+                ?: return Result.failure(Exception("No transaction keys available. Please unlock your vault first."))
+
+            Log.d(TAG, "changePIN: Using UTK ${availableUtk.keyId}")
+
+            // Build PIN payload matching enclave PINChangePayload struct
+            val pinPayload = JsonObject().apply {
+                addProperty("old_pin", oldPin)
+                addProperty("new_pin", newPin)
+            }
+
+            // Encrypt with X25519 + ChaCha20-Poly1305 to enclave's public key
+            val encryptedResult = cryptoManager.encryptToPublicKey(
+                plaintext = pinPayload.toString().toByteArray(),
+                publicKeyBase64 = android.util.Base64.encodeToString(enclavePublicKey, android.util.Base64.NO_WRAP)
+            )
+
+            // Combine ephemeral public key + nonce + ciphertext
+            val ephemeralPubKeyBytes = android.util.Base64.decode(encryptedResult.ephemeralPublicKey, android.util.Base64.NO_WRAP)
+            val nonceBytes = android.util.Base64.decode(encryptedResult.nonce, android.util.Base64.NO_WRAP)
+            val ciphertextBytes = android.util.Base64.decode(encryptedResult.ciphertext, android.util.Base64.NO_WRAP)
+
+            val combined = ephemeralPubKeyBytes + nonceBytes + ciphertextBytes
+            val encryptedPayloadBase64 = android.util.Base64.encodeToString(combined, android.util.Base64.NO_WRAP)
+
+            // Build request payload
+            val requestPayload = JsonObject().apply {
+                addProperty("utk_id", availableUtk.keyId)
+                addProperty("encrypted_payload", encryptedPayloadBase64)
+            }
+
+            // Ensure we're subscribed to vault responses
+            subscribeToVault()
+
+            // Send via pin.change topic (dot notation matching enclave handler registration)
+            val response = sendAndAwaitResponse(
+                messageType = "pin.change",
+                payload = requestPayload,
+                timeoutMs = 30000L
+            )
+
+            // SECURITY: Remove used UTK immediately regardless of outcome - UTKs are single-use
+            credentialStore.removeUtk(availableUtk.keyId)
+            Log.d(TAG, "changePIN: Removed used UTK ${availableUtk.keyId}")
+
+            if (response == null) {
+                return Result.failure(Exception("Request timed out"))
+            }
+
+            when (response) {
+                is VaultResponse.HandlerResult -> {
+                    if (response.success && response.result != null) {
+                        val status = response.result.get("status")?.asString
+                        if (status == "pin_changed") {
+                            // Store new UTKs from response
+                            val newUtksArray = response.result.getAsJsonArray("new_utks")
+                            if (newUtksArray != null && newUtksArray.size() > 0) {
+                                val newKeys = mutableListOf<TransactionKeyInfo>()
+                                for (i in 0 until newUtksArray.size()) {
+                                    val utkString = newUtksArray.get(i).asString
+                                    val parts = utkString.split(":", limit = 2)
+                                    if (parts.size == 2) {
+                                        newKeys.add(TransactionKeyInfo(
+                                            keyId = parts[0],
+                                            publicKey = parts[1],
+                                            algorithm = "X25519"
+                                        ))
+                                    }
+                                }
+                                if (newKeys.isNotEmpty()) {
+                                    credentialStore.addUtks(newKeys)
+                                    Log.i(TAG, "changePIN: Added ${newKeys.size} new UTKs. Total: ${credentialStore.getUtkCount()}")
+                                }
+                            }
+                            Result.success(PINChangeResult(success = true))
+                        } else {
+                            val error = response.result.get("error")?.asString ?: "PIN change failed"
+                            Result.success(PINChangeResult(success = false, error = error))
+                        }
+                    } else {
+                        val error = response.error ?: "PIN change failed"
+                        // Check for known error messages from enclave
+                        Result.success(PINChangeResult(success = false, error = error))
+                    }
+                }
+                is VaultResponse.Error -> {
+                    Result.success(PINChangeResult(success = false, error = response.message))
+                }
+                else -> {
+                    Result.success(PINChangeResult(success = false, error = "Unexpected response"))
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "changePIN error", e)
+            Result.failure(e)
+        }
+    }
+
     /**
      * Send a message to another user's vault.
      *
@@ -2073,4 +2196,12 @@ data class CustomCategoryDto(
     val name: String,
     val icon: String? = null,
     val createdAt: Long = System.currentTimeMillis()
+)
+
+/**
+ * Result of a PIN change operation.
+ */
+data class PINChangeResult(
+    val success: Boolean,
+    val error: String? = null
 )

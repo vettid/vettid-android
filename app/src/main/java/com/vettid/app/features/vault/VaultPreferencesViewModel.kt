@@ -3,6 +3,7 @@ package com.vettid.app.features.vault
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.app.core.crypto.CryptoManager
 import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.network.HandlerSummary
@@ -81,7 +82,8 @@ class VaultPreferencesViewModel @Inject constructor(
     private val credentialStore: CredentialStore,
     private val ownerSpaceClient: OwnerSpaceClient,
     private val connectionManager: NatsConnectionManager,
-    private val appPreferencesStore: AppPreferencesStore
+    private val appPreferencesStore: AppPreferencesStore,
+    private val cryptoManager: CryptoManager
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(VaultPreferencesState())
@@ -268,6 +270,37 @@ class VaultPreferencesViewModel @Inject constructor(
     fun onChangePasswordClick() {
         viewModelScope.launch {
             _effects.emit(VaultPreferencesEffect.NavigateToChangePassword)
+        }
+    }
+
+    // MARK: - PIN Change
+
+    /**
+     * Change the vault unlock PIN.
+     * Delegates to OwnerSpaceClient for encrypted communication with enclave.
+     */
+    fun changePIN(currentPin: String, newPin: String, onResult: (Result<Unit>) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val result = ownerSpaceClient.changePIN(currentPin, newPin, cryptoManager)
+                result.fold(
+                    onSuccess = { pinChangeResult ->
+                        if (pinChangeResult.success) {
+                            _effects.emit(VaultPreferencesEffect.ShowSuccess("PIN changed successfully"))
+                            onResult(Result.success(Unit))
+                        } else {
+                            val error = pinChangeResult.error ?: "PIN change failed"
+                            onResult(Result.failure(Exception(error)))
+                        }
+                    },
+                    onFailure = { error ->
+                        onResult(Result.failure(error))
+                    }
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "changePIN error", e)
+                onResult(Result.failure(e))
+            }
         }
     }
 

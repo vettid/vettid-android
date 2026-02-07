@@ -80,7 +80,8 @@ class PinUnlockViewModel @Inject constructor(
 ) : ViewModel() {
 
     companion object {
-        const val PIN_LENGTH = 6
+        const val MIN_PIN_LENGTH = 4
+        const val MAX_PIN_LENGTH = 8
         private const val RESPONSE_TIMEOUT_MS = 30000L
     }
 
@@ -142,8 +143,8 @@ class PinUnlockViewModel @Inject constructor(
     private fun updatePin(pin: String) {
         val current = _state.value
         if (current is PinUnlockState.EnteringPin) {
-            // Only allow digits and max PIN_LENGTH
-            val sanitizedPin = pin.filter { it.isDigit() }.take(PIN_LENGTH)
+            // Only allow digits and max MAX_PIN_LENGTH
+            val sanitizedPin = pin.filter { it.isDigit() }.take(MAX_PIN_LENGTH)
             _state.value = current.copy(pin = sanitizedPin, error = null)
         }
     }
@@ -162,8 +163,8 @@ class PinUnlockViewModel @Inject constructor(
                 return
             }
 
-            if (current.pin.length != PIN_LENGTH) {
-                _state.value = current.copy(error = "PIN must be $PIN_LENGTH digits")
+            if (current.pin.length !in MIN_PIN_LENGTH..MAX_PIN_LENGTH) {
+                _state.value = current.copy(error = "PIN must be $MIN_PIN_LENGTH-$MAX_PIN_LENGTH digits")
                 return
             }
 

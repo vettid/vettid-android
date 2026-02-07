@@ -16,6 +16,9 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.vettid.app.core.network.HandlerSummary
 import com.vettid.app.core.network.InstalledHandler
 import com.vettid.app.features.settings.AppTheme
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import kotlinx.coroutines.flow.collectLatest
 
 /**
@@ -30,6 +33,7 @@ fun VaultPreferencesContent(
 ) {
     val state by viewModel.state.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
+    var showChangePinDialog by remember { mutableStateOf(false) }
 
     // Handle effects
     LaunchedEffect(Unit) {
@@ -91,6 +95,16 @@ fun VaultPreferencesContent(
                     title = "Change Password",
                     subtitle = "Update your vault credential password",
                     onClick = { viewModel.onChangePasswordClick() }
+                )
+
+                Divider()
+
+                // Change PIN
+                PreferencesItem(
+                    icon = Icons.Default.Pin,
+                    title = "Change PIN",
+                    subtitle = "Update your vault unlock PIN (4-8 digits)",
+                    onClick = { showChangePinDialog = true }
                 )
             }
 
@@ -156,6 +170,167 @@ fun VaultPreferencesContent(
             modifier = Modifier.align(Alignment.BottomCenter)
         )
     }
+
+    // Change PIN dialog
+    if (showChangePinDialog) {
+        ChangePinDialog(
+            onDismiss = { showChangePinDialog = false },
+            onChangePIN = { currentPin, newPin, onError ->
+                viewModel.changePIN(currentPin, newPin) { result ->
+                    result.fold(
+                        onSuccess = { showChangePinDialog = false },
+                        onFailure = { e -> onError(e.message ?: "PIN change failed") }
+                    )
+                }
+            }
+        )
+    }
+}
+
+@Composable
+private fun ChangePinDialog(
+    onDismiss: () -> Unit,
+    onChangePIN: (currentPin: String, newPin: String, onError: (String) -> Unit) -> Unit
+) {
+    var currentPin by remember { mutableStateOf("") }
+    var newPin by remember { mutableStateOf("") }
+    var confirmPin by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var isChanging by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = { if (!isChanging) onDismiss() },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Pin,
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Change PIN")
+            }
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                // Current PIN
+                OutlinedTextField(
+                    value = currentPin,
+                    onValueChange = { value ->
+                        currentPin = value.filter { it.isDigit() }.take(8)
+                        error = null
+                    },
+                    label = { Text("Current PIN") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    singleLine = true,
+                    enabled = !isChanging,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // New PIN
+                OutlinedTextField(
+                    value = newPin,
+                    onValueChange = { value ->
+                        newPin = value.filter { it.isDigit() }.take(8)
+                        error = null
+                    },
+                    label = { Text("New PIN (4-8 digits)") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    singleLine = true,
+                    enabled = !isChanging,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Confirm New PIN
+                OutlinedTextField(
+                    value = confirmPin,
+                    onValueChange = { value ->
+                        confirmPin = value.filter { it.isDigit() }.take(8)
+                        error = null
+                    },
+                    label = { Text("Confirm New PIN") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    singleLine = true,
+                    enabled = !isChanging,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // Error message
+                if (error != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = error!!,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                // Loading indicator
+                if (isChanging) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Changing PIN...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    // Validate
+                    when {
+                        currentPin.isEmpty() || !currentPin.all { it.isDigit() } -> {
+                            error = "Enter your current PIN"
+                        }
+                        newPin.length !in 4..8 || !newPin.all { it.isDigit() } -> {
+                            error = "New PIN must be 4-8 digits"
+                        }
+                        confirmPin != newPin -> {
+                            error = "PINs do not match"
+                        }
+                        newPin == currentPin -> {
+                            error = "New PIN must be different from current PIN"
+                        }
+                        else -> {
+                            isChanging = true
+                            error = null
+                            onChangePIN(currentPin, newPin) { errorMsg ->
+                                error = errorMsg
+                                isChanging = false
+                            }
+                        }
+                    }
+                },
+                enabled = !isChanging
+            ) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !isChanging
+            ) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 @Composable

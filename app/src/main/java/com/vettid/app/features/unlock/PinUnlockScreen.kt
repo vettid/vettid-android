@@ -83,7 +83,7 @@ fun PinUnlockScreen(
             // Subtitle based on state
             Text(
                 text = when (state) {
-                    is PinUnlockState.Idle, is PinUnlockState.EnteringPin -> "Enter your 6-digit PIN"
+                    is PinUnlockState.Idle, is PinUnlockState.EnteringPin -> "Enter your PIN"
                     is PinUnlockState.Connecting -> "Connecting to vault..."
                     is PinUnlockState.Verifying -> "Verifying PIN..."
                     is PinUnlockState.Success -> "Unlocked!"
@@ -167,7 +167,7 @@ private fun PinEntryContent(
         // PIN dots display
         PinDotsDisplay(
             pinLength = pin.length,
-            maxLength = PinUnlockViewModel.PIN_LENGTH
+            maxLength = PinUnlockViewModel.MAX_PIN_LENGTH
         )
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -191,13 +191,8 @@ private fun PinEntryContent(
         // Numeric keypad
         NumericKeypad(
             onDigit = { digit ->
-                if (pin.length < PinUnlockViewModel.PIN_LENGTH) {
-                    val newPin = pin + digit
-                    onPinChanged(newPin)
-                    // Auto-submit when PIN is complete
-                    if (newPin.length == PinUnlockViewModel.PIN_LENGTH) {
-                        onSubmit()
-                    }
+                if (pin.length < PinUnlockViewModel.MAX_PIN_LENGTH) {
+                    onPinChanged(pin + digit)
                 }
             },
             onBackspace = {
@@ -206,6 +201,26 @@ private fun PinEntryContent(
                 }
             }
         )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Submit button (visible when PIN has minimum length)
+        AnimatedVisibility(
+            visible = pin.length >= PinUnlockViewModel.MIN_PIN_LENGTH,
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
+            Button(
+                onClick = onSubmit,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 48.dp)
+            ) {
+                Icon(Icons.Default.Lock, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Unlock")
+            }
+        }
     }
 }
 
