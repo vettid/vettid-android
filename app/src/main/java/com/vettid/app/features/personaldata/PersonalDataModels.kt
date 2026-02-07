@@ -133,6 +133,133 @@ object PersonalDataTemplates {
         templates.filter { it.category == category }
 }
 
+// MARK: - Multi-Field Templates
+
+/**
+ * Input hint for multi-field template fields.
+ * Controls which widget is used in the template form.
+ */
+enum class PersonalDataFieldInputHint {
+    TEXT,           // Standard text with word capitalization
+    DATE,           // Date picker (MM/DD/YYYY)
+    EXPIRY_DATE,    // Expiry date picker (MM/YYYY)
+    COUNTRY,        // Country dropdown
+    STATE,          // US state / province dropdown
+    NUMBER,         // Numeric keyboard
+    PHONE,          // Phone number input
+    EMAIL           // Email keyboard
+}
+
+/**
+ * A field definition within a multi-field personal data template.
+ */
+data class PersonalDataTemplateField(
+    val name: String,
+    val namespace: String,
+    val category: DataCategory,
+    val placeholder: String = "",
+    val inputHint: PersonalDataFieldInputHint = PersonalDataFieldInputHint.TEXT
+)
+
+/**
+ * A pre-defined collection of fields for common personal data types.
+ * Similar to SecretTemplate but for personal data.
+ */
+data class PersonalDataMultiTemplate(
+    val name: String,
+    val description: String,
+    val category: DataCategory,
+    val fields: List<PersonalDataTemplateField>
+) {
+    companion object {
+        val all = listOf(
+            PersonalDataMultiTemplate(
+                name = "Home Address",
+                description = "Street, city, state, postal code, country",
+                category = DataCategory.ADDRESS,
+                fields = listOf(
+                    PersonalDataTemplateField("Street", "address.home.street", DataCategory.ADDRESS, "e.g., 123 Main St"),
+                    PersonalDataTemplateField("Street Line 2", "address.home.street2", DataCategory.ADDRESS, "Apt, Suite, etc."),
+                    PersonalDataTemplateField("City", "address.home.city", DataCategory.ADDRESS, "e.g., San Francisco"),
+                    PersonalDataTemplateField("State / Province", "address.home.state", DataCategory.ADDRESS, "", PersonalDataFieldInputHint.STATE),
+                    PersonalDataTemplateField("Postal Code", "address.home.postal_code", DataCategory.ADDRESS, "e.g., 94102", PersonalDataFieldInputHint.NUMBER),
+                    PersonalDataTemplateField("Country", "address.home.country", DataCategory.ADDRESS, "", PersonalDataFieldInputHint.COUNTRY)
+                )
+            ),
+            PersonalDataMultiTemplate(
+                name = "Business Address",
+                description = "Company name, street, city, state, postal code, country",
+                category = DataCategory.ADDRESS,
+                fields = listOf(
+                    PersonalDataTemplateField("Company", "address.work.company", DataCategory.ADDRESS, "e.g., Acme Inc."),
+                    PersonalDataTemplateField("Street", "address.work.street", DataCategory.ADDRESS, "e.g., 456 Office Blvd"),
+                    PersonalDataTemplateField("Street Line 2", "address.work.street2", DataCategory.ADDRESS, "Floor, Suite, etc."),
+                    PersonalDataTemplateField("City", "address.work.city", DataCategory.ADDRESS, "e.g., New York"),
+                    PersonalDataTemplateField("State / Province", "address.work.state", DataCategory.ADDRESS, "", PersonalDataFieldInputHint.STATE),
+                    PersonalDataTemplateField("Postal Code", "address.work.postal_code", DataCategory.ADDRESS, "e.g., 10001", PersonalDataFieldInputHint.NUMBER),
+                    PersonalDataTemplateField("Country", "address.work.country", DataCategory.ADDRESS, "", PersonalDataFieldInputHint.COUNTRY)
+                )
+            ),
+            PersonalDataMultiTemplate(
+                name = "Family Member",
+                description = "Name, relationship, phone, email",
+                category = DataCategory.CONTACT,
+                fields = listOf(
+                    PersonalDataTemplateField("Full Name", "contact.family.name", DataCategory.CONTACT, "e.g., Jane Doe"),
+                    PersonalDataTemplateField("Relationship", "contact.family.relationship", DataCategory.CONTACT, "e.g., Spouse, Parent"),
+                    PersonalDataTemplateField("Phone", "contact.family.phone", DataCategory.CONTACT, "", PersonalDataFieldInputHint.PHONE),
+                    PersonalDataTemplateField("Email", "contact.family.email", DataCategory.CONTACT, "", PersonalDataFieldInputHint.EMAIL)
+                )
+            ),
+            PersonalDataMultiTemplate(
+                name = "Emergency Contact",
+                description = "Name, relationship, phone",
+                category = DataCategory.MEDICAL,
+                fields = listOf(
+                    PersonalDataTemplateField("Name", "medical.emergency.name", DataCategory.MEDICAL, "e.g., John Smith"),
+                    PersonalDataTemplateField("Relationship", "medical.emergency.relationship", DataCategory.MEDICAL, "e.g., Spouse, Parent"),
+                    PersonalDataTemplateField("Phone", "medical.emergency.phone", DataCategory.MEDICAL, "", PersonalDataFieldInputHint.PHONE)
+                )
+            ),
+            PersonalDataMultiTemplate(
+                name = "Full Name",
+                description = "Prefix, first, middle, last, suffix",
+                category = DataCategory.IDENTITY,
+                fields = listOf(
+                    PersonalDataTemplateField("Prefix", "personal.legal.prefix", DataCategory.IDENTITY, "e.g., Mr., Ms., Dr."),
+                    PersonalDataTemplateField("First Name", "personal.legal.first_name", DataCategory.IDENTITY, ""),
+                    PersonalDataTemplateField("Middle Name", "personal.legal.middle_name", DataCategory.IDENTITY, ""),
+                    PersonalDataTemplateField("Last Name", "personal.legal.last_name", DataCategory.IDENTITY, ""),
+                    PersonalDataTemplateField("Suffix", "personal.legal.suffix", DataCategory.IDENTITY, "e.g., Jr., III")
+                )
+            ),
+            PersonalDataMultiTemplate(
+                name = "Government ID",
+                description = "ID type, number, issuing authority, expiry",
+                category = DataCategory.IDENTITY,
+                fields = listOf(
+                    PersonalDataTemplateField("ID Type", "identity.gov_id.type", DataCategory.IDENTITY, "e.g., Passport, Driver License"),
+                    PersonalDataTemplateField("Number", "identity.gov_id.number", DataCategory.IDENTITY, "", PersonalDataFieldInputHint.NUMBER),
+                    PersonalDataTemplateField("Issuing Authority", "identity.gov_id.issuing_authority", DataCategory.IDENTITY, "e.g., State of California"),
+                    PersonalDataTemplateField("Expiry Date", "identity.gov_id.expiry", DataCategory.IDENTITY, "", PersonalDataFieldInputHint.EXPIRY_DATE)
+                )
+            )
+        )
+    }
+}
+
+/**
+ * State for the multi-field template form dialog.
+ */
+data class PersonalDataTemplateFormState(
+    val template: PersonalDataMultiTemplate,
+    val fieldValues: Map<Int, String> = emptyMap(),
+    val isSaving: Boolean = false
+) {
+    fun getValue(fieldIndex: Int): String = fieldValues[fieldIndex] ?: ""
+    fun hasAnyValue(): Boolean = fieldValues.values.any { it.isNotBlank() }
+}
+
 /**
  * State for the personal data list screen.
  */

@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -25,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -38,14 +40,20 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
+import com.vettid.app.ui.components.DropdownPickerField
 import com.vettid.app.ui.components.PhoneNumberInput
 import com.vettid.app.ui.components.ProfilePhotoCapture
+import com.vettid.app.ui.components.commonCountries
+import com.vettid.app.ui.components.usStatesAndTerritories
 import kotlinx.coroutines.flow.collectLatest
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
+import java.text.SimpleDateFormat
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Calendar
+import java.util.Locale
 
 /**
  * Format ISO 8601 timestamp to local timezone for display.
@@ -86,6 +94,10 @@ fun PersonalDataContent(
     // Search bar visibility state (lifted up for FAB control)
     var showSearchBar by remember { mutableStateOf(false) }
 
+    // Template chooser and form state
+    var showTemplateChooser by remember { mutableStateOf(false) }
+    var templateFormState by remember { mutableStateOf<PersonalDataTemplateFormState?>(null) }
+
     // Handle effects
     LaunchedEffect(Unit) {
         viewModel.effects.collectLatest { effect ->
@@ -114,7 +126,7 @@ fun PersonalDataContent(
 
             is PersonalDataState.Empty -> {
                 EmptyPersonalDataContent(
-                    onAddClick = { viewModel.onEvent(PersonalDataEvent.AddItem) },
+                    onAddClick = { showTemplateChooser = true },
                     onPublishClick = { viewModel.publishProfile() }
                 )
             }
@@ -183,9 +195,9 @@ fun PersonalDataContent(
                         contentDescription = if (showSearchBar) "Close search" else "Search"
                     )
                 }
-                // Add FAB (primary)
+                // Add FAB (primary) - opens template chooser
                 FloatingActionButton(
-                    onClick = { viewModel.onEvent(PersonalDataEvent.AddItem) }
+                    onClick = { showTemplateChooser = true }
                 ) {
                     Icon(Icons.Default.Add, contentDescription = "Add personal data")
                 }
@@ -220,6 +232,40 @@ fun PersonalDataContent(
                     viewModel.dismissDialog()
                 }
             }
+        )
+    }
+
+    // Template chooser dialog
+    if (showTemplateChooser) {
+        PersonalDataTemplateChooserDialog(
+            onCustomField = {
+                showTemplateChooser = false
+                viewModel.onEvent(PersonalDataEvent.AddItem)
+            },
+            onTemplateSelected = { template ->
+                showTemplateChooser = false
+                templateFormState = PersonalDataTemplateFormState(template)
+            },
+            onDismiss = { showTemplateChooser = false }
+        )
+    }
+
+    // Template form dialog
+    templateFormState?.let { formState ->
+        PersonalDataTemplateFormDialog(
+            state = formState,
+            onFieldValueChange = { index, value ->
+                templateFormState = formState.copy(
+                    fieldValues = formState.fieldValues + (index to value)
+                )
+            },
+            onSave = {
+                templateFormState = formState.copy(isSaving = true)
+                viewModel.saveTemplate(formState) {
+                    templateFormState = null
+                }
+            },
+            onDismiss = { templateFormState = null }
         )
     }
 
@@ -2185,5 +2231,342 @@ private fun profileGenerateQrCode(content: String, size: Int): android.graphics.
         bitmap
     } catch (e: Exception) {
         null
+    }
+}
+
+// MARK: - Template Chooser and Form
+
+/**
+ * Maps DataCategory to an icon for use in template chooser and form.
+ */
+private fun getDataCategoryIcon(category: DataCategory): ImageVector {
+    return when (category) {
+        DataCategory.IDENTITY -> Icons.Default.Person
+        DataCategory.CONTACT -> Icons.Default.Contacts
+        DataCategory.ADDRESS -> Icons.Default.LocationOn
+        DataCategory.FINANCIAL -> Icons.Default.AccountBalance
+        DataCategory.MEDICAL -> Icons.Default.LocalHospital
+        DataCategory.OTHER -> Icons.Default.Category
+    }
+}
+
+@Composable
+private fun PersonalDataTemplateChooserDialog(
+    onCustomField: () -> Unit,
+    onTemplateSelected: (PersonalDataMultiTemplate) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Add Personal Data") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                // Custom field option (always first)
+                Surface(
+                    onClick = onCustomField,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Row(
+                        modifier = Modifier.padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.Edit,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Custom Field",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                            Text(
+                                "Add a single field with custom name and value",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    "TEMPLATES",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
+                )
+
+                // Template options
+                PersonalDataMultiTemplate.all.forEach { template ->
+                    Surface(
+                        onClick = { onTemplateSelected(template) },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                getDataCategoryIcon(template.category),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    template.name,
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    template.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Text(
+                                "${template.fields.size} fields",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PersonalDataTemplateFormDialog(
+    state: PersonalDataTemplateFormState,
+    onFieldValueChange: (Int, String) -> Unit,
+    onSave: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    // Track which date picker is open (by field index)
+    var datePickerFieldIndex by remember { mutableIntStateOf(-1) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    getDataCategoryIcon(state.template.category),
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(state.template.name)
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                state.template.fields.forEachIndexed { index, field ->
+                    when (field.inputHint) {
+                        PersonalDataFieldInputHint.DATE, PersonalDataFieldInputHint.EXPIRY_DATE -> {
+                            OutlinedTextField(
+                                value = state.getValue(index),
+                                onValueChange = {},
+                                label = { Text(field.name) },
+                                placeholder = {
+                                    Text(if (field.inputHint == PersonalDataFieldInputHint.EXPIRY_DATE) "MM/YYYY" else "MM/DD/YYYY")
+                                },
+                                readOnly = true,
+                                singleLine = true,
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.CalendarMonth,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { datePickerFieldIndex = index }
+                            )
+                        }
+                        PersonalDataFieldInputHint.COUNTRY -> {
+                            DropdownPickerField(
+                                value = state.getValue(index),
+                                onValueChange = { onFieldValueChange(index, it) },
+                                label = field.name,
+                                options = commonCountries,
+                                leadingIcon = Icons.Default.Public
+                            )
+                        }
+                        PersonalDataFieldInputHint.STATE -> {
+                            DropdownPickerField(
+                                value = state.getValue(index),
+                                onValueChange = { onFieldValueChange(index, it) },
+                                label = field.name,
+                                options = usStatesAndTerritories,
+                                leadingIcon = Icons.Default.LocationOn
+                            )
+                        }
+                        PersonalDataFieldInputHint.PHONE -> {
+                            PhoneNumberInput(
+                                value = state.getValue(index),
+                                onValueChange = { onFieldValueChange(index, it) },
+                                label = field.name
+                            )
+                        }
+                        PersonalDataFieldInputHint.EMAIL -> {
+                            OutlinedTextField(
+                                value = state.getValue(index),
+                                onValueChange = { onFieldValueChange(index, it) },
+                                label = { Text(field.name) },
+                                placeholder = {
+                                    if (field.placeholder.isNotEmpty()) {
+                                        Text(field.placeholder)
+                                    }
+                                },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Email
+                                ),
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Email,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        PersonalDataFieldInputHint.NUMBER -> {
+                            OutlinedTextField(
+                                value = state.getValue(index),
+                                onValueChange = { onFieldValueChange(index, it) },
+                                label = { Text(field.name) },
+                                placeholder = {
+                                    if (field.placeholder.isNotEmpty()) {
+                                        Text(field.placeholder)
+                                    }
+                                },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(
+                                    keyboardType = KeyboardType.Number
+                                ),
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.Numbers,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        PersonalDataFieldInputHint.TEXT -> {
+                            OutlinedTextField(
+                                value = state.getValue(index),
+                                onValueChange = { onFieldValueChange(index, it) },
+                                label = { Text(field.name) },
+                                placeholder = {
+                                    if (field.placeholder.isNotEmpty()) {
+                                        Text(field.placeholder)
+                                    }
+                                },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(
+                                    capitalization = KeyboardCapitalization.Words
+                                ),
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Default.TextFields,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onSave,
+                enabled = state.hasAnyValue() && !state.isSaving
+            ) {
+                if (state.isSaving) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Text("Save")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+
+    // Date picker dialog
+    if (datePickerFieldIndex >= 0) {
+        val field = state.template.fields[datePickerFieldIndex]
+        val isExpiryOnly = field.inputHint == PersonalDataFieldInputHint.EXPIRY_DATE
+        val datePickerState = rememberDatePickerState()
+
+        DatePickerDialog(
+            onDismissRequest = { datePickerFieldIndex = -1 },
+            confirmButton = {
+                TextButton(onClick = {
+                    datePickerState.selectedDateMillis?.let { millis ->
+                        val cal = Calendar.getInstance().apply { timeInMillis = millis }
+                        val formatted = if (isExpiryOnly) {
+                            SimpleDateFormat("MM/yyyy", Locale.US).format(cal.time)
+                        } else {
+                            SimpleDateFormat("MM/dd/yyyy", Locale.US).format(cal.time)
+                        }
+                        onFieldValueChange(datePickerFieldIndex, formatted)
+                    }
+                    datePickerFieldIndex = -1
+                }) {
+                    Text("OK")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { datePickerFieldIndex = -1 }) {
+                    Text("Cancel")
+                }
+            }
+        ) {
+            DatePicker(state = datePickerState)
+        }
     }
 }

@@ -440,6 +440,7 @@ class PersonalDataViewModel @Inject constructor(
         return when {
             namespace.startsWith("personal.legal") -> DataCategory.IDENTITY
             namespace.startsWith("personal.info") -> DataCategory.IDENTITY
+            namespace.startsWith("identity.") -> DataCategory.IDENTITY
             namespace.startsWith("contact.") -> DataCategory.CONTACT
             namespace.startsWith("social.") -> DataCategory.CONTACT
             namespace.startsWith("address.") -> DataCategory.ADDRESS
@@ -475,13 +476,29 @@ class PersonalDataViewModel @Inject constructor(
             "address.home.state" to "State",
             "address.home.postal_code" to "Postal Code",
             "address.home.country" to "Country",
+            "address.work.company" to "Company",
             "address.work.street" to "Work Street",
+            "address.work.street2" to "Work Address Line 2",
             "address.work.city" to "Work City",
+            "address.work.state" to "Work State",
+            "address.work.postal_code" to "Work Postal Code",
+            "address.work.country" to "Work Country",
             "social.website.personal" to "Website",
             "social.linkedin.url" to "LinkedIn",
             "social.twitter.handle" to "X (Twitter)",
             "social.instagram.handle" to "Instagram",
             "social.github.username" to "GitHub",
+            "contact.family.name" to "Family Member",
+            "contact.family.relationship" to "Relationship",
+            "contact.family.phone" to "Family Phone",
+            "contact.family.email" to "Family Email",
+            "medical.emergency.name" to "Emergency Contact",
+            "medical.emergency.relationship" to "Emergency Relationship",
+            "medical.emergency.phone" to "Emergency Phone",
+            "identity.gov_id.type" to "ID Type",
+            "identity.gov_id.number" to "ID Number",
+            "identity.gov_id.issuing_authority" to "Issuing Authority",
+            "identity.gov_id.expiry" to "ID Expiry Date",
             "financial.bank.name" to "Bank Name",
             "financial.bank.account_number" to "Account Number",
             "financial.bank.routing_number" to "Routing Number"
@@ -1015,6 +1032,113 @@ class PersonalDataViewModel @Inject constructor(
                 Log.e(TAG, "Failed to save data", e)
                 _effects.emit(PersonalDataEffect.ShowError(e.message ?: "Failed to save"))
                 _editState.value = current.copy(isSaving = false)
+            }
+        }
+    }
+
+    /**
+     * Save all non-empty fields from a multi-field template at once.
+     */
+    fun saveTemplate(formState: PersonalDataTemplateFormState, onComplete: () -> Unit) {
+        viewModelScope.launch {
+            try {
+                val template = formState.template
+
+                // Collect non-empty field values
+                val fieldsToSave = template.fields.mapIndexedNotNull { index, field ->
+                    val value = formState.getValue(index)
+                    if (value.isNotBlank()) field to value else null
+                }
+
+                if (fieldsToSave.isEmpty()) {
+                    _effects.emit(PersonalDataEffect.ShowError("No fields to save"))
+                    return@launch
+                }
+
+                Log.i(TAG, "Saving template '${template.name}' with ${fieldsToSave.size} fields")
+
+                // Build fields JSON payload
+                val fieldsObj = JsonObject()
+                fieldsToSave.forEach { (field, value) ->
+                    fieldsObj.addProperty(field.namespace, value)
+                }
+
+                // Send to vault
+                val payload = JsonObject().apply {
+                    add("fields", fieldsObj)
+                }
+
+                Log.d(TAG, "Saving template fields to vault: $payload")
+                val response = ownerSpaceClient.sendAndAwaitResponse("personal-data.update", payload, 10000L)
+
+                when (response) {
+                    is VaultResponse.HandlerResult -> {
+                        if (response.success) {
+                            Log.i(TAG, "Template fields saved to vault")
+                        } else {
+                            Log.w(TAG, "Vault returned error saving template: ${response.error}")
+                        }
+                    }
+                    is VaultResponse.Error -> {
+                        Log.e(TAG, "Vault error saving template: ${response.code} - ${response.message}")
+                        _effects.emit(PersonalDataEffect.ShowError("Failed to save: ${response.message}"))
+                        return@launch
+                    }
+                    null -> {
+                        Log.w(TAG, "Timeout waiting for vault template save confirmation")
+                    }
+                    else -> {
+                        Log.w(TAG, "Unexpected response: ${response::class.simpleName}")
+                    }
+                }
+
+                // Save each field locally and update in-memory list
+                val now = Instant.now()
+                fieldsToSave.forEach { (field, value) ->
+                    // Save locally for offline access
+                    val editState = EditDataItemState(
+                        id = field.namespace,
+                        name = field.name,
+                        value = value,
+                        category = field.category,
+                        isEditing = false
+                    )
+                    saveFieldLocally(field.namespace, editState)
+
+                    // Update in-memory data
+                    val existingIndex = dataItems.indexOfFirst { it.id == field.namespace }
+                    val item = PersonalDataItem(
+                        id = field.namespace,
+                        name = displayNameFromNamespace(field.namespace),
+                        type = dataTypeFromNamespace(field.namespace),
+                        value = value,
+                        category = field.category,
+                        isSystemField = false,
+                        isInPublicProfile = false,
+                        createdAt = now,
+                        updatedAt = now
+                    )
+                    if (existingIndex >= 0) {
+                        dataItems[existingIndex] = item
+                    } else {
+                        dataItems.add(item)
+                    }
+                }
+
+                // Update UI state
+                if (dataItems.isEmpty()) {
+                    _state.value = PersonalDataState.Empty
+                } else {
+                    _state.value = PersonalDataState.Loaded(items = dataItems.toList())
+                }
+
+                _effects.emit(PersonalDataEffect.ShowSuccess("${fieldsToSave.size} fields saved"))
+                onComplete()
+
+                Log.i(TAG, "Template save completed: ${fieldsToSave.size} fields")
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to save template", e)
+                _effects.emit(PersonalDataEffect.ShowError(e.message ?: "Failed to save template"))
             }
         }
     }

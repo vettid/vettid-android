@@ -46,10 +46,10 @@ object GuideCatalog {
         GuideDef(
             guideId = "personal_data",
             title = "Your Personal Data",
-            message = "Add and manage your personal information, photo, and public profile.",
+            message = "Add and manage your personal information using templates (address, name, emergency contact) or custom fields. Set your photo and manage your public profile.",
             order = 4,
             priority = 0,
-            version = 1
+            version = 2
         ),
         GuideDef(
             guideId = "secrets",
