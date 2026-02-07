@@ -40,6 +40,14 @@ class FeedViewModel @Inject constructor(
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
+    // Audit events toggle (hidden by default)
+    private val _showAuditEvents = MutableStateFlow(false)
+    val showAuditEvents: StateFlow<Boolean> = _showAuditEvents.asStateFlow()
+
+    // Search query
+    private val _searchQuery = MutableStateFlow("")
+    val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
+
     // Expose sync state for UI
     val syncState: StateFlow<SyncState> = feedRepository.syncState
     val isOnline: StateFlow<Boolean> = feedRepository.isOnline
@@ -62,6 +70,7 @@ class FeedViewModel @Inject constructor(
         observeConnectionAndLoad()
         observeFeedUpdates()
         startPeriodicRefresh()
+        observeFilterChanges()
     }
 
     /**
@@ -70,13 +79,69 @@ class FeedViewModel @Inject constructor(
     private fun showCachedFeed() {
         val cached = feedRepository.getCachedEvents()
         if (cached.isNotEmpty()) {
-            _state.value = FeedState.Loaded(
-                events = cached,
-                hasMore = false,
-                unreadCount = cached.count { it.isUnread },
-                isOffline = true
-            )
-            Log.d(TAG, "Showing ${cached.size} cached feed events")
+            val filtered = filterForDisplay(cached)
+            _state.value = if (filtered.isEmpty()) {
+                FeedState.Empty
+            } else {
+                FeedState.Loaded(
+                    events = filtered,
+                    hasMore = false,
+                    unreadCount = filtered.count { it.isUnread },
+                    isOffline = true
+                )
+            }
+            Log.d(TAG, "Showing ${filtered.size} of ${cached.size} cached feed events")
+        }
+    }
+
+    fun toggleAuditEvents() {
+        _showAuditEvents.value = !_showAuditEvents.value
+    }
+
+    fun updateSearchQuery(query: String) {
+        _searchQuery.value = query
+    }
+
+    /**
+     * Filter events for display based on audit toggle and search query.
+     */
+    private fun filterForDisplay(events: List<FeedEvent>): List<FeedEvent> {
+        var filtered = events
+        if (!_showAuditEvents.value) {
+            filtered = filtered.filter { it.feedStatus != FeedStatus.HIDDEN }
+        }
+        val query = _searchQuery.value.trim()
+        if (query.isNotEmpty()) {
+            filtered = filtered.filter { event ->
+                event.title.contains(query, ignoreCase = true) ||
+                    (event.message?.contains(query, ignoreCase = true) == true)
+            }
+        }
+        return filtered
+    }
+
+    /**
+     * Re-filter cached events when audit toggle or search query changes.
+     */
+    private fun observeFilterChanges() {
+        viewModelScope.launch {
+            combine(_showAuditEvents, _searchQuery.debounce(300)) { _, _ -> Unit }
+                .collect {
+                    val allCached = feedRepository.getCachedEvents()
+                    if (allCached.isNotEmpty()) {
+                        val filtered = filterForDisplay(allCached)
+                        if (filtered.isEmpty()) {
+                            _state.value = FeedState.Empty
+                        } else {
+                            _state.value = FeedState.Loaded(
+                                events = filtered,
+                                hasMore = false,
+                                unreadCount = filtered.count { it.isUnread },
+                                isOffline = !feedRepository.isOnline.value
+                            )
+                        }
+                    }
+                }
         }
     }
 
@@ -189,13 +254,14 @@ class FeedViewModel @Inject constructor(
                 // Use repository which provides offline caching
                 feedRepository.getFeed(forceRefresh = false)
                     .onSuccess { events ->
-                        if (events.isEmpty()) {
+                        val filtered = filterForDisplay(events)
+                        if (filtered.isEmpty()) {
                             _state.value = FeedState.Empty
                         } else {
                             _state.value = FeedState.Loaded(
-                                events = events,
+                                events = filtered,
                                 hasMore = false, // Repository handles pagination
-                                unreadCount = events.count { it.isUnread },
+                                unreadCount = filtered.count { it.isUnread },
                                 isOffline = !feedRepository.isOnline.value
                             )
                         }
@@ -207,11 +273,12 @@ class FeedViewModel @Inject constructor(
                         Log.e(TAG, "Failed to load feed", error)
                         // Try to show cached data even on error
                         val cached = feedRepository.getCachedEvents()
-                        if (cached.isNotEmpty()) {
+                        val filtered = filterForDisplay(cached)
+                        if (filtered.isNotEmpty()) {
                             _state.value = FeedState.Loaded(
-                                events = cached,
+                                events = filtered,
                                 hasMore = false,
-                                unreadCount = cached.count { it.isUnread },
+                                unreadCount = filtered.count { it.isUnread },
                                 isOffline = true
                             )
                         } else {
@@ -241,13 +308,14 @@ class FeedViewModel @Inject constructor(
                     .onSuccess { result ->
                         Log.d(TAG, "Sync complete: +${result.newEvents} new, ${result.updatedEvents} updated")
                         val events = feedRepository.getCachedEvents()
-                        if (events.isEmpty()) {
+                        val filtered = filterForDisplay(events)
+                        if (filtered.isEmpty()) {
                             _state.value = FeedState.Empty
                         } else {
                             _state.value = FeedState.Loaded(
-                                events = events,
+                                events = filtered,
                                 hasMore = result.hasMore,
-                                unreadCount = events.count { it.isUnread },
+                                unreadCount = filtered.count { it.isUnread },
                                 isOffline = false
                             )
                         }

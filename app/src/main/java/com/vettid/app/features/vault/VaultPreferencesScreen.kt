@@ -15,6 +15,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.vettid.app.core.network.HandlerSummary
 import com.vettid.app.core.network.InstalledHandler
+import com.vettid.app.features.settings.AppTheme
 import kotlinx.coroutines.flow.collectLatest
 
 /**
@@ -130,32 +131,11 @@ fun VaultPreferencesContent(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // Info card
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer
-                )
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalAlignment = Alignment.Top
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Info,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = "These settings are stored locally in your vault and sync across your devices.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer
-                    )
-                }
-            }
+            // Appearance section
+            AppearanceSection(
+                currentTheme = state.theme,
+                onThemeChange = { viewModel.updateTheme(it) }
+            )
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -224,6 +204,49 @@ private fun PreferencesItem(
             )
         }
     )
+}
+
+@Composable
+private fun AppearanceSection(
+    currentTheme: AppTheme,
+    onThemeChange: (AppTheme) -> Unit
+) {
+    PreferencesSection(title = "APPEARANCE") {
+        AppTheme.values().forEach { theme ->
+            ListItem(
+                modifier = Modifier.clickable { onThemeChange(theme) },
+                headlineContent = { Text(theme.displayName) },
+                leadingContent = {
+                    RadioButton(
+                        selected = currentTheme == theme,
+                        onClick = { onThemeChange(theme) }
+                    )
+                },
+                trailingContent = {
+                    when (theme) {
+                        AppTheme.AUTO -> Icon(
+                            Icons.Default.BrightnessAuto,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        AppTheme.LIGHT -> Icon(
+                            Icons.Default.LightMode,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        AppTheme.DARK -> Icon(
+                            Icons.Default.DarkMode,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            )
+            if (theme != AppTheme.values().last()) {
+                Divider(modifier = Modifier.padding(horizontal = 16.dp))
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

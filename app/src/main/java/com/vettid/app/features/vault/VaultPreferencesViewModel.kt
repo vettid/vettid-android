@@ -7,7 +7,9 @@ import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.network.HandlerSummary
 import com.vettid.app.core.network.InstalledHandler
+import com.vettid.app.core.storage.AppPreferencesStore
 import com.vettid.app.core.storage.CredentialStore
+import com.vettid.app.features.settings.AppTheme
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -37,6 +39,7 @@ enum class VaultServerStatus {
  * State for vault preferences.
  */
 data class VaultPreferencesState(
+    val theme: AppTheme = AppTheme.AUTO,
     val sessionTtlMinutes: Int = 15,
     val installedHandlerCount: Int = 0,
     val availableHandlerCount: Int = 0,
@@ -77,7 +80,8 @@ sealed class VaultPreferencesEffect {
 class VaultPreferencesViewModel @Inject constructor(
     private val credentialStore: CredentialStore,
     private val ownerSpaceClient: OwnerSpaceClient,
-    private val connectionManager: NatsConnectionManager
+    private val connectionManager: NatsConnectionManager,
+    private val appPreferencesStore: AppPreferencesStore
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(VaultPreferencesState())
@@ -119,8 +123,11 @@ class VaultPreferencesViewModel @Inject constructor(
                 val pcrVersion = credentialStore.getCurrentPcrVersion()
                 val pcr0Hash = credentialStore.getEnrollmentPcr0Hash()
                 val enrollmentPcrVersion = credentialStore.getEnrollmentPcrVersion()
+                // Load theme preference
+                val theme = appPreferencesStore.getTheme()
 
                 _state.value = VaultPreferencesState(
+                    theme = theme,
                     sessionTtlMinutes = 15,
                     archiveAfterDays = 7,
                     deleteAfterDays = 30,
@@ -242,6 +249,13 @@ class VaultPreferencesViewModel @Inject constructor(
                 Log.e(TAG, "Failed to update delete setting", e)
                 _effects.emit(VaultPreferencesEffect.ShowError("Failed to update setting"))
             }
+        }
+    }
+
+    fun updateTheme(theme: AppTheme) {
+        viewModelScope.launch {
+            appPreferencesStore.setTheme(theme)
+            _state.update { it.copy(theme = theme) }
         }
     }
 

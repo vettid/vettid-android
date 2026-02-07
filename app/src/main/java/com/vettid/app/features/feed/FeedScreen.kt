@@ -1,5 +1,6 @@
 package com.vettid.app.features.feed
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -47,9 +48,9 @@ fun FeedContent(
 ) {
     val state by viewModel.state.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
-    val syncState by viewModel.syncState.collectAsState()
-    val isOnline by viewModel.isOnline.collectAsState()
     val isOfflineModeEnabled by viewModel.isOfflineModeEnabled.collectAsState()
+    val showAuditEvents by viewModel.showAuditEvents.collectAsState()
+    val searchQuery by viewModel.searchQuery.collectAsState()
 
     // Snackbar state for action feedback
     val snackbarHostState = remember { SnackbarHostState() }
@@ -98,14 +99,13 @@ fun FeedContent(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Don't show offline banner if user intentionally chose offline mode
-        val showOffline = !isOfflineModeEnabled && (!isOnline || (state as? FeedState.Loaded)?.isOffline == true)
-        if (showOffline) {
-            OfflineBanner(
-                isSyncing = syncState == SyncState.SYNCING,
-                onRetry = { viewModel.refresh() }
-            )
-        }
+        // Toolbar: audit toggle chip + search
+        FeedToolbar(
+            showAuditEvents = showAuditEvents,
+            onToggleAudit = { viewModel.toggleAuditEvents() },
+            searchQuery = searchQuery,
+            onSearchQueryChange = { viewModel.updateSearchQuery(it) }
+        )
 
         Box(modifier = Modifier.weight(1f)) {
             when (val currentState = state) {
@@ -157,46 +157,6 @@ fun FeedContent(
     }
 }
 
-@Composable
-private fun OfflineBanner(
-    isSyncing: Boolean,
-    onRetry: () -> Unit
-) {
-    Surface(
-        color = MaterialTheme.colorScheme.errorContainer,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = if (isSyncing) Icons.Default.Sync else Icons.Default.CloudOff,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.onErrorContainer
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = if (isSyncing) "Syncing..." else "Offline - Showing cached data",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier.weight(1f)
-            )
-            // Always show retry button - allows manual refresh even while "syncing"
-            TextButton(
-                onClick = onRetry,
-                colors = ButtonDefaults.textButtonColors(
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer
-                )
-            ) {
-                Text(if (isSyncing) "Refresh" else "Retry")
-            }
-        }
-    }
-}
-
 /**
  * Content shown when user has intentionally chosen offline mode.
  * Shows a friendly message instead of error state.
@@ -229,6 +189,64 @@ private fun OfflineModeContent() {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FeedToolbar(
+    showAuditEvents: Boolean,
+    onToggleAudit: () -> Unit,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit
+) {
+    var searchExpanded by rememberSaveable { mutableStateOf(false) }
+
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            FilterChip(
+                selected = showAuditEvents,
+                onClick = onToggleAudit,
+                label = { Text("Audit Log") },
+                leadingIcon = if (showAuditEvents) {
+                    { Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(18.dp)) }
+                } else null
+            )
+
+            Spacer(modifier = Modifier.weight(1f))
+
+            IconButton(onClick = { searchExpanded = !searchExpanded }) {
+                Icon(
+                    imageVector = if (searchExpanded) Icons.Default.SearchOff else Icons.Default.Search,
+                    contentDescription = if (searchExpanded) "Close search" else "Search feed"
+                )
+            }
+        }
+
+        AnimatedVisibility(visible = searchExpanded) {
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = onSearchQueryChange,
+                placeholder = { Text("Search events...") },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { onSearchQueryChange("") }) {
+                            Icon(Icons.Default.Clear, contentDescription = "Clear search")
+                        }
+                    }
+                }
             )
         }
     }
