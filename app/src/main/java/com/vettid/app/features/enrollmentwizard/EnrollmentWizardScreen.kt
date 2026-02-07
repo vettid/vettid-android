@@ -287,7 +287,6 @@ fun EnrollmentWizardScreen(
                                 isPublishing = currentState.isPublishing,
                                 error = currentState.error,
                                 onDismissError = { viewModel.onEvent(WizardEvent.DismissError) },
-                                onSkip = { viewModel.onEvent(WizardEvent.Skip) },
                                 onConfirm = { viewModel.onEvent(WizardEvent.ConfirmProfile) }
                             )
                         }

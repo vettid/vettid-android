@@ -5,8 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.nats.FeedClient
 import com.vettid.app.core.nats.FeedEvent
-import com.vettid.app.core.nats.NatsConnectionManager
-import com.vettid.app.core.nats.NatsConnectionState
+import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.storage.CredentialStore
 import com.vettid.app.core.storage.PersonalDataStore
@@ -26,7 +25,7 @@ class FeedViewModel @Inject constructor(
     private val feedClient: FeedClient,
     private val feedRepository: FeedRepository,
     private val feedNotificationService: FeedNotificationService,
-    private val connectionManager: NatsConnectionManager,
+    private val natsAutoConnector: NatsAutoConnector,
     private val credentialStore: CredentialStore,
     private val ownerSpaceClient: OwnerSpaceClient,
     private val personalDataStore: PersonalDataStore
@@ -90,8 +89,8 @@ class FeedViewModel @Inject constructor(
      */
     private fun observeConnectionAndLoad() {
         viewModelScope.launch {
-            connectionManager.connectionState.collect { state ->
-                if (state is NatsConnectionState.Connected && !hasLoadedInitially) {
+            natsAutoConnector.connectionState.collect { state ->
+                if (state is NatsAutoConnector.AutoConnectState.Connected && !hasLoadedInitially) {
                     hasLoadedInitially = true
                     Log.d(TAG, "NATS connected, loading feed (initial)")
                     // Small delay to let connection stabilize

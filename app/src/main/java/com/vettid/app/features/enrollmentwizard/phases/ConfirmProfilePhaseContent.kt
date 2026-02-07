@@ -26,7 +26,6 @@ fun ConfirmProfilePhaseContent(
     isPublishing: Boolean = false,
     error: String? = null,
     onDismissError: () -> Unit = {},
-    onSkip: () -> Unit = {},
     onConfirm: () -> Unit = {}
 ) {
     Column(
@@ -159,25 +158,16 @@ fun ConfirmProfilePhaseContent(
 
         Spacer(modifier = Modifier.weight(1f))
 
-        // Bottom buttons
+        // Bottom button
         Surface(shadowElevation = 8.dp) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    .padding(16.dp)
             ) {
-                OutlinedButton(
-                    onClick = onSkip,
-                    modifier = Modifier.weight(1f),
-                    enabled = !isPublishing
-                ) {
-                    Text("Skip")
-                }
-
                 Button(
                     onClick = onConfirm,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.fillMaxWidth(),
                     enabled = !isPublishing
                 ) {
                     if (isPublishing) {
