@@ -370,7 +370,13 @@ fun VettIDApp(
                         popUpTo(Screen.Enrollment.route) { inclusive = true }
                     }
                 },
-                onCancel = { navController.popBackStack() },
+                onCancel = {
+                    if (!navController.popBackStack()) {
+                        navController.navigate(Screen.Welcome.route) {
+                            popUpTo(0) { inclusive = true }
+                        }
+                    }
+                },
                 startWithManualEntry = startWithManualEntry,
                 initialCode = initialCode
             )
@@ -407,7 +413,13 @@ fun VettIDApp(
                         popUpTo(Screen.EnrollmentWizard.route) { inclusive = true }
                     }
                 },
-                onCancel = { navController.popBackStack() },
+                onCancel = {
+                    if (!navController.popBackStack()) {
+                        navController.navigate(Screen.Welcome.route) {
+                            popUpTo(0) { inclusive = true }
+                        }
+                    }
+                },
                 startWithManualEntry = startWithManualEntry,
                 initialCode = initialCode
             )
