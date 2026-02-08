@@ -3,6 +3,8 @@ package com.vettid.app.features.connections.components
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -67,7 +69,7 @@ fun ConnectionNotificationPreferencesCard(
                 }
             )
 
-            Divider(modifier = Modifier.padding(vertical = 12.dp))
+            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
 
             // Notification types
             Text(
@@ -79,7 +81,7 @@ fun ConnectionNotificationPreferencesCard(
             Spacer(modifier = Modifier.height(8.dp))
 
             NotificationToggle(
-                icon = Icons.Default.Chat,
+                icon = Icons.AutoMirrored.Filled.Chat,
                 title = "Messages",
                 description = "New messages from this connection",
                 enabled = preferences.messagesEnabled && !preferences.isMuted,
@@ -118,7 +120,7 @@ fun ConnectionNotificationPreferencesCard(
                 }
             )
 
-            Divider(modifier = Modifier.padding(vertical = 12.dp))
+            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
 
             // Sound and vibration
             Text(
@@ -130,7 +132,7 @@ fun ConnectionNotificationPreferencesCard(
             Spacer(modifier = Modifier.height(8.dp))
 
             NotificationToggle(
-                icon = Icons.Default.VolumeUp,
+                icon = Icons.AutoMirrored.Filled.VolumeUp,
                 title = "Sound",
                 description = "Play notification sound",
                 enabled = preferences.soundEnabled && !preferences.isMuted,

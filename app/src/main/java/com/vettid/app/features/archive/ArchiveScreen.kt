@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -257,7 +259,7 @@ private fun ArchiveItemCard(
             // Icon based on type
             Icon(
                 imageVector = when (item.type) {
-                    ArchivedItemType.MESSAGE -> Icons.Default.Chat
+                    ArchivedItemType.MESSAGE -> Icons.AutoMirrored.Filled.Chat
                     ArchivedItemType.CONNECTION -> Icons.Default.Person
                     ArchivedItemType.FILE -> Icons.Default.Description
                     ArchivedItemType.AUTH_REQUEST -> Icons.Default.VerifiedUser
@@ -471,7 +473,7 @@ fun ArchiveScreenFull(
                 title = { Text("Archive") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )

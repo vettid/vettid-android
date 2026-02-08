@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Message
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -70,7 +72,7 @@ fun HandlerDetailScreen(
                 title = { Text("Handler Details") },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
@@ -398,7 +400,7 @@ private fun getPermissionIcon(type: String) = when (type.lowercase()) {
     "network" -> Icons.Default.Wifi
     "storage" -> Icons.Default.Storage
     "crypto" -> Icons.Default.Lock
-    "messaging" -> Icons.Default.Message
+    "messaging" -> Icons.AutoMirrored.Filled.Message
     else -> Icons.Default.Security
 }
 

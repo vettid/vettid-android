@@ -3,6 +3,8 @@ package com.vettid.app.features.connections.components
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -72,7 +74,7 @@ fun TrustProgressCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        imageVector = Icons.Default.TrendingUp,
+                        imageVector = Icons.AutoMirrored.Filled.TrendingUp,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary
                     )
@@ -105,7 +107,7 @@ fun TrustProgressCard(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Divider()
+            HorizontalDivider()
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -493,13 +495,13 @@ private fun getNextLevelRequirements(level: TrustLevel): String {
 private fun getEventIcon(type: TrustEventType): ImageVector {
     return when (type) {
         TrustEventType.CONNECTION_ESTABLISHED -> Icons.Default.Handshake
-        TrustEventType.MESSAGE_EXCHANGED -> Icons.Default.Chat
+        TrustEventType.MESSAGE_EXCHANGED -> Icons.AutoMirrored.Filled.Chat
         TrustEventType.CREDENTIAL_SHARED -> Icons.Default.Share
         TrustEventType.CREDENTIAL_VERIFIED -> Icons.Default.Verified
         TrustEventType.PROFILE_UPDATED -> Icons.Default.Edit
         TrustEventType.MUTUAL_CONTACT_FOUND -> Icons.Default.Group
         TrustEventType.LONG_TERM_CONNECTION -> Icons.Default.Schedule
-        TrustEventType.ACTIVITY_INCREASE -> Icons.Default.TrendingUp
+        TrustEventType.ACTIVITY_INCREASE -> Icons.AutoMirrored.Filled.TrendingUp
         TrustEventType.INACTIVE_PERIOD -> Icons.Default.Pause
     }
 }

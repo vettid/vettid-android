@@ -5,6 +5,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.CallMade
+import androidx.compose.material.icons.automirrored.filled.CallReceived
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -236,7 +238,7 @@ private fun InvitationTrackingItem(
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = if (invitation.direction == InvitationDirection.OUTBOUND)
-                            Icons.Default.CallMade else Icons.Default.CallReceived,
+                            Icons.AutoMirrored.Filled.CallMade else Icons.AutoMirrored.Filled.CallReceived,
                         contentDescription = null,
                         tint = getStatusColor(invitation.status),
                         modifier = Modifier.size(20.dp)
@@ -399,7 +401,7 @@ fun InvitationDetailCard(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            Divider()
+            HorizontalDivider()
 
             Spacer(modifier = Modifier.height(16.dp))
 

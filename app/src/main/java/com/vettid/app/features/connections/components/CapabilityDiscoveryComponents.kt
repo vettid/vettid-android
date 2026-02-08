@@ -5,6 +5,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -266,7 +267,7 @@ fun MyCapabilitiesCard(
                     )
                 }
 
-                Divider()
+                HorizontalDivider()
             }
         }
     }
@@ -367,7 +368,7 @@ private fun getCategoryName(category: CapabilityCategory): String {
 
 private fun getCategoryIcon(category: CapabilityCategory): ImageVector {
     return when (category) {
-        CapabilityCategory.MESSAGING -> Icons.Default.Chat
+        CapabilityCategory.MESSAGING -> Icons.AutoMirrored.Filled.Chat
         CapabilityCategory.FILE_SHARING -> Icons.Default.Share
         CapabilityCategory.CREDENTIALS -> Icons.Default.Badge
         CapabilityCategory.PAYMENTS -> Icons.Default.Payment

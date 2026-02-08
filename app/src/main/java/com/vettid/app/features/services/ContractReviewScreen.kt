@@ -6,6 +6,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.CompareArrows
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.outlined.Assignment
+import androidx.compose.material.icons.automirrored.outlined.HelpOutline
+import androidx.compose.material.icons.automirrored.outlined.Message
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -70,7 +76,7 @@ fun ContractReviewScreen(
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
                         Icon(
-                            imageVector = Icons.Default.ArrowBack,
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back"
                         )
                     }
@@ -142,7 +148,7 @@ private fun ContractReviewContent(
                 SectionHeader(
                     title = "Required Data",
                     subtitle = "This service requires the following data",
-                    icon = Icons.Outlined.Assignment,
+                    icon = Icons.AutoMirrored.Outlined.Assignment,
                     color = MaterialTheme.colorScheme.error
                 )
             }
@@ -338,7 +344,7 @@ private fun ContractChangesCard(changes: ContractChanges) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
-                    imageVector = Icons.Default.CompareArrows,
+                    imageVector = Icons.AutoMirrored.Filled.CompareArrows,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.error
                 )
@@ -585,7 +591,7 @@ private fun OnDemandFieldsCard(fields: List<String>) {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.HelpOutline,
+                        imageVector = Icons.AutoMirrored.Outlined.HelpOutline,
                         contentDescription = null,
                         modifier = Modifier.size(16.dp),
                         tint = MaterialTheme.colorScheme.secondary
@@ -646,7 +652,7 @@ private fun PermissionsCard(contract: ServiceDataContract) {
             )
 
             PermissionRow(
-                icon = Icons.Outlined.Message,
+                icon = Icons.AutoMirrored.Outlined.Message,
                 label = "Send you messages",
                 enabled = contract.canSendMessages
             )
@@ -817,7 +823,7 @@ private fun LegalLinksCard(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(
-                        imageVector = Icons.Default.OpenInNew,
+                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                         contentDescription = null,
                         modifier = Modifier.size(16.dp)
                     )
@@ -833,7 +839,7 @@ private fun LegalLinksCard(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(
-                        imageVector = Icons.Default.OpenInNew,
+                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                         contentDescription = null,
                         modifier = Modifier.size(16.dp)
                     )

@@ -3,6 +3,7 @@ package com.vettid.app.ui.navigation
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -130,7 +131,7 @@ fun SignOutBottomSheet(
                         }
                     }
 
-                    Divider(modifier = Modifier.padding(horizontal = 24.dp))
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 24.dp))
                 }
 
                 // Sign out of Vault Services (full sign out)
@@ -145,7 +146,7 @@ fun SignOutBottomSheet(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Logout,
+                        imageVector = Icons.AutoMirrored.Filled.Logout,
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.error
                     )

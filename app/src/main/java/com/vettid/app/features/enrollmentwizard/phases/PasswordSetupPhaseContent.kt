@@ -238,7 +238,7 @@ private fun PasswordStrengthIndicator(strength: PasswordStrength) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         LinearProgressIndicator(
-            progress = (strength.ordinal + 1) / 4f,
+            progress = { (strength.ordinal + 1) / 4f },
             modifier = Modifier
                 .weight(1f)
                 .height(4.dp),
@@ -295,7 +295,7 @@ private fun CreatingCredentialContent(
 
         // Progress indicator
         LinearProgressIndicator(
-            progress = progress,
+            progress = { progress },
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 32.dp),

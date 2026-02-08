@@ -7,6 +7,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -297,7 +298,7 @@ private fun CapabilitiesSection(capabilities: List<CapabilityInfo>) {
 @Composable
 private fun CapabilityItem(capability: CapabilityInfo) {
     val icon = when (capability.icon) {
-        "messaging" -> Icons.Default.Chat
+        "messaging" -> Icons.AutoMirrored.Filled.Chat
         "sharing" -> Icons.Default.Share
         "credentials" -> Icons.Default.Badge
         "payments" -> Icons.Default.Payment

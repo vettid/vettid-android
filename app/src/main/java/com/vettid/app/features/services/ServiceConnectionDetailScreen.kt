@@ -8,6 +8,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Label
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -71,7 +73,7 @@ fun ServiceConnectionDetailScreen(
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
                         Icon(
-                            imageVector = Icons.Default.ArrowBack,
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back"
                         )
                     }
@@ -120,7 +122,7 @@ fun ServiceConnectionDetailScreen(
                                         Icon(Icons.Outlined.Notifications, contentDescription = null)
                                     }
                                 )
-                                Divider()
+                                HorizontalDivider()
                                 DropdownMenuItem(
                                     text = { Text("Revoke connection", color = MaterialTheme.colorScheme.error) },
                                     onClick = {
@@ -1102,7 +1104,7 @@ private fun TagsCard(tags: List<String>) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
-                    imageVector = Icons.Outlined.Label,
+                    imageVector = Icons.AutoMirrored.Outlined.Label,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary
                 )

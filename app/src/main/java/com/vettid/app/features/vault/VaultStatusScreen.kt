@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Help
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -251,7 +252,7 @@ private fun ProvisioningContent(
         verticalArrangement = Arrangement.Center
     ) {
         CircularProgressIndicator(
-            progress = state.progress,
+            progress = { state.progress },
             modifier = Modifier.size(80.dp)
         )
 
@@ -307,7 +308,7 @@ private fun RunningContent(
                     HealthLevel.HEALTHY -> Icons.Default.CheckCircle
                     HealthLevel.DEGRADED -> Icons.Default.Warning
                     HealthLevel.UNHEALTHY -> Icons.Default.Error
-                    HealthLevel.UNKNOWN -> Icons.Default.Help
+                    HealthLevel.UNKNOWN -> Icons.AutoMirrored.Filled.Help
                 },
                 color = when (state.health.status) {
                     HealthLevel.HEALTHY -> Color(0xFF4CAF50)
@@ -469,7 +470,7 @@ private fun MetricRow(label: String, value: Float, unit: String) {
         Text(label, style = MaterialTheme.typography.bodyMedium)
         Row(verticalAlignment = Alignment.CenterVertically) {
             LinearProgressIndicator(
-                progress = value / 100f,
+                progress = { value / 100f },
                 modifier = Modifier
                     .width(100.dp)
                     .height(8.dp)

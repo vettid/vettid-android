@@ -47,7 +47,7 @@ fun ConnectionHealthCard(
                 HealthStatusBadge(status = health.healthStatus)
             }
 
-            Divider()
+            HorizontalDivider()
 
             // Last Active
             HealthIndicatorRow(

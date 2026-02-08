@@ -8,6 +8,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -203,7 +205,7 @@ private fun NumberPad(
             }
             NumberButton("0", onClick = { onNumberClick("0") })
             IconActionButton(
-                icon = Icons.Default.Backspace,
+                icon = Icons.AutoMirrored.Filled.Backspace,
                 contentDescription = "Delete",
                 onClick = onDeleteClick
             )
@@ -299,7 +301,7 @@ fun PinSetupScreen(
                 title = { Text("Set Up PIN") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )

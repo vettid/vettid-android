@@ -8,6 +8,8 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Message
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -93,7 +95,7 @@ fun ServiceInitiationScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
@@ -542,7 +544,7 @@ private fun DataAccessRow(text: String) {
 private fun getCapabilityIcon(capability: String): androidx.compose.ui.graphics.vector.ImageVector {
     return when {
         capability.contains("auth", ignoreCase = true) -> Icons.Outlined.Lock
-        capability.contains("message", ignoreCase = true) -> Icons.Outlined.Message
+        capability.contains("message", ignoreCase = true) -> Icons.AutoMirrored.Outlined.Message
         capability.contains("payment", ignoreCase = true) -> Icons.Outlined.Payment
         capability.contains("notification", ignoreCase = true) -> Icons.Outlined.Notifications
         capability.contains("data", ignoreCase = true) -> Icons.Outlined.Storage

@@ -87,7 +87,7 @@ fun ConfirmIdentityPhaseContent(
                     icon = Icons.Default.Badge
                 )
 
-                Divider(
+                HorizontalDivider(
                     modifier = Modifier.padding(vertical = 12.dp),
                     color = MaterialTheme.colorScheme.outlineVariant
                 )
@@ -98,7 +98,7 @@ fun ConfirmIdentityPhaseContent(
                     icon = Icons.Default.Badge
                 )
 
-                Divider(
+                HorizontalDivider(
                     modifier = Modifier.padding(vertical = 12.dp),
                     color = MaterialTheme.colorScheme.outlineVariant
                 )

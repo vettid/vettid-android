@@ -5,6 +5,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Label
+import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -169,7 +171,7 @@ fun AddSecretScreen(
                 onValueChange = { name = it },
                 label = { Text("Name") },
                 placeholder = { Text(if (isCritical) "e.g., Bitcoin Wallet Seed" else "e.g., GitHub Token") },
-                leadingIcon = { Icon(Icons.Default.Label, null) },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.Label, null) },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(
                     capitalization = KeyboardCapitalization.Words,
@@ -203,7 +205,7 @@ fun AddSecretScreen(
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = categoryExpanded) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .menuAnchor()
+                        .menuAnchor(MenuAnchorType.PrimaryNotEditable)
                 )
 
                 ExposedDropdownMenu(
@@ -283,7 +285,7 @@ fun AddSecretScreen(
                         else "Additional notes about this secret"
                     )
                 },
-                leadingIcon = { Icon(Icons.Default.Notes, null) },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.Notes, null) },
                 keyboardOptions = KeyboardOptions(
                     capitalization = KeyboardCapitalization.Sentences,
                     imeAction = ImeAction.Done

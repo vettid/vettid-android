@@ -8,6 +8,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -155,7 +157,7 @@ private fun RequestingActionContent(
         verticalArrangement = Arrangement.Center
     ) {
         CircularProgressIndicator(
-            progress = state?.progress ?: 0f,
+            progress = { state?.progress ?: 0f },
             modifier = Modifier.size(64.dp)
         )
 
@@ -451,7 +453,7 @@ private fun EnteringPasswordContent(
                     strokeWidth = 2.dp
                 )
             } else {
-                Icon(Icons.Default.Login, contentDescription = null)
+                Icon(Icons.AutoMirrored.Filled.Login, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("Authenticate")
             }
@@ -473,7 +475,7 @@ private fun ExecutingContent(
         verticalArrangement = Arrangement.Center
     ) {
         CircularProgressIndicator(
-            progress = state.progress,
+            progress = { state.progress },
             modifier = Modifier.size(80.dp)
         )
 
@@ -487,7 +489,7 @@ private fun ExecutingContent(
         Spacer(modifier = Modifier.height(16.dp))
 
         LinearProgressIndicator(
-            progress = state.progress,
+            progress = { state.progress },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(8.dp)
@@ -576,7 +578,7 @@ private fun SuccessContent(
         ) {
             Text("Continue")
             Spacer(modifier = Modifier.width(8.dp))
-            Icon(Icons.Default.ArrowForward, contentDescription = null)
+            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
         }
     }
 }

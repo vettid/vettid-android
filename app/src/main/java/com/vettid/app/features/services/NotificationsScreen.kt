@@ -9,6 +9,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Message
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -65,7 +67,7 @@ fun NotificationsScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
@@ -292,7 +294,7 @@ private fun notificationTypeIcon(type: NotificationType): androidx.compose.ui.gr
         NotificationType.DATA_REQUEST -> Icons.Outlined.Description
         NotificationType.PAYMENT_REQUEST -> Icons.Outlined.Payment
         NotificationType.CONTRACT_UPDATE -> Icons.Outlined.Description
-        NotificationType.MESSAGE -> Icons.Outlined.Message
+        NotificationType.MESSAGE -> Icons.AutoMirrored.Outlined.Message
         NotificationType.ALERT -> Icons.Outlined.Warning
     }
 }

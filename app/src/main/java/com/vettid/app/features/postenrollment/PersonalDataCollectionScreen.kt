@@ -6,6 +6,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Note
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -248,7 +249,7 @@ private fun SystemFieldsSection(systemFields: com.vettid.app.core.storage.System
             }
 
             Spacer(modifier = Modifier.height(8.dp))
-            Divider()
+            HorizontalDivider()
             Spacer(modifier = Modifier.height(8.dp))
 
             Row(
@@ -517,7 +518,7 @@ private fun CustomFieldsSection(
                         onClick = { onEditField(field) }
                     )
                     if (index < customFields.lastIndex) {
-                        Divider(modifier = Modifier.padding(horizontal = 16.dp))
+                        HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                     }
                 }
             }
@@ -547,7 +548,7 @@ private fun CustomFieldItem(
                     FieldCategory.ADDRESS -> Icons.Default.LocationOn
                     FieldCategory.FINANCIAL -> Icons.Default.AccountBalance
                     FieldCategory.MEDICAL -> Icons.Default.LocalHospital
-                    FieldCategory.OTHER -> Icons.Default.Note
+                    FieldCategory.OTHER -> Icons.AutoMirrored.Filled.Note
                 },
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary
@@ -654,7 +655,7 @@ private fun AddCustomFieldDialog(
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .menuAnchor()
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
                     )
 
                     ExposedDropdownMenu(
@@ -766,7 +767,7 @@ private fun EditCustomFieldDialog(
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .menuAnchor()
+                                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
                         )
 
                         ExposedDropdownMenu(

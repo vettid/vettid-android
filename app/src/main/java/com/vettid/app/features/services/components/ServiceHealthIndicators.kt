@@ -241,7 +241,7 @@ fun ServiceHealthCard(
             // Issues
             if (health.issues.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(12.dp))
-                Divider()
+                HorizontalDivider()
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
@@ -313,7 +313,7 @@ private fun UsageMeter(
         Spacer(modifier = Modifier.height(4.dp))
 
         LinearProgressIndicator(
-            progress = percentage.coerceIn(0f, 1f),
+            progress = { percentage.coerceIn(0f, 1f) },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(6.dp)
@@ -360,7 +360,7 @@ private fun UsageMeter(
         Spacer(modifier = Modifier.height(4.dp))
 
         LinearProgressIndicator(
-            progress = percentage.coerceIn(0f, 1f),
+            progress = { percentage.coerceIn(0f, 1f) },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(6.dp)
@@ -430,7 +430,7 @@ fun TrustScoreIndicator(
         verticalAlignment = Alignment.CenterVertically
     ) {
         CircularProgressIndicator(
-            progress = score / 100f,
+            progress = { score / 100f },
             modifier = Modifier.size(32.dp),
             color = color,
             trackColor = color.copy(alpha = 0.2f),

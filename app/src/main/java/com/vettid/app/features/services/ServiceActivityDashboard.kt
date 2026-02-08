@@ -8,6 +8,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Message
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -73,7 +75,7 @@ fun ServiceActivityDashboard(
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
                         Icon(
-                            imageVector = Icons.Default.ArrowBack,
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back"
                         )
                     }
@@ -237,7 +239,7 @@ private fun ActivitySummaryCard(summary: ActivitySummary) {
 
             summary.totalPaymentAmount?.let { amount ->
                 Spacer(modifier = Modifier.height(12.dp))
-                Divider()
+                HorizontalDivider()
                 Spacer(modifier = Modifier.height(12.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -620,7 +622,7 @@ private fun getActivityTypeIcon(type: ServiceActivityType) = when (type) {
     ServiceActivityType.DATA_DELETE -> Icons.Outlined.Delete
     ServiceActivityType.AUTH_REQUEST -> Icons.Outlined.VpnKey
     ServiceActivityType.PAYMENT_REQUEST -> Icons.Outlined.Payment
-    ServiceActivityType.MESSAGE -> Icons.Outlined.Message
+    ServiceActivityType.MESSAGE -> Icons.AutoMirrored.Outlined.Message
 }
 
 private fun getActivityTypeColor(type: ServiceActivityType) = when (type) {

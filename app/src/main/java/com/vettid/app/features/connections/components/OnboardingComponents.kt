@@ -11,6 +11,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Help
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -429,7 +430,7 @@ fun HelpTooltip(
             modifier = Modifier.size(24.dp)
         ) {
             Icon(
-                imageVector = Icons.Default.Help,
+                imageVector = Icons.AutoMirrored.Filled.Help,
                 contentDescription = "Help",
                 modifier = Modifier.size(18.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant

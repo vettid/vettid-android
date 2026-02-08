@@ -104,7 +104,7 @@ fun SecuritySettingsContent(
                                 onClick = { viewModel.updateLockMethod(method) }
                             )
                             if (method != LockMethod.values().last()) {
-                                Divider(modifier = Modifier.padding(horizontal = 16.dp))
+                                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                             }
                         }
                     }
@@ -138,7 +138,7 @@ fun SecuritySettingsContent(
                             ) {
                                 OutlinedButton(
                                     onClick = { expandedTimeout = true },
-                                    modifier = Modifier.menuAnchor()
+                                    modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable)
                                 ) {
                                     Text(state.autoLockTimeout.displayName)
                                     Icon(
@@ -196,7 +196,7 @@ fun SecuritySettingsContent(
                         }
                     )
 
-                    Divider(modifier = Modifier.padding(horizontal = 16.dp))
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
 
                     ListItem(
                         headlineContent = { Text("Screenshots") },
@@ -249,7 +249,7 @@ fun SecuritySettingsContent(
                         }
                     )
 
-                    Divider(modifier = Modifier.padding(horizontal = 16.dp))
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
 
                     ListItem(
                         modifier = Modifier.clickable { viewModel.onViewRecoveryPhraseClick() },

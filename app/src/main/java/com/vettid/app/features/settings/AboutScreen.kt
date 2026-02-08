@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Help
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -101,7 +103,7 @@ fun AboutSettingsContent() {
                     }
                 )
 
-                Divider(modifier = Modifier.padding(horizontal = 16.dp))
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
 
                 AboutListItem(
                     icon = Icons.Default.PrivacyTip,
@@ -112,7 +114,7 @@ fun AboutSettingsContent() {
                     }
                 )
 
-                Divider(modifier = Modifier.padding(horizontal = 16.dp))
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
 
                 AboutListItem(
                     icon = Icons.Default.Code,
@@ -139,7 +141,7 @@ fun AboutSettingsContent() {
         Card(modifier = Modifier.fillMaxWidth()) {
             Column {
                 AboutListItem(
-                    icon = Icons.Default.Help,
+                    icon = Icons.AutoMirrored.Filled.Help,
                     title = "Help Center",
                     onClick = {
                         val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://vettid.dev/help"))
@@ -147,7 +149,7 @@ fun AboutSettingsContent() {
                     }
                 )
 
-                Divider(modifier = Modifier.padding(horizontal = 16.dp))
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
 
                 AboutListItem(
                     icon = Icons.Default.Email,
@@ -161,7 +163,7 @@ fun AboutSettingsContent() {
                     }
                 )
 
-                Divider(modifier = Modifier.padding(horizontal = 16.dp))
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
 
                 AboutListItem(
                     icon = Icons.Default.BugReport,
@@ -198,7 +200,7 @@ fun AboutSettingsContent() {
                     }
                 )
 
-                Divider(modifier = Modifier.padding(horizontal = 16.dp))
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
 
                 AboutListItem(
                     icon = Icons.Default.Code,
@@ -251,7 +253,7 @@ private fun AboutListItem(
         },
         trailingContent = {
             Icon(
-                imageVector = Icons.Default.OpenInNew,
+                imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(20.dp)

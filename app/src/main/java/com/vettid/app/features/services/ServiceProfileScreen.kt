@@ -7,6 +7,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.automirrored.outlined.Message
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -54,7 +57,7 @@ fun ServiceProfileScreen(
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
                         Icon(
-                            imageVector = Icons.Default.ArrowBack,
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back"
                         )
                     }
@@ -397,7 +400,7 @@ private fun ContactInfoCard(contactInfo: ServiceContactInfo) {
 
             contactInfo.supportUrl?.let { url ->
                 ContactRow(
-                    icon = Icons.Default.OpenInNew,
+                    icon = Icons.AutoMirrored.Filled.OpenInNew,
                     label = "Support Website",
                     value = url,
                     isVerified = false
@@ -609,7 +612,7 @@ private fun ContractSummaryCard(
                 PermissionIndicator(
                     enabled = contract.canSendMessages,
                     label = "Messages",
-                    icon = Icons.Outlined.Message
+                    icon = Icons.AutoMirrored.Outlined.Message
                 )
                 PermissionIndicator(
                     enabled = contract.canRequestAuth,
@@ -731,7 +734,7 @@ private fun TrustedResourceCard(
             }
 
             Icon(
-                imageVector = Icons.Default.OpenInNew,
+                imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                 contentDescription = "Open",
                 modifier = Modifier.size(16.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant

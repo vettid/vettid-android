@@ -66,7 +66,7 @@ fun ConnectionsFilterSheet(
             )
 
             Spacer(modifier = Modifier.height(24.dp))
-            Divider()
+            HorizontalDivider()
             Spacer(modifier = Modifier.height(24.dp))
 
             // Status Filter
@@ -83,7 +83,7 @@ fun ConnectionsFilterSheet(
             )
 
             Spacer(modifier = Modifier.height(24.dp))
-            Divider()
+            HorizontalDivider()
             Spacer(modifier = Modifier.height(24.dp))
 
             // Tags Filter
@@ -102,7 +102,7 @@ fun ConnectionsFilterSheet(
                 )
 
                 Spacer(modifier = Modifier.height(24.dp))
-                Divider()
+                HorizontalDivider()
                 Spacer(modifier = Modifier.height(24.dp))
             }
 
@@ -113,7 +113,7 @@ fun ConnectionsFilterSheet(
             )
 
             Spacer(modifier = Modifier.height(24.dp))
-            Divider()
+            HorizontalDivider()
             Spacer(modifier = Modifier.height(24.dp))
 
             // Toggle Options

@@ -470,7 +470,7 @@ private fun AttestationContent(
         Spacer(modifier = Modifier.height(32.dp))
 
         LinearProgressIndicator(
-            progress = progress,
+            progress = { progress },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(8.dp),
@@ -839,7 +839,7 @@ private fun PinSetupContent(
 
                     if (expanded) {
                         Spacer(modifier = Modifier.height(12.dp))
-                        Divider()
+                        HorizontalDivider()
                         Spacer(modifier = Modifier.height(12.dp))
 
                         // Module ID
@@ -1111,7 +1111,7 @@ private fun PasswordStrengthIndicator(strength: PasswordStrength) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         LinearProgressIndicator(
-            progress = (strength.ordinal + 1) / 4f,
+            progress = { (strength.ordinal + 1) / 4f },
             modifier = Modifier
                 .weight(1f)
                 .height(4.dp),
@@ -1160,7 +1160,7 @@ private fun FinalizingContent(progress: Float) {
         Spacer(modifier = Modifier.height(24.dp))
 
         LinearProgressIndicator(
-            progress = progress,
+            progress = { progress },
             modifier = Modifier
                 .fillMaxWidth(0.7f)
                 .height(8.dp),
@@ -1297,7 +1297,7 @@ private fun LoadingContent(message: String, progress: Float? = null) {
         verticalArrangement = Arrangement.Center
     ) {
         if (progress != null) {
-            CircularProgressIndicator(progress = progress)
+            CircularProgressIndicator(progress = { progress })
         } else {
             CircularProgressIndicator()
         }
@@ -1354,7 +1354,7 @@ private fun CreatingCredentialContent(
 
         // Progress indicator
         LinearProgressIndicator(
-            progress = progress,
+            progress = { progress },
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 32.dp)

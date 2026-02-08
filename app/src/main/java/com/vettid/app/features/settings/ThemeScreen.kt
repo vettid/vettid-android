@@ -70,7 +70,7 @@ fun ThemeSettingsContent(
                             onClick = { viewModel.updateTheme(theme) }
                         )
                         if (theme != AppTheme.values().last()) {
-                            Divider(modifier = Modifier.padding(horizontal = 16.dp))
+                            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                         }
                     }
                 }

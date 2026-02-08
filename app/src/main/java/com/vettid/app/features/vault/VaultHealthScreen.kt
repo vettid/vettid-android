@@ -7,6 +7,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -63,7 +64,7 @@ fun VaultHealthScreen(
                 title = { Text("Vault Health") },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
@@ -186,7 +187,7 @@ private fun ProvisioningContent(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             CircularProgressIndicator(
-                progress = progress,
+                progress = { progress },
                 modifier = Modifier.size(80.dp),
                 strokeWidth = 6.dp
             )
@@ -210,7 +211,7 @@ private fun ProvisioningContent(
             Spacer(modifier = Modifier.height(16.dp))
 
             LinearProgressIndicator(
-                progress = progress,
+                progress = { progress },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(8.dp)
@@ -436,7 +437,7 @@ private fun ResourceBar(
         }
         Spacer(modifier = Modifier.height(4.dp))
         LinearProgressIndicator(
-            progress = (value.toFloat() / maxValue).coerceIn(0f, 1f),
+            progress = { (value.toFloat() / maxValue).coerceIn(0f, 1f) },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(6.dp)

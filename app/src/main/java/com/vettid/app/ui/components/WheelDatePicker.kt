@@ -198,7 +198,7 @@ private fun WheelDatePickerDialog(
                     )
                 }
 
-                Divider()
+                HorizontalDivider()
                 Spacer(modifier = Modifier.height(8.dp))
 
                 // Wheel pickers

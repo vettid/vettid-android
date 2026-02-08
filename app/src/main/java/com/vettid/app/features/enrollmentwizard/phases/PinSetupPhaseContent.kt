@@ -280,7 +280,7 @@ private fun AttestationInfoCard(attestationInfo: AttestationInfo) {
 
             if (expanded) {
                 Spacer(modifier = Modifier.height(12.dp))
-                Divider()
+                HorizontalDivider()
                 Spacer(modifier = Modifier.height(12.dp))
 
                 // Module ID

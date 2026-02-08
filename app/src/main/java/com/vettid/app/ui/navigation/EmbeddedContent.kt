@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -432,7 +433,7 @@ private fun formatConnectionTime(timestamp: Long): String {
 @Composable
 fun VaultServicesLogsContent() {
     PlaceholderContent(
-        icon = Icons.Default.Article,
+        icon = Icons.AutoMirrored.Filled.Article,
         title = "Activity Logs",
         description = "View vault activity logs and audit trail."
     )

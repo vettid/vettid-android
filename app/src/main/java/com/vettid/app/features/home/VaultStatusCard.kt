@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Help
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -197,7 +198,7 @@ private fun getIconForStatus(icon: VaultStatusIcon): ImageVector {
         VaultStatusIcon.HEALTHY -> Icons.Default.CheckCircle
         VaultStatusIcon.DEGRADED -> Icons.Default.Warning
         VaultStatusIcon.UNHEALTHY -> Icons.Default.Error
-        VaultStatusIcon.UNKNOWN -> Icons.Default.Help
+        VaultStatusIcon.UNKNOWN -> Icons.AutoMirrored.Filled.Help
         VaultStatusIcon.STOPPED -> Icons.Default.PauseCircle
         VaultStatusIcon.TERMINATED -> Icons.Default.Cancel
         VaultStatusIcon.ERROR -> Icons.Default.Error

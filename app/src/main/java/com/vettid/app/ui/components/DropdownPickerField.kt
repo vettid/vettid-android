@@ -54,7 +54,7 @@ fun DropdownPickerField(
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier
                 .fillMaxWidth()
-                .menuAnchor()
+                .menuAnchor(MenuAnchorType.PrimaryEditable)
         )
         ExposedDropdownMenu(
             expanded = expanded,

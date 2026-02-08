@@ -115,7 +115,7 @@ fun PaymentRequestSheet(
             SubscriptionInfoCard(details = details)
         }
 
-        Divider(modifier = Modifier.padding(vertical = 16.dp))
+        HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
 
         // Payment methods section
         Text(

@@ -5,6 +5,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.VolumeDown
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -186,7 +188,7 @@ fun ActiveCallScreen(
 
                     // Speaker button
                     ControlButton(
-                        icon = if (activeState.isSpeakerOn) Icons.Default.VolumeUp else Icons.Default.VolumeDown,
+                        icon = if (activeState.isSpeakerOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeDown,
                         label = "Speaker",
                         isActive = activeState.isSpeakerOn,
                         onClick = { viewModel.toggleSpeaker() }

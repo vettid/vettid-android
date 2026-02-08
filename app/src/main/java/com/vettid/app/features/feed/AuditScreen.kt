@@ -8,6 +8,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Message
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -58,7 +60,7 @@ fun AuditScreen(
                 title = { Text("Audit Log") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
@@ -661,7 +663,7 @@ private fun isLastMonth(startDate: Long?, endDate: Long?): Boolean {
 private fun getEventIcon(eventType: String): ImageVector {
     return when {
         eventType.startsWith("call.") -> Icons.Default.Call
-        eventType.startsWith("message.") -> Icons.Default.Message
+        eventType.startsWith("message.") -> Icons.AutoMirrored.Filled.Message
         eventType.startsWith("connection.") -> Icons.Default.Person
         eventType.startsWith("security.") -> Icons.Default.Security
         eventType.startsWith("transfer.") -> Icons.Default.SwapHoriz

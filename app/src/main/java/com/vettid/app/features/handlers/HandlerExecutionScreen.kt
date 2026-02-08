@@ -5,6 +5,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -74,7 +75,7 @@ fun HandlerExecutionScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )
@@ -319,7 +320,7 @@ private fun InputFieldComposable(
                         },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .menuAnchor()
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
                     )
 
                     ExposedDropdownMenu(
@@ -588,7 +589,7 @@ private fun ErrorContent(
         Spacer(modifier = Modifier.height(16.dp))
 
         Button(onClick = onNavigateBack) {
-            Icon(Icons.Default.ArrowBack, contentDescription = null)
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
             Text("Go Back")
         }

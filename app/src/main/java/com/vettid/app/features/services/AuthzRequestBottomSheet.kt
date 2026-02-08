@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -338,7 +339,7 @@ private fun TimerIndicator(
             contentAlignment = Alignment.Center
         ) {
             CircularProgressIndicator(
-                progress = progress,
+                progress = { progress },
                 modifier = Modifier.size(48.dp),
                 color = timerColor,
                 trackColor = MaterialTheme.colorScheme.surfaceVariant,
@@ -372,7 +373,7 @@ private fun getActionIconAndColor(action: String): Pair<ImageVector, Color> {
         action.contains("payment", ignoreCase = true) || action.contains("pay", ignoreCase = true) ->
             Icons.Outlined.Payment to Color(0xFF4CAF50) // Green
         action.contains("send", ignoreCase = true) || action.contains("message", ignoreCase = true) ->
-            Icons.Outlined.Send to Color(0xFF9C27B0) // Purple
+            Icons.AutoMirrored.Outlined.Send to Color(0xFF9C27B0) // Purple
         action.contains("access", ignoreCase = true) ->
             Icons.Outlined.Key to Color(0xFF009688) // Teal
         action.contains("share", ignoreCase = true) ->

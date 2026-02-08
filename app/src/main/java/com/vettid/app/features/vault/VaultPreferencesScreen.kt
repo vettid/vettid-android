@@ -5,6 +5,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Chat
+import androidx.compose.material.icons.automirrored.filled.Help
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -92,7 +96,7 @@ fun VaultPreferencesContent(
                     onTtlChange = { viewModel.updateSessionTtl(it) }
                 )
 
-                Divider()
+                HorizontalDivider()
 
                 // Change Password
                 PreferencesItem(
@@ -128,7 +132,7 @@ fun VaultPreferencesContent(
                     onValueChange = { viewModel.updateArchiveAfterDays(it) }
                 )
 
-                Divider()
+                HorizontalDivider()
 
                 ArchiveDropdownItem(
                     label = "Delete after",
@@ -468,7 +472,7 @@ private fun TTLDropdownItem(
             ) {
                 OutlinedButton(
                     onClick = { expanded = true },
-                    modifier = Modifier.menuAnchor()
+                    modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable)
                 ) {
                     Text("$currentTtl min")
                     Icon(
@@ -522,7 +526,7 @@ private fun ArchiveDropdownItem(
             ) {
                 OutlinedButton(
                     onClick = { expanded = true },
-                    modifier = Modifier.menuAnchor()
+                    modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable)
                 ) {
                     Text("$currentValue days")
                     Icon(
@@ -566,7 +570,7 @@ fun VaultPreferencesScreenFull(
                 title = { Text("Preferences") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )
@@ -659,7 +663,7 @@ private fun VaultServerSection(
 
         // Instance Info (only when running)
         if (status == VaultServerStatus.RUNNING && instanceId != null) {
-            Divider()
+            HorizontalDivider()
             ListItem(
                 headlineContent = { Text("Instance") },
                 supportingContent = { Text(instanceId) },
@@ -674,7 +678,7 @@ private fun VaultServerSection(
         }
 
         if (status == VaultServerStatus.RUNNING && natsEndpoint != null) {
-            Divider()
+            HorizontalDivider()
             ListItem(
                 headlineContent = { Text("NATS Endpoint") },
                 supportingContent = { Text(natsEndpoint) },
@@ -690,7 +694,7 @@ private fun VaultServerSection(
 
         // PCR Attestation Info
         if (pcrVersion != null || pcr0Hash != null) {
-            Divider()
+            HorizontalDivider()
             ListItem(
                 headlineContent = { Text("Enclave Attestation") },
                 supportingContent = {
@@ -724,7 +728,7 @@ private fun VaultServerSection(
         }
 
         // Change PIN
-        Divider()
+        HorizontalDivider()
         PreferencesItem(
             icon = Icons.Default.Pin,
             title = "Change PIN",
@@ -734,7 +738,7 @@ private fun VaultServerSection(
 
         // Only show start/stop buttons for legacy EC2 mode (not Nitro Enclave)
         if (status != VaultServerStatus.ENCLAVE_READY) {
-            Divider()
+            HorizontalDivider()
 
             // Action Buttons (legacy EC2 mode only)
             Row(
@@ -954,21 +958,21 @@ private fun HelpSupportSection() {
             supportingContent = { Text("FAQs, guides, and contact support") },
             leadingContent = {
                 Icon(
-                    imageVector = Icons.Default.Help,
+                    imageVector = Icons.AutoMirrored.Filled.Help,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             },
             trailingContent = {
                 Icon(
-                    imageVector = Icons.Default.OpenInNew,
+                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         )
 
-        Divider()
+        HorizontalDivider()
 
         ListItem(
             modifier = Modifier.clickable {
@@ -1096,7 +1100,7 @@ private fun EventHandlersFullScreen(
                 title = { Text("Event Handlers") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
@@ -1389,7 +1393,7 @@ private fun getCategoryIcon(category: String): androidx.compose.ui.graphics.vect
         "file", "transfer" -> Icons.Default.AttachFile
         "voice", "call" -> Icons.Default.Call
         "video" -> Icons.Default.Videocam
-        "messaging", "chat" -> Icons.Default.Chat
+        "messaging", "chat" -> Icons.AutoMirrored.Filled.Chat
         "security" -> Icons.Default.Security
         "storage" -> Icons.Default.Storage
         else -> Icons.Default.Extension

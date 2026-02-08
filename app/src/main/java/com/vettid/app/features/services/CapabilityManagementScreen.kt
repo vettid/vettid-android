@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.Message
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -63,7 +65,7 @@ fun CapabilityManagementScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )
@@ -188,7 +190,7 @@ private fun CategoryHeader(category: CapabilityCategory) {
             imageVector = when (category) {
                 CapabilityCategory.IDENTITY -> Icons.Outlined.Badge
                 CapabilityCategory.DATA -> Icons.Outlined.Storage
-                CapabilityCategory.COMMUNICATION -> Icons.Outlined.Message
+                CapabilityCategory.COMMUNICATION -> Icons.AutoMirrored.Outlined.Message
                 CapabilityCategory.FINANCIAL -> Icons.Outlined.Payments
             },
             contentDescription = null,

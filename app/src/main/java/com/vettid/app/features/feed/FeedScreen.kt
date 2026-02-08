@@ -10,6 +10,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Label
+import androidx.compose.material.icons.automirrored.filled.Message
+import androidx.compose.material.icons.automirrored.filled.PhoneMissed
+import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -497,7 +501,7 @@ private fun ActionButtons(
             }
             ActionTypes.REPLY -> {
                 Button(onClick = { onAction("reply") }) {
-                    Icon(Icons.Default.Reply, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Icon(Icons.AutoMirrored.Filled.Reply, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("Reply")
                 }
@@ -543,12 +547,12 @@ private fun EventIcon(
 private fun getEventIconAndColor(eventType: String): Pair<ImageVector, Color> {
     return when (eventType) {
         EventTypes.CALL_INCOMING -> Icons.Default.Call to Color(0xFF4CAF50).copy(alpha = 0.2f)
-        EventTypes.CALL_MISSED -> Icons.Default.PhoneMissed to Color(0xFFF44336).copy(alpha = 0.2f)
+        EventTypes.CALL_MISSED -> Icons.AutoMirrored.Filled.PhoneMissed to Color(0xFFF44336).copy(alpha = 0.2f)
         EventTypes.CALL_COMPLETED -> Icons.Default.CallEnd to MaterialTheme.colorScheme.surfaceVariant
         EventTypes.CONNECTION_REQUEST -> Icons.Default.PersonAdd to Color(0xFF2196F3).copy(alpha = 0.2f)
         EventTypes.CONNECTION_ACCEPTED -> Icons.Default.PersonAddAlt to MaterialTheme.colorScheme.primaryContainer
         EventTypes.CONNECTION_REVOKED -> Icons.Default.PersonRemove to MaterialTheme.colorScheme.surfaceVariant
-        EventTypes.MESSAGE_RECEIVED -> Icons.Default.Message to Color(0xFF2196F3).copy(alpha = 0.2f)
+        EventTypes.MESSAGE_RECEIVED -> Icons.AutoMirrored.Filled.Message to Color(0xFF2196F3).copy(alpha = 0.2f)
         EventTypes.SECURITY_ALERT -> Icons.Default.Shield to Color(0xFFF44336).copy(alpha = 0.2f)
         EventTypes.SECURITY_MIGRATION -> Icons.Default.Security to MaterialTheme.colorScheme.primaryContainer
         EventTypes.TRANSFER_REQUEST -> Icons.Default.SwapHoriz to Color(0xFFFF9800).copy(alpha = 0.2f)
@@ -741,7 +745,7 @@ private fun EventDetailDialog(
                 // Event type
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        imageVector = Icons.Default.Label,
+                        imageVector = Icons.AutoMirrored.Filled.Label,
                         contentDescription = null,
                         modifier = Modifier.size(16.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
@@ -776,7 +780,7 @@ private fun EventDetailDialog(
                 event.metadata?.let { metadata ->
                     if (metadata.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(16.dp))
-                        Divider()
+                        HorizontalDivider()
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             text = "Details",

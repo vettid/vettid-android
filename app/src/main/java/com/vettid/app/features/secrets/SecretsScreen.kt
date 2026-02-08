@@ -14,6 +14,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -854,7 +856,7 @@ private fun AddSecretDialog(
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedCategory) },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .menuAnchor()
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
                     )
                     ExposedDropdownMenu(
                         expanded = expandedCategory,
@@ -898,7 +900,7 @@ private fun AddSecretDialog(
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedType) },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .menuAnchor()
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
                     )
                     ExposedDropdownMenu(
                         expanded = expandedType,
@@ -1444,7 +1446,7 @@ private fun getCategoryIcon(category: SecretCategory): ImageVector {
         SecretCategory.PASSWORD -> Icons.Default.Password
         SecretCategory.WIFI -> Icons.Default.Wifi
         SecretCategory.CERTIFICATE -> Icons.Default.VerifiedUser
-        SecretCategory.NOTE -> Icons.Default.Notes
+        SecretCategory.NOTE -> Icons.AutoMirrored.Filled.Notes
         SecretCategory.OTHER -> Icons.Default.Category
     }
 }
@@ -1508,7 +1510,7 @@ fun SecretsScreenFull(
                 title = { Text("Secrets") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 }
             )

@@ -256,7 +256,7 @@ private fun TimerIndicator(
             contentAlignment = Alignment.Center
         ) {
             CircularProgressIndicator(
-                progress = progress,
+                progress = { progress },
                 modifier = Modifier.size(48.dp),
                 color = timerColor,
                 trackColor = MaterialTheme.colorScheme.surfaceVariant,
