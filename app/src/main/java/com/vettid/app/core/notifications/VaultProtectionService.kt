@@ -209,11 +209,12 @@ class VaultProtectionService : Service() {
 
             // Listen for recovery events
             ownerSpaceClient.vaultEvents
-                .catch { e ->
-                    Log.e(TAG, "Error in vault event stream", e)
-                }
                 .collect { event ->
-                    handleVaultEvent(event)
+                    try {
+                        handleVaultEvent(event)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error handling vault event", e)
+                    }
                 }
         }
 
