@@ -19,6 +19,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.google.gson.JsonObject
+import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.core.storage.AppPreferencesStore
@@ -45,7 +46,8 @@ class LocationCollectionWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted workerParams: WorkerParameters,
     private val appPreferencesStore: AppPreferencesStore,
-    private val ownerSpaceClient: OwnerSpaceClient
+    private val ownerSpaceClient: OwnerSpaceClient,
+    private val connectionManager: NatsConnectionManager
 ) : CoroutineWorker(appContext, workerParams) {
 
     companion object {
@@ -83,6 +85,36 @@ class LocationCollectionWorker @AssistedInject constructor(
         }
 
         /**
+         * Ensure periodic location collection is scheduled (no-op if already running).
+         * Uses KEEP policy to avoid resetting the timer on an existing healthy worker.
+         */
+        fun ensureScheduled(context: Context, frequencyMinutes: Int) {
+            val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .setRequiresBatteryNotLow(true)
+                .build()
+
+            val workRequest = PeriodicWorkRequestBuilder<LocationCollectionWorker>(
+                frequencyMinutes.toLong(), TimeUnit.MINUTES
+            )
+                .setConstraints(constraints)
+                .setBackoffCriteria(
+                    BackoffPolicy.EXPONENTIAL,
+                    1, TimeUnit.MINUTES
+                )
+                .build()
+
+            WorkManager.getInstance(context)
+                .enqueueUniquePeriodicWork(
+                    WORK_NAME,
+                    ExistingPeriodicWorkPolicy.KEEP,
+                    workRequest
+                )
+
+            Log.i(TAG, "Ensured location collection scheduled (every $frequencyMinutes minutes)")
+        }
+
+        /**
          * Cancel periodic location collection.
          */
         fun cancel(context: Context) {
@@ -100,8 +132,8 @@ class LocationCollectionWorker @AssistedInject constructor(
             return Result.success()
         }
 
-        // Check permission
-        val hasPermission = ContextCompat.checkSelfPermission(
+        // Check foreground location permission
+        val hasForegroundPermission = ContextCompat.checkSelfPermission(
             applicationContext,
             Manifest.permission.ACCESS_FINE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(
@@ -109,8 +141,27 @@ class LocationCollectionWorker @AssistedInject constructor(
             Manifest.permission.ACCESS_COARSE_LOCATION
         ) == PackageManager.PERMISSION_GRANTED
 
-        if (!hasPermission) {
+        if (!hasForegroundPermission) {
             Log.w(TAG, "Location permission not granted, skipping")
+            return Result.success()
+        }
+
+        // Check background location permission (required on Android 10+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val hasBackgroundPermission = ContextCompat.checkSelfPermission(
+                applicationContext,
+                Manifest.permission.ACCESS_BACKGROUND_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (!hasBackgroundPermission) {
+                Log.w(TAG, "Background location permission not granted, skipping")
+                return Result.success()
+            }
+        }
+
+        // Check NATS connectivity — don't burn retries if vault is unreachable
+        if (!connectionManager.isConnected()) {
+            Log.w(TAG, "NATS not connected, skipping location collection (will retry next period)")
             return Result.success()
         }
 
@@ -255,12 +306,20 @@ class LocationCollectionWorker @AssistedInject constructor(
                 }
             }
             is VaultResponse.Error -> {
-                Log.e(TAG, "Vault error: ${response.message}")
-                if (runAttemptCount < 3) Result.retry() else Result.failure()
+                Log.e(TAG, "Vault error (code=${response.code}): ${response.message}")
+                // Don't retry permanent errors (handler not found, invalid payload)
+                if (response.code == "HANDLER_NOT_FOUND" || response.code == "INVALID_PAYLOAD") {
+                    Log.e(TAG, "Permanent error, not retrying")
+                    Result.failure()
+                } else if (runAttemptCount < 3) {
+                    Result.retry()
+                } else {
+                    Result.failure()
+                }
             }
             else -> {
-                Log.w(TAG, "Unexpected vault response type")
-                Result.success()
+                Log.w(TAG, "Unexpected vault response type: $response")
+                if (runAttemptCount < 3) Result.retry() else Result.failure()
             }
         }
     }

@@ -1,8 +1,12 @@
 package com.vettid.app.core.nats
 
+import android.content.Context
 import android.util.Log
 import com.vettid.app.core.network.VaultLifecycleClient
+import com.vettid.app.core.storage.AppPreferencesStore
 import com.vettid.app.core.storage.CredentialStore
+import com.vettid.app.features.location.LocationCollectionWorker
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -34,13 +38,15 @@ import javax.inject.Singleton
  */
 @Singleton
 class NatsAutoConnector @Inject constructor(
+    @ApplicationContext private val appContext: Context,
     private val natsClient: NatsClient,
     private val connectionManager: NatsConnectionManager,
     private val ownerSpaceClient: OwnerSpaceClient,
     private val credentialStore: CredentialStore,
     private val credentialClient: NatsCredentialClient,
     private val bootstrapClient: BootstrapClient,
-    private val vaultLifecycleClient: VaultLifecycleClient
+    private val vaultLifecycleClient: VaultLifecycleClient,
+    private val appPreferencesStore: AppPreferencesStore
 ) {
     companion object {
         private const val TAG = "NatsAutoConnector"
@@ -314,6 +320,9 @@ class NatsAutoConnector @Inject constructor(
         // Step 11: Start listening for credential rotation events
         startRotationListener()
 
+        // Step 12: Re-schedule location worker if tracking was enabled
+        ensureLocationWorkerScheduled()
+
         _connectionState.value = AutoConnectState.Connected
         Log.i(TAG, "Auto-connect completed successfully")
         return ConnectionResult.Success
@@ -352,6 +361,21 @@ class NatsAutoConnector @Inject constructor(
      * Check if currently connected.
      */
     fun isConnected(): Boolean = natsClient.isConnected
+
+    /**
+     * Re-schedule the location collection worker if location tracking is enabled.
+     * Called after successful NATS connection to recover from worker death.
+     *
+     * WorkManager's ExistingPeriodicWorkPolicy.KEEP means this is a no-op
+     * if the worker is already running — it only reschedules if the worker was lost.
+     */
+    private fun ensureLocationWorkerScheduled() {
+        if (!appPreferencesStore.isLocationTrackingEnabled()) return
+
+        val frequency = appPreferencesStore.getLocationFrequency()
+        Log.i(TAG, "Ensuring location worker is scheduled (frequency=${frequency.minutes}min)")
+        LocationCollectionWorker.ensureScheduled(appContext, frequency.minutes)
+    }
 
     /**
      * Disconnect from NATS.

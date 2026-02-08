@@ -194,15 +194,17 @@ object AppModule {
     @Provides
     @Singleton
     fun provideNatsAutoConnector(
+        @ApplicationContext context: Context,
         natsClient: NatsClient,
         connectionManager: NatsConnectionManager,
         ownerSpaceClient: OwnerSpaceClient,
         credentialStore: CredentialStore,
         credentialClient: NatsCredentialClient,
         bootstrapClient: BootstrapClient,
-        vaultLifecycleClient: VaultLifecycleClient
+        vaultLifecycleClient: VaultLifecycleClient,
+        appPreferencesStore: AppPreferencesStore
     ): NatsAutoConnector {
-        return NatsAutoConnector(natsClient, connectionManager, ownerSpaceClient, credentialStore, credentialClient, bootstrapClient, vaultLifecycleClient)
+        return NatsAutoConnector(context, natsClient, connectionManager, ownerSpaceClient, credentialStore, credentialClient, bootstrapClient, vaultLifecycleClient, appPreferencesStore)
     }
 
     // Calling Dependencies
