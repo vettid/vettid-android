@@ -76,7 +76,7 @@ fun PinSetupPhaseContent(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "Create a 6-digit PIN to secure your vault. This PIN is encrypted and sent directly to the secure enclave.",
+            text = "Create a PIN (4\u20138 digits) to secure your vault. 6+ digits recommended. This PIN is encrypted and sent directly to the secure enclave.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
@@ -87,9 +87,9 @@ fun PinSetupPhaseContent(
         // PIN input
         OutlinedTextField(
             value = pin,
-            onValueChange = { if (it.length <= 6) onPinChange(it) },
+            onValueChange = { if (it.length <= 8) onPinChange(it) },
             label = { Text("PIN") },
-            placeholder = { Text("Enter 6-digit PIN") },
+            placeholder = { Text("Enter 4\u20138 digit PIN") },
             modifier = Modifier.fillMaxWidth(),
             enabled = !isSubmitting,
             singleLine = true,
@@ -106,12 +106,12 @@ fun PinSetupPhaseContent(
         Spacer(modifier = Modifier.height(16.dp))
 
         // Confirm PIN input with match indicator
-        val pinsMatch = pin.length == 6 && confirmPin.length == 6 && pin == confirmPin
-        val pinsMismatch = pin.length == 6 && confirmPin.length == 6 && pin != confirmPin
+        val pinsMatch = pin.length >= 4 && confirmPin.length >= 4 && pin == confirmPin
+        val pinsMismatch = confirmPin.length >= pin.length && pin != confirmPin
 
         OutlinedTextField(
             value = confirmPin,
-            onValueChange = { if (it.length <= 6) onConfirmPinChange(it) },
+            onValueChange = { if (it.length <= 8) onConfirmPinChange(it) },
             label = { Text("Confirm PIN") },
             placeholder = { Text("Re-enter PIN") },
             modifier = Modifier.fillMaxWidth(),
@@ -193,7 +193,7 @@ fun PinSetupPhaseContent(
         Button(
             onClick = onSubmit,
             modifier = Modifier.fillMaxWidth(),
-            enabled = !isSubmitting && pin.length == 6 && confirmPin.length == 6
+            enabled = !isSubmitting && pin.length in 4..8 && pin == confirmPin
         ) {
             if (isSubmitting) {
                 CircularProgressIndicator(

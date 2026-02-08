@@ -70,7 +70,8 @@ class EnrollmentWizardViewModel @Inject constructor(
     companion object {
         private const val TAG = "EnrollmentWizardVM"
         const val MIN_PASSWORD_LENGTH = 12
-        const val PIN_LENGTH = 6
+        const val MIN_PIN_LENGTH = 4
+        const val MAX_PIN_LENGTH = 8
     }
 
     private val _state = MutableStateFlow<WizardState>(WizardState.Loading)
@@ -633,7 +634,7 @@ class EnrollmentWizardViewModel @Inject constructor(
     private fun updatePin(pin: String) {
         val current = _state.value
         if (current is WizardState.SettingPin) {
-            val filteredPin = pin.filter { it.isDigit() }.take(PIN_LENGTH)
+            val filteredPin = pin.filter { it.isDigit() }.take(MAX_PIN_LENGTH)
             _state.value = current.copy(pin = filteredPin, error = null)
         }
     }
@@ -641,7 +642,7 @@ class EnrollmentWizardViewModel @Inject constructor(
     private fun updateConfirmPin(confirmPin: String) {
         val current = _state.value
         if (current is WizardState.SettingPin) {
-            val filteredPin = confirmPin.filter { it.isDigit() }.take(PIN_LENGTH)
+            val filteredPin = confirmPin.filter { it.isDigit() }.take(MAX_PIN_LENGTH)
             _state.value = current.copy(confirmPin = filteredPin, error = null)
         }
     }
@@ -765,10 +766,13 @@ class EnrollmentWizardViewModel @Inject constructor(
 
     private fun validatePin(pin: String, confirmPin: String): String? {
         return when {
-            pin.length != PIN_LENGTH -> "PIN must be exactly $PIN_LENGTH digits"
+            pin.length < MIN_PIN_LENGTH -> "PIN must be at least $MIN_PIN_LENGTH digits"
+            pin.length > MAX_PIN_LENGTH -> "PIN must be at most $MAX_PIN_LENGTH digits"
             !pin.all { it.isDigit() } -> "PIN must contain only digits"
             pin != confirmPin -> "PINs do not match"
-            pin == "000000" || pin == "123456" || pin == "654321" ->
+            pin.all { it == pin[0] } -> "PIN is too simple. Please choose a different PIN."
+            pin == "1234" || pin == "4321" || pin == "123456" || pin == "654321" ||
+                pin == "12345678" || pin == "87654321" ->
                 "PIN is too simple. Please choose a different PIN."
             else -> null
         }

@@ -571,21 +571,63 @@ class NitroAttestationVerifier @Inject constructor(
 
     /**
      * Build Sig_structure for COSE_Sign1 verification.
+     *
+     * MUST use definite-length CBOR array encoding to match what the NSM
+     * signs over. An indefinite-length array (0x9F...FF) produces different
+     * bytes than a definite-length array (0x84...) and signature fails.
      */
     private fun buildSigStructure(coseSign1: CoseSign1): ByteArray {
         // Sig_structure = ["Signature1", protected, external_aad, payload]
+        // Manually build CBOR with definite-length 4-element array
         val output = java.io.ByteArrayOutputStream()
-        val generator = cborFactory.createGenerator(output)
 
-        generator.writeStartArray()
-        generator.writeString("Signature1")
-        generator.writeBinary(coseSign1.protectedHeader)
-        generator.writeBinary(ByteArray(0)) // external_aad
-        generator.writeBinary(coseSign1.payload)
-        generator.writeEndArray()
-        generator.close()
+        // CBOR major type 4 (array), additional info 4 = 0x84
+        output.write(0x84)
+
+        // Element 1: text string "Signature1" (10 bytes)
+        // Major type 3 (text string), length 10 = 0x6A
+        output.write(0x6A)
+        output.write("Signature1".toByteArray(Charsets.UTF_8))
+
+        // Element 2: byte string - protected header
+        writeCborByteString(output, coseSign1.protectedHeader)
+
+        // Element 3: byte string - external_aad (empty)
+        writeCborByteString(output, ByteArray(0))
+
+        // Element 4: byte string - payload
+        writeCborByteString(output, coseSign1.payload)
 
         return output.toByteArray()
+    }
+
+    /**
+     * Write a CBOR byte string (major type 2) with proper length encoding.
+     */
+    private fun writeCborByteString(output: java.io.ByteArrayOutputStream, data: ByteArray) {
+        val len = data.size
+        when {
+            len < 24 -> {
+                output.write(0x40 + len) // major type 2, length < 24
+            }
+            len < 256 -> {
+                output.write(0x58) // major type 2, 1-byte length follows
+                output.write(len)
+            }
+            len < 65536 -> {
+                output.write(0x59) // major type 2, 2-byte length follows
+                output.write((len shr 8) and 0xFF)
+                output.write(len and 0xFF)
+            }
+            else -> {
+                output.write(0x5A) // major type 2, 4-byte length follows
+                output.write((len shr 24) and 0xFF)
+                output.write((len shr 16) and 0xFF)
+                output.write((len shr 8) and 0xFF)
+                output.write(len and 0xFF)
+            }
+        }
+        output.write(data)
     }
 
     /**
