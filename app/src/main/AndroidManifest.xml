@@ -85,6 +85,25 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="vettid" android:host="connect" />
             </intent-filter>
+
+            <!-- Deep link for voting (vettid.dev) -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="vettid.dev"
+                    android:pathPrefix="/votes" />
+            </intent-filter>
+
+            <!-- Custom scheme for voting -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="vettid" android:host="votes" />
+            </intent-filter>
         </activity>
 
         <!-- Vault protection foreground service -->

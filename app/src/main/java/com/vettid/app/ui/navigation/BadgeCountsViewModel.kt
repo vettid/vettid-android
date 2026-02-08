@@ -6,9 +6,13 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.nats.ConnectionsClient
 import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.NatsConnectionState
+import com.vettid.app.core.network.VaultServiceClient
+import com.vettid.app.core.storage.CredentialStore
 import com.vettid.app.features.feed.FeedNotificationService
 import com.vettid.app.features.feed.FeedRepository
 import com.vettid.app.features.feed.FeedUpdate
+import com.vettid.app.features.voting.ProposalStatus
+import com.vettid.app.features.voting.VotingRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -17,6 +21,7 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 private const val TAG = "BadgeCountsViewModel"
+private const val PROPOSALS_POLL_INTERVAL_MS = 5 * 60 * 1000L // 5 minutes
 
 /**
  * ViewModel that provides badge counts for the bottom navigation.
@@ -24,6 +29,7 @@ private const val TAG = "BadgeCountsViewModel"
  * Observes:
  * - Feed unread count (events with status "active" and readAt == null)
  * - Connections pending count (connection requests awaiting action)
+ * - Unvoted proposals count (active proposals the user hasn't voted on)
  *
  * This ViewModel is separate from FeedViewModel/ConnectionsViewModel to allow
  * independent observation at the MainScreen level without creating duplicate
@@ -34,7 +40,10 @@ class BadgeCountsViewModel @Inject constructor(
     private val feedRepository: FeedRepository,
     private val feedNotificationService: FeedNotificationService,
     private val connectionsClient: ConnectionsClient,
-    private val connectionManager: NatsConnectionManager
+    private val connectionManager: NatsConnectionManager,
+    private val vaultServiceClient: VaultServiceClient,
+    private val credentialStore: CredentialStore,
+    private val votingRepository: VotingRepository
 ) : ViewModel() {
 
     private val _unreadFeedCount = MutableStateFlow(0)
@@ -43,12 +52,16 @@ class BadgeCountsViewModel @Inject constructor(
     private val _pendingConnectionsCount = MutableStateFlow(0)
     val pendingConnectionsCount: StateFlow<Int> = _pendingConnectionsCount.asStateFlow()
 
+    private val _unvotedProposalsCount = MutableStateFlow(0)
+    val unvotedProposalsCount: StateFlow<Int> = _unvotedProposalsCount.asStateFlow()
+
     // Track if we've done initial refresh to avoid duplicate refreshes
     private var hasRefreshedInitially = false
 
     init {
         observeConnectionState()
         observeFeedUpdates()
+        startProposalsPolling()
     }
 
     /**
@@ -92,11 +105,24 @@ class BadgeCountsViewModel @Inject constructor(
     }
 
     /**
+     * Periodically poll for unvoted proposals.
+     */
+    private fun startProposalsPolling() {
+        viewModelScope.launch {
+            while (true) {
+                delay(PROPOSALS_POLL_INTERVAL_MS)
+                refreshProposalsCount()
+            }
+        }
+    }
+
+    /**
      * Refresh all badge counts.
      */
     fun refreshCounts() {
         refreshFeedCount()
         refreshConnectionsCount()
+        refreshProposalsCount()
     }
 
     /**
@@ -164,6 +190,51 @@ class BadgeCountsViewModel @Inject constructor(
     }
 
     /**
+     * Refresh unvoted proposals count.
+     * Uses cached proposals first, then tries to fetch fresh data.
+     */
+    private fun refreshProposalsCount() {
+        viewModelScope.launch {
+            try {
+                // Try cached proposals first
+                val cached = votingRepository.getCachedProposals()
+                if (cached != null) {
+                    val count = cached.count { proposal ->
+                        proposal.status == ProposalStatus.ACTIVE &&
+                            !proposal.userHasVoted &&
+                            !votingRepository.hasVotedOnProposal(proposal.id)
+                    }
+                    _unvotedProposalsCount.value = count
+                }
+
+                // Then try to fetch fresh data
+                val authToken = credentialStore.getAuthToken() ?: return@launch
+                vaultServiceClient.getProposals(
+                    authToken = authToken,
+                    status = listOf(ProposalStatus.ACTIVE),
+                    page = 1,
+                    perPage = 50
+                ).onSuccess { response ->
+                    val count = response.proposals.count { proposal ->
+                        !proposal.userHasVoted &&
+                            !votingRepository.hasVotedOnProposal(proposal.id)
+                    }
+                    _unvotedProposalsCount.value = count
+                    Log.d(TAG, "Unvoted proposals count: $count")
+                }.onFailure { error ->
+                    if (error is CancellationException) throw error
+                    Log.w(TAG, "Failed to load proposals for count: ${error.message}")
+                }
+            } catch (e: CancellationException) {
+                Log.d(TAG, "Proposals count refresh cancelled")
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Error refreshing proposals count", e)
+            }
+        }
+    }
+
+    /**
      * Called when user views the feed tab - refresh count.
      */
     fun onFeedViewed() {
@@ -175,5 +246,12 @@ class BadgeCountsViewModel @Inject constructor(
      */
     fun onConnectionsViewed() {
         refreshConnectionsCount()
+    }
+
+    /**
+     * Called when user views the voting tab - refresh count.
+     */
+    fun onVotingViewed() {
+        refreshProposalsCount()
     }
 }

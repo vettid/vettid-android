@@ -41,7 +41,8 @@ fun MainScaffold(
     archiveContent: @Composable () -> Unit,
     votingContent: @Composable () -> Unit,
     settingsContent: @Composable () -> Unit,
-    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() }
+    snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
+    drawerBadgeCounts: Map<DrawerItem, Int> = emptyMap()
 ) {
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     val density = LocalDensity.current
@@ -171,7 +172,8 @@ fun MainScaffold(
             },
             userName = userName,
             userEmail = userEmail,
-            profilePhotoBase64 = profilePhotoBase64
+            profilePhotoBase64 = profilePhotoBase64,
+            badgeCounts = drawerBadgeCounts
         )
     }
 }

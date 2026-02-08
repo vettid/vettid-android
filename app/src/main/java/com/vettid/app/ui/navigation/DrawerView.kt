@@ -37,7 +37,8 @@ fun DrawerView(
     onItemSelected: (DrawerItem) -> Unit,
     userName: String,
     userEmail: String = "",
-    profilePhotoBase64: String? = null
+    profilePhotoBase64: String? = null,
+    badgeCounts: Map<DrawerItem, Int> = emptyMap()
 ) {
     AnimatedVisibility(
         visible = isOpen,
@@ -73,6 +74,7 @@ fun DrawerView(
                             icon = item.icon,
                             title = item.title,
                             selected = currentItem == item,
+                            badgeCount = badgeCounts[item] ?: 0,
                             onClick = {
                                 Log.d(TAG, "Drawer item clicked: $item")
                                 onItemSelected(item)
@@ -196,6 +198,7 @@ private fun DrawerNavigationItem(
     icon: ImageVector,
     title: String,
     selected: Boolean,
+    badgeCount: Int = 0,
     onClick: () -> Unit
 ) {
     Surface(
@@ -216,15 +219,37 @@ private fun DrawerNavigationItem(
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = if (selected) {
-                    MaterialTheme.colorScheme.onSecondaryContainer
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
+            if (badgeCount > 0) {
+                BadgedBox(
+                    badge = {
+                        Badge {
+                            Text(
+                                text = if (badgeCount > 99) "99+" else badgeCount.toString()
+                            )
+                        }
+                    }
+                ) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = null,
+                        tint = if (selected) {
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
                 }
-            )
+            } else {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = if (selected) {
+                        MaterialTheme.colorScheme.onSecondaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                )
+            }
             Spacer(modifier = Modifier.width(16.dp))
             Text(
                 text = title,

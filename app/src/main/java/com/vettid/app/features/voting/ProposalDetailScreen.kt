@@ -44,6 +44,7 @@ fun ProposalDetailScreen(
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.error.collectAsState()
     val votingState by viewModel.state.collectAsState()
+    val snackbarHostState = remember { SnackbarHostState() }
 
     // Set proposal ID
     LaunchedEffect(proposalId) {
@@ -55,10 +56,10 @@ fun ProposalDetailScreen(
         viewModel.effects.collect { effect ->
             when (effect) {
                 is VotingEffect.ShowReceipt -> {
-                    // Could show a snackbar or navigate
+                    snackbarHostState.showSnackbar("Vote cast successfully!")
                 }
                 is VotingEffect.ShowError -> {
-                    // Could show a snackbar
+                    snackbarHostState.showSnackbar(effect.message)
                 }
                 is VotingEffect.NavigateBack -> onNavigateBack()
             }
@@ -75,7 +76,8 @@ fun ProposalDetailScreen(
                     }
                 }
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         Box(
             modifier = Modifier

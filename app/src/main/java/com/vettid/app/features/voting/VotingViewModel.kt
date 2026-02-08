@@ -4,8 +4,11 @@ import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.gson.JsonArray
+import com.google.gson.JsonObject
 import com.vettid.app.core.crypto.CryptoManager
-import com.vettid.app.core.nats.NitroEnrollmentClient
+import com.vettid.app.core.nats.OwnerSpaceClient
+import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.core.network.VaultServiceClient
 import com.vettid.app.core.network.TransactionKeyInfo
 import com.vettid.app.core.storage.CredentialStore
@@ -40,7 +43,7 @@ class VotingViewModel @Inject constructor(
     private val vaultServiceClient: VaultServiceClient,
     private val credentialStore: CredentialStore,
     private val cryptoManager: CryptoManager,
-    private val nitroEnrollmentClient: NitroEnrollmentClient,
+    private val ownerSpaceClient: OwnerSpaceClient,
     private val votingRepository: VotingRepository
 ) : ViewModel() {
 
@@ -173,7 +176,7 @@ class VotingViewModel @Inject constructor(
 
             try {
                 val receipt = castVote(
-                    proposalId = currentState.proposal.id,
+                    proposal = currentState.proposal,
                     choiceId = currentState.selectedChoice.id,
                     password = password
                 )
@@ -198,7 +201,8 @@ class VotingViewModel @Inject constructor(
                     _state.value = VotingState.Failed(
                         proposal = currentState.proposal,
                         error = "Failed to cast vote",
-                        retryable = true
+                        retryable = true,
+                        selectedChoice = currentState.selectedChoice
                     )
                 }
             } catch (e: Exception) {
@@ -206,7 +210,8 @@ class VotingViewModel @Inject constructor(
                 _state.value = VotingState.Failed(
                     proposal = currentState.proposal,
                     error = e.message ?: "Failed to cast vote",
-                    retryable = true
+                    retryable = true,
+                    selectedChoice = currentState.selectedChoice
                 )
             }
         }
@@ -215,6 +220,9 @@ class VotingViewModel @Inject constructor(
     /**
      * Cast a vote via NATS to the vault enclave.
      *
+     * Uses OwnerSpaceClient.sendAndAwaitResponse() which handles E2E encryption,
+     * correct NATS subject routing ({space}.forVault.vote.cast), and timeout.
+     *
      * The enclave will:
      * 1. Verify password against stored hash
      * 2. Derive voting keypair from identity + proposal_id
@@ -222,7 +230,7 @@ class VotingViewModel @Inject constructor(
      * 4. Return receipt with voting public key and signature
      */
     private suspend fun castVote(
-        proposalId: String,
+        proposal: Proposal,
         choiceId: String,
         password: String
     ): VoteReceipt? {
@@ -243,62 +251,72 @@ class VotingViewModel @Inject constructor(
             enclavePublicKeyBase64 = utk.publicKey
         )
 
-        // Build vote request
-        val voteRequest = mapOf(
-            "operation" to "cast_vote",
-            "proposal_id" to proposalId,
-            "choice_id" to choiceId,
-            "encrypted_password_hash" to passwordEncryption.encryptedPasswordHash,
-            "password_ephemeral_key" to passwordEncryption.ephemeralPublicKey,
-            "password_nonce" to passwordEncryption.nonce,
-            "password_key_id" to utk.keyId,
-            "timestamp" to Instant.now().toString()
-        )
+        // Build vote request payload as JsonObject for OwnerSpaceClient
+        val payload = JsonObject().apply {
+            addProperty("proposal_id", proposal.id)
+            addProperty("vote", choiceId)
+            // Send valid choices so vault can validate
+            val choicesArray = JsonArray()
+            proposal.choices.forEach { choicesArray.add(it.id) }
+            add("valid_choices", choicesArray)
+            // Password authorization (encrypted with UTK)
+            addProperty("encrypted_password_hash", passwordEncryption.encryptedPasswordHash)
+            addProperty("ephemeral_public_key", passwordEncryption.ephemeralPublicKey)
+            addProperty("nonce", passwordEncryption.nonce)
+            addProperty("password_key_id", utk.keyId)
+        }
 
-        // Send via NATS and wait for response
-        // This uses the existing NATS connection established during enrollment
-        val response = nitroEnrollmentClient.sendVaultOperation(voteRequest)
+        // Send via OwnerSpaceClient — publishes to {space}.forVault.vote.cast
+        val response = ownerSpaceClient.sendAndAwaitResponse("vote.cast", payload)
 
-        // Parse response
-        return response?.let { resp ->
-            // Remove used UTK
-            credentialStore.removeUtk(utk.keyId)
+        // Remove used UTK regardless of outcome
+        credentialStore.removeUtk(utk.keyId)
 
-            // Store any new UTKs from response (format: "ID:base64PublicKey")
-            @Suppress("UNCHECKED_CAST")
-            val newUtks = resp["new_utks"] as? List<String>
-            if (newUtks != null && newUtks.isNotEmpty()) {
-                Log.d(TAG, "Received ${newUtks.size} new UTKs from vote response")
-                val newKeys = newUtks.mapNotNull { utkString ->
-                    val parts = utkString.split(":", limit = 2)
-                    if (parts.size == 2) {
-                        TransactionKeyInfo(
-                            keyId = parts[0],
-                            publicKey = parts[1],
-                            algorithm = "X25519"
-                        )
-                    } else null
-                }
-                if (newKeys.isNotEmpty()) {
-                    credentialStore.addUtks(newKeys)
-                    Log.i(TAG, "Added ${newKeys.size} new UTKs to pool")
+        // Parse response from VaultResponse
+        return when (response) {
+            is VaultResponse.HandlerResult -> {
+                if (response.success && response.result != null) {
+                    val r = response.result
+
+                    // Handle UTK replenishment (format: "ID:base64PublicKey")
+                    r.getAsJsonArray("new_utks")?.let { utksArray ->
+                        val newKeys = (0 until utksArray.size()).mapNotNull { i ->
+                            val utkString = utksArray[i].asString
+                            val parts = utkString.split(":", limit = 2)
+                            if (parts.size == 2) {
+                                TransactionKeyInfo(
+                                    keyId = parts[0],
+                                    publicKey = parts[1],
+                                    algorithm = "X25519"
+                                )
+                            } else null
+                        }
+                        if (newKeys.isNotEmpty()) {
+                            credentialStore.addUtks(newKeys)
+                            Log.i(TAG, "Added ${newKeys.size} new UTKs from vote response")
+                        }
+                    }
+
+                    val votingPubKey = r.get("voting_public_key")?.asString ?: ""
+                    VoteReceipt(
+                        voteId = "${votingPubKey.take(16)}-${proposal.id.take(8)}",
+                        proposalId = proposal.id,
+                        choiceId = choiceId,
+                        votingPublicKey = votingPubKey,
+                        signature = r.get("vote_signature")?.asString ?: "",
+                        timestamp = try {
+                            Instant.parse(r.get("voted_at")?.asString)
+                        } catch (e: Exception) {
+                            Instant.now()
+                        }
+                    )
+                } else {
+                    throw Exception(response.error ?: "Vote failed")
                 }
             }
-
-            @Suppress("UNCHECKED_CAST")
-            val receiptData = resp["receipt"] as? Map<String, Any>
-            receiptData?.let {
-                VoteReceipt(
-                    voteId = it["vote_id"] as? String ?: "",
-                    proposalId = proposalId,
-                    choiceId = choiceId,
-                    votingPublicKey = it["voting_public_key"] as? String ?: "",
-                    signature = it["signature"] as? String ?: "",
-                    timestamp = Instant.parse(it["timestamp"] as? String ?: Instant.now().toString()),
-                    merkleIndex = (it["merkle_index"] as? Number)?.toInt(),
-                    merkleProof = null
-                )
-            }
+            is VaultResponse.Error -> throw Exception(response.message)
+            null -> throw Exception("Vault response timeout")
+            else -> throw Exception("Unexpected response type")
         }
     }
 
@@ -309,14 +327,17 @@ class VotingViewModel @Inject constructor(
     private fun retry() {
         val currentState = _state.value
         if (currentState is VotingState.Failed) {
-            // Return to password entry with the same selection
-            _state.value = VotingState.EnteringPassword(
-                proposal = currentState.proposal,
-                selectedChoice = VoteChoice(
-                    id = "",
-                    label = "Previous selection"
+            val choice = currentState.selectedChoice
+            if (choice != null) {
+                // Return to password entry with the preserved selection
+                _state.value = VotingState.EnteringPassword(
+                    proposal = currentState.proposal,
+                    selectedChoice = choice
                 )
-            )
+            } else {
+                // Fallback: return to idle so user can re-select
+                _state.value = VotingState.Idle
+            }
         }
     }
 

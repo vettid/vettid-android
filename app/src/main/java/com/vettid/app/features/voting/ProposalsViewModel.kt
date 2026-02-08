@@ -96,7 +96,7 @@ class ProposalsViewModel @Inject constructor(
                         hasMorePages = response.page < response.totalPages
                         currentPage = response.page
                         _state.value = ProposalsState.Loaded(
-                            proposals = proposalsWithVoteStatus,
+                            proposals = sortProposals(proposalsWithVoteStatus),
                             hasMore = hasMorePages,
                             filter = currentFilter
                         )
@@ -146,7 +146,7 @@ class ProposalsViewModel @Inject constructor(
                     currentPage = response.page
 
                     _state.value = currentState.copy(
-                        proposals = currentState.proposals + newProposals,
+                        proposals = sortProposals(currentState.proposals + newProposals),
                         hasMore = hasMorePages
                     )
                 }.onFailure { e ->
@@ -209,6 +209,24 @@ class ProposalsViewModel @Inject constructor(
         } else {
             _state.value = ProposalsState.Error(errorMessage)
         }
+    }
+
+    /**
+     * Sort proposals by priority: active unvoted first, then active voted,
+     * then upcoming, then ended/finalized/cancelled. Within each group,
+     * sort newest first.
+     */
+    private fun sortProposals(proposals: List<Proposal>): List<Proposal> {
+        return proposals.sortedWith(
+            compareBy<Proposal> {
+                when {
+                    it.status == ProposalStatus.ACTIVE && !it.userHasVoted -> 0
+                    it.status == ProposalStatus.ACTIVE && it.userHasVoted -> 1
+                    it.status == ProposalStatus.UPCOMING -> 2
+                    else -> 3 // ENDED, FINALIZED, CANCELLED
+                }
+            }.thenByDescending { it.createdAt }
+        )
     }
 
     /**

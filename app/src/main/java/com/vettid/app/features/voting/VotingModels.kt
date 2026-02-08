@@ -387,7 +387,8 @@ sealed class VotingState {
     data class Failed(
         val proposal: Proposal,
         val error: String,
-        val retryable: Boolean = true
+        val retryable: Boolean = true,
+        val selectedChoice: VoteChoice? = null
     ) : VotingState()
 }
 

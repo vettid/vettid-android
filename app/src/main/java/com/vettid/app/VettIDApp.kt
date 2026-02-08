@@ -231,6 +231,7 @@ fun VettIDApp(
     var pendingConnectData by remember { mutableStateOf<String?>(null) }
     var pendingEnrollData by remember { mutableStateOf<String?>(null) }
     var pendingTransferApprovalId by remember { mutableStateOf<String?>(null) }
+    var pendingVoteProposalId by remember { mutableStateOf<String?>(null) }
 
     // Handle deep links - store data for processing in appState effect
     LaunchedEffect(deepLinkData) {
@@ -256,12 +257,17 @@ fun VettIDApp(
                 }
                 onDeepLinkConsumed()
             }
+            DeepLinkType.VOTE -> {
+                // proposalId may be null (just navigate to proposals list)
+                pendingVoteProposalId = deepLinkData.code ?: ""
+                onDeepLinkConsumed()
+            }
             DeepLinkType.NONE -> { /* No deep link */ }
         }
     }
 
     // Handle navigation based on app state and pending deep links
-    LaunchedEffect(appState, pendingEnrollData, pendingConnectData, pendingTransferApprovalId) {
+    LaunchedEffect(appState, pendingEnrollData, pendingConnectData, pendingTransferApprovalId, pendingVoteProposalId) {
         // Handle pending enrollment - takes priority
         if (pendingEnrollData != null) {
             val code = pendingEnrollData
@@ -308,6 +314,19 @@ fun VettIDApp(
                     // Then navigate to TransferApproval
                     if (transferId != null) {
                         navController.navigate(Screen.TransferApproval.createRoute(transferId))
+                    }
+                }
+                // Check for pending vote deep link (Issue #50: Vault-based voting)
+                else if (pendingVoteProposalId != null) {
+                    val proposalId = pendingVoteProposalId
+                    pendingVoteProposalId = null
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                    if (!proposalId.isNullOrEmpty()) {
+                        navController.navigate(Screen.ProposalDetail.createRoute(proposalId))
+                    } else {
+                        navController.navigate(Screen.Proposals.route)
                     }
                 }
                 // Check for pending connect data before going to Main
@@ -1261,6 +1280,14 @@ fun MainScreen(
     // Badge counts from real data
     val unreadFeedCount by badgeCountsViewModel.unreadFeedCount.collectAsState()
     val pendingConnectionsCount by badgeCountsViewModel.pendingConnectionsCount.collectAsState()
+    val unvotedProposalsCount by badgeCountsViewModel.unvotedProposalsCount.collectAsState()
+
+    // Build drawer badge counts map
+    val drawerBadgeCounts = buildMap {
+        if (unreadFeedCount > 0) put(DrawerItem.FEED, unreadFeedCount)
+        if (pendingConnectionsCount > 0) put(DrawerItem.CONNECTIONS, pendingConnectionsCount)
+        if (unvotedProposalsCount > 0) put(DrawerItem.VOTING, unvotedProposalsCount)
+    }
 
     // Connection details dialog state
     var showConnectionDetailsDialog by remember { mutableStateOf(false) }
@@ -1329,7 +1356,8 @@ fun MainScreen(
         settingsContent = {
             SettingsContent(onNavigateToAppDetails = onNavigateToAppDetails)
         },
-        snackbarHostState = snackbarHostState
+        snackbarHostState = snackbarHostState,
+        drawerBadgeCounts = drawerBadgeCounts
     )
 }
 

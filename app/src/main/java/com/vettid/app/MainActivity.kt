@@ -32,6 +32,7 @@ enum class DeepLinkType {
     ENROLL,
     CONNECT,
     TRANSFER_APPROVE,
+    VOTE,
     NONE
 }
 
@@ -103,6 +104,9 @@ class MainActivity : ComponentActivity() {
      * - vettid://connect?data=xxx (base64-encoded JSON)
      * - https://vettid.dev/connect/xxx
      * - https://vettid.dev/connect?data=xxx
+     * - vettid://votes?id=xxx
+     * - https://vettid.dev/votes/xxx
+     * - https://vettid.dev/votes?id=xxx
      */
     private fun extractDeepLinkData(intent: Intent?): DeepLinkData {
         val uri = intent?.data ?: return DeepLinkData(DeepLinkType.NONE)
@@ -137,6 +141,14 @@ class MainActivity : ComponentActivity() {
                     code = data?.let { decodeBase64IfNeeded(it) } ?: code
                 )
             }
+            // Custom scheme: vettid://votes?id=xxx (Issue #50: Vault-based voting)
+            uri.scheme == "vettid" && uri.host == "votes" -> {
+                val proposalId = uri.getQueryParameter("id")
+                DeepLinkData(
+                    type = DeepLinkType.VOTE,
+                    code = proposalId
+                )
+            }
             // Custom scheme: vettid://transfer/approve?id=xxx (Issue #31: Device-to-device transfer)
             uri.scheme == "vettid" && uri.host == "transfer" && uri.pathSegments.firstOrNull() == "approve" -> {
                 val transferId = uri.getQueryParameter("id")
@@ -159,6 +171,14 @@ class MainActivity : ComponentActivity() {
                 DeepLinkData(
                     type = DeepLinkType.CONNECT,
                     code = data?.let { decodeBase64IfNeeded(it) } ?: uri.pathSegments.getOrNull(1)
+                )
+            }
+            // HTTPS: https://vettid.dev/votes/xxx or https://vettid.dev/votes?id=xxx
+            uri.host == "vettid.dev" && uri.pathSegments.firstOrNull() == "votes" -> {
+                val proposalId = uri.getQueryParameter("id") ?: uri.pathSegments.getOrNull(1)
+                DeepLinkData(
+                    type = DeepLinkType.VOTE,
+                    code = proposalId
                 )
             }
             else -> DeepLinkData(DeepLinkType.NONE)

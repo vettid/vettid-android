@@ -265,6 +265,27 @@ private fun ProposalCard(
                 }
             }
 
+            // Unvoted active indicator
+            if (proposal.status == ProposalStatus.ACTIVE && !proposal.userHasVoted) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        modifier = Modifier.size(8.dp),
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primary
+                    ) {}
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Vote now",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+            }
+
             // Voted indicator
             if (proposal.userHasVoted) {
                 Spacer(modifier = Modifier.height(12.dp))
