@@ -169,6 +169,33 @@ class ConnectionDetailViewModel @Inject constructor(
     }
 
     /**
+     * Rotate E2E keys for this connection.
+     */
+    fun rotateKeys() {
+        viewModelScope.launch {
+            val currentState = _state.value
+            if (currentState is ConnectionDetailState.Loaded) {
+                _state.value = currentState.copy(isRotating = true)
+            }
+
+            connectionsClient.rotate(connectionId).fold(
+                onSuccess = {
+                    _effects.emit(ConnectionDetailEffect.ShowSuccess("Keys rotated successfully"))
+                    loadConnection()
+                },
+                onFailure = { error ->
+                    if (currentState is ConnectionDetailState.Loaded) {
+                        _state.value = currentState.copy(isRotating = false)
+                    }
+                    _effects.emit(ConnectionDetailEffect.ShowError(
+                        error.message ?: "Failed to rotate keys"
+                    ))
+                }
+            )
+        }
+    }
+
+    /**
      * View profile details.
      */
     fun onViewProfileClick() {
@@ -235,7 +262,8 @@ sealed class ConnectionDetailState {
     data class Loaded(
         val connection: Connection,
         val profile: Profile?,
-        val isRevoking: Boolean = false
+        val isRevoking: Boolean = false,
+        val isRotating: Boolean = false
     ) : ConnectionDetailState()
 
     data class Error(val message: String) : ConnectionDetailState()

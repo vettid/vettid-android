@@ -253,7 +253,7 @@ class ConnectionsClientTest {
             handlerId = null,
             success = true,
             result = JsonObject().apply {
-                add("items", items)
+                add("connections", items)
                 addProperty("next_cursor", "cursor-abc")
             },
             error = null
@@ -290,7 +290,7 @@ class ConnectionsClientTest {
             handlerId = null,
             success = true,
             result = JsonObject().apply {
-                add("items", JsonArray())
+                add("connections", JsonArray())
             },
             error = null
         )

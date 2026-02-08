@@ -169,7 +169,7 @@ class ConnectionsClient @Inject constructor(
         }
 
         return sendAndAwait("connection.list", payload) { result ->
-            val items = result.getAsJsonArray("items")?.map { item ->
+            val items = (result.getAsJsonArray("connections") ?: result.getAsJsonArray("items"))?.map { item ->
                 parseConnectionRecord(item.asJsonObject)
             } ?: emptyList()
 
@@ -261,9 +261,9 @@ class ConnectionsClient @Inject constructor(
         return ConnectionRecord(
             connectionId = json.get("connection_id")?.asString ?: "",
             peerGuid = json.get("peer_guid")?.asString ?: "",
-            label = json.get("label")?.asString ?: "",
+            label = json.get("label")?.asString ?: json.get("peer_alias")?.asString ?: "",
             status = json.get("status")?.asString ?: "unknown",
-            direction = json.get("direction")?.asString ?: "unknown",
+            direction = json.get("direction")?.asString ?: json.get("credentials_type")?.asString ?: "unknown",
             createdAt = json.get("created_at")?.asString ?: "",
             expiresAt = json.get("expires_at")?.asString,
             lastRotatedAt = json.get("last_rotated_at")?.asString

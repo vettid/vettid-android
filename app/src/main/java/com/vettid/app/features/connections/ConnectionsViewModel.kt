@@ -144,6 +144,20 @@ class ConnectionsViewModel @Inject constructor(
 
                     allConnections = connectionsWithMessages
 
+                    // Check for stale key rotation (> 30 days)
+                    val thirtyDaysAgo = Instant.now().minusSeconds(30L * 24 * 60 * 60)
+                    for (record in listResult.items) {
+                        if (record.status.equals("active", ignoreCase = true)) {
+                            val lastRotated = record.lastRotatedAt?.let {
+                                try { Instant.parse(it) } catch (e: Exception) { null }
+                            }
+                            if (lastRotated == null || lastRotated.isBefore(thirtyDaysAgo)) {
+                                android.util.Log.w("ConnectionsVM",
+                                    "Connection ${record.connectionId} keys not rotated in 30+ days")
+                            }
+                        }
+                    }
+
                     // Also populate enhanced connections
                     allEnhancedConnections = connectionsWithMessages.map { it.toEnhanced() }
 

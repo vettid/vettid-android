@@ -231,7 +231,7 @@ class ScanInvitationViewModel @Inject constructor(
             // Parse with flexible field names (backend may use different conventions)
             val connectionId = json.get("connection_id")?.asString ?: return null
             val natsCredentials = json.get("credentials")?.asString
-                ?: json.get("nats_credentials")?.asString ?: return null
+                ?: json.get("nats_credentials")?.asString ?: ""
             val ownerSpaceId = json.get("owner_space")?.asString
                 ?: json.get("owner_space_id")?.asString ?: ""
             val messageSpaceId = json.get("message_space")?.asString

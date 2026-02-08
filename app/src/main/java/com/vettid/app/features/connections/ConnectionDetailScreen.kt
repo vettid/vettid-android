@@ -108,9 +108,11 @@ fun ConnectionDetailScreen(
                     connection = currentState.connection,
                     profile = currentState.profile,
                     isRevoking = currentState.isRevoking,
+                    isRotating = currentState.isRotating,
                     onMessageClick = { viewModel.onMessageClick() },
                     onVoiceCallClick = { viewModel.onVoiceCallClick() },
                     onVideoCallClick = { viewModel.onVideoCallClick() },
+                    onRotateKeysClick = { viewModel.rotateKeys() },
                     onRevokeClick = { viewModel.onRevokeClick() },
                     modifier = Modifier.padding(padding)
                 )
@@ -142,9 +144,11 @@ private fun LoadedContent(
     connection: Connection,
     profile: Profile?,
     isRevoking: Boolean,
+    isRotating: Boolean = false,
     onMessageClick: () -> Unit,
     onVoiceCallClick: () -> Unit,
     onVideoCallClick: () -> Unit,
+    onRotateKeysClick: () -> Unit = {},
     onRevokeClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -247,6 +251,31 @@ private fun LoadedContent(
         ConnectionInfoCard(connection = connection)
 
         Spacer(modifier = Modifier.height(24.dp))
+
+        // Rotate Keys button
+        if (connection.status == ConnectionStatus.ACTIVE) {
+            OutlinedButton(
+                onClick = onRotateKeysClick,
+                enabled = !isRotating
+            ) {
+                if (isRotating) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Rotate Keys")
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+        }
 
         // Revoke button
         if (connection.status == ConnectionStatus.ACTIVE) {
