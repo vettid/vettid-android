@@ -521,9 +521,29 @@ class FeedViewModel @Inject constructor(
                     }
                     _effects.emit(FeedEffect.ShowActionSuccess("Event archived"))
                 }
-                .onFailure {
-                    Log.e(TAG, "Failed to archive event", it)
-                    _effects.emit(FeedEffect.ShowError("Failed to archive event"))
+                .onFailure { error ->
+                    // If vault says "event not found", the event was already deleted/cleaned up
+                    // server-side. Remove it locally so the user isn't stuck with an un-archivable item.
+                    if (error.message?.contains("event not found", ignoreCase = true) == true) {
+                        Log.w(TAG, "Event $eventId not found in vault, removing locally")
+                        feedRepository.removeEventLocally(eventId)
+                        val allCached = feedRepository.getCachedEvents()
+                        val filtered = filterForDisplay(allCached)
+                        _state.value = if (filtered.isEmpty()) {
+                            FeedState.Empty
+                        } else {
+                            FeedState.Loaded(
+                                events = filtered,
+                                hasMore = false,
+                                unreadCount = filtered.count { it.isUnread },
+                                isOffline = !feedRepository.isOnline.value
+                            )
+                        }
+                        _effects.emit(FeedEffect.ShowActionSuccess("Event archived"))
+                    } else {
+                        Log.e(TAG, "Failed to archive event", error)
+                        _effects.emit(FeedEffect.ShowError("Failed to archive event"))
+                    }
                 }
         }
     }
@@ -553,9 +573,27 @@ class FeedViewModel @Inject constructor(
                     }
                     _effects.emit(FeedEffect.ShowActionSuccess("Event deleted"))
                 }
-                .onFailure {
-                    Log.e(TAG, "Failed to delete event", it)
-                    _effects.emit(FeedEffect.ShowError("Failed to delete event"))
+                .onFailure { error ->
+                    if (error.message?.contains("event not found", ignoreCase = true) == true) {
+                        Log.w(TAG, "Event $eventId not found in vault, removing locally")
+                        feedRepository.removeEventLocally(eventId)
+                        val allCached = feedRepository.getCachedEvents()
+                        val filtered = filterForDisplay(allCached)
+                        _state.value = if (filtered.isEmpty()) {
+                            FeedState.Empty
+                        } else {
+                            FeedState.Loaded(
+                                events = filtered,
+                                hasMore = false,
+                                unreadCount = filtered.count { it.isUnread },
+                                isOffline = !feedRepository.isOnline.value
+                            )
+                        }
+                        _effects.emit(FeedEffect.ShowActionSuccess("Event removed"))
+                    } else {
+                        Log.e(TAG, "Failed to delete event", error)
+                        _effects.emit(FeedEffect.ShowError("Failed to delete event"))
+                    }
                 }
         }
     }
