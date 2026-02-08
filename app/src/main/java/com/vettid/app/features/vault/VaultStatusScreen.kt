@@ -2,6 +2,7 @@ package com.vettid.app.features.vault
 
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -21,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.vettid.app.core.nats.VaultHandler
 import kotlinx.coroutines.flow.collectLatest
 
 /**
@@ -363,7 +365,32 @@ private fun RunningContent(
             }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Available Handlers
+        if (state.handlers.isNotEmpty()) {
+            HandlersSection(handlers = state.handlers)
+            Spacer(modifier = Modifier.height(16.dp))
+        } else if (state.handlersLoading) {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(20.dp),
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = "Loading handlers...",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
 
         // Quick actions
         Text(
@@ -702,5 +729,146 @@ private fun ActionButton(
         Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
         Spacer(modifier = Modifier.width(6.dp))
         Text(label)
+    }
+}
+
+// MARK: - Handlers Section
+
+@Composable
+private fun HandlersSection(handlers: List<VaultHandler>) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Available Handlers",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Text(
+                        text = "${handlers.size}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            handlers.forEach { handler ->
+                HandlerRow(handler = handler)
+            }
+        }
+    }
+}
+
+@Composable
+private fun HandlerRow(handler: VaultHandler) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { expanded = !expanded }
+            .padding(vertical = 6.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = getHandlerIcon(handler.id),
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = handler.name,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f)
+            )
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant
+            ) {
+                Text(
+                    text = "${handler.operations.size} ops",
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(4.dp))
+            Icon(
+                imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        AnimatedVisibility(visible = expanded) {
+            Column(modifier = Modifier.padding(start = 30.dp, top = 6.dp)) {
+                Text(
+                    text = handler.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                // Operations as wrapped chips
+                @OptIn(ExperimentalLayoutApi::class)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    handler.operations.forEach { op ->
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer
+                        ) {
+                            Text(
+                                text = op,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun getHandlerIcon(handlerId: String): ImageVector {
+    return when (handlerId) {
+        "profile" -> Icons.Default.Person
+        "personal-data" -> Icons.Default.Badge
+        "secrets" -> Icons.Default.Key
+        "credential" -> Icons.Default.VerifiedUser
+        "connection" -> Icons.Default.People
+        "message" -> Icons.Default.Email
+        "feed" -> Icons.Default.Notifications
+        "location" -> Icons.Default.LocationOn
+        "vote" -> Icons.Default.HowToVote
+        "audit" -> Icons.Default.Policy
+        "call" -> Icons.Default.Call
+        "block" -> Icons.Default.Block
+        "invitation" -> Icons.Default.PersonAdd
+        "capability" -> Icons.Default.Handshake
+        "settings" -> Icons.Default.Settings
+        "notification" -> Icons.Default.NotificationsActive
+        "service" -> Icons.Default.Business
+        "datastore" -> Icons.Default.Storage
+        "pin" -> Icons.Default.Lock
+        else -> Icons.Default.Extension
     }
 }

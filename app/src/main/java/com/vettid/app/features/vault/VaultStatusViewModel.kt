@@ -1,7 +1,9 @@
 package com.vettid.app.features.vault
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.network.*
 import com.vettid.app.core.storage.CredentialStore
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -14,10 +16,13 @@ import javax.inject.Inject
  *
  * Handles vault status display, provisioning, start/stop, and health monitoring
  */
+private const val TAG = "VaultStatusViewModel"
+
 @HiltViewModel
 class VaultStatusViewModel @Inject constructor(
     private val vaultServiceClient: VaultServiceClient,
-    private val credentialStore: CredentialStore
+    private val credentialStore: CredentialStore,
+    private val ownerSpaceClient: OwnerSpaceClient
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<VaultStatusState>(VaultStatusState.Loading)
@@ -84,6 +89,10 @@ class VaultStatusViewModel @Inject constructor(
             result.fold(
                 onSuccess = { response ->
                     _state.value = mapResponseToState(response)
+                    // If vault is running, fetch handler list from enclave
+                    if (_state.value is VaultStatusState.Running) {
+                        loadHandlers()
+                    }
                     _effects.emit(VaultStatusEffect.StatusUpdated(_state.value))
                 },
                 onFailure = { error ->
@@ -350,6 +359,32 @@ class VaultStatusViewModel @Inject constructor(
     private fun viewSettings() {
         viewModelScope.launch {
             _effects.emit(VaultStatusEffect.NavigateToSettings)
+        }
+    }
+
+    private fun loadHandlers() {
+        val currentState = _state.value
+        if (currentState !is VaultStatusState.Running) return
+
+        _state.value = currentState.copy(handlersLoading = true)
+
+        viewModelScope.launch {
+            try {
+                val handlers = ownerSpaceClient.listHandlers()
+                val latest = _state.value
+                if (latest is VaultStatusState.Running) {
+                    _state.value = latest.copy(
+                        handlers = handlers,
+                        handlersLoading = false
+                    )
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to load handlers from enclave", e)
+                val latest = _state.value
+                if (latest is VaultStatusState.Running) {
+                    _state.value = latest.copy(handlersLoading = false)
+                }
+            }
         }
     }
 

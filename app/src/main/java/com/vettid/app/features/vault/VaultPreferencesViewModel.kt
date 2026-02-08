@@ -8,8 +8,6 @@ import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.network.BackupApiClient
 import com.vettid.app.core.network.BackupSettings
-import com.vettid.app.core.network.HandlerSummary
-import com.vettid.app.core.network.InstalledHandler
 import com.vettid.app.core.storage.AppPreferencesStore
 import com.vettid.app.core.storage.CredentialStore
 import android.content.Context
@@ -52,8 +50,6 @@ enum class VaultServerStatus {
 data class VaultPreferencesState(
     val theme: AppTheme = AppTheme.AUTO,
     val sessionTtlMinutes: Int = 15,
-    val installedHandlerCount: Int = 0,
-    val availableHandlerCount: Int = 0,
     val archiveAfterDays: Int = 7,
     val deleteAfterDays: Int = 30,
     val isLoading: Boolean = false,
@@ -70,11 +66,6 @@ data class VaultPreferencesState(
     val pcrVersion: String? = null,
     val pcr0Hash: String? = null,
     val enrollmentPcrVersion: String? = null,
-    // Handlers
-    val installedHandlers: List<InstalledHandler> = emptyList(),
-    val availableHandlers: List<HandlerSummary> = emptyList(),
-    val handlersLoading: Boolean = false,
-    val handlersError: String? = null,
     // Backup
     val backupEnabled: Boolean = true,
     // Location tracking
@@ -92,7 +83,6 @@ data class VaultPreferencesState(
 sealed class VaultPreferencesEffect {
     data class ShowSuccess(val message: String) : VaultPreferencesEffect()
     data class ShowError(val message: String) : VaultPreferencesEffect()
-    object NavigateToHandlers : VaultPreferencesEffect()
     object NavigateToChangePassword : VaultPreferencesEffect()
     object NavigateToLocationHistory : VaultPreferencesEffect()
     object NavigateToSharedLocations : VaultPreferencesEffect()
@@ -121,28 +111,10 @@ class VaultPreferencesViewModel @Inject constructor(
         loadPreferences()
         // With Nitro Enclave, vault is always ready - no need to poll status
         setEnclaveReady()
-        // Load handlers (static list of known vault capabilities)
-        loadHandlers()
         // Load backup settings
         loadBackupSettings()
         // Load location preferences
         loadLocationPreferences()
-    }
-
-    /**
-     * Categorize a handler based on its ID prefix.
-     */
-    private fun categorizeHandler(handlerId: String): String {
-        return when {
-            handlerId.startsWith("profile.") -> "profile"
-            handlerId.startsWith("secrets.") -> "storage"
-            handlerId.startsWith("connections.") -> "connections"
-            handlerId.startsWith("messaging.") -> "messaging"
-            handlerId.startsWith("feed.") -> "feed"
-            handlerId.startsWith("credential.") -> "security"
-            handlerId.startsWith("app.") -> "authentication"
-            else -> "other"
-        }
     }
 
     private fun loadPreferences() {
@@ -170,71 +142,6 @@ class VaultPreferencesViewModel @Inject constructor(
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load preferences", e)
             }
-        }
-    }
-
-    /**
-     * Load installed handlers.
-     * Uses a static list of known vault capabilities since the enclave
-     * doesn't expose a dynamic handler listing endpoint.
-     */
-    fun loadHandlers() {
-        viewModelScope.launch {
-            _state.value = _state.value.copy(handlersLoading = true, handlersError = null)
-
-            // Build static list of known vault handler capabilities
-            val handlers = listOf(
-                InstalledHandler(
-                    id = "profile.get", name = "Profile Management",
-                    version = "1.0", category = "profile",
-                    iconUrl = null, installedAt = "", lastExecutedAt = null,
-                    executionCount = 0, enabled = true, hasUpdate = false, latestVersion = null
-                ),
-                InstalledHandler(
-                    id = "personal-data.update", name = "Personal Data",
-                    version = "1.0", category = "profile",
-                    iconUrl = null, installedAt = "", lastExecutedAt = null,
-                    executionCount = 0, enabled = true, hasUpdate = false, latestVersion = null
-                ),
-                InstalledHandler(
-                    id = "secrets.add", name = "Secrets Storage",
-                    version = "1.0", category = "storage",
-                    iconUrl = null, installedAt = "", lastExecutedAt = null,
-                    executionCount = 0, enabled = true, hasUpdate = false, latestVersion = null
-                ),
-                InstalledHandler(
-                    id = "secrets.identity", name = "Identity Keys",
-                    version = "1.0", category = "security",
-                    iconUrl = null, installedAt = "", lastExecutedAt = null,
-                    executionCount = 0, enabled = true, hasUpdate = false, latestVersion = null
-                ),
-                InstalledHandler(
-                    id = "connection.request", name = "Connections",
-                    version = "1.0", category = "connections",
-                    iconUrl = null, installedAt = "", lastExecutedAt = null,
-                    executionCount = 0, enabled = true, hasUpdate = false, latestVersion = null
-                ),
-                InstalledHandler(
-                    id = "message.send", name = "Messaging",
-                    version = "1.0", category = "messaging",
-                    iconUrl = null, installedAt = "", lastExecutedAt = null,
-                    executionCount = 0, enabled = true, hasUpdate = false, latestVersion = null
-                ),
-                InstalledHandler(
-                    id = "credential.manage", name = "Credential Management",
-                    version = "1.0", category = "security",
-                    iconUrl = null, installedAt = "", lastExecutedAt = null,
-                    executionCount = 0, enabled = true, hasUpdate = false, latestVersion = null
-                )
-            )
-
-            _state.value = _state.value.copy(
-                installedHandlers = handlers,
-                installedHandlerCount = handlers.size,
-                handlersLoading = false,
-                handlersError = null
-            )
-            Log.d(TAG, "Loaded ${handlers.size} known vault handlers")
         }
     }
 
@@ -341,12 +248,6 @@ class VaultPreferencesViewModel @Inject constructor(
         viewModelScope.launch {
             appPreferencesStore.setTheme(theme)
             _state.update { it.copy(theme = theme) }
-        }
-    }
-
-    fun onManageHandlersClick() {
-        viewModelScope.launch {
-            _effects.emit(VaultPreferencesEffect.NavigateToHandlers)
         }
     }
 

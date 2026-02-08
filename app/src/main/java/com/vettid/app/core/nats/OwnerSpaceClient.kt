@@ -872,6 +872,51 @@ class OwnerSpaceClient @Inject constructor(
         return sendToVault("ping")
     }
 
+    /**
+     * List available vault handler categories and their operations.
+     * Queries the enclave's handlers.list endpoint for a dynamic list
+     * that matches the running enclave version.
+     *
+     * @return List of handler categories, or empty list on error/timeout
+     */
+    suspend fun listHandlers(): List<VaultHandler> {
+        return try {
+            val response = sendAndAwaitResponse("handlers.list", JsonObject(), 10000L)
+            when (response) {
+                is VaultResponse.HandlerResult -> {
+                    if (response.success && response.result != null) {
+                        val handlersArray = response.result.getAsJsonArray("handlers")
+                        handlersArray?.mapNotNull { element ->
+                            try {
+                                val obj = element.asJsonObject
+                                VaultHandler(
+                                    id = obj.get("id").asString,
+                                    name = obj.get("name").asString,
+                                    description = obj.get("description").asString,
+                                    operations = obj.getAsJsonArray("operations")
+                                        .map { it.asString }
+                                )
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Failed to parse handler entry", e)
+                                null
+                            }
+                        } ?: emptyList()
+                    } else {
+                        Log.w(TAG, "listHandlers: unsuccessful response: ${response.error}")
+                        emptyList()
+                    }
+                }
+                else -> {
+                    Log.w(TAG, "listHandlers: unexpected response type: $response")
+                    emptyList()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "listHandlers failed", e)
+            emptyList()
+        }
+    }
+
     // MARK: - Credential Operations (KMS-Sealed Protean Credential)
 
     /**
@@ -2393,4 +2438,14 @@ data class SharedLocationUpdate(
     val accuracy: Float?,
     val timestamp: Long,
     val updatedAt: String
+)
+
+/**
+ * A vault handler category with its sub-operations, as reported by the enclave.
+ */
+data class VaultHandler(
+    val id: String,
+    val name: String,
+    val description: String,
+    val operations: List<String>
 )
