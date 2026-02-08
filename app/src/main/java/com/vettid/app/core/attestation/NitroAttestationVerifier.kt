@@ -577,7 +577,7 @@ class NitroAttestationVerifier @Inject constructor(
         val output = java.io.ByteArrayOutputStream()
         val generator = cborFactory.createGenerator(output)
 
-        generator.writeStartArray(4)
+        generator.writeStartArray()
         generator.writeString("Signature1")
         generator.writeBinary(coseSign1.protectedHeader)
         generator.writeBinary(ByteArray(0)) // external_aad

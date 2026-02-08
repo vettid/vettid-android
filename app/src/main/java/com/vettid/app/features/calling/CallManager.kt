@@ -1,6 +1,7 @@
 package com.vettid.app.features.calling
 
 import android.content.Context
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.os.Build
 import android.os.VibrationEffect
@@ -72,15 +73,16 @@ class CallManager @Inject constructor(
     /**
      * Initiate an outgoing call.
      *
-     * @param connectionId Connection to call
+     * @param targetUserGuid GUID of the user to call
+     * @param displayName Caller's display name to show
      * @param callType Voice or video
      */
-    suspend fun startCall(connectionId: String, callType: CallType): Result<Unit> {
+    suspend fun startCall(targetUserGuid: String, displayName: String, callType: CallType): Result<Unit> {
         if (_callState.value !is CallState.Idle) {
             return Result.failure(IllegalStateException("Already in a call"))
         }
 
-        Log.i(TAG, "Starting $callType call to $connectionId")
+        Log.i(TAG, "Starting $callType call to $targetUserGuid")
 
         // Initialize WebRTC
         initializeWebRTC()
@@ -109,9 +111,10 @@ class CallManager @Inject constructor(
             return Result.failure(IllegalStateException("Failed to create SDP offer"))
         }
 
-        // Send call initiation via signaling
+        // Send call initiation via signaling (vault-routed)
         val result = callSignalingClient.initiateCall(
-            connectionId = connectionId,
+            targetUserGuid = targetUserGuid,
+            displayName = displayName,
             callType = callType,
             sdpOffer = sdpOffer.description
         )
@@ -124,11 +127,12 @@ class CallManager @Inject constructor(
             _showCallUI.emit(CallUIEvent.ShowOutgoing(call))
             startRingingTimer()
 
-            // Collect ICE candidates and send to peer
+            // Collect ICE candidates and send to peer (vault-routed)
             scope.launch {
                 webRTCClient?.iceCandidates?.collect { candidate ->
                     callSignalingClient.sendIceCandidate(
                         callId = call.callId,
+                        peerGuid = call.peerGuid,
                         candidate = candidate.sdp,
                         sdpMid = candidate.sdpMid,
                         sdpMLineIndex = candidate.sdpMLineIndex
@@ -193,9 +197,10 @@ class CallManager @Inject constructor(
             return Result.failure(IllegalStateException("Failed to create SDP answer"))
         }
 
-        // Send answer via signaling
+        // Send answer via signaling (vault-routed to caller)
         val result = callSignalingClient.answerCall(
             callId = state.call.callId,
+            callerGuid = state.call.peerGuid,
             sdpAnswer = sdpAnswer.description
         )
 
@@ -209,11 +214,12 @@ class CallManager @Inject constructor(
             startDurationTimer(answeredCall)
             setupAudioForCall()
 
-            // Collect ICE candidates
+            // Collect ICE candidates (vault-routed to caller)
             scope.launch {
                 webRTCClient?.iceCandidates?.collect { candidate ->
                     callSignalingClient.sendIceCandidate(
                         callId = answeredCall.callId,
+                        peerGuid = answeredCall.peerGuid,
                         candidate = candidate.sdp,
                         sdpMid = candidate.sdpMid,
                         sdpMLineIndex = candidate.sdpMLineIndex
@@ -237,7 +243,7 @@ class CallManager @Inject constructor(
         stopRingtone()
         disposeWebRTC()
 
-        val result = callSignalingClient.rejectCall(state.call.callId)
+        val result = callSignalingClient.rejectCall(state.call.callId, state.call.peerGuid)
 
         return result.map {
             _callState.value = CallState.Ended(state.call, CallEndReason.REJECTED)
@@ -264,7 +270,7 @@ class CallManager @Inject constructor(
         stopDurationTimer()
         stopRingtone()
 
-        val result = callSignalingClient.endCall(call.callId)
+        val result = callSignalingClient.endCall(call.callId, call.peerGuid)
 
         return result.map {
             val duration = when (state) {
@@ -301,7 +307,7 @@ class CallManager @Inject constructor(
         if (state is CallState.Active) {
             val newSpeaker = !state.isSpeakerOn
             _callState.value = state.copy(isSpeakerOn = newSpeaker)
-            audioManager.isSpeakerphoneOn = newSpeaker
+            setSpeakerphone(newSpeaker)
             Log.d(TAG, "Speaker toggled: $newSpeaker")
         }
     }
@@ -316,8 +322,8 @@ class CallManager @Inject constructor(
             _callState.value = state.copy(isLocalVideoEnabled = newEnabled)
             webRTCClient?.setVideoEnabled(newEnabled)
 
-            // Notify peer
-            callSignalingClient.sendVideoState(state.call.callId, newEnabled)
+            // Notify peer (vault-routed)
+            callSignalingClient.sendVideoState(state.call.callId, state.call.peerGuid, newEnabled)
             Log.d(TAG, "Video toggled: $newEnabled")
         }
     }
@@ -406,8 +412,8 @@ class CallManager @Inject constructor(
 
     private suspend fun handleIncomingCall(event: CallEvent.IncomingCall) {
         if (_callState.value !is CallState.Idle) {
-            // Already in a call - auto-reject
-            callSignalingClient.rejectCall(event.callId, "busy")
+            // Already in a call - auto-reject (vault-routed to caller)
+            callSignalingClient.rejectCall(event.callId, event.peerGuid, "busy")
             return
         }
 
@@ -600,7 +606,7 @@ class CallManager @Inject constructor(
             val state = _callState.value
             if (state is CallState.Outgoing) {
                 Log.i(TAG, "Call timed out")
-                callSignalingClient.endCall(state.call.callId)
+                callSignalingClient.endCall(state.call.callId, state.call.peerGuid)
                 disposeWebRTC()
                 _callState.value = CallState.Ended(state.call, CallEndReason.TIMEOUT)
                 delay(1500)
@@ -633,13 +639,28 @@ class CallManager @Inject constructor(
 
     private fun setupAudioForCall() {
         audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-        audioManager.isSpeakerphoneOn = false
+        setSpeakerphone(false)
     }
 
     private fun resetAudio() {
         audioManager.mode = AudioManager.MODE_NORMAL
-        audioManager.isSpeakerphoneOn = false
+        setSpeakerphone(false)
         audioManager.isMicrophoneMute = false
+    }
+
+    private fun setSpeakerphone(enabled: Boolean) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val devices = audioManager.availableCommunicationDevices
+            if (enabled) {
+                val speaker = devices.find { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                if (speaker != null) audioManager.setCommunicationDevice(speaker)
+            } else {
+                audioManager.clearCommunicationDevice()
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            audioManager.isSpeakerphoneOn = enabled
+        }
     }
 
     companion object {

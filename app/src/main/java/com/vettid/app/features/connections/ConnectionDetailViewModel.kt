@@ -182,7 +182,12 @@ class ConnectionDetailViewModel @Inject constructor(
      */
     fun onVoiceCallClick() {
         viewModelScope.launch {
-            callManager.startCall(connectionId, CallType.VOICE).fold(
+            val connection = (_state.value as? ConnectionDetailState.Loaded)?.connection
+            if (connection == null) {
+                _effects.emit(ConnectionDetailEffect.ShowError("Connection not loaded"))
+                return@launch
+            }
+            callManager.startCall(connection.peerGuid, connection.peerDisplayName, CallType.VOICE).fold(
                 onSuccess = {
                     // CallManager will emit showCallUI event which navigates to call screen
                 },
@@ -200,7 +205,12 @@ class ConnectionDetailViewModel @Inject constructor(
      */
     fun onVideoCallClick() {
         viewModelScope.launch {
-            callManager.startCall(connectionId, CallType.VIDEO).fold(
+            val connection = (_state.value as? ConnectionDetailState.Loaded)?.connection
+            if (connection == null) {
+                _effects.emit(ConnectionDetailEffect.ShowError("Connection not loaded"))
+                return@launch
+            }
+            callManager.startCall(connection.peerGuid, connection.peerDisplayName, CallType.VIDEO).fold(
                 onSuccess = {
                     // CallManager will emit showCallUI event which navigates to call screen
                 },

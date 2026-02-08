@@ -247,7 +247,6 @@ class RuntimeProtection @Inject constructor(
                 Build.BOARD.lowercase().contains("nox") ||
                 Build.BOOTLOADER.lowercase().contains("nox") ||
                 Build.HARDWARE.lowercase().contains("nox") ||
-                Build.SERIAL.lowercase().contains("nox") ||
                 Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic")
     }
 

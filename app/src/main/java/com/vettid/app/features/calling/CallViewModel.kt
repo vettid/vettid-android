@@ -31,11 +31,11 @@ class CallViewModel @Inject constructor(
     val effects: SharedFlow<CallEffect> = _effects.asSharedFlow()
 
     /**
-     * Start a call to a connection.
+     * Start a call to a user.
      */
-    fun startCall(connectionId: String, callType: CallType) {
+    fun startCall(targetUserGuid: String, displayName: String, callType: CallType) {
         viewModelScope.launch {
-            callManager.startCall(connectionId, callType).onFailure { error ->
+            callManager.startCall(targetUserGuid, displayName, callType).onFailure { error ->
                 _effects.emit(CallEffect.ShowError(error.message ?: "Failed to start call"))
             }
         }
