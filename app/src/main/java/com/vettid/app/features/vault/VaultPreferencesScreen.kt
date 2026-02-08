@@ -80,8 +80,6 @@ fun VaultPreferencesContent(
                 errorMessage = state.vaultErrorMessage,
                 pcrVersion = state.pcrVersion,
                 pcr0Hash = state.pcr0Hash,
-                onStartClick = { viewModel.startVault() },
-                onStopClick = { viewModel.stopVault() },
                 onRefreshClick = { viewModel.refreshVaultStatus() },
                 onChangePinClick = { showChangePinDialog = true }
             )
@@ -597,8 +595,6 @@ private fun VaultServerSection(
     errorMessage: String?,
     pcrVersion: String?,
     pcr0Hash: String?,
-    onStartClick: () -> Unit,
-    onStopClick: () -> Unit,
     onRefreshClick: () -> Unit,
     onChangePinClick: () -> Unit = {}
 ) {
@@ -735,52 +731,6 @@ private fun VaultServerSection(
             subtitle = "Update your vault unlock PIN (4-8 digits)",
             onClick = onChangePinClick
         )
-
-        // Only show start/stop buttons for legacy EC2 mode (not Nitro Enclave)
-        if (status != VaultServerStatus.ENCLAVE_READY) {
-            HorizontalDivider()
-
-            // Action Buttons (legacy EC2 mode only)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                // Start Button
-                OutlinedButton(
-                    onClick = onStartClick,
-                    enabled = !actionInProgress && (status == VaultServerStatus.STOPPED || status == VaultServerStatus.ERROR || status == VaultServerStatus.UNKNOWN),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.PlayArrow,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Start")
-                }
-
-                // Stop Button
-                OutlinedButton(
-                    onClick = onStopClick,
-                    enabled = !actionInProgress && status == VaultServerStatus.RUNNING,
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    )
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Stop,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Stop")
-                }
-            }
-        }
 
         // Error message card (if there's an error)
         if (status == VaultServerStatus.ERROR && errorMessage != null) {

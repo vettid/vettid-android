@@ -393,25 +393,4 @@ class VaultPreferencesViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Start vault - deprecated with Nitro architecture.
-     * The enclave is always running and doesn't need to be started.
-     */
-    @Deprecated("Nitro Enclave is always running. This method has no effect.")
-    fun startVault() {
-        viewModelScope.launch {
-            _effects.emit(VaultPreferencesEffect.ShowSuccess("Vault is always available with Nitro Enclave"))
-        }
-    }
-
-    /**
-     * Stop vault - deprecated with Nitro architecture.
-     * Cannot stop the shared enclave.
-     */
-    @Deprecated("Nitro Enclave cannot be stopped. This method has no effect.")
-    fun stopVault() {
-        viewModelScope.launch {
-            _effects.emit(VaultPreferencesEffect.ShowError("Cannot stop shared Nitro Enclave"))
-        }
-    }
 }
