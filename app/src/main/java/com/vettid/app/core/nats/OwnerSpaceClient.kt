@@ -93,6 +93,11 @@ class OwnerSpaceClient @Inject constructor(
     /** Flow of feed notifications (new events, status updates). */
     val feedNotifications: SharedFlow<FeedNotification> = _feedNotifications.asSharedFlow()
 
+    // Location sharing events
+    private val _locationUpdates = MutableSharedFlow<SharedLocationUpdate>(extraBufferCapacity = 16)
+    /** Flow of location updates from connections sharing their location. */
+    val locationUpdates: SharedFlow<SharedLocationUpdate> = _locationUpdates.asSharedFlow()
+
     private var appSubscription: NatsSubscription? = null
     private var eventTypesSubscription: NatsSubscription? = null
 
@@ -1091,6 +1096,11 @@ class OwnerSpaceClient @Inject constructor(
                     handleSecurityEvent(message)
                     return
                 }
+                // Location sharing events
+                message.subject.endsWith(".forApp.location-update") -> {
+                    handleLocationUpdate(message)
+                    return
+                }
                 // Feed notification events (Issue #15)
                 // Exclude .response messages - they should flow through to normal response handling
                 message.subject.contains(".forApp.feed.") && !message.subject.endsWith(".response") -> {
@@ -1443,6 +1453,32 @@ class OwnerSpaceClient @Inject constructor(
             _connectionRevocations.tryEmit(connectionRevoked)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to parse connection-revoked event", e)
+        }
+    }
+
+    /**
+     * Handle location update from peer vault.
+     * Ephemeral: not stored, only emitted to flow for display.
+     */
+    private fun handleLocationUpdate(message: NatsMessage) {
+        try {
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+
+            val update = SharedLocationUpdate(
+                connectionId = payload.getString("connection_id"),
+                latitude = payload.getDouble("latitude"),
+                longitude = payload.getDouble("longitude"),
+                accuracy = if (payload.has("accuracy") && !payload.isNull("accuracy"))
+                    payload.getDouble("accuracy").toFloat() else null,
+                timestamp = payload.getLong("timestamp"),
+                updatedAt = payload.optString("updated_at", "")
+            )
+
+            android.util.Log.d(TAG, "Received location update from: ${update.connectionId}")
+            _locationUpdates.tryEmit(update)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse location-update event", e)
         }
     }
 
@@ -2204,4 +2240,17 @@ data class CustomCategoryDto(
 data class PINChangeResult(
     val success: Boolean,
     val error: String? = null
+)
+
+/**
+ * A location update received from a connection sharing their location.
+ * Ephemeral: displayed in-memory only, not persisted.
+ */
+data class SharedLocationUpdate(
+    val connectionId: String,
+    val latitude: Double,
+    val longitude: Double,
+    val accuracy: Float?,
+    val timestamp: Long,
+    val updatedAt: String
 )

@@ -109,11 +109,14 @@ fun ConnectionDetailScreen(
                     profile = currentState.profile,
                     isRevoking = currentState.isRevoking,
                     isRotating = currentState.isRotating,
+                    isLocationSharingEnabled = currentState.isLocationSharingEnabled,
+                    isTogglingLocationSharing = currentState.isTogglingLocationSharing,
                     onMessageClick = { viewModel.onMessageClick() },
                     onVoiceCallClick = { viewModel.onVoiceCallClick() },
                     onVideoCallClick = { viewModel.onVideoCallClick() },
                     onRotateKeysClick = { viewModel.rotateKeys() },
                     onRevokeClick = { viewModel.onRevokeClick() },
+                    onLocationSharingToggle = { viewModel.toggleLocationSharing(it) },
                     modifier = Modifier.padding(padding)
                 )
             }
@@ -145,11 +148,14 @@ private fun LoadedContent(
     profile: Profile?,
     isRevoking: Boolean,
     isRotating: Boolean = false,
+    isLocationSharingEnabled: Boolean = false,
+    isTogglingLocationSharing: Boolean = false,
     onMessageClick: () -> Unit,
     onVoiceCallClick: () -> Unit,
     onVideoCallClick: () -> Unit,
     onRotateKeysClick: () -> Unit = {},
     onRevokeClick: () -> Unit,
+    onLocationSharingToggle: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -250,6 +256,16 @@ private fun LoadedContent(
         // Connection info card
         ConnectionInfoCard(connection = connection)
 
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Location sharing card
+        LocationSharingCard(
+            isEnabled = isLocationSharingEnabled,
+            isToggling = isTogglingLocationSharing,
+            isActive = connection.status == ConnectionStatus.ACTIVE,
+            onToggle = onLocationSharingToggle
+        )
+
         Spacer(modifier = Modifier.height(24.dp))
 
         // Rotate Keys button
@@ -304,6 +320,55 @@ private fun LoadedContent(
         }
 
         Spacer(modifier = Modifier.height(32.dp))
+    }
+}
+
+@Composable
+private fun LocationSharingCard(
+    isEnabled: Boolean,
+    isToggling: Boolean,
+    isActive: Boolean,
+    onToggle: (Boolean) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Default.LocationOn,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+                tint = if (isEnabled) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Share My Location",
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Text(
+                    text = "Share your latest location with this connection",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (isToggling) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(24.dp),
+                    strokeWidth = 2.dp
+                )
+            } else {
+                Switch(
+                    checked = isEnabled,
+                    onCheckedChange = { onToggle(it) },
+                    enabled = isActive
+                )
+            }
+        }
     }
 }
 

@@ -50,7 +50,8 @@ fun VaultPreferencesContent(
     onManageHandlers: () -> Unit = {},
     onChangePassword: () -> Unit = {},
     onNavigateToAppDetails: () -> Unit = {},
-    onNavigateToLocationHistory: () -> Unit = {}
+    onNavigateToLocationHistory: () -> Unit = {},
+    onNavigateToSharedLocations: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -98,6 +99,9 @@ fun VaultPreferencesContent(
                 }
                 is VaultPreferencesEffect.NavigateToLocationHistory -> {
                     onNavigateToLocationHistory()
+                }
+                is VaultPreferencesEffect.NavigateToSharedLocations -> {
+                    onNavigateToSharedLocations()
                 }
                 is VaultPreferencesEffect.RequestLocationPermission -> {
                     val permission = if (effect.precision == LocationPrecision.EXACT) {
@@ -215,7 +219,8 @@ fun VaultPreferencesContent(
                 onFrequencyChange = { viewModel.updateLocationFrequency(it) },
                 onDisplacementChange = { viewModel.updateDisplacementThreshold(it) },
                 onRetentionChange = { viewModel.updateLocationRetention(it) },
-                onViewHistory = { viewModel.onViewLocationHistoryClick() }
+                onViewHistory = { viewModel.onViewLocationHistoryClick() },
+                onViewSharedLocations = { viewModel.onViewSharedLocationsClick() }
             )
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -639,7 +644,8 @@ fun VaultPreferencesScreenFull(
     viewModel: VaultPreferencesViewModel = hiltViewModel(),
     onBack: () -> Unit,
     onNavigateToAppDetails: () -> Unit = {},
-    onNavigateToLocationHistory: () -> Unit = {}
+    onNavigateToLocationHistory: () -> Unit = {},
+    onNavigateToSharedLocations: () -> Unit = {}
 ) {
     Scaffold(
         topBar = {
@@ -657,7 +663,8 @@ fun VaultPreferencesScreenFull(
             VaultPreferencesContent(
                 viewModel = viewModel,
                 onNavigateToAppDetails = onNavigateToAppDetails,
-                onNavigateToLocationHistory = onNavigateToLocationHistory
+                onNavigateToLocationHistory = onNavigateToLocationHistory,
+                onNavigateToSharedLocations = onNavigateToSharedLocations
             )
         }
     }
@@ -1052,7 +1059,8 @@ private fun LocationTrackingSection(
     onFrequencyChange: (LocationUpdateFrequency) -> Unit,
     onDisplacementChange: (DisplacementThreshold) -> Unit,
     onRetentionChange: (LocationRetention) -> Unit,
-    onViewHistory: () -> Unit
+    onViewHistory: () -> Unit,
+    onViewSharedLocations: () -> Unit = {}
 ) {
     PreferencesSection(title = "LOCATION TRACKING") {
         // Enable toggle
@@ -1130,6 +1138,16 @@ private fun LocationTrackingSection(
                 title = "View Location History",
                 subtitle = "See your stored location data",
                 onClick = onViewHistory
+            )
+
+            HorizontalDivider()
+
+            // Shared locations
+            PreferencesItem(
+                icon = Icons.Default.People,
+                title = "Shared Locations",
+                subtitle = "See locations shared by connections",
+                onClick = onViewSharedLocations
             )
         }
     }

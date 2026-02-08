@@ -95,6 +95,7 @@ sealed class VaultPreferencesEffect {
     object NavigateToHandlers : VaultPreferencesEffect()
     object NavigateToChangePassword : VaultPreferencesEffect()
     object NavigateToLocationHistory : VaultPreferencesEffect()
+    object NavigateToSharedLocations : VaultPreferencesEffect()
     data class RequestLocationPermission(val precision: LocationPrecision) : VaultPreferencesEffect()
 }
 
@@ -503,6 +504,12 @@ class VaultPreferencesViewModel @Inject constructor(
     fun onViewLocationHistoryClick() {
         viewModelScope.launch {
             _effects.emit(VaultPreferencesEffect.NavigateToLocationHistory)
+        }
+    }
+
+    fun onViewSharedLocationsClick() {
+        viewModelScope.launch {
+            _effects.emit(VaultPreferencesEffect.NavigateToSharedLocations)
         }
     }
 

@@ -1,11 +1,15 @@
 package com.vettid.app.features.connections
 
+import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.gson.JsonObject
 import com.vettid.app.core.crypto.ConnectionCryptoManager
 import com.vettid.app.core.nats.ConnectionsClient
 import com.vettid.app.core.nats.NatsAutoConnector
+import com.vettid.app.core.nats.OwnerSpaceClient
+import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.core.network.Connection
 import com.vettid.app.core.network.ConnectionStatus
 import com.vettid.app.core.network.Profile
@@ -26,9 +30,12 @@ import javax.inject.Inject
  *
  * Note: Connection data comes from vault via NATS, not HTTP API.
  */
+private const val TAG = "ConnectionDetailVM"
+
 @HiltViewModel
 class ConnectionDetailViewModel @Inject constructor(
     private val connectionsClient: ConnectionsClient,
+    private val ownerSpaceClient: OwnerSpaceClient,
     private val natsAutoConnector: NatsAutoConnector,
     private val connectionCryptoManager: ConnectionCryptoManager,
     private val callManager: CallManager,
@@ -98,6 +105,8 @@ class ConnectionDetailViewModel @Inject constructor(
                             connection = connection,
                             profile = null
                         )
+                        // Load location sharing status after connection loads
+                        loadLocationSharingStatus()
                     } else {
                         _state.value = ConnectionDetailState.Error(
                             message = "Connection not found"
@@ -249,6 +258,83 @@ class ConnectionDetailViewModel @Inject constructor(
             )
         }
     }
+
+    /**
+     * Load the current location sharing status for this connection.
+     */
+    private fun loadLocationSharingStatus() {
+        viewModelScope.launch {
+            try {
+                val response = ownerSpaceClient.sendAndAwaitResponse(
+                    "location.sharing.list", JsonObject(), 10000L
+                )
+                if (response is VaultResponse.HandlerResult && response.success) {
+                    val result = response.result
+                    val sharedWith = result?.getAsJsonArray("shared_with")
+                    val isEnabled = sharedWith?.any {
+                        it.asString == connectionId
+                    } ?: false
+
+                    val currentState = _state.value
+                    if (currentState is ConnectionDetailState.Loaded) {
+                        _state.value = currentState.copy(isLocationSharingEnabled = isEnabled)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to load location sharing status", e)
+            }
+        }
+    }
+
+    /**
+     * Toggle location sharing for this connection.
+     */
+    fun toggleLocationSharing(enabled: Boolean) {
+        viewModelScope.launch {
+            val currentState = _state.value
+            if (currentState is ConnectionDetailState.Loaded) {
+                _state.value = currentState.copy(isTogglingLocationSharing = true)
+            }
+
+            try {
+                val payload = JsonObject().apply {
+                    addProperty("connection_id", connectionId)
+                    addProperty("enabled", enabled)
+                }
+                val response = ownerSpaceClient.sendAndAwaitResponse(
+                    "location.sharing.toggle", payload, 10000L
+                )
+
+                if (response is VaultResponse.HandlerResult && response.success) {
+                    val loaded = _state.value as? ConnectionDetailState.Loaded
+                    if (loaded != null) {
+                        _state.value = loaded.copy(
+                            isLocationSharingEnabled = enabled,
+                            isTogglingLocationSharing = false
+                        )
+                    }
+                    _effects.emit(ConnectionDetailEffect.ShowSuccess(
+                        if (enabled) "Location sharing enabled" else "Location sharing disabled"
+                    ))
+                } else {
+                    val loaded = _state.value as? ConnectionDetailState.Loaded
+                    if (loaded != null) {
+                        _state.value = loaded.copy(isTogglingLocationSharing = false)
+                    }
+                    _effects.emit(ConnectionDetailEffect.ShowError("Failed to toggle location sharing"))
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to toggle location sharing", e)
+                val loaded = _state.value as? ConnectionDetailState.Loaded
+                if (loaded != null) {
+                    _state.value = loaded.copy(isTogglingLocationSharing = false)
+                }
+                _effects.emit(ConnectionDetailEffect.ShowError(
+                    e.message ?: "Failed to toggle location sharing"
+                ))
+            }
+        }
+    }
 }
 
 // MARK: - State Types
@@ -263,7 +349,9 @@ sealed class ConnectionDetailState {
         val connection: Connection,
         val profile: Profile?,
         val isRevoking: Boolean = false,
-        val isRotating: Boolean = false
+        val isRotating: Boolean = false,
+        val isLocationSharingEnabled: Boolean = false,
+        val isTogglingLocationSharing: Boolean = false
     ) : ConnectionDetailState()
 
     data class Error(val message: String) : ConnectionDetailState()
