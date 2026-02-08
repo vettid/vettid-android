@@ -38,7 +38,7 @@ fun TagChip(
         shape = RoundedCornerShape(16.dp),
         color = if (selected) tagColor.copy(alpha = 0.2f) else tagColor.copy(alpha = 0.1f),
         border = if (selected) {
-            ButtonDefaults.outlinedButtonBorder
+            ButtonDefaults.outlinedButtonBorder(enabled = true)
         } else null
     ) {
         Row(

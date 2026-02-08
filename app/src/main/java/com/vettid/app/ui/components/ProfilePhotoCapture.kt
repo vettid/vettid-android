@@ -354,7 +354,7 @@ private fun CameraOverlay() {
                 modifier = Modifier.fillMaxSize(),
                 shape = CircleShape,
                 color = Color.Transparent,
-                border = ButtonDefaults.outlinedButtonBorder
+                border = ButtonDefaults.outlinedButtonBorder(enabled = true)
             ) {}
         }
 
