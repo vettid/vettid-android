@@ -17,10 +17,8 @@ fun ContextualBottomNav(
     section: AppSection,
     vaultTab: VaultTab,
     vaultServicesTab: VaultServicesTab,
-    appSettingsTab: AppSettingsTab,
     onVaultTabSelected: (VaultTab) -> Unit,
     onVaultServicesTabSelected: (VaultServicesTab) -> Unit,
-    onAppSettingsTabSelected: (AppSettingsTab) -> Unit,
     onMoreClick: () -> Unit,
     modifier: Modifier = Modifier,
     // Badge counts
@@ -41,11 +39,9 @@ fun ContextualBottomNav(
             onTabSelected = onVaultServicesTabSelected,
             modifier = modifier
         )
-        AppSection.APP_SETTINGS -> AppSettingsBottomNav(
-            selectedTab = appSettingsTab,
-            onTabSelected = onAppSettingsTabSelected,
-            modifier = modifier
-        )
+        AppSection.APP_SETTINGS -> {
+            // App settings uses VaultPreferencesScreen directly, no bottom nav needed
+        }
     }
 }
 
@@ -133,20 +129,3 @@ private fun VaultServicesBottomNav(
     }
 }
 
-@Composable
-private fun AppSettingsBottomNav(
-    selectedTab: AppSettingsTab,
-    onTabSelected: (AppSettingsTab) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    NavigationBar(modifier = modifier) {
-        AppSettingsTab.entries.forEach { tab ->
-            NavigationBarItem(
-                icon = { Icon(tab.icon, contentDescription = null) },
-                label = { Text(tab.title) },
-                selected = selectedTab == tab,
-                onClick = { onTabSelected(tab) }
-            )
-        }
-    }
-}

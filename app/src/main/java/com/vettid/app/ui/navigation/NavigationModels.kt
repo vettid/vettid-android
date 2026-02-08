@@ -56,14 +56,6 @@ enum class VaultServicesTab(
     MANAGE("Manage", Icons.Default.Settings)
 }
 
-enum class AppSettingsTab(
-    val title: String,
-    val icon: ImageVector
-) {
-    GENERAL("General", Icons.Default.Tune),
-    SECURITY("Security", Icons.Default.Security),
-    BACKUP("Backup", Icons.Default.Backup)
-}
 
 enum class VaultMoreItem(
     val title: String,

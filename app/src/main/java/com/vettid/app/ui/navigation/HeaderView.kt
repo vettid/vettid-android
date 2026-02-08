@@ -125,8 +125,7 @@ data class HeaderConfig(
 fun getHeaderConfig(
     section: AppSection,
     vaultTab: VaultTab,
-    vaultServicesTab: VaultServicesTab,
-    appSettingsTab: AppSettingsTab
+    vaultServicesTab: VaultServicesTab
 ): HeaderConfig {
     return when (section) {
         AppSection.VAULT -> when (vaultTab) {
@@ -158,16 +157,8 @@ fun getHeaderConfig(
                 actionIcon = null
             )
         }
-        AppSection.APP_SETTINGS -> when (appSettingsTab) {
-            AppSettingsTab.GENERAL -> HeaderConfig(
-                title = "General Settings"
-            )
-            AppSettingsTab.SECURITY -> HeaderConfig(
-                title = "Security"
-            )
-            AppSettingsTab.BACKUP -> HeaderConfig(
-                title = "Backup & Recovery"
-            )
-        }
+        AppSection.APP_SETTINGS -> HeaderConfig(
+            title = "Settings"
+        )
     }
 }

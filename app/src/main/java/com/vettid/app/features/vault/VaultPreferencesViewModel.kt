@@ -12,8 +12,16 @@ import com.vettid.app.core.network.HandlerSummary
 import com.vettid.app.core.network.InstalledHandler
 import com.vettid.app.core.storage.AppPreferencesStore
 import com.vettid.app.core.storage.CredentialStore
+import android.content.Context
+import com.vettid.app.features.location.DisplacementThreshold
+import com.vettid.app.features.location.LocationCollectionWorker
+import com.vettid.app.features.location.LocationPrecision
+import com.vettid.app.features.location.LocationRetention
+import com.vettid.app.features.location.LocationUpdateFrequency
 import com.vettid.app.features.settings.AppTheme
+import com.google.gson.JsonObject
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -68,7 +76,14 @@ data class VaultPreferencesState(
     val handlersLoading: Boolean = false,
     val handlersError: String? = null,
     // Backup
-    val backupEnabled: Boolean = true
+    val backupEnabled: Boolean = true,
+    // Location tracking
+    val locationTrackingEnabled: Boolean = false,
+    val locationPrecision: LocationPrecision = LocationPrecision.EXACT,
+    val locationFrequency: LocationUpdateFrequency = LocationUpdateFrequency.THIRTY_MINUTES,
+    val locationDisplacementThreshold: DisplacementThreshold = DisplacementThreshold.ONE_HUNDRED,
+    val locationRetention: LocationRetention = LocationRetention.THIRTY_DAYS,
+    val hasLocationPermission: Boolean = false
 )
 
 /**
@@ -79,10 +94,13 @@ sealed class VaultPreferencesEffect {
     data class ShowError(val message: String) : VaultPreferencesEffect()
     object NavigateToHandlers : VaultPreferencesEffect()
     object NavigateToChangePassword : VaultPreferencesEffect()
+    object NavigateToLocationHistory : VaultPreferencesEffect()
+    data class RequestLocationPermission(val precision: LocationPrecision) : VaultPreferencesEffect()
 }
 
 @HiltViewModel
 class VaultPreferencesViewModel @Inject constructor(
+    @ApplicationContext private val appContext: Context,
     private val credentialStore: CredentialStore,
     private val ownerSpaceClient: OwnerSpaceClient,
     private val connectionManager: NatsConnectionManager,
@@ -105,6 +123,8 @@ class VaultPreferencesViewModel @Inject constructor(
         loadHandlers()
         // Load backup settings
         loadBackupSettings()
+        // Load location preferences
+        loadLocationPreferences()
     }
 
     /**
@@ -393,4 +413,131 @@ class VaultPreferencesViewModel @Inject constructor(
         }
     }
 
+    // MARK: - Location Tracking
+
+    private fun loadLocationPreferences() {
+        _state.update {
+            it.copy(
+                locationTrackingEnabled = appPreferencesStore.isLocationTrackingEnabled(),
+                locationPrecision = appPreferencesStore.getLocationPrecision(),
+                locationFrequency = appPreferencesStore.getLocationFrequency(),
+                locationDisplacementThreshold = appPreferencesStore.getDisplacementThreshold(),
+                locationRetention = appPreferencesStore.getLocationRetention()
+            )
+        }
+    }
+
+    /**
+     * Toggle location tracking on/off.
+     * When enabling, emits RequestLocationPermission effect so the UI can request permission.
+     * When disabling, saves immediately and cancels the worker.
+     */
+    fun toggleLocationTracking(enabled: Boolean) {
+        viewModelScope.launch {
+            if (enabled) {
+                // Request permission first - UI will call onLocationPermissionResult
+                _effects.emit(
+                    VaultPreferencesEffect.RequestLocationPermission(_state.value.locationPrecision)
+                )
+            } else {
+                appPreferencesStore.setLocationTrackingEnabled(false)
+                _state.update { it.copy(locationTrackingEnabled = false) }
+                LocationCollectionWorker.cancel(appContext)
+                syncLocationSettingsToVault(false)
+                _effects.emit(VaultPreferencesEffect.ShowSuccess("Location tracking disabled"))
+            }
+        }
+    }
+
+    /**
+     * Called by the UI after the permission result is received.
+     */
+    fun onLocationPermissionResult(granted: Boolean) {
+        viewModelScope.launch {
+            if (granted) {
+                appPreferencesStore.setLocationTrackingEnabled(true)
+                _state.update {
+                    it.copy(locationTrackingEnabled = true, hasLocationPermission = true)
+                }
+                val frequency = _state.value.locationFrequency
+                LocationCollectionWorker.schedule(appContext, frequency.minutes)
+                syncLocationSettingsToVault(true)
+                _effects.emit(VaultPreferencesEffect.ShowSuccess("Location tracking enabled"))
+            } else {
+                _state.update {
+                    it.copy(locationTrackingEnabled = false, hasLocationPermission = false)
+                }
+                _effects.emit(VaultPreferencesEffect.ShowError("Location permission required"))
+            }
+        }
+    }
+
+    fun updateLocationPrecision(precision: LocationPrecision) {
+        appPreferencesStore.setLocationPrecision(precision)
+        _state.update { it.copy(locationPrecision = precision) }
+    }
+
+    fun updateLocationFrequency(frequency: LocationUpdateFrequency) {
+        appPreferencesStore.setLocationFrequency(frequency)
+        _state.update { it.copy(locationFrequency = frequency) }
+        // Reschedule worker with new frequency if tracking is enabled
+        if (_state.value.locationTrackingEnabled) {
+            LocationCollectionWorker.schedule(appContext, frequency.minutes)
+        }
+    }
+
+    fun updateDisplacementThreshold(threshold: DisplacementThreshold) {
+        appPreferencesStore.setDisplacementThreshold(threshold)
+        _state.update { it.copy(locationDisplacementThreshold = threshold) }
+    }
+
+    fun updateLocationRetention(retention: LocationRetention) {
+        viewModelScope.launch {
+            appPreferencesStore.setLocationRetention(retention)
+            _state.update { it.copy(locationRetention = retention) }
+            // Sync retention to vault so compaction/purge uses the correct value
+            syncLocationRetentionToVault(retention)
+        }
+    }
+
+    fun onViewLocationHistoryClick() {
+        viewModelScope.launch {
+            _effects.emit(VaultPreferencesEffect.NavigateToLocationHistory)
+        }
+    }
+
+    private fun syncLocationSettingsToVault(enabled: Boolean) {
+        viewModelScope.launch {
+            try {
+                val retention = _state.value.locationRetention
+                val payload = JsonObject().apply {
+                    addProperty("enabled", enabled)
+                    addProperty("retention_days", retention.days)
+                    addProperty("compaction_threshold_days", 7)
+                }
+                ownerSpaceClient.sendAndAwaitResponse(
+                    "location.settings.update", payload, 10000L
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to sync location settings to vault", e)
+            }
+        }
+    }
+
+    private fun syncLocationRetentionToVault(retention: LocationRetention) {
+        viewModelScope.launch {
+            try {
+                val payload = JsonObject().apply {
+                    addProperty("enabled", _state.value.locationTrackingEnabled)
+                    addProperty("retention_days", retention.days)
+                    addProperty("compaction_threshold_days", 7)
+                }
+                ownerSpaceClient.sendAndAwaitResponse(
+                    "location.settings.update", payload, 10000L
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to sync location retention to vault", e)
+            }
+        }
+    }
 }

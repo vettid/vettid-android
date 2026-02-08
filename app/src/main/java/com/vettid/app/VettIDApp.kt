@@ -86,6 +86,7 @@ import com.vettid.app.features.enrollmentwizard.EnrollmentWizardScreen
 import com.vettid.app.features.feed.GuideDetailScreen
 import com.vettid.app.features.settings.AppDetailsScreen
 import com.vettid.app.features.feed.NavigationTarget
+import com.vettid.app.features.location.LocationHistoryScreen
 import com.vettid.app.features.secrets.CriticalSecretsScreen
 import com.vettid.app.features.unlock.PinUnlockScreen
 import com.vettid.app.features.personaldata.PersonalDataContent
@@ -181,6 +182,7 @@ sealed class Screen(val route: String) {
     object CriticalSecrets : Screen("critical-secrets")
     // App details screen
     object AppDetails : Screen("app-details")
+    object LocationHistory : Screen("location-history")
     // Guide detail screen
     object Guide : Screen("guide/{guideId}?eventId={eventId}&userName={userName}") {
         fun createRoute(guideId: String, eventId: String = "", userName: String = ""): String {
@@ -723,7 +725,13 @@ fun VettIDApp(
         composable(Screen.VaultPreferences.route) {
             VaultPreferencesScreenFull(
                 onBack = { navController.popBackStack() },
-                onNavigateToAppDetails = { navController.navigate(Screen.AppDetails.route) }
+                onNavigateToAppDetails = { navController.navigate(Screen.AppDetails.route) },
+                onNavigateToLocationHistory = { navController.navigate(Screen.LocationHistory.route) }
+            )
+        }
+        composable(Screen.LocationHistory.route) {
+            LocationHistoryScreen(
+                onBack = { navController.popBackStack() }
             )
         }
         composable(Screen.AppDetails.route) {

@@ -1,5 +1,10 @@
 package com.vettid.app.features.vault
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -15,10 +20,17 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.vettid.app.core.network.HandlerSummary
 import com.vettid.app.core.network.InstalledHandler
+import com.vettid.app.features.location.DisplacementThreshold
+import com.vettid.app.features.location.LocationPrecision
+import com.vettid.app.features.location.LocationRetention
+import com.vettid.app.features.location.LocationUpdateFrequency
 import com.vettid.app.features.settings.AppTheme
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
@@ -37,11 +49,36 @@ fun VaultPreferencesContent(
     viewModel: VaultPreferencesViewModel = hiltViewModel(),
     onManageHandlers: () -> Unit = {},
     onChangePassword: () -> Unit = {},
-    onNavigateToAppDetails: () -> Unit = {}
+    onNavigateToAppDetails: () -> Unit = {},
+    onNavigateToLocationHistory: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     var showChangePinDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    // Location permission launchers
+    val backgroundLocationLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        // Background location is optional - proceed either way
+        viewModel.onLocationPermissionResult(true)
+    }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            // On Android 10+, also request background location
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+            } else {
+                viewModel.onLocationPermissionResult(true)
+            }
+        } else {
+            viewModel.onLocationPermissionResult(false)
+        }
+    }
 
     // Handle effects
     LaunchedEffect(Unit) {
@@ -58,6 +95,30 @@ fun VaultPreferencesContent(
                 }
                 is VaultPreferencesEffect.NavigateToChangePassword -> {
                     onChangePassword()
+                }
+                is VaultPreferencesEffect.NavigateToLocationHistory -> {
+                    onNavigateToLocationHistory()
+                }
+                is VaultPreferencesEffect.RequestLocationPermission -> {
+                    val permission = if (effect.precision == LocationPrecision.EXACT) {
+                        Manifest.permission.ACCESS_FINE_LOCATION
+                    } else {
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                    }
+                    // Check if already granted
+                    if (ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                                viewModel.onLocationPermissionResult(true)
+                            } else {
+                                backgroundLocationLauncher.launch(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+                            }
+                        } else {
+                            viewModel.onLocationPermissionResult(true)
+                        }
+                    } else {
+                        locationPermissionLauncher.launch(permission)
+                    }
                 }
             }
         }
@@ -139,6 +200,23 @@ fun VaultPreferencesContent(
                     onValueChange = { viewModel.updateDeleteAfterDays(it) }
                 )
             }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Location Tracking section
+            LocationTrackingSection(
+                enabled = state.locationTrackingEnabled,
+                precision = state.locationPrecision,
+                frequency = state.locationFrequency,
+                displacementThreshold = state.locationDisplacementThreshold,
+                retention = state.locationRetention,
+                onToggle = { viewModel.toggleLocationTracking(it) },
+                onPrecisionChange = { viewModel.updateLocationPrecision(it) },
+                onFrequencyChange = { viewModel.updateLocationFrequency(it) },
+                onDisplacementChange = { viewModel.updateDisplacementThreshold(it) },
+                onRetentionChange = { viewModel.updateLocationRetention(it) },
+                onViewHistory = { viewModel.onViewLocationHistoryClick() }
+            )
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -560,7 +638,8 @@ private fun ArchiveDropdownItem(
 fun VaultPreferencesScreenFull(
     viewModel: VaultPreferencesViewModel = hiltViewModel(),
     onBack: () -> Unit,
-    onNavigateToAppDetails: () -> Unit = {}
+    onNavigateToAppDetails: () -> Unit = {},
+    onNavigateToLocationHistory: () -> Unit = {}
 ) {
     Scaffold(
         topBar = {
@@ -577,7 +656,8 @@ fun VaultPreferencesScreenFull(
         Box(modifier = Modifier.padding(padding)) {
             VaultPreferencesContent(
                 viewModel = viewModel,
-                onNavigateToAppDetails = onNavigateToAppDetails
+                onNavigateToAppDetails = onNavigateToAppDetails,
+                onNavigateToLocationHistory = onNavigateToLocationHistory
             )
         }
     }
@@ -955,6 +1035,195 @@ private fun HelpSupportSection() {
             }
         )
     }
+}
+
+// MARK: - Location Tracking Section
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LocationTrackingSection(
+    enabled: Boolean,
+    precision: LocationPrecision,
+    frequency: LocationUpdateFrequency,
+    displacementThreshold: DisplacementThreshold,
+    retention: LocationRetention,
+    onToggle: (Boolean) -> Unit,
+    onPrecisionChange: (LocationPrecision) -> Unit,
+    onFrequencyChange: (LocationUpdateFrequency) -> Unit,
+    onDisplacementChange: (DisplacementThreshold) -> Unit,
+    onRetentionChange: (LocationRetention) -> Unit,
+    onViewHistory: () -> Unit
+) {
+    PreferencesSection(title = "LOCATION TRACKING") {
+        // Enable toggle
+        ListItem(
+            headlineContent = { Text("Enable Location Tracking") },
+            supportingContent = { Text("Capture and store location in your vault") },
+            leadingContent = {
+                Icon(
+                    imageVector = Icons.Default.LocationOn,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            trailingContent = {
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = { onToggle(it) }
+                )
+            }
+        )
+
+        if (enabled) {
+            HorizontalDivider()
+
+            // Precision
+            LocationPrecisionSelector(
+                current = precision,
+                onChange = onPrecisionChange
+            )
+
+            HorizontalDivider()
+
+            // Update frequency
+            LocationDropdownItem(
+                label = "Update Frequency",
+                icon = Icons.Default.Schedule,
+                currentValue = frequency.displayName,
+                options = LocationUpdateFrequency.entries.map { it.displayName },
+                onSelected = { index ->
+                    onFrequencyChange(LocationUpdateFrequency.entries[index])
+                }
+            )
+
+            HorizontalDivider()
+
+            // Displacement threshold
+            LocationDropdownItem(
+                label = "Movement Threshold",
+                icon = Icons.Default.NearMe,
+                currentValue = displacementThreshold.displayName,
+                options = DisplacementThreshold.entries.map { it.displayName },
+                onSelected = { index ->
+                    onDisplacementChange(DisplacementThreshold.entries[index])
+                }
+            )
+
+            HorizontalDivider()
+
+            // Retention
+            LocationDropdownItem(
+                label = "Data Retention",
+                icon = Icons.Default.DeleteSweep,
+                currentValue = retention.displayName,
+                options = LocationRetention.entries.map { it.displayName },
+                onSelected = { index ->
+                    onRetentionChange(LocationRetention.entries[index])
+                }
+            )
+
+            HorizontalDivider()
+
+            // View history
+            PreferencesItem(
+                icon = Icons.Default.History,
+                title = "View Location History",
+                subtitle = "See your stored location data",
+                onClick = onViewHistory
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LocationPrecisionSelector(
+    current: LocationPrecision,
+    onChange: (LocationPrecision) -> Unit
+) {
+    ListItem(
+        headlineContent = { Text("Precision") },
+        supportingContent = {
+            Row(
+                modifier = Modifier
+                    .padding(top = 8.dp)
+                    .fillMaxWidth()
+            ) {
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    LocationPrecision.entries.forEachIndexed { index, precision ->
+                        SegmentedButton(
+                            selected = current == precision,
+                            onClick = { onChange(precision) },
+                            shape = SegmentedButtonDefaults.itemShape(index, LocationPrecision.entries.size)
+                        ) {
+                            Text(precision.displayName, style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                }
+            }
+        },
+        leadingContent = {
+            Icon(
+                imageVector = Icons.Default.GpsFixed,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LocationDropdownItem(
+    label: String,
+    icon: ImageVector,
+    currentValue: String,
+    options: List<String>,
+    onSelected: (Int) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    ListItem(
+        headlineContent = { Text(label) },
+        leadingContent = {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        trailingContent = {
+            ExposedDropdownMenuBox(
+                expanded = expanded,
+                onExpandedChange = { expanded = it }
+            ) {
+                OutlinedButton(
+                    onClick = { expanded = true },
+                    modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                ) {
+                    Text(currentValue, style = MaterialTheme.typography.labelSmall)
+                    Icon(
+                        imageVector = Icons.Default.ArrowDropDown,
+                        contentDescription = null
+                    )
+                }
+                ExposedDropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false }
+                ) {
+                    options.forEachIndexed { index, option ->
+                        DropdownMenuItem(
+                            text = { Text(option) },
+                            onClick = {
+                                onSelected(index)
+                                expanded = false
+                            }
+                        )
+                    }
+                }
+            }
+        }
+    )
 }
 
 // MARK: - Event Handlers Section
