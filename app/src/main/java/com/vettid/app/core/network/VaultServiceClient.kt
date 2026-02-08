@@ -127,6 +127,26 @@ open class VaultServiceClient @Inject constructor() {
     }
 
     /**
+     * Step 1a-alt: Resolve a short enrollment code to full enrollment data
+     * This is a PUBLIC endpoint - no Authorization header needed
+     *
+     * Resolves a short code (XXXX-XXXX) from the web portal to the full
+     * enrollment data (equivalent to scanning the QR code).
+     *
+     * Note: The API URL must be set via setEnrollmentApiUrl() before calling this
+     */
+    suspend fun resolveEnrollmentCode(
+        enrollmentCode: String,
+        deviceId: String
+    ): Result<EnrollmentQRData> {
+        val request = ResolveEnrollmentCodeRequest(
+            enrollmentCode = enrollmentCode,
+            deviceId = deviceId
+        )
+        return safeApiCall { getEnrollmentApi().resolveEnrollmentCode(request) }
+    }
+
+    /**
      * Step 1b: Start enrollment directly with invitation_code (test/invitation flow)
      * This is a PUBLIC endpoint - no Authorization header needed
      *
@@ -650,6 +670,10 @@ interface VaultServiceApi {
     @POST("vault/enroll/authenticate")
     suspend fun enrollAuthenticate(@Body request: EnrollAuthenticateRequest): Response<EnrollAuthenticateResponse>
 
+    // Enrollment - Step 1a-alt: Resolve short enrollment code (public endpoint, no auth header)
+    @POST("vault/enroll/resolve-code")
+    suspend fun resolveEnrollmentCode(@Body request: ResolveEnrollmentCodeRequest): Response<EnrollmentQRData>
+
     // Enrollment - Step 1b: Start Direct (public endpoint, no auth header) - invitation/test flow
     @POST("vault/enroll/start-direct")
     suspend fun enrollStartDirect(@Body request: EnrollStartDirectRequest): Response<EnrollStartDirectResponse>
@@ -881,6 +905,15 @@ data class EnrollAuthenticateRequest(
     @SerializedName("device_id") val deviceId: String,
     @SerializedName("device_type") val deviceType: String = "android",
     @SerializedName("device_name") val deviceName: String = android.os.Build.MODEL
+)
+
+/**
+ * Request to resolve a short enrollment code to full enrollment data
+ */
+data class ResolveEnrollmentCodeRequest(
+    @SerializedName("enrollment_code") val enrollmentCode: String,
+    @SerializedName("device_id") val deviceId: String,
+    @SerializedName("device_type") val deviceType: String = "android"
 )
 
 /**

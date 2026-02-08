@@ -180,7 +180,7 @@ private fun ManualEntryContent(
                 Icon(Icons.Default.Close, contentDescription = "Cancel")
             }
             Text(
-                text = "Enter Invitation Code",
+                text = "Enter Enrollment Code",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
             )
@@ -205,7 +205,7 @@ private fun ManualEntryContent(
 
         // Instructions
         Text(
-            text = "Enter the invitation code from your VettID web portal or paste the enrollment link.",
+            text = "Enter the enrollment code from your VettID web portal.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -218,8 +218,8 @@ private fun ManualEntryContent(
         OutlinedTextField(
             value = inviteCode,
             onValueChange = onInviteCodeChange,
-            label = { Text("Invitation Code") },
-            placeholder = { Text("Enter code or paste link") },
+            label = { Text("Enrollment Code") },
+            placeholder = { Text("e.g. ABCD-1234") },
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Text,
                 imeAction = ImeAction.Done

@@ -367,6 +367,7 @@ fun VettIDApp(
         composable(Screen.Welcome.route) {
             WelcomeScreen(
                 onScanQR = { navController.navigate(Screen.EnrollmentWizard.createRoute(startWithManualEntry = false)) },
+                onEnterCode = { navController.navigate(Screen.EnrollmentWizard.createRoute(startWithManualEntry = true)) },
                 onRecoverAccount = { navController.navigate(Screen.ProteanRecovery.route) }
             )
         }
@@ -996,6 +997,7 @@ fun VettIDApp(
 @Composable
 fun WelcomeScreen(
     onScanQR: () -> Unit,
+    onEnterCode: () -> Unit = {},
     onRecoverAccount: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -1048,6 +1050,17 @@ fun WelcomeScreen(
             Icon(Icons.Default.QrCodeScanner, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
             Text("Scan QR Code")
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        OutlinedButton(
+            onClick = onEnterCode,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.Edit, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Enter Enrollment Code")
         }
 
         Spacer(modifier = Modifier.height(16.dp))

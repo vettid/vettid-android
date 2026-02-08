@@ -378,11 +378,19 @@ class EnrollmentWizardViewModel @Inject constructor(
     }
 
     private suspend fun processQRCode(qrData: String) {
+        val trimmed = qrData.trim().uppercase()
+
+        // Check for short enrollment code (XXXX-XXXX)
+        if (trimmed.matches(Regex("^[A-Z0-9]{4}-[A-Z0-9]{4}$"))) {
+            resolveEnrollmentCode(trimmed)
+            return
+        }
+
         val enrollmentData = EnrollmentQRData.parse(qrData)
 
         if (enrollmentData == null) {
             _state.value = WizardState.Error(
-                message = "Invalid QR code format. Please scan a valid VettID enrollment QR code.",
+                message = "Invalid QR code or enrollment code. Please scan a valid VettID QR code or enter a valid enrollment code.",
                 canRetry = true,
                 previousPhase = WizardPhase.START
             )
@@ -396,6 +404,47 @@ class EnrollmentWizardViewModel @Inject constructor(
 
         // Use Nitro flow
         processNitroEnrollment(enrollmentData)
+    }
+
+    /**
+     * Resolve a short enrollment code (XXXX-XXXX) via the API,
+     * then proceed with normal enrollment using the returned data.
+     */
+    private suspend fun resolveEnrollmentCode(code: String) {
+        _state.value = WizardState.ProcessingInvite("Resolving enrollment code...")
+
+        // Set default API URL for code resolution (same as QR code default)
+        vaultServiceClient.setEnrollmentApiUrl("https://api.vettid.dev")
+
+        val result = vaultServiceClient.resolveEnrollmentCode(
+            enrollmentCode = code,
+            deviceId = getDeviceId()
+        )
+
+        result.fold(
+            onSuccess = { enrollmentData ->
+                Log.i(TAG, "Enrollment code resolved successfully")
+                // Set the API URL from the resolved data
+                vaultServiceClient.setEnrollmentApiUrl(enrollmentData.apiUrl)
+                // Proceed with normal Nitro enrollment
+                processNitroEnrollment(enrollmentData)
+            },
+            onFailure = { error ->
+                val errorMessage = when {
+                    error.message?.contains("401") == true ->
+                        "Invalid or expired enrollment code. Please check the code or request a new one from the web portal."
+                    error.message?.contains("400") == true ->
+                        "Invalid enrollment code format. Please enter the code as shown on the web portal (e.g. ABCD-1234)."
+                    else ->
+                        "Failed to resolve enrollment code: ${error.message}"
+                }
+                _state.value = WizardState.Error(
+                    message = errorMessage,
+                    canRetry = true,
+                    previousPhase = WizardPhase.START
+                )
+            }
+        )
     }
 
     // ============== ATTESTATION PHASE ==============
