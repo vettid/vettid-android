@@ -675,6 +675,138 @@ class OwnerSpaceClient @Inject constructor(
     }
 
     /**
+     * Change the credential password stored in the Protean Credential.
+     *
+     * Flow:
+     * 1. Hash old and new passwords with Argon2id to PHC format
+     * 2. Encrypt both hashes with UTK for transport security
+     * 3. Send to enclave via credential.password-change
+     * 4. Enclave verifies old hash, updates credential, returns re-encrypted credential
+     * 5. Store new UTKs from response
+     *
+     * @param oldPassword The current credential password (plaintext)
+     * @param newPassword The new credential password (plaintext)
+     * @param cryptoManager For Argon2id hashing and UTK encryption
+     */
+    suspend fun changePassword(
+        oldPassword: String,
+        newPassword: String,
+        cryptoManager: com.vettid.app.core.crypto.CryptoManager
+    ): Result<PasswordChangeResult> {
+        return try {
+            // Get an available UTK (single-use)
+            val utkPool = credentialStore.getUtkPool()
+            val availableUtk = utkPool.firstOrNull()
+                ?: return Result.failure(Exception("No transaction keys available. Please unlock your vault first."))
+
+            Log.d(TAG, "changePassword: Using UTK ${availableUtk.keyId}")
+
+            // Hash both passwords with Argon2id to PHC format
+            val oldSaltBytes = credentialStore.getPasswordSaltBytes()
+                ?: return Result.failure(Exception("Password salt not found. Please re-enroll."))
+            val oldPasswordHash = cryptoManager.hashPasswordPHC(oldPassword, oldSaltBytes)
+
+            val newSaltBytes = cryptoManager.generateSalt()
+            val newPasswordHash = cryptoManager.hashPasswordPHC(newPassword, newSaltBytes)
+
+            // Build payload matching enclave PasswordChangePayload struct
+            val passwordPayload = JsonObject().apply {
+                addProperty("old_password_hash", oldPasswordHash)
+                addProperty("new_password_hash", newPasswordHash)
+            }
+
+            // Encrypt with X25519 + XChaCha20-Poly1305 to UTK public key
+            val encryptedResult = cryptoManager.encryptToPublicKey(
+                plaintext = passwordPayload.toString().toByteArray(),
+                publicKeyBase64 = availableUtk.publicKey
+            )
+
+            // Combine ephemeral public key + nonce + ciphertext
+            val ephemeralPubKeyBytes = android.util.Base64.decode(encryptedResult.ephemeralPublicKey, android.util.Base64.NO_WRAP)
+            val nonceBytes = android.util.Base64.decode(encryptedResult.nonce, android.util.Base64.NO_WRAP)
+            val ciphertextBytes = android.util.Base64.decode(encryptedResult.ciphertext, android.util.Base64.NO_WRAP)
+
+            val combined = ephemeralPubKeyBytes + nonceBytes + ciphertextBytes
+            val encryptedPayloadBase64 = android.util.Base64.encodeToString(combined, android.util.Base64.NO_WRAP)
+
+            // Build request payload
+            val requestPayload = JsonObject().apply {
+                addProperty("utk_id", availableUtk.keyId)
+                addProperty("encrypted_payload", encryptedPayloadBase64)
+            }
+
+            // Ensure we're subscribed to vault responses
+            subscribeToVault()
+
+            // Send via credential.password-change topic
+            val response = sendAndAwaitResponse(
+                messageType = "credential.password-change",
+                payload = requestPayload,
+                timeoutMs = 30000L
+            )
+
+            // SECURITY: Remove used UTK immediately regardless of outcome - UTKs are single-use
+            credentialStore.removeUtk(availableUtk.keyId)
+            Log.d(TAG, "changePassword: Removed used UTK ${availableUtk.keyId}")
+
+            if (response == null) {
+                return Result.failure(Exception("Request timed out"))
+            }
+
+            when (response) {
+                is VaultResponse.HandlerResult -> {
+                    if (response.success && response.result != null) {
+                        val status = response.result.get("status")?.asString
+                        if (status == "password_changed") {
+                            // Store new UTKs from response
+                            val newUtksArray = response.result.getAsJsonArray("new_utks")
+                            if (newUtksArray != null && newUtksArray.size() > 0) {
+                                val newKeys = mutableListOf<TransactionKeyInfo>()
+                                for (i in 0 until newUtksArray.size()) {
+                                    val utkObj = newUtksArray.get(i).asJsonObject
+                                    val id = utkObj.get("id")?.asString ?: continue
+                                    val publicKey = utkObj.get("public_key")?.asString ?: continue
+                                    newKeys.add(TransactionKeyInfo(
+                                        keyId = id,
+                                        publicKey = publicKey,
+                                        algorithm = "X25519"
+                                    ))
+                                }
+                                if (newKeys.isNotEmpty()) {
+                                    credentialStore.addUtks(newKeys)
+                                    Log.i(TAG, "changePassword: Added ${newKeys.size} new UTKs. Total: ${credentialStore.getUtkCount()}")
+                                }
+                            }
+
+                            // Update stored password salt for future operations
+                            credentialStore.setPasswordSalt(
+                                android.util.Base64.encodeToString(newSaltBytes, android.util.Base64.NO_WRAP)
+                            )
+
+                            Result.success(PasswordChangeResult(success = true))
+                        } else {
+                            val error = response.result.get("error")?.asString ?: "Password change failed"
+                            Result.success(PasswordChangeResult(success = false, error = error))
+                        }
+                    } else {
+                        val error = response.error ?: "Password change failed"
+                        Result.success(PasswordChangeResult(success = false, error = error))
+                    }
+                }
+                is VaultResponse.Error -> {
+                    Result.success(PasswordChangeResult(success = false, error = response.message))
+                }
+                else -> {
+                    Result.success(PasswordChangeResult(success = false, error = "Unexpected response"))
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "changePassword error", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Send a message to another user's vault.
      *
      * Used for vault-routed signaling where messages go to the TARGET user's vault
@@ -2238,6 +2370,14 @@ data class CustomCategoryDto(
  * Result of a PIN change operation.
  */
 data class PINChangeResult(
+    val success: Boolean,
+    val error: String? = null
+)
+
+/**
+ * Result of a password change operation.
+ */
+data class PasswordChangeResult(
     val success: Boolean,
     val error: String? = null
 )

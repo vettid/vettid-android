@@ -87,6 +87,7 @@ import com.vettid.app.features.feed.GuideDetailScreen
 import com.vettid.app.features.settings.AppDetailsScreen
 import com.vettid.app.features.feed.NavigationTarget
 import com.vettid.app.features.location.LocationHistoryScreen
+import com.vettid.app.features.location.LocationSettingsScreen
 import com.vettid.app.features.location.SharedLocationsScreen
 import com.vettid.app.features.secrets.CriticalSecretsScreen
 import com.vettid.app.features.unlock.PinUnlockScreen
@@ -185,6 +186,7 @@ sealed class Screen(val route: String) {
     object AppDetails : Screen("app-details")
     object LocationHistory : Screen("location-history")
     object SharedLocations : Screen("shared-locations")
+    object LocationSettings : Screen("location-settings")
     // Guide detail screen
     object Guide : Screen("guide/{guideId}?eventId={eventId}&userName={userName}") {
         fun createRoute(guideId: String, eventId: String = "", userName: String = ""): String {
@@ -541,6 +543,9 @@ fun VettIDApp(
                 onNavigateToAppDetails = {
                     navController.navigate(Screen.AppDetails.route)
                 },
+                onNavigateToLocationSettings = {
+                    navController.navigate(Screen.LocationSettings.route)
+                },
                 appViewModel = appViewModel
             )
         }
@@ -729,7 +734,8 @@ fun VettIDApp(
                 onBack = { navController.popBackStack() },
                 onNavigateToAppDetails = { navController.navigate(Screen.AppDetails.route) },
                 onNavigateToLocationHistory = { navController.navigate(Screen.LocationHistory.route) },
-                onNavigateToSharedLocations = { navController.navigate(Screen.SharedLocations.route) }
+                onNavigateToSharedLocations = { navController.navigate(Screen.SharedLocations.route) },
+                onNavigateToLocationSettings = { navController.navigate(Screen.LocationSettings.route) }
             )
         }
         composable(Screen.LocationHistory.route) {
@@ -740,6 +746,13 @@ fun VettIDApp(
         composable(Screen.SharedLocations.route) {
             SharedLocationsScreen(
                 onBack = { navController.popBackStack() }
+            )
+        }
+        composable(Screen.LocationSettings.route) {
+            LocationSettingsScreen(
+                onBack = { navController.popBackStack() },
+                onNavigateToLocationHistory = { navController.navigate(Screen.LocationHistory.route) },
+                onNavigateToSharedLocations = { navController.navigate(Screen.SharedLocations.route) }
             )
         }
         composable(Screen.AppDetails.route) {
@@ -1260,6 +1273,7 @@ fun MainScreen(
     onNavigateToGuide: (guideId: String, eventId: String, userName: String) -> Unit = { _, _, _ -> },
     onNavigateToCriticalSecrets: () -> Unit = {},
     onNavigateToAppDetails: () -> Unit = {},
+    onNavigateToLocationSettings: () -> Unit = {},
     appViewModel: AppViewModel = hiltViewModel(),
     badgeCountsViewModel: BadgeCountsViewModel = hiltViewModel()
 ) {
@@ -1370,7 +1384,10 @@ fun MainScreen(
             )
         },
         settingsContent = {
-            SettingsContent(onNavigateToAppDetails = onNavigateToAppDetails)
+            SettingsContent(
+                onNavigateToAppDetails = onNavigateToAppDetails,
+                onNavigateToLocationSettings = onNavigateToLocationSettings
+            )
         },
         snackbarHostState = snackbarHostState,
         drawerBadgeCounts = drawerBadgeCounts
@@ -1901,8 +1918,13 @@ private fun ArchiveContentEmbedded() {
 }
 
 @Composable
-private fun SettingsContent(onNavigateToAppDetails: () -> Unit = {}) {
-    // Settings content now includes About and Help & Support in the scrollable list
-    VaultPreferencesContent(onNavigateToAppDetails = onNavigateToAppDetails)
+private fun SettingsContent(
+    onNavigateToAppDetails: () -> Unit = {},
+    onNavigateToLocationSettings: () -> Unit = {}
+) {
+    VaultPreferencesContent(
+        onNavigateToAppDetails = onNavigateToAppDetails,
+        onNavigateToLocationSettings = onNavigateToLocationSettings
+    )
 }
 

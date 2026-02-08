@@ -27,10 +27,7 @@ import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.vettid.app.core.network.HandlerSummary
 import com.vettid.app.core.network.InstalledHandler
-import com.vettid.app.features.location.DisplacementThreshold
 import com.vettid.app.features.location.LocationPrecision
-import com.vettid.app.features.location.LocationRetention
-import com.vettid.app.features.location.LocationUpdateFrequency
 import com.vettid.app.features.settings.AppTheme
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
@@ -51,11 +48,13 @@ fun VaultPreferencesContent(
     onChangePassword: () -> Unit = {},
     onNavigateToAppDetails: () -> Unit = {},
     onNavigateToLocationHistory: () -> Unit = {},
-    onNavigateToSharedLocations: () -> Unit = {}
+    onNavigateToSharedLocations: () -> Unit = {},
+    onNavigateToLocationSettings: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     var showChangePinDialog by remember { mutableStateOf(false) }
+    var showChangePasswordDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
     // Location permission launchers
@@ -102,6 +101,9 @@ fun VaultPreferencesContent(
                 }
                 is VaultPreferencesEffect.NavigateToSharedLocations -> {
                     onNavigateToSharedLocations()
+                }
+                is VaultPreferencesEffect.NavigateToLocationSettings -> {
+                    onNavigateToLocationSettings()
                 }
                 is VaultPreferencesEffect.RequestLocationPermission -> {
                     val permission = if (effect.precision == LocationPrecision.EXACT) {
@@ -166,7 +168,7 @@ fun VaultPreferencesContent(
                     icon = Icons.Default.Password,
                     title = "Change Password",
                     subtitle = "Update your vault credential password",
-                    onClick = { viewModel.onChangePasswordClick() }
+                    onClick = { showChangePasswordDialog = true }
                 )
             }
 
@@ -207,21 +209,15 @@ fun VaultPreferencesContent(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // Location Tracking section
-            LocationTrackingSection(
-                enabled = state.locationTrackingEnabled,
-                precision = state.locationPrecision,
-                frequency = state.locationFrequency,
-                displacementThreshold = state.locationDisplacementThreshold,
-                retention = state.locationRetention,
-                onToggle = { viewModel.toggleLocationTracking(it) },
-                onPrecisionChange = { viewModel.updateLocationPrecision(it) },
-                onFrequencyChange = { viewModel.updateLocationFrequency(it) },
-                onDisplacementChange = { viewModel.updateDisplacementThreshold(it) },
-                onRetentionChange = { viewModel.updateLocationRetention(it) },
-                onViewHistory = { viewModel.onViewLocationHistoryClick() },
-                onViewSharedLocations = { viewModel.onViewSharedLocationsClick() }
-            )
+            // Location Tracking link
+            PreferencesSection(title = "LOCATION") {
+                PreferencesItem(
+                    icon = Icons.Default.LocationOn,
+                    title = "Location Tracking",
+                    subtitle = if (state.locationTrackingEnabled) "Enabled" else "Disabled",
+                    onClick = { viewModel.onLocationSettingsClick() }
+                )
+            }
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -288,6 +284,21 @@ fun VaultPreferencesContent(
                     result.fold(
                         onSuccess = { showChangePinDialog = false },
                         onFailure = { e -> onError(e.message ?: "PIN change failed") }
+                    )
+                }
+            }
+        )
+    }
+
+    // Change Password dialog
+    if (showChangePasswordDialog) {
+        ChangePasswordDialog(
+            onDismiss = { showChangePasswordDialog = false },
+            onChangePassword = { currentPassword, newPassword, onError ->
+                viewModel.changePassword(currentPassword, newPassword) { result ->
+                    result.fold(
+                        onSuccess = { showChangePasswordDialog = false },
+                        onFailure = { e -> onError(e.message ?: "Password change failed") }
                     )
                 }
             }
@@ -419,6 +430,148 @@ private fun ChangePinDialog(
                             isChanging = true
                             error = null
                             onChangePIN(currentPin, newPin) { errorMsg ->
+                                error = errorMsg
+                                isChanging = false
+                            }
+                        }
+                    }
+                },
+                enabled = !isChanging
+            ) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !isChanging
+            ) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+private fun ChangePasswordDialog(
+    onDismiss: () -> Unit,
+    onChangePassword: (currentPassword: String, newPassword: String, onError: (String) -> Unit) -> Unit
+) {
+    var currentPassword by remember { mutableStateOf("") }
+    var newPassword by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var isChanging by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = { if (!isChanging) onDismiss() },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Password,
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Change Password")
+            }
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                // Current Password
+                OutlinedTextField(
+                    value = currentPassword,
+                    onValueChange = {
+                        currentPassword = it
+                        error = null
+                    },
+                    label = { Text("Current Password") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    enabled = !isChanging,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // New Password
+                OutlinedTextField(
+                    value = newPassword,
+                    onValueChange = {
+                        newPassword = it
+                        error = null
+                    },
+                    label = { Text("New Password") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    enabled = !isChanging,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Confirm New Password
+                OutlinedTextField(
+                    value = confirmPassword,
+                    onValueChange = {
+                        confirmPassword = it
+                        error = null
+                    },
+                    label = { Text("Confirm New Password") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true,
+                    enabled = !isChanging,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                // Error message
+                if (error != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = error!!,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                // Loading indicator
+                if (isChanging) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Changing password...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    when {
+                        currentPassword.isEmpty() -> {
+                            error = "Enter your current password"
+                        }
+                        newPassword.length < 8 -> {
+                            error = "New password must be at least 8 characters"
+                        }
+                        confirmPassword != newPassword -> {
+                            error = "Passwords do not match"
+                        }
+                        newPassword == currentPassword -> {
+                            error = "New password must be different from current password"
+                        }
+                        else -> {
+                            isChanging = true
+                            error = null
+                            onChangePassword(currentPassword, newPassword) { errorMsg ->
                                 error = errorMsg
                                 isChanging = false
                             }
@@ -645,7 +798,8 @@ fun VaultPreferencesScreenFull(
     onBack: () -> Unit,
     onNavigateToAppDetails: () -> Unit = {},
     onNavigateToLocationHistory: () -> Unit = {},
-    onNavigateToSharedLocations: () -> Unit = {}
+    onNavigateToSharedLocations: () -> Unit = {},
+    onNavigateToLocationSettings: () -> Unit = {}
 ) {
     Scaffold(
         topBar = {
@@ -664,7 +818,8 @@ fun VaultPreferencesScreenFull(
                 viewModel = viewModel,
                 onNavigateToAppDetails = onNavigateToAppDetails,
                 onNavigateToLocationHistory = onNavigateToLocationHistory,
-                onNavigateToSharedLocations = onNavigateToSharedLocations
+                onNavigateToSharedLocations = onNavigateToSharedLocations,
+                onNavigateToLocationSettings = onNavigateToLocationSettings
             )
         }
     }
@@ -685,12 +840,9 @@ private fun VaultServerSection(
     onRefreshClick: () -> Unit,
     onChangePinClick: () -> Unit = {}
 ) {
-    var showLogsDialog by remember { mutableStateOf(false) }
-
     PreferencesSection(title = "VAULT") {
-        // Status Row - clickable to show logs
+        // Status Row
         ListItem(
-            modifier = Modifier.clickable { showLogsDialog = true },
             headlineContent = { Text("Status") },
             supportingContent = {
                 Text(
@@ -850,75 +1002,6 @@ private fun VaultServerSection(
         }
     }
 
-    // Vault logs dialog
-    if (showLogsDialog) {
-        VaultLogsDialog(onDismiss = { showLogsDialog = false })
-    }
-}
-
-@Composable
-private fun VaultLogsDialog(onDismiss: () -> Unit) {
-    var logs by remember { mutableStateOf("Loading vault logs...") }
-
-    // Load vault-related logs
-    LaunchedEffect(Unit) {
-        logs = try {
-            val process = Runtime.getRuntime().exec(
-                arrayOf("logcat", "-d", "-t", "150", "-s",
-                    "NitroEnrollmentClient:*",
-                    "NitroAttestation:*",
-                    "NitroWebSocket:*",
-                    "VaultManager:*",
-                    "CredentialStore:*",
-                    "CryptoManager:*",
-                    "PinUnlockViewModel:*",
-                    "EnrollmentWizardVM:*"
-                )
-            )
-            val output = process.inputStream.bufferedReader().readText()
-            if (output.isBlank()) {
-                "No recent vault logs found.\n\nTry performing a vault operation to generate logs."
-            } else {
-                output
-            }
-        } catch (e: Exception) {
-            "Failed to load vault logs: ${e.message}"
-        }
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.Terminal,
-                    contentDescription = null,
-                    modifier = Modifier.size(24.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Vault Manager Logs")
-            }
-        },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 400.dp)
-                    .verticalScroll(rememberScrollState())
-            ) {
-                Text(
-                    text = logs,
-                    style = MaterialTheme.typography.bodySmall,
-                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("Close")
-            }
-        }
-    )
 }
 
 // MARK: - About Section
@@ -1042,206 +1125,6 @@ private fun HelpSupportSection() {
             }
         )
     }
-}
-
-// MARK: - Location Tracking Section
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun LocationTrackingSection(
-    enabled: Boolean,
-    precision: LocationPrecision,
-    frequency: LocationUpdateFrequency,
-    displacementThreshold: DisplacementThreshold,
-    retention: LocationRetention,
-    onToggle: (Boolean) -> Unit,
-    onPrecisionChange: (LocationPrecision) -> Unit,
-    onFrequencyChange: (LocationUpdateFrequency) -> Unit,
-    onDisplacementChange: (DisplacementThreshold) -> Unit,
-    onRetentionChange: (LocationRetention) -> Unit,
-    onViewHistory: () -> Unit,
-    onViewSharedLocations: () -> Unit = {}
-) {
-    PreferencesSection(title = "LOCATION TRACKING") {
-        // Enable toggle
-        ListItem(
-            headlineContent = { Text("Enable Location Tracking") },
-            supportingContent = { Text("Capture and store location in your vault") },
-            leadingContent = {
-                Icon(
-                    imageVector = Icons.Default.LocationOn,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            },
-            trailingContent = {
-                Switch(
-                    checked = enabled,
-                    onCheckedChange = { onToggle(it) }
-                )
-            }
-        )
-
-        if (enabled) {
-            HorizontalDivider()
-
-            // Precision
-            LocationPrecisionSelector(
-                current = precision,
-                onChange = onPrecisionChange
-            )
-
-            HorizontalDivider()
-
-            // Update frequency
-            LocationDropdownItem(
-                label = "Update Frequency",
-                icon = Icons.Default.Schedule,
-                currentValue = frequency.displayName,
-                options = LocationUpdateFrequency.entries.map { it.displayName },
-                onSelected = { index ->
-                    onFrequencyChange(LocationUpdateFrequency.entries[index])
-                }
-            )
-
-            HorizontalDivider()
-
-            // Displacement threshold
-            LocationDropdownItem(
-                label = "Movement Threshold",
-                icon = Icons.Default.NearMe,
-                currentValue = displacementThreshold.displayName,
-                options = DisplacementThreshold.entries.map { it.displayName },
-                onSelected = { index ->
-                    onDisplacementChange(DisplacementThreshold.entries[index])
-                }
-            )
-
-            HorizontalDivider()
-
-            // Retention
-            LocationDropdownItem(
-                label = "Data Retention",
-                icon = Icons.Default.DeleteSweep,
-                currentValue = retention.displayName,
-                options = LocationRetention.entries.map { it.displayName },
-                onSelected = { index ->
-                    onRetentionChange(LocationRetention.entries[index])
-                }
-            )
-
-            HorizontalDivider()
-
-            // View history
-            PreferencesItem(
-                icon = Icons.Default.History,
-                title = "View Location History",
-                subtitle = "See your stored location data",
-                onClick = onViewHistory
-            )
-
-            HorizontalDivider()
-
-            // Shared locations
-            PreferencesItem(
-                icon = Icons.Default.People,
-                title = "Shared Locations",
-                subtitle = "See locations shared by connections",
-                onClick = onViewSharedLocations
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun LocationPrecisionSelector(
-    current: LocationPrecision,
-    onChange: (LocationPrecision) -> Unit
-) {
-    ListItem(
-        headlineContent = { Text("Precision") },
-        supportingContent = {
-            Row(
-                modifier = Modifier
-                    .padding(top = 8.dp)
-                    .fillMaxWidth()
-            ) {
-                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                    LocationPrecision.entries.forEachIndexed { index, precision ->
-                        SegmentedButton(
-                            selected = current == precision,
-                            onClick = { onChange(precision) },
-                            shape = SegmentedButtonDefaults.itemShape(index, LocationPrecision.entries.size)
-                        ) {
-                            Text(precision.displayName, style = MaterialTheme.typography.labelSmall)
-                        }
-                    }
-                }
-            }
-        },
-        leadingContent = {
-            Icon(
-                imageVector = Icons.Default.GpsFixed,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    )
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun LocationDropdownItem(
-    label: String,
-    icon: ImageVector,
-    currentValue: String,
-    options: List<String>,
-    onSelected: (Int) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-
-    ListItem(
-        headlineContent = { Text(label) },
-        leadingContent = {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        },
-        trailingContent = {
-            ExposedDropdownMenuBox(
-                expanded = expanded,
-                onExpandedChange = { expanded = it }
-            ) {
-                OutlinedButton(
-                    onClick = { expanded = true },
-                    modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                ) {
-                    Text(currentValue, style = MaterialTheme.typography.labelSmall)
-                    Icon(
-                        imageVector = Icons.Default.ArrowDropDown,
-                        contentDescription = null
-                    )
-                }
-                ExposedDropdownMenu(
-                    expanded = expanded,
-                    onDismissRequest = { expanded = false }
-                ) {
-                    options.forEachIndexed { index, option ->
-                        DropdownMenuItem(
-                            text = { Text(option) },
-                            onClick = {
-                                onSelected(index)
-                                expanded = false
-                            }
-                        )
-                    }
-                }
-            }
-        }
-    )
 }
 
 // MARK: - Event Handlers Section

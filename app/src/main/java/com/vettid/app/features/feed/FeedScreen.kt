@@ -1,14 +1,18 @@
 package com.vettid.app.features.feed
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Label
 import androidx.compose.material.icons.automirrored.filled.Message
@@ -25,17 +29,21 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.vettid.app.core.nats.FeedEvent
 import com.vettid.app.core.nats.EventPriority
+import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
 
 /**
  * Feed screen showing activity events.
@@ -344,15 +352,133 @@ private fun EventCard(
     onDelete: () -> Unit,
     onAction: (String) -> Unit
 ) {
-    val isRead = event.feedStatus == FeedStatus.READ
-    val alpha = if (isRead) 0.7f else 1f
-    val priorityColor = getPriorityColor(event.priorityLevel)
-    var showMenu by remember { mutableStateOf(false) }
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    val actionButtonWidthPx = with(density) { 160.dp.toPx() }
+    val offsetX = remember { Animatable(0f) }
 
-    Card(
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp)
+    ) {
+        // Background action buttons (revealed on swipe)
+        Row(
+            modifier = Modifier
+                .matchParentSize()
+                .clip(RoundedCornerShape(12.dp)),
+            horizontalArrangement = Arrangement.End
+        ) {
+            // Archive button
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(80.dp)
+                    .background(MaterialTheme.colorScheme.primary)
+                    .clickable {
+                        scope.launch {
+                            offsetX.animateTo(0f, tween(200))
+                        }
+                        onArchive()
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Default.Archive,
+                        contentDescription = "Archive",
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Text(
+                        "Archive",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                }
+            }
+            // Delete button
+            Box(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(80.dp)
+                    .background(MaterialTheme.colorScheme.error)
+                    .clickable {
+                        scope.launch {
+                            offsetX.animateTo(0f, tween(200))
+                        }
+                        onDelete()
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = "Delete",
+                        tint = MaterialTheme.colorScheme.onError,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Text(
+                        "Delete",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onError
+                    )
+                }
+            }
+        }
+
+        // Foreground card (slides left on swipe)
+        EventCardContent(
+            event = event,
+            onClick = {
+                if (offsetX.value < -20f) {
+                    // If swiped open, close first
+                    scope.launch { offsetX.animateTo(0f, tween(200)) }
+                } else {
+                    onClick()
+                }
+            },
+            onAction = onAction,
+            modifier = Modifier
+                .offset { IntOffset(offsetX.value.roundToInt(), 0) }
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            scope.launch {
+                                if (offsetX.value < -actionButtonWidthPx / 2) {
+                                    offsetX.animateTo(-actionButtonWidthPx, tween(200))
+                                } else {
+                                    offsetX.animateTo(0f, tween(200))
+                                }
+                            }
+                        },
+                        onHorizontalDrag = { _, dragAmount ->
+                            scope.launch {
+                                val newOffset = (offsetX.value + dragAmount)
+                                    .coerceIn(-actionButtonWidthPx, 0f)
+                                offsetX.snapTo(newOffset)
+                            }
+                        }
+                    )
+                }
+        )
+    }
+}
+
+@Composable
+private fun EventCardContent(
+    event: FeedEvent,
+    onClick: () -> Unit,
+    onAction: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val isRead = event.feedStatus == FeedStatus.READ
+    val alpha = if (isRead) 0.7f else 1f
+    val priorityColor = getPriorityColor(event.priorityLevel)
+
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
             .clickable(onClick = onClick),
         colors = CardDefaults.cardColors(
             containerColor = if (event.priorityLevel == EventPriority.URGENT) {
@@ -421,44 +547,6 @@ private fun EventCard(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.outline
                     )
-                }
-
-                // Overflow menu
-                Box {
-                    IconButton(onClick = { showMenu = true }) {
-                        Icon(
-                            Icons.Default.MoreVert,
-                            contentDescription = "More options",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = showMenu,
-                        onDismissRequest = { showMenu = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Archive") },
-                            onClick = {
-                                showMenu = false
-                                onArchive()
-                            },
-                            leadingIcon = { Icon(Icons.Default.Archive, contentDescription = null) }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Delete") },
-                            onClick = {
-                                showMenu = false
-                                onDelete()
-                            },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Default.Delete,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.error
-                                )
-                            }
-                        )
-                    }
                 }
             }
 

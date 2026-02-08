@@ -12,7 +12,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.vettid.app.NatsConnectionState
-import com.vettid.app.ui.components.NatsConnectionStatusBanner
 
 private const val TAG = "MainScaffold"
 
@@ -112,31 +111,11 @@ fun MainScaffold(
             },
             snackbarHost = { SnackbarHost(snackbarHostState) }
         ) { padding ->
-            // State to track if banner is dismissed
-            var isBannerDismissed by remember { mutableStateOf(false) }
-
-            // Reset banner dismissal when connection state changes
-            LaunchedEffect(natsConnectionState) {
-                if (natsConnectionState == NatsConnectionState.Connected) {
-                    isBannerDismissed = false
-                }
-            }
-
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
             ) {
-                // NATS connection status banner (shown when not connected)
-                if (!isBannerDismissed) {
-                    NatsConnectionStatusBanner(
-                        connectionState = natsConnectionState,
-                        errorMessage = natsErrorMessage,
-                        onRetry = onNatsRetry,
-                        onDismiss = { isBannerDismissed = true }
-                    )
-                }
-
                 // Main content based on current drawer item or settings overlay
                 Box(modifier = Modifier.fillMaxSize()) {
                     if (navigationState.isSettingsOpen) {

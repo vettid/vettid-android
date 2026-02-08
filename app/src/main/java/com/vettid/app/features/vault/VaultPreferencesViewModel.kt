@@ -96,6 +96,7 @@ sealed class VaultPreferencesEffect {
     object NavigateToChangePassword : VaultPreferencesEffect()
     object NavigateToLocationHistory : VaultPreferencesEffect()
     object NavigateToSharedLocations : VaultPreferencesEffect()
+    object NavigateToLocationSettings : VaultPreferencesEffect()
     data class RequestLocationPermission(val precision: LocationPrecision) : VaultPreferencesEffect()
 }
 
@@ -158,9 +159,9 @@ class VaultPreferencesViewModel @Inject constructor(
 
                 _state.value = VaultPreferencesState(
                     theme = theme,
-                    sessionTtlMinutes = 15,
-                    archiveAfterDays = 7,
-                    deleteAfterDays = 30,
+                    sessionTtlMinutes = appPreferencesStore.getSessionTtlMinutes(),
+                    archiveAfterDays = appPreferencesStore.getArchiveAfterDays(),
+                    deleteAfterDays = appPreferencesStore.getDeleteAfterDays(),
                     isOfflineMode = isOffline,
                     pcrVersion = pcrVersion,
                     pcr0Hash = pcr0Hash,
@@ -240,8 +241,8 @@ class VaultPreferencesViewModel @Inject constructor(
     fun updateSessionTtl(minutes: Int) {
         viewModelScope.launch {
             try {
+                appPreferencesStore.setSessionTtlMinutes(minutes)
                 _state.value = _state.value.copy(sessionTtlMinutes = minutes)
-                // In production, persist to vault storage
                 _effects.emit(VaultPreferencesEffect.ShowSuccess("Session TTL updated"))
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to update TTL", e)
@@ -253,6 +254,7 @@ class VaultPreferencesViewModel @Inject constructor(
     fun updateArchiveAfterDays(days: Int) {
         viewModelScope.launch {
             try {
+                appPreferencesStore.setArchiveAfterDays(days)
                 _state.value = _state.value.copy(archiveAfterDays = days)
                 _effects.emit(VaultPreferencesEffect.ShowSuccess("Archive setting updated"))
             } catch (e: Exception) {
@@ -273,6 +275,7 @@ class VaultPreferencesViewModel @Inject constructor(
                     ))
                     return@launch
                 }
+                appPreferencesStore.setDeleteAfterDays(days)
                 _state.value = _state.value.copy(deleteAfterDays = days)
                 _effects.emit(VaultPreferencesEffect.ShowSuccess("Delete setting updated"))
             } catch (e: Exception) {
@@ -379,6 +382,37 @@ class VaultPreferencesViewModel @Inject constructor(
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "changePIN error", e)
+                onResult(Result.failure(e))
+            }
+        }
+    }
+
+    // MARK: - Password Change
+
+    /**
+     * Change the credential password stored in the Protean Credential.
+     * Delegates to OwnerSpaceClient for encrypted communication with enclave.
+     */
+    fun changePassword(currentPassword: String, newPassword: String, onResult: (Result<Unit>) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val result = ownerSpaceClient.changePassword(currentPassword, newPassword, cryptoManager)
+                result.fold(
+                    onSuccess = { passwordChangeResult ->
+                        if (passwordChangeResult.success) {
+                            _effects.emit(VaultPreferencesEffect.ShowSuccess("Password changed successfully"))
+                            onResult(Result.success(Unit))
+                        } else {
+                            val error = passwordChangeResult.error ?: "Password change failed"
+                            onResult(Result.failure(Exception(error)))
+                        }
+                    },
+                    onFailure = { error ->
+                        onResult(Result.failure(error))
+                    }
+                )
+            } catch (e: Exception) {
+                Log.e(TAG, "changePassword error", e)
                 onResult(Result.failure(e))
             }
         }
@@ -510,6 +544,12 @@ class VaultPreferencesViewModel @Inject constructor(
     fun onViewSharedLocationsClick() {
         viewModelScope.launch {
             _effects.emit(VaultPreferencesEffect.NavigateToSharedLocations)
+        }
+    }
+
+    fun onLocationSettingsClick() {
+        viewModelScope.launch {
+            _effects.emit(VaultPreferencesEffect.NavigateToLocationSettings)
         }
     }
 

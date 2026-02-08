@@ -313,13 +313,75 @@ class FeedRepository @Inject constructor(
         )
     }
 
+    /**
+     * Incremental sync without acquiring mutex (called from getFeed which already holds it).
+     */
     private suspend fun incrementalSync(): Result<List<FeedEvent>> {
         Log.d(TAG, "Performing incremental sync from sequence ${getLastSequence()}")
-        val syncResult = sync()
-        return syncResult.fold(
-            onSuccess = { Result.success(getCachedEvents()) },
-            onFailure = { Result.failure(it) }
-        )
+        try {
+            val syncResult = withTimeoutOrNull(SYNC_TIMEOUT_MS) {
+                val lastSequence = getLastSequence()
+                feedClient.sync(sinceSequence = lastSequence)
+            }
+
+            if (syncResult == null) {
+                Log.w(TAG, "Incremental sync timed out after ${SYNC_TIMEOUT_MS}ms")
+                return Result.failure(Exception("Sync timed out"))
+            }
+
+            return syncResult.fold(
+                onSuccess = { response ->
+                    val cachedEvents = getCachedEvents().toMutableList()
+                    val existingIds = cachedEvents.map { it.eventId }.toSet()
+
+                    var newCount = 0
+                    var updatedCount = 0
+                    var deletedCount = 0
+
+                    for (event in response.events) {
+                        when {
+                            event.feedStatus == "deleted" -> {
+                                cachedEvents.removeAll { it.eventId == event.eventId }
+                                deletedCount++
+                            }
+                            event.eventId in existingIds -> {
+                                val index = cachedEvents.indexOfFirst { it.eventId == event.eventId }
+                                if (index >= 0) {
+                                    cachedEvents[index] = event
+                                    updatedCount++
+                                }
+                            }
+                            else -> {
+                                cachedEvents.add(event)
+                                newCount++
+                            }
+                        }
+                    }
+
+                    val sortedEvents = cachedEvents.sortedWith(
+                        compareByDescending<FeedEvent> { it.priority }
+                            .thenByDescending { it.createdAt }
+                    )
+                    val trimmedEvents = sortedEvents.take(MAX_CACHED_EVENTS)
+
+                    saveEvents(trimmedEvents)
+                    setLastSequence(response.latestSequence)
+                    setLastSyncTime(System.currentTimeMillis())
+                    _isOnline.value = true
+
+                    Log.i(TAG, "Incremental sync complete: +$newCount new, $updatedCount updated, -$deletedCount deleted")
+                    Result.success(trimmedEvents)
+                },
+                onFailure = { error ->
+                    if (error is CancellationException) throw error
+                    Log.e(TAG, "Incremental sync failed", error)
+                    _isOnline.value = false
+                    Result.failure(error)
+                }
+            )
+        } catch (e: CancellationException) {
+            throw e
+        }
     }
 
     private fun saveEvents(events: List<FeedEvent>) {

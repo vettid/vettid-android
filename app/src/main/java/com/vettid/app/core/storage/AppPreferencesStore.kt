@@ -122,9 +122,37 @@ class AppPreferencesStore(context: Context) {
         prefs.edit().putLong(KEY_LAST_CAPTURE_TIME, epochSeconds).apply()
     }
 
+    // --- Credential Settings ---
+
+    fun getSessionTtlMinutes(): Int =
+        prefs.getInt(KEY_SESSION_TTL, 15)
+
+    fun setSessionTtlMinutes(minutes: Int) {
+        prefs.edit().putInt(KEY_SESSION_TTL, minutes).apply()
+    }
+
+    fun getArchiveAfterDays(): Int =
+        prefs.getInt(KEY_ARCHIVE_AFTER_DAYS, 7)
+
+    fun setArchiveAfterDays(days: Int) {
+        prefs.edit().putInt(KEY_ARCHIVE_AFTER_DAYS, days).apply()
+    }
+
+    fun getDeleteAfterDays(): Int =
+        prefs.getInt(KEY_DELETE_AFTER_DAYS, 30)
+
+    fun setDeleteAfterDays(days: Int) {
+        prefs.edit().putInt(KEY_DELETE_AFTER_DAYS, days).apply()
+    }
+
     companion object {
         private const val PREFS_NAME = "app_preferences"
         private const val KEY_THEME = "app_theme"
+
+        // Credential settings keys
+        private const val KEY_SESSION_TTL = "session_ttl_minutes"
+        private const val KEY_ARCHIVE_AFTER_DAYS = "archive_after_days"
+        private const val KEY_DELETE_AFTER_DAYS = "delete_after_days"
 
         // Location tracking keys
         private const val KEY_LOCATION_ENABLED = "location_tracking_enabled"
