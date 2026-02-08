@@ -98,11 +98,10 @@ object GuideContentProvider {
             GuideSection.Heading("Available Settings"),
             GuideSection.BulletList(
                 listOf(
-                    "Change your PIN",
-                    "Change your password",
-                    "Toggle biometric authentication",
+                    "Change your PIN or password",
+                    "Session TTL and archive settings",
+                    "Location tracking preferences",
                     "Theme and appearance",
-                    "Notification preferences",
                     "Backup settings"
                 )
             ),
@@ -117,9 +116,13 @@ object GuideContentProvider {
             GuideSection.Paragraph(
                 "Your personal data section stores information about you \u2014 name, contact details, addresses, and more."
             ),
+            GuideSection.Heading("Templates"),
+            GuideSection.Paragraph(
+                "Use templates to quickly add common fields like Date of Birth, SSN, Passport, Driver License, Home Address, Emergency Contact, and more. Templates provide the right field types and structure automatically."
+            ),
             GuideSection.Heading("Adding Information"),
             GuideSection.Paragraph(
-                "Add and edit fields, organize them into categories, and set up custom fields for anything you need."
+                "Add fields from templates or create custom fields for anything you need. Organize them into categories like Identity, Contact, Address, Financial, and Medical."
             ),
             GuideSection.Heading("Profile Photo"),
             GuideSection.Paragraph(
