@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.network.Profile
 import com.vettid.app.core.network.ProfileApiClient
+import com.vettid.app.core.storage.MinorSecretsStore
+import com.vettid.app.core.storage.PersonalDataStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -19,7 +21,9 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class ProfileViewModel @Inject constructor(
-    private val profileApiClient: ProfileApiClient
+    private val profileApiClient: ProfileApiClient,
+    private val minorSecretsStore: MinorSecretsStore,
+    private val personalDataStore: PersonalDataStore
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<ProfileState>(ProfileState.Loading)
@@ -45,8 +49,15 @@ class ProfileViewModel @Inject constructor(
     private val _isSaving = MutableStateFlow(false)
     val isSaving: StateFlow<Boolean> = _isSaving.asStateFlow()
 
+    private val _publicSecrets = MutableStateFlow<List<PublicMetadataItem>>(emptyList())
+    val publicSecrets: StateFlow<List<PublicMetadataItem>> = _publicSecrets.asStateFlow()
+
+    private val _publicPersonalData = MutableStateFlow<List<PublicMetadataItem>>(emptyList())
+    val publicPersonalData: StateFlow<List<PublicMetadataItem>> = _publicPersonalData.asStateFlow()
+
     init {
         loadProfile()
+        loadPublicMetadata()
     }
 
     /**
@@ -194,6 +205,46 @@ class ProfileViewModel @Inject constructor(
     }
 
     /**
+     * Load metadata visible to agents, services, and connections.
+     */
+    private fun loadPublicMetadata() {
+        viewModelScope.launch {
+            // Public secrets (keys in public profile)
+            val secrets = minorSecretsStore.getPublicProfileSecrets()
+            _publicSecrets.value = secrets.map { secret ->
+                PublicMetadataItem(
+                    name = secret.name,
+                    type = secret.type.name,
+                    category = secret.category.displayName
+                )
+            }
+
+            // Public personal data fields
+            val publicFieldIds = personalDataStore.getPublicProfileFields()
+            val customFields = personalDataStore.getCustomFields()
+            val publicItems = mutableListOf<PublicMetadataItem>()
+
+            // System fields (always potentially visible)
+            personalDataStore.getSystemFields()?.let { sys ->
+                if (sys.firstName.isNotBlank()) publicItems.add(PublicMetadataItem("First Name", "System", "Identity"))
+                if (sys.lastName.isNotBlank()) publicItems.add(PublicMetadataItem("Last Name", "System", "Identity"))
+                if (sys.email.isNotBlank()) publicItems.add(PublicMetadataItem("Email", "System", "Contact"))
+            }
+
+            // Custom fields marked as public profile
+            customFields.filter { it.id in publicFieldIds }.forEach { field ->
+                publicItems.add(PublicMetadataItem(
+                    name = field.name,
+                    type = field.fieldType.displayName,
+                    category = field.category.name.lowercase().replaceFirstChar { it.uppercase() }
+                ))
+            }
+
+            _publicPersonalData.value = publicItems
+        }
+    }
+
+    /**
      * Check if form has changes.
      */
     fun hasChanges(): Boolean {
@@ -232,3 +283,13 @@ sealed class ProfileEffect {
     data class ShowSuccess(val message: String) : ProfileEffect()
     data class ShowError(val message: String) : ProfileEffect()
 }
+
+/**
+ * A metadata item visible to connections/agents/services.
+ * Shows name and type only - never the actual value.
+ */
+data class PublicMetadataItem(
+    val name: String,
+    val type: String,
+    val category: String
+)

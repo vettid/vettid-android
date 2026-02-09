@@ -1,6 +1,8 @@
 package com.vettid.app.features.profile
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -31,6 +33,11 @@ fun ProfileScreen(
     val editDisplayName by viewModel.editDisplayName.collectAsState()
     val editBio by viewModel.editBio.collectAsState()
     val editLocation by viewModel.editLocation.collectAsState()
+    val publicSecrets by viewModel.publicSecrets.collectAsState()
+    val publicPersonalData by viewModel.publicPersonalData.collectAsState()
+
+    var showSecretsDialog by remember { mutableStateOf(false) }
+    var showPersonalDataDialog by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -111,6 +118,10 @@ fun ProfileScreen(
                         isPublishing = currentState.isPublishing,
                         onEdit = { viewModel.startEditing() },
                         onPublish = { viewModel.publishProfile() },
+                        onViewSecrets = { showSecretsDialog = true },
+                        onViewPersonalData = { showPersonalDataDialog = true },
+                        secretsCount = publicSecrets.size,
+                        personalDataCount = publicPersonalData.size,
                         modifier = Modifier.padding(padding)
                     )
                 }
@@ -125,6 +136,104 @@ fun ProfileScreen(
             }
         }
     }
+
+    // Public Secrets Metadata Dialog
+    if (showSecretsDialog) {
+        MetadataDialog(
+            title = "Public Secret Metadata",
+            subtitle = "Visible to agents, services, and connections",
+            items = publicSecrets,
+            emptyMessage = "No secrets are shared publicly",
+            onDismiss = { showSecretsDialog = false }
+        )
+    }
+
+    // Public Personal Data Dialog
+    if (showPersonalDataDialog) {
+        MetadataDialog(
+            title = "Public Personal Data",
+            subtitle = "Visible to agents, services, and connections",
+            items = publicPersonalData,
+            emptyMessage = "No personal data is shared publicly",
+            onDismiss = { showPersonalDataDialog = false }
+        )
+    }
+}
+
+@Composable
+private fun MetadataDialog(
+    title: String,
+    subtitle: String,
+    items: List<PublicMetadataItem>,
+    emptyMessage: String,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                if (items.isEmpty()) {
+                    Text(
+                        text = emptyMessage,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.heightIn(max = 400.dp)
+                    ) {
+                        items(items) { item ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = item.name,
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                        Text(
+                                            text = "${item.category} - ${item.type}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Icon(
+                                        Icons.Default.Visibility,
+                                        contentDescription = "Public",
+                                        modifier = Modifier.size(16.dp),
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
 }
 
 @Composable
@@ -143,6 +252,10 @@ private fun ViewProfileContent(
     isPublishing: Boolean,
     onEdit: () -> Unit,
     onPublish: () -> Unit,
+    onViewSecrets: () -> Unit,
+    onViewPersonalData: () -> Unit,
+    secretsCount: Int,
+    personalDataCount: Int,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -175,7 +288,32 @@ private fun ViewProfileContent(
             style = MaterialTheme.typography.headlineMedium
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Public metadata buttons
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(
+                onClick = onViewSecrets,
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Secrets ($secretsCount)", style = MaterialTheme.typography.labelMedium)
+            }
+            OutlinedButton(
+                onClick = onViewPersonalData,
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Personal ($personalDataCount)", style = MaterialTheme.typography.labelMedium)
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         // Profile info card
         Card(
