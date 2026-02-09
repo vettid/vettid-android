@@ -275,6 +275,8 @@ fun PersonalDataContent(
     if (showPublicProfilePreview) {
         val publishedProfile by viewModel.publishedProfile.collectAsState()
         val isLoadingPublishedProfile by viewModel.isLoadingPublishedProfile.collectAsState()
+        val publicSecrets by viewModel.publicSecrets.collectAsState()
+        val publicPersonalData by viewModel.publicPersonalData.collectAsState()
 
         androidx.compose.ui.window.Dialog(
             onDismissRequest = viewModel::hidePublicProfilePreview,
@@ -287,6 +289,8 @@ fun PersonalDataContent(
             PublicProfileFullScreen(
                 publishedProfile = publishedProfile,
                 isLoading = isLoadingPublishedProfile,
+                publicSecrets = publicSecrets,
+                publicPersonalData = publicPersonalData,
                 onBack = viewModel::hidePublicProfilePreview
             )
         }
@@ -1390,8 +1394,12 @@ private fun maskString(value: String): String {
 private fun PublicProfileFullScreen(
     publishedProfile: PublishedProfileData?,
     isLoading: Boolean,
+    publicSecrets: List<PublicMetadataItem> = emptyList(),
+    publicPersonalData: List<PublicMetadataItem> = emptyList(),
     onBack: () -> Unit
 ) {
+    var showSecretsDialog by remember { mutableStateOf(false) }
+    var showPersonalDataDialog by remember { mutableStateOf(false) }
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background
@@ -1530,6 +1538,31 @@ private fun PublicProfileFullScreen(
                             }
                         }
 
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        // Public metadata buttons
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            OutlinedButton(
+                                onClick = { showSecretsDialog = true },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Secrets (${publicSecrets.size})", style = MaterialTheme.typography.labelMedium)
+                            }
+                            OutlinedButton(
+                                onClick = { showPersonalDataDialog = true },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text("Personal (${publicPersonalData.size})", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+
                         Spacer(modifier = Modifier.height(16.dp))
 
                         // Profile card - scrollable (read-only view)
@@ -1567,6 +1600,104 @@ private fun PublicProfileFullScreen(
             }
         }
     }
+
+    // Public Secrets Metadata Dialog
+    if (showSecretsDialog) {
+        PublicMetadataDialog(
+            title = "Public Secret Metadata",
+            subtitle = "Visible to agents, services, and connections",
+            items = publicSecrets,
+            emptyMessage = "No secrets are shared publicly",
+            onDismiss = { showSecretsDialog = false }
+        )
+    }
+
+    // Public Personal Data Dialog
+    if (showPersonalDataDialog) {
+        PublicMetadataDialog(
+            title = "Public Personal Data",
+            subtitle = "Visible to agents, services, and connections",
+            items = publicPersonalData,
+            emptyMessage = "No personal data is shared publicly",
+            onDismiss = { showPersonalDataDialog = false }
+        )
+    }
+}
+
+@Composable
+private fun PublicMetadataDialog(
+    title: String,
+    subtitle: String,
+    items: List<PublicMetadataItem>,
+    emptyMessage: String,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                if (items.isEmpty()) {
+                    Text(
+                        text = emptyMessage,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.heightIn(max = 400.dp)
+                    ) {
+                        items(items) { item ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = item.name,
+                                            style = MaterialTheme.typography.bodyMedium
+                                        )
+                                        Text(
+                                            text = "${item.category} - ${item.type}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Icon(
+                                        Icons.Default.Visibility,
+                                        contentDescription = "Public",
+                                        modifier = Modifier.size(16.dp),
+                                        tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
 }
 
 @Composable

@@ -79,6 +79,13 @@ class PersonalDataViewModel @Inject constructor(
     private val _systemFields = MutableStateFlow<com.vettid.app.core.storage.SystemPersonalData?>(null)
     val systemFields: StateFlow<com.vettid.app.core.storage.SystemPersonalData?> = _systemFields.asStateFlow()
 
+    // Public metadata (names/types only, never values)
+    private val _publicSecrets = MutableStateFlow<List<PublicMetadataItem>>(emptyList())
+    val publicSecrets: StateFlow<List<PublicMetadataItem>> = _publicSecrets.asStateFlow()
+
+    private val _publicPersonalData = MutableStateFlow<List<PublicMetadataItem>>(emptyList())
+    val publicPersonalData: StateFlow<List<PublicMetadataItem>> = _publicPersonalData.asStateFlow()
+
     // In-memory data store loaded from vault
     private val dataItems = mutableListOf<PersonalDataItem>()
 
@@ -89,6 +96,7 @@ class PersonalDataViewModel @Inject constructor(
         Log.i(TAG, "PersonalDataViewModel created - starting load")
         loadPersonalData()
         loadCustomCategories()
+        loadPublicMetadata()
     }
 
     /**
@@ -1874,6 +1882,47 @@ class PersonalDataViewModel @Inject constructor(
     }
 
     /**
+     * Load metadata visible to agents, services, and connections.
+     * Shows names and types only - never actual values.
+     */
+    private fun loadPublicMetadata() {
+        viewModelScope.launch {
+            // Public secrets (keys in public profile)
+            val secrets = minorSecretsStore.getPublicProfileSecrets()
+            _publicSecrets.value = secrets.map { secret ->
+                PublicMetadataItem(
+                    name = secret.name,
+                    type = secret.type.name,
+                    category = secret.category.displayName
+                )
+            }
+
+            // Public personal data fields
+            val publicFieldIds = personalDataStore.getPublicProfileFields()
+            val customFields = personalDataStore.getCustomFields()
+            val publicItems = mutableListOf<PublicMetadataItem>()
+
+            // System fields (always potentially visible)
+            personalDataStore.getSystemFields()?.let { sys ->
+                if (sys.firstName.isNotBlank()) publicItems.add(PublicMetadataItem("First Name", "System", "Identity"))
+                if (sys.lastName.isNotBlank()) publicItems.add(PublicMetadataItem("Last Name", "System", "Identity"))
+                if (sys.email.isNotBlank()) publicItems.add(PublicMetadataItem("Email", "System", "Contact"))
+            }
+
+            // Custom fields marked as public profile
+            customFields.filter { it.id in publicFieldIds }.forEach { field ->
+                publicItems.add(PublicMetadataItem(
+                    name = field.name,
+                    type = field.fieldType.displayName,
+                    category = field.category.name.lowercase().replaceFirstChar { it.uppercase() }
+                ))
+            }
+
+            _publicPersonalData.value = publicItems
+        }
+    }
+
+    /**
      * Show the photo capture dialog.
      */
     fun showPhotoCaptureDialog() {
@@ -1959,4 +2008,14 @@ data class PublishedProfileData(
     val isFromVault: Boolean,
     val updatedAt: String? = null,
     val photo: String? = null
+)
+
+/**
+ * A metadata item visible to connections/agents/services.
+ * Shows name and type only - never the actual value.
+ */
+data class PublicMetadataItem(
+    val name: String,
+    val type: String,
+    val category: String
 )
