@@ -65,7 +65,6 @@ fun FeedContent(
     val state by viewModel.state.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val isOfflineModeEnabled by viewModel.isOfflineModeEnabled.collectAsState()
-    val showAuditEvents by viewModel.showAuditEvents.collectAsState()
 
     // Snackbar state for action feedback
     val snackbarHostState = remember { SnackbarHostState() }
@@ -123,12 +122,6 @@ fun FeedContent(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Toolbar: audit toggle chip
-        FeedToolbar(
-            showAuditEvents = showAuditEvents,
-            onToggleAudit = { viewModel.toggleAuditEvents() }
-        )
-
         Box(modifier = Modifier.weight(1f)) {
             when (val currentState = state) {
                 is FeedState.Loading -> {
@@ -156,7 +149,8 @@ fun FeedContent(
                     onEventClick = { viewModel.onEventClick(it) },
                     onArchive = { viewModel.archiveEvent(it.eventId) },
                     onDelete = { viewModel.deleteEvent(it.eventId) },
-                    onAction = { event, action -> viewModel.executeAction(event.eventId, action) }
+                    onAction = { event, action -> viewModel.executeAction(event.eventId, action) },
+                    onTogglePriority = { viewModel.togglePriority(it.eventId) }
                 )
                 is FeedState.Error -> {
                     // If in offline mode, show friendly offline content instead of error
@@ -216,29 +210,6 @@ private fun OfflineModeContent() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun FeedToolbar(
-    showAuditEvents: Boolean,
-    onToggleAudit: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        FilterChip(
-            selected = showAuditEvents,
-            onClick = onToggleAudit,
-            label = { Text("Audit Log") },
-            leadingIcon = if (showAuditEvents) {
-                { Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(18.dp)) }
-            } else null
-        )
-    }
-}
-
 @Composable
 private fun FeedList(
     events: List<FeedEvent>,
@@ -247,7 +218,8 @@ private fun FeedList(
     onEventClick: (FeedEvent) -> Unit,
     onArchive: (FeedEvent) -> Unit,
     onDelete: (FeedEvent) -> Unit,
-    onAction: (FeedEvent, String) -> Unit
+    onAction: (FeedEvent, String) -> Unit,
+    onTogglePriority: (FeedEvent) -> Unit = {}
 ) {
     val listState = rememberLazyListState()
     var pullDistance by remember { mutableFloatStateOf(0f) }
@@ -286,7 +258,8 @@ private fun FeedList(
                     onClick = { onEventClick(event) },
                     onArchive = { onArchive(event) },
                     onDelete = { onDelete(event) },
-                    onAction = { action -> onAction(event, action) }
+                    onAction = { action -> onAction(event, action) },
+                    onTogglePriority = { onTogglePriority(event) }
                 )
             }
         }
@@ -326,7 +299,8 @@ private fun EventCard(
     onClick: () -> Unit,
     onArchive: () -> Unit,
     onDelete: () -> Unit,
-    onAction: (String) -> Unit
+    onAction: (String) -> Unit,
+    onTogglePriority: () -> Unit = {}
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
@@ -352,6 +326,20 @@ private fun EventCard(
             expanded = showMenu,
             onDismissRequest = { showMenu = false }
         ) {
+            DropdownMenuItem(
+                text = { Text(if (event.priority >= 1) "Unpin" else "Pin to Top") },
+                onClick = {
+                    showMenu = false
+                    onTogglePriority()
+                },
+                leadingIcon = {
+                    Icon(
+                        Icons.Default.PushPin,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            )
             DropdownMenuItem(
                 text = { Text("Archive") },
                 onClick = {
@@ -474,6 +462,15 @@ private fun EventCardContent(
 
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (event.priority >= 1) {
+                            Icon(
+                                Icons.Default.PushPin,
+                                contentDescription = "Pinned",
+                                modifier = Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                        }
                         Text(
                             text = event.title,
                             style = MaterialTheme.typography.titleSmall,

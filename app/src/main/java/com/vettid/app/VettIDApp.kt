@@ -92,6 +92,7 @@ import com.vettid.app.features.location.SharedLocationsScreen
 import com.vettid.app.features.secrets.CriticalSecretsScreen
 import com.vettid.app.features.unlock.PinUnlockScreen
 import com.vettid.app.features.personaldata.PersonalDataContent
+import com.vettid.app.features.services.AuditLogContent
 
 private const val TAG = "VettIDApp"
 
@@ -1458,6 +1459,9 @@ fun MainScreen(
             ProposalsContent(
                 onNavigateToProposal = { proposalId -> onNavigateToProposalDetail(proposalId) }
             )
+        },
+        auditLogContent = { _ ->
+            AuditLogContent()
         },
         settingsContent = {
             SettingsContent(

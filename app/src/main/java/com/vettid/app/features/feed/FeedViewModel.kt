@@ -40,7 +40,7 @@ class FeedViewModel @Inject constructor(
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
-    // Audit events toggle (hidden by default)
+    // Audit events toggle (hidden by default) - kept for backward compatibility but no longer shown in feed
     private val _showAuditEvents = MutableStateFlow(false)
     val showAuditEvents: StateFlow<Boolean> = _showAuditEvents.asStateFlow()
 
@@ -107,6 +107,7 @@ class FeedViewModel @Inject constructor(
 
     /**
      * Filter events for display based on status, audit toggle, and search query.
+     * Pinned (HIGH/URGENT priority) events sort to the top.
      */
     private fun filterForDisplay(events: List<FeedEvent>): List<FeedEvent> {
         var filtered = events
@@ -123,6 +124,11 @@ class FeedViewModel @Inject constructor(
                     (event.message?.contains(query, ignoreCase = true) == true)
             }
         }
+        // Sort: pinned (high priority) first, then by creation time descending
+        filtered = filtered.sortedWith(
+            compareByDescending<FeedEvent> { it.priority }
+                .thenByDescending { it.createdAt }
+        )
         return filtered
     }
 
@@ -165,9 +171,9 @@ class FeedViewModel @Inject constructor(
                     hasLoadedInitially = true
                     Log.d(TAG, "NATS connected, loading feed (initial)")
                     // Small delay to let connection stabilize
-                    delay(1000)
-                    // Sync guides first and wait for completion so events exist before loading feed
-                    syncGuides()
+                    delay(200)
+                    // Sync guides in parallel — don't block feed loading
+                    launch { syncGuides() }
                     loadFeedAndWait()
                     isInitialLoadComplete = true
                 }
@@ -643,6 +649,37 @@ class FeedViewModel @Inject constructor(
                         Log.e(TAG, "Failed to archive event", error)
                         _effects.emit(FeedEffect.ShowError("Failed to archive event"))
                     }
+                }
+        }
+    }
+
+    fun togglePriority(eventId: String) {
+        viewModelScope.launch {
+            val event = feedRepository.getCachedEvents().find { it.eventId == eventId } ?: return@launch
+            val newPriority = if (event.priority >= 1) 0 else 1 // Toggle between NORMAL and HIGH
+
+            feedClient.setEventPriority(eventId, newPriority)
+                .onSuccess {
+                    feedRepository.updateEventLocally(eventId) { it.copy(priority = newPriority) }
+                    val allCached = feedRepository.getCachedEvents()
+                    val filtered = filterForDisplay(allCached)
+                    _state.value = if (filtered.isEmpty()) {
+                        FeedState.Empty
+                    } else {
+                        FeedState.Loaded(
+                            events = filtered,
+                            hasMore = false,
+                            unreadCount = filtered.count { it.isUnread },
+                            isOffline = !feedRepository.isOnline.value
+                        )
+                    }
+                    _effects.emit(FeedEffect.ShowActionSuccess(
+                        if (newPriority >= 1) "Pinned to top" else "Unpinned"
+                    ))
+                }
+                .onFailure {
+                    Log.e(TAG, "Failed to update priority", it)
+                    _effects.emit(FeedEffect.ShowError("Failed to update priority"))
                 }
         }
     }

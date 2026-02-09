@@ -16,7 +16,8 @@ enum class DrawerItem(
     PERSONAL_DATA("Personal Data", Icons.Default.Person),
     SECRETS("Secrets", Icons.Default.Lock),
     ARCHIVE("Archive", Icons.Default.Archive),
-    VOTING("Voting", Icons.Default.HowToVote)
+    VOTING("Voting", Icons.Default.HowToVote),
+    AUDIT_LOG("Audit Log", Icons.Default.Security)
 }
 
 /**

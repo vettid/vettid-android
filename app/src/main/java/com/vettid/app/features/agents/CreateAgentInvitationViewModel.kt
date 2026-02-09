@@ -3,6 +3,7 @@ package com.vettid.app.features.agents
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.nats.VaultResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -20,7 +21,8 @@ private const val TAG = "CreateAgentInvVM"
  */
 @HiltViewModel
 class CreateAgentInvitationViewModel @Inject constructor(
-    private val ownerSpaceClient: OwnerSpaceClient
+    private val ownerSpaceClient: OwnerSpaceClient,
+    private val natsAutoConnector: NatsAutoConnector
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<CreateInvitationState>(CreateInvitationState.Ready)
@@ -40,6 +42,12 @@ class CreateAgentInvitationViewModel @Inject constructor(
 
     private fun createInvitation(name: String) {
         viewModelScope.launch {
+            // Check connection state before sending
+            if (natsAutoConnector.connectionState.value !is NatsAutoConnector.AutoConnectState.Connected) {
+                _state.value = CreateInvitationState.Error("Not connected to vault. Please wait for connection.")
+                return@launch
+            }
+
             _state.value = CreateInvitationState.Creating
 
             try {

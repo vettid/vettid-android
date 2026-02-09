@@ -142,6 +142,21 @@ class FeedClient @Inject constructor(
     }
 
     /**
+     * Set the priority of a feed event.
+     *
+     * @param eventId The event ID
+     * @param priority Priority level: -1 (LOW), 0 (NORMAL), 1 (HIGH), 2 (URGENT)
+     */
+    suspend fun setEventPriority(eventId: String, priority: Int): Result<Unit> {
+        val payload = JsonObject().apply {
+            addProperty("event_id", eventId)
+            addProperty("priority", priority)
+        }
+
+        return sendRequest("feed.set-priority", payload) { Unit }
+    }
+
+    /**
      * Sync events since a given sequence number.
      * Used for incremental updates.
      *

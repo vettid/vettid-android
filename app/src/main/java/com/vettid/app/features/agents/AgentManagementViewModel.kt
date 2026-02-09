@@ -3,6 +3,7 @@ package com.vettid.app.features.agents
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.nats.VaultResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -16,10 +17,12 @@ private const val TAG = "AgentManagementVM"
  * ViewModel for agent management screen.
  *
  * Lists connected agents, supports revoking connections.
+ * Waits for NATS connection before loading to avoid "failed to publish" errors.
  */
 @HiltViewModel
 class AgentManagementViewModel @Inject constructor(
-    private val ownerSpaceClient: OwnerSpaceClient
+    private val ownerSpaceClient: OwnerSpaceClient,
+    private val natsAutoConnector: NatsAutoConnector
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<AgentManagementState>(AgentManagementState.Loading)
@@ -28,8 +31,22 @@ class AgentManagementViewModel @Inject constructor(
     private val _effects = MutableSharedFlow<AgentManagementEffect>()
     val effects: SharedFlow<AgentManagementEffect> = _effects.asSharedFlow()
 
+    private var hasLoadedInitially = false
+
     init {
-        loadAgents()
+        observeConnectionAndLoad()
+    }
+
+    private fun observeConnectionAndLoad() {
+        viewModelScope.launch {
+            natsAutoConnector.connectionState.collect { state ->
+                if (state is NatsAutoConnector.AutoConnectState.Connected && !hasLoadedInitially) {
+                    hasLoadedInitially = true
+                    Log.d(TAG, "NATS connected, loading agents")
+                    loadAgents()
+                }
+            }
+        }
     }
 
     fun onEvent(event: AgentManagementEvent) {

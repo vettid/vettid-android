@@ -39,6 +39,7 @@ fun MainScaffold(
     secretsContent: @Composable (searchQuery: String) -> Unit,
     archiveContent: @Composable (searchQuery: String) -> Unit,
     votingContent: @Composable (searchQuery: String) -> Unit,
+    auditLogContent: @Composable (searchQuery: String) -> Unit = {},
     settingsContent: @Composable () -> Unit,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     drawerBadgeCounts: Map<DrawerItem, Int> = emptyMap()
@@ -148,6 +149,7 @@ fun MainScaffold(
                             DrawerItem.SECRETS -> secretsContent(searchQuery)
                             DrawerItem.ARCHIVE -> archiveContent(searchQuery)
                             DrawerItem.VOTING -> votingContent(searchQuery)
+                            DrawerItem.AUDIT_LOG -> auditLogContent(searchQuery)
                         }
                     }
                 }
