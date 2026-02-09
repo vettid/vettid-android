@@ -783,6 +783,7 @@ fun VettIDApp(
         }
         composable(Screen.VaultStatus.route) {
             VaultStatusScreen(
+                onBack = { navController.popBackStack() },
                 onNavigateToEnrollment = {
                     navController.navigate(Screen.EnrollmentWizard.createRoute())
                 },

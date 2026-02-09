@@ -9,6 +9,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Help
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -31,6 +32,7 @@ import kotlinx.coroutines.flow.collectLatest
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VaultStatusScreen(
+    onBack: () -> Unit = {},
     onNavigateToEnrollment: () -> Unit,
     onRequireAuth: (String) -> Unit,
     onNavigateToSettings: () -> Unit,
@@ -63,12 +65,14 @@ fun VaultStatusScreen(
         topBar = {
             TopAppBar(
                 title = { Text("Vault") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
                 actions = {
                     IconButton(onClick = { viewModel.onEvent(VaultStatusEvent.Refresh) }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-                    }
-                    IconButton(onClick = { viewModel.onEvent(VaultStatusEvent.ViewSettings) }) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
                     }
                 }
             )
@@ -98,9 +102,7 @@ fun VaultStatusScreen(
                 is VaultStatusState.Running -> RunningContent(
                     state = targetState,
                     syncStatus = syncStatus,
-                    onSync = { viewModel.onEvent(VaultStatusEvent.SyncVault) },
-                    onBackup = { viewModel.onEvent(VaultStatusEvent.TriggerBackup) },
-                    onStop = { viewModel.onEvent(VaultStatusEvent.StopVault) }
+                    onSaveToS3 = { viewModel.saveVaultState() }
                 )
                 is VaultStatusState.Stopped -> StoppedContent(
                     state = targetState,
@@ -218,7 +220,7 @@ private fun EnrolledContent(
             modifier = Modifier.fillMaxWidth()
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
-                InfoRow(label = "Vault ID", value = state.vaultId.take(8) + "...")
+                InfoRow(label = "Vault ID", value = state.vaultId)
                 if (state.enrolledAt.isNotEmpty()) {
                     InfoRow(label = "Enrolled", value = state.enrolledAt)
                 }
@@ -290,9 +292,7 @@ private fun ProvisioningContent(
 private fun RunningContent(
     state: VaultStatusState.Running,
     syncStatus: SyncStatus,
-    onSync: () -> Unit,
-    onBackup: () -> Unit,
-    onStop: () -> Unit
+    onSaveToS3: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -357,7 +357,7 @@ private fun RunningContent(
                     fontWeight = FontWeight.Medium
                 )
                 Spacer(modifier = Modifier.height(12.dp))
-                InfoRow(label = "Vault ID", value = state.vaultId.take(8) + "...")
+                InfoRow(label = "Vault ID", value = state.vaultId)
                 state.instanceId?.let { InfoRow(label = "Instance", value = it) }
                 state.region?.let { InfoRow(label = "Region", value = it) }
                 state.lastBackup?.let { InfoRow(label = "Last Backup", value = it) }
@@ -392,46 +392,14 @@ private fun RunningContent(
             Spacer(modifier = Modifier.height(16.dp))
         }
 
-        // Quick actions
-        Text(
-            text = "Quick Actions",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Medium
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        // Save to S3
+        Button(
+            onClick = onSaveToS3,
+            modifier = Modifier.fillMaxWidth()
         ) {
-            ActionButton(
-                icon = Icons.Default.Sync,
-                label = "Sync",
-                onClick = onSync,
-                modifier = Modifier.weight(1f)
-            )
-            ActionButton(
-                icon = Icons.Default.Backup,
-                label = "Backup",
-                onClick = onBackup,
-                modifier = Modifier.weight(1f)
-            )
-        }
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        // Stop button
-        OutlinedButton(
-            onClick = onStop,
-            modifier = Modifier.fillMaxWidth(),
-            colors = ButtonDefaults.outlinedButtonColors(
-                contentColor = MaterialTheme.colorScheme.error
-            )
-        ) {
-            Icon(Icons.Default.Stop, contentDescription = null)
+            Icon(Icons.Default.CloudUpload, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
-            Text("Stop Vault")
+            Text("Save Vault to S3")
         }
     }
 }
@@ -557,7 +525,7 @@ private fun StoppedContent(
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
-                InfoRow(label = "Vault ID", value = state.vaultId.take(8) + "...")
+                InfoRow(label = "Vault ID", value = state.vaultId)
                 state.instanceId?.let { InfoRow(label = "Instance", value = it) }
                 state.lastBackup?.let { InfoRow(label = "Last Backup", value = it) }
             }
@@ -697,38 +665,21 @@ private fun StatusBadge(
 
 @Composable
 private fun InfoRow(label: String, value: String) {
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween
+            .padding(vertical = 4.dp)
     ) {
         Text(
             text = label,
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        Spacer(modifier = Modifier.height(2.dp))
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium
         )
-    }
-}
-
-@Composable
-private fun ActionButton(
-    icon: ImageVector,
-    label: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    OutlinedButton(
-        onClick = onClick,
-        modifier = modifier.height(48.dp)
-    ) {
-        Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
-        Spacer(modifier = Modifier.width(6.dp))
-        Text(label)
     }
 }
 

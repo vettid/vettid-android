@@ -8,7 +8,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
-import com.vettid.app.core.nats.NatsConnectionManager
+import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.core.storage.CredentialStore
@@ -31,7 +31,7 @@ class SecretsViewModel @Inject constructor(
     private val minorSecretsStore: MinorSecretsStore,
     private val ownerSpaceClient: OwnerSpaceClient,
     private val credentialStore: CredentialStore,
-    private val connectionManager: NatsConnectionManager
+    private val natsAutoConnector: NatsAutoConnector
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<SecretsState>(SecretsState.Loading)
@@ -467,8 +467,8 @@ class SecretsViewModel @Inject constructor(
     fun syncFromVault() {
         viewModelScope.launch {
             try {
-                if (!connectionManager.isConnected()) {
-                    _effects.emit(SecretsEffect.ShowError("Not connected"))
+                if (natsAutoConnector.connectionState.value !is NatsAutoConnector.AutoConnectState.Connected) {
+                    _effects.emit(SecretsEffect.ShowError("Not connected to vault. Please wait for connection."))
                     return@launch
                 }
 
@@ -562,7 +562,7 @@ class SecretsViewModel @Inject constructor(
      */
     private suspend fun fetchUserPublicKeyFromVault() {
         try {
-            if (!connectionManager.isConnected()) {
+            if (natsAutoConnector.connectionState.value !is NatsAutoConnector.AutoConnectState.Connected) {
                 Log.w(TAG, "Cannot fetch user public key: not connected to vault")
                 return
             }

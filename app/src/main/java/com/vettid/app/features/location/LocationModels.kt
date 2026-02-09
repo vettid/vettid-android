@@ -11,9 +11,12 @@ enum class LocationPrecision(val decimalPlaces: Int, val displayName: String) {
 
 /**
  * How often the WorkManager worker runs to capture location.
- * Minimum is 15 minutes per WorkManager constraints.
+ * For intervals under 15 minutes, one-shot work chains are used since
+ * WorkManager's minimum periodic interval is 15 minutes.
  */
 enum class LocationUpdateFrequency(val minutes: Int, val displayName: String) {
+    ONE_MINUTE(1, "Every minute"),
+    FIVE_MINUTES(5, "Every 5 minutes"),
     FIFTEEN_MINUTES(15, "Every 15 minutes"),
     THIRTY_MINUTES(30, "Every 30 minutes"),
     ONE_HOUR(60, "Every hour"),

@@ -163,5 +163,15 @@ class AppPreferencesStore(context: Context) {
         private const val KEY_LAST_KNOWN_LAT = "location_last_lat"
         private const val KEY_LAST_KNOWN_LON = "location_last_lon"
         private const val KEY_LAST_CAPTURE_TIME = "location_last_capture_time"
+
+        // Backup keys
+        private const val KEY_BACKUP_ENABLED = "backup_enabled"
+    }
+
+    fun isBackupEnabled(): Boolean =
+        prefs.getBoolean(KEY_BACKUP_ENABLED, true)
+
+    fun setBackupEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_BACKUP_ENABLED, enabled).apply()
     }
 }

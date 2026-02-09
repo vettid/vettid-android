@@ -6,7 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.JsonObject
 import com.vettid.app.core.crypto.CryptoManager
-import com.vettid.app.core.nats.NatsConnectionManager
+import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.core.storage.CredentialStore
@@ -26,7 +26,7 @@ private const val REVEAL_DURATION_SECONDS = 30
 class CriticalSecretsViewModel @Inject constructor(
     private val ownerSpaceClient: OwnerSpaceClient,
     private val credentialStore: CredentialStore,
-    private val connectionManager: NatsConnectionManager,
+    private val natsAutoConnector: NatsAutoConnector,
     private val cryptoManager: CryptoManager
 ) : ViewModel() {
 
@@ -89,8 +89,8 @@ class CriticalSecretsViewModel @Inject constructor(
             _state.value = CriticalSecretsState.Authenticating
 
             try {
-                if (!connectionManager.isConnected()) {
-                    _state.value = CriticalSecretsState.Error("Not connected to vault")
+                if (natsAutoConnector.connectionState.value !is NatsAutoConnector.AutoConnectState.Connected) {
+                    _state.value = CriticalSecretsState.Error("Not connected to vault. Please wait for connection.")
                     return@launch
                 }
 
@@ -167,8 +167,8 @@ class CriticalSecretsViewModel @Inject constructor(
             _state.value = CriticalSecretsState.Retrieving(secretName)
 
             try {
-                if (!connectionManager.isConnected()) {
-                    _state.value = CriticalSecretsState.Error("Not connected to vault")
+                if (natsAutoConnector.connectionState.value !is NatsAutoConnector.AutoConnectState.Connected) {
+                    _state.value = CriticalSecretsState.Error("Not connected to vault. Please wait for connection.")
                     return@launch
                 }
 

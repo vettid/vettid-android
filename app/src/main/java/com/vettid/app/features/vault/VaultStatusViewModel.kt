@@ -384,6 +384,35 @@ class VaultStatusViewModel @Inject constructor(
         }
     }
 
+    fun saveVaultState() {
+        viewModelScope.launch {
+            try {
+                val response = ownerSpaceClient.sendAndAwaitResponse(
+                    messageType = "vault.save",
+                    payload = com.google.gson.JsonObject()
+                )
+                when (response) {
+                    is com.vettid.app.core.nats.VaultResponse.HandlerResult -> {
+                        if (response.success) {
+                            _effects.emit(VaultStatusEffect.ShowSuccess("Vault state saved to S3"))
+                        } else {
+                            _effects.emit(VaultStatusEffect.ShowError(response.error ?: "Failed to save"))
+                        }
+                    }
+                    is com.vettid.app.core.nats.VaultResponse.Error -> {
+                        _effects.emit(VaultStatusEffect.ShowError(response.message))
+                    }
+                    else -> {
+                        _effects.emit(VaultStatusEffect.ShowError("Unexpected response"))
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to save vault state", e)
+                _effects.emit(VaultStatusEffect.ShowError(e.message ?: "Failed to save"))
+            }
+        }
+    }
+
     private fun loadHandlers() {
         val currentState = _state.value
         if (currentState !is VaultStatusState.Running) return

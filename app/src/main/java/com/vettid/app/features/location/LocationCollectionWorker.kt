@@ -14,7 +14,9 @@ import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -53,35 +55,89 @@ class LocationCollectionWorker @AssistedInject constructor(
     companion object {
         private const val TAG = "LocationCollectionWorker"
         private const val WORK_NAME = "location_collection"
+        private const val WORK_NAME_HIGH_FREQ = "location_collection_high_freq"
         private const val LOCATION_TIMEOUT_MS = 30_000L
+        private const val MIN_PERIODIC_MINUTES = 15
 
         /**
          * Schedule periodic location collection.
+         * For intervals >= 15 min, uses PeriodicWorkRequest.
+         * For intervals < 15 min, uses chained OneTimeWorkRequests.
+         * Always captures an initial location immediately.
          */
         fun schedule(context: Context, frequencyMinutes: Int) {
+            // Always capture initial location immediately
+            captureNow(context)
+
+            if (frequencyMinutes >= MIN_PERIODIC_MINUTES) {
+                // Cancel any high-frequency chain
+                WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME_HIGH_FREQ)
+
+                val constraints = Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .setRequiresBatteryNotLow(true)
+                    .build()
+
+                val workRequest = PeriodicWorkRequestBuilder<LocationCollectionWorker>(
+                    frequencyMinutes.toLong(), TimeUnit.MINUTES
+                )
+                    .setConstraints(constraints)
+                    .setBackoffCriteria(
+                        BackoffPolicy.EXPONENTIAL,
+                        1, TimeUnit.MINUTES
+                    )
+                    .build()
+
+                WorkManager.getInstance(context)
+                    .enqueueUniquePeriodicWork(
+                        WORK_NAME,
+                        ExistingPeriodicWorkPolicy.UPDATE,
+                        workRequest
+                    )
+            } else {
+                // Cancel periodic work, use high-frequency chain
+                WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
+                scheduleHighFrequency(context, frequencyMinutes)
+            }
+
+            Log.i(TAG, "Scheduled location collection every $frequencyMinutes minutes")
+        }
+
+        /**
+         * Schedule a single immediate location capture.
+         */
+        fun captureNow(context: Context) {
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED)
-                .setRequiresBatteryNotLow(true)
                 .build()
 
-            val workRequest = PeriodicWorkRequestBuilder<LocationCollectionWorker>(
-                frequencyMinutes.toLong(), TimeUnit.MINUTES
-            )
+            val workRequest = OneTimeWorkRequestBuilder<LocationCollectionWorker>()
                 .setConstraints(constraints)
-                .setBackoffCriteria(
-                    BackoffPolicy.EXPONENTIAL,
-                    1, TimeUnit.MINUTES
-                )
+                .build()
+
+            WorkManager.getInstance(context).enqueue(workRequest)
+            Log.i(TAG, "Scheduled immediate location capture")
+        }
+
+        /**
+         * Schedule high-frequency (< 15 min) location collection using one-shot chains.
+         */
+        private fun scheduleHighFrequency(context: Context, frequencyMinutes: Int) {
+            val constraints = Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED)
+                .build()
+
+            val workRequest = OneTimeWorkRequestBuilder<LocationCollectionWorker>()
+                .setConstraints(constraints)
+                .setInitialDelay(frequencyMinutes.toLong(), TimeUnit.MINUTES)
                 .build()
 
             WorkManager.getInstance(context)
-                .enqueueUniquePeriodicWork(
-                    WORK_NAME,
-                    ExistingPeriodicWorkPolicy.UPDATE,
+                .enqueueUniqueWork(
+                    WORK_NAME_HIGH_FREQ,
+                    ExistingWorkPolicy.REPLACE,
                     workRequest
                 )
-
-            Log.i(TAG, "Scheduled location collection every $frequencyMinutes minutes")
         }
 
         /**
@@ -89,36 +145,41 @@ class LocationCollectionWorker @AssistedInject constructor(
          * Uses KEEP policy to avoid resetting the timer on an existing healthy worker.
          */
         fun ensureScheduled(context: Context, frequencyMinutes: Int) {
-            val constraints = Constraints.Builder()
-                .setRequiredNetworkType(NetworkType.CONNECTED)
-                .setRequiresBatteryNotLow(true)
-                .build()
+            if (frequencyMinutes >= MIN_PERIODIC_MINUTES) {
+                val constraints = Constraints.Builder()
+                    .setRequiredNetworkType(NetworkType.CONNECTED)
+                    .setRequiresBatteryNotLow(true)
+                    .build()
 
-            val workRequest = PeriodicWorkRequestBuilder<LocationCollectionWorker>(
-                frequencyMinutes.toLong(), TimeUnit.MINUTES
-            )
-                .setConstraints(constraints)
-                .setBackoffCriteria(
-                    BackoffPolicy.EXPONENTIAL,
-                    1, TimeUnit.MINUTES
+                val workRequest = PeriodicWorkRequestBuilder<LocationCollectionWorker>(
+                    frequencyMinutes.toLong(), TimeUnit.MINUTES
                 )
-                .build()
+                    .setConstraints(constraints)
+                    .setBackoffCriteria(
+                        BackoffPolicy.EXPONENTIAL,
+                        1, TimeUnit.MINUTES
+                    )
+                    .build()
 
-            WorkManager.getInstance(context)
-                .enqueueUniquePeriodicWork(
-                    WORK_NAME,
-                    ExistingPeriodicWorkPolicy.KEEP,
-                    workRequest
-                )
+                WorkManager.getInstance(context)
+                    .enqueueUniquePeriodicWork(
+                        WORK_NAME,
+                        ExistingPeriodicWorkPolicy.KEEP,
+                        workRequest
+                    )
 
-            Log.i(TAG, "Ensured location collection scheduled (every $frequencyMinutes minutes)")
+                Log.i(TAG, "Ensured location collection scheduled (every $frequencyMinutes minutes)")
+            } else {
+                scheduleHighFrequency(context, frequencyMinutes)
+            }
         }
 
         /**
-         * Cancel periodic location collection.
+         * Cancel all location collection work.
          */
         fun cancel(context: Context) {
             WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
+            WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME_HIGH_FREQ)
             Log.i(TAG, "Cancelled location collection")
         }
     }
@@ -131,6 +192,8 @@ class LocationCollectionWorker @AssistedInject constructor(
             Log.d(TAG, "Location tracking disabled, skipping")
             return Result.success()
         }
+
+        val frequency = appPreferencesStore.getLocationFrequency()
 
         // Check foreground location permission
         val hasForegroundPermission = ContextCompat.checkSelfPermission(
@@ -165,7 +228,7 @@ class LocationCollectionWorker @AssistedInject constructor(
             return Result.success()
         }
 
-        return try {
+        val result = try {
             val location = getCurrentLocation()
             if (location == null) {
                 Log.w(TAG, "Failed to get current location")
@@ -177,6 +240,13 @@ class LocationCollectionWorker @AssistedInject constructor(
             Log.e(TAG, "Location collection exception", e)
             if (runAttemptCount < 3) Result.retry() else Result.failure()
         }
+
+        // For high-frequency mode (< 15 min), re-schedule the next capture
+        if (frequency.minutes < MIN_PERIODIC_MINUTES && result == Result.success()) {
+            scheduleHighFrequency(applicationContext, frequency.minutes)
+        }
+
+        return result
     }
 
     private suspend fun getCurrentLocation(): Location? {

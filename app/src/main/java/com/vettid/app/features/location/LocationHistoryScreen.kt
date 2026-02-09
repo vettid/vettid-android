@@ -7,10 +7,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.flow.collectLatest
@@ -28,6 +28,8 @@ fun LocationHistoryScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showOverflowMenu by remember { mutableStateOf(false) }
+    var showFilterDropdown by remember { mutableStateOf(false) }
+    var isRefreshing by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.effects.collectLatest { effect ->
@@ -42,6 +44,13 @@ fun LocationHistoryScreen(
         }
     }
 
+    // Track loading state for pull-to-refresh
+    LaunchedEffect(state.isLoading) {
+        if (!state.isLoading) {
+            isRefreshing = false
+        }
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -52,9 +61,6 @@ fun LocationHistoryScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { viewModel.loadHistory() }) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-                    }
                     Box {
                         IconButton(onClick = { showOverflowMenu = true }) {
                             Icon(Icons.Default.MoreVert, contentDescription = "More")
@@ -84,29 +90,64 @@ fun LocationHistoryScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
-        Column(
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = {
+                isRefreshing = true
+                viewModel.loadHistory()
+            },
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Filter chips
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                TimeFilter.entries.forEach { filter ->
-                    FilterChip(
-                        selected = state.selectedFilter == filter,
-                        onClick = { viewModel.setFilter(filter) },
-                        label = { Text(filter.displayName) }
-                    )
+            Column(modifier = Modifier.fillMaxSize()) {
+                // Filter dropdown
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Box {
+                        OutlinedButton(onClick = { showFilterDropdown = true }) {
+                            Icon(Icons.Default.FilterList, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(state.selectedFilter.displayName)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(18.dp))
+                        }
+                        DropdownMenu(
+                            expanded = showFilterDropdown,
+                            onDismissRequest = { showFilterDropdown = false }
+                        ) {
+                            TimeFilter.entries.forEach { filter ->
+                                DropdownMenuItem(
+                                    text = { Text(filter.displayName) },
+                                    onClick = {
+                                        showFilterDropdown = false
+                                        viewModel.setFilter(filter)
+                                    },
+                                    trailingIcon = {
+                                        if (state.selectedFilter == filter) {
+                                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                        }
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    if (state.entries.isNotEmpty()) {
+                        Text(
+                            text = "${state.entries.size} points",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
-            }
 
             when {
-                state.isLoading -> {
+                state.isLoading && !isRefreshing -> {
                     Box(
                         modifier = Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center
@@ -169,14 +210,6 @@ fun LocationHistoryScreen(
                     }
                 }
                 else -> {
-                    // Results summary
-                    Text(
-                        text = "${state.entries.size} location points",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                    )
-
                     LazyColumn(
                         modifier = Modifier.fillMaxSize(),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
@@ -187,6 +220,7 @@ fun LocationHistoryScreen(
                         }
                     }
                 }
+            }
             }
         }
     }
