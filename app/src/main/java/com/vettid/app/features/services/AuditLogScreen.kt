@@ -83,17 +83,41 @@ fun AuditLogContent(
             VerificationBanner(status = status)
         }
 
-        // Time window chips
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        // Time window dropdown
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            items(TimeWindow.entries) { window ->
-                FilterChip(
-                    selected = timeWindow == window,
-                    onClick = { viewModel.setTimeWindow(window) },
-                    label = { Text(window.label) }
-                )
+            var showTimeDropdown by remember { mutableStateOf(false) }
+            Box {
+                OutlinedButton(onClick = { showTimeDropdown = true }) {
+                    Icon(Icons.Default.Schedule, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(timeWindow.label)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(18.dp))
+                }
+                DropdownMenu(
+                    expanded = showTimeDropdown,
+                    onDismissRequest = { showTimeDropdown = false }
+                ) {
+                    TimeWindow.entries.forEach { window ->
+                        DropdownMenuItem(
+                            text = { Text(window.label) },
+                            onClick = {
+                                showTimeDropdown = false
+                                viewModel.setTimeWindow(window)
+                            },
+                            trailingIcon = {
+                                if (timeWindow == window) {
+                                    Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        )
+                    }
+                }
             }
         }
 

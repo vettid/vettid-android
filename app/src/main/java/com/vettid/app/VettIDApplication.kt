@@ -3,23 +3,32 @@ package com.vettid.app
 import android.app.Application
 import android.util.Log
 import androidx.lifecycle.ProcessLifecycleOwner
+import androidx.work.Configuration
 import com.vettid.app.core.attestation.PcrInitializationService
 import com.vettid.app.core.nats.AppLifecycleObserver
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
 @HiltAndroidApp
-class VettIDApplication : Application() {
+class VettIDApplication : Application(), Configuration.Provider {
 
     companion object {
         private const val TAG = "VettIDApplication"
     }
 
     @Inject
+    lateinit var workerFactory: androidx.hilt.work.HiltWorkerFactory
+
+    @Inject
     lateinit var pcrInitializationService: PcrInitializationService
 
     @Inject
     lateinit var appLifecycleObserver: AppLifecycleObserver
+
+    override val workManagerConfiguration: Configuration
+        get() = Configuration.Builder()
+            .setWorkerFactory(workerFactory)
+            .build()
 
     override fun onCreate() {
         super.onCreate()
