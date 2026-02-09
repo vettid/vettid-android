@@ -1,8 +1,10 @@
 package com.vettid.app.features.vault
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -229,6 +231,11 @@ fun VaultPreferencesContent(
                     onClick = { viewModel.onLocationSettingsClick() }
                 )
             }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Notifications section
+            NotificationsSection()
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -677,6 +684,67 @@ private fun PreferencesItem(
             )
         }
     )
+}
+
+@Composable
+private fun NotificationsSection() {
+    val context = LocalContext.current
+
+    // Check if notification permission is granted
+    val notificationPermissionGranted = remember {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(
+                context, Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true // Pre-Android 13, notifications are enabled by default
+        }
+    }
+
+    PreferencesSection(title = "NOTIFICATIONS") {
+        // Permission status
+        ListItem(
+            headlineContent = { Text("Notifications") },
+            supportingContent = {
+                Text(if (notificationPermissionGranted) "Enabled" else "Disabled")
+            },
+            leadingContent = {
+                Icon(
+                    imageVector = if (notificationPermissionGranted) Icons.Default.Notifications else Icons.Default.NotificationsOff,
+                    contentDescription = null,
+                    tint = if (notificationPermissionGranted) Color(0xFF4CAF50) else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        )
+
+        HorizontalDivider()
+
+        // Manage notification channels via system settings
+        ListItem(
+            modifier = Modifier.clickable {
+                val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                    putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                }
+                context.startActivity(intent)
+            },
+            headlineContent = { Text("Manage Channels") },
+            supportingContent = { Text("Configure notification channels in system settings") },
+            leadingContent = {
+                Icon(
+                    imageVector = Icons.Default.Tune,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            trailingContent = {
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

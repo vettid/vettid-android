@@ -166,6 +166,9 @@ class AppPreferencesStore(context: Context) {
 
         // Backup keys
         private const val KEY_BACKUP_ENABLED = "backup_enabled"
+
+        // Notification keys
+        private const val KEY_NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
     }
 
     fun isBackupEnabled(): Boolean =
@@ -173,5 +176,14 @@ class AppPreferencesStore(context: Context) {
 
     fun setBackupEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_BACKUP_ENABLED, enabled).apply()
+    }
+
+    // --- Notification Preferences ---
+
+    fun hasRequestedNotificationPermission(): Boolean =
+        prefs.getBoolean(KEY_NOTIFICATION_PERMISSION_REQUESTED, false)
+
+    fun setNotificationPermissionRequested(requested: Boolean) {
+        prefs.edit().putBoolean(KEY_NOTIFICATION_PERMISSION_REQUESTED, requested).apply()
     }
 }

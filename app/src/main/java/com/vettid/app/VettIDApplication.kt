@@ -6,6 +6,7 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.work.Configuration
 import com.vettid.app.core.attestation.PcrInitializationService
 import com.vettid.app.core.nats.AppLifecycleObserver
+import com.vettid.app.features.feed.FeedNotificationService
 import dagger.hilt.android.HiltAndroidApp
 import javax.inject.Inject
 
@@ -24,6 +25,11 @@ class VettIDApplication : Application(), Configuration.Provider {
 
     @Inject
     lateinit var appLifecycleObserver: AppLifecycleObserver
+
+    // Eagerly initialize FeedNotificationService so it starts listening
+    // to NATS feed events immediately on app startup, not lazily on first injection
+    @Inject
+    lateinit var feedNotificationService: FeedNotificationService
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder()

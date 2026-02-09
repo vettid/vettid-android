@@ -314,6 +314,36 @@ class FeedNotificationService @Inject constructor(
     }
 
     /**
+     * Show a welcome notification after the user grants notification permission.
+     * Validates the notification pipeline works end-to-end.
+     */
+    fun showWelcomeNotification() {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(EXTRA_OPEN_FEED, true)
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID_DEFAULT)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle("Welcome to VettID")
+            .setContentText("Your vault is set up. You'll receive notifications for important events here.")
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .build()
+
+        try {
+            NotificationManagerCompat.from(context).notify("welcome".hashCode(), notification)
+            Log.d(TAG, "Showed welcome notification")
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Notification permission not granted for welcome", e)
+        }
+    }
+
+    /**
      * Clear all feed notifications.
      * Call this when user opens the Feed screen.
      */

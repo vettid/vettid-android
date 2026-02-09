@@ -1,8 +1,12 @@
 package com.vettid.app
 
+import android.Manifest
 import android.graphics.BitmapFactory
+import android.os.Build
 import android.util.Log
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -959,6 +963,28 @@ fun VettIDApp(
         }
         // Personal data collection screen (Phase 2)
         composable(Screen.PersonalDataCollection.route) {
+            val context = LocalContext.current
+            val notificationViewModel: NotificationViewModel = hiltViewModel()
+            val appPreferencesStore = remember { com.vettid.app.core.storage.AppPreferencesStore(context) }
+
+            // Request notification permission once after enrollment
+            val notificationPermissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission()
+            ) { granted ->
+                if (granted) {
+                    notificationViewModel.feedNotificationService.showWelcomeNotification()
+                }
+            }
+
+            LaunchedEffect(Unit) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    if (!appPreferencesStore.hasRequestedNotificationPermission()) {
+                        appPreferencesStore.setNotificationPermissionRequested(true)
+                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }
+            }
+
             PersonalDataCollectionScreen(
                 onNavigateToMain = {
                     navController.navigate(Screen.Main.route) {
@@ -1306,6 +1332,14 @@ sealed class UnlockAuthState {
 @dagger.hilt.android.lifecycle.HiltViewModel
 class UnlockViewModel @javax.inject.Inject constructor(
     val biometricAuthManager: BiometricAuthManager
+) : androidx.lifecycle.ViewModel()
+
+/**
+ * Simple ViewModel to provide FeedNotificationService for notification permission flow.
+ */
+@dagger.hilt.android.lifecycle.HiltViewModel
+class NotificationViewModel @javax.inject.Inject constructor(
+    val feedNotificationService: com.vettid.app.features.feed.FeedNotificationService
 ) : androidx.lifecycle.ViewModel()
 
 /**
