@@ -111,14 +111,10 @@ class MainActivity : ComponentActivity() {
     private fun extractDeepLinkData(intent: Intent?): DeepLinkData {
         val uri = intent?.data ?: return DeepLinkData(DeepLinkType.NONE)
 
-        // Debug logging for deep link troubleshooting
-        android.util.Log.d("VettID-DeepLink", "Received URI: $uri")
-        android.util.Log.d("VettID-DeepLink", "  scheme: ${uri.scheme}")
-        android.util.Log.d("VettID-DeepLink", "  host: ${uri.host}")
-        android.util.Log.d("VettID-DeepLink", "  path: ${uri.path}")
-        android.util.Log.d("VettID-DeepLink", "  query: ${uri.query}")
-        android.util.Log.d("VettID-DeepLink", "  data param: ${uri.getQueryParameter("data")}")
-        android.util.Log.d("VettID-DeepLink", "  code param: ${uri.getQueryParameter("code")}")
+        // SECURITY: Only log deep link type, not parameters (may contain tokens/codes)
+        if (BuildConfig.DEBUG) {
+            android.util.Log.d("VettID-DeepLink", "Received URI: scheme=${uri.scheme}, host=${uri.host}, path=${uri.path}")
+        }
 
         return when {
             // Custom scheme: vettid://enroll?code=xxx or vettid://enroll?data=xxx
@@ -218,18 +214,19 @@ class MainActivity : ComponentActivity() {
     private fun performSecurityCheck() {
         val result = runtimeProtection.performSecurityCheck()
 
-        // Log threats for debugging (in production, handle appropriately)
         if (!result.isSecure) {
-            // In production, you might want to:
-            // 1. Show a warning dialog for non-critical threats
-            // 2. Restrict functionality for critical threats
-            // 3. Block app entirely for very critical threats (debugger, Frida)
-            android.util.Log.w("VettID-Security", "Security threats detected: ${result.threats}")
+            android.util.Log.w("VettID-Security", "Security threats detected: ${result.threats.size} threat(s)")
 
-            // Check for critical threats that should block the app
+            // SECURITY: Block app for critical threats (debugger, Frida, tampering)
             if (runtimeProtection.hasCriticalThreats()) {
-                android.util.Log.e("VettID-Security", "Critical security threat detected!")
-                // In production, consider finishing the activity or showing error screen
+                android.util.Log.e("VettID-Security", "Critical security threat detected - blocking app")
+                android.widget.Toast.makeText(
+                    this,
+                    "Security threat detected. VettID cannot run in this environment.",
+                    android.widget.Toast.LENGTH_LONG
+                ).show()
+                finish()
+                return
             }
         }
     }

@@ -118,8 +118,11 @@ object NetworkConfig {
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
-            // TLS configuration - only TLS 1.2 and 1.3
-            .connectionSpecs(listOf(tlsSpec, ConnectionSpec.CLEARTEXT)) // CLEARTEXT needed for localhost in tests
+            // SECURITY: TLS only in production; allow cleartext only in debug builds for localhost testing
+            .connectionSpecs(
+                if (BuildConfig.DEBUG) listOf(tlsSpec, ConnectionSpec.CLEARTEXT)
+                else listOf(tlsSpec)
+            )
             // Connection pool limits
             .connectionPool(connectionPool)
 

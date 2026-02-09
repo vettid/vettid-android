@@ -134,14 +134,12 @@ class PersonalDataStore @Inject constructor(
      */
     fun getSystemFields(): SystemPersonalData? {
         val isSet = encryptedPrefs.getBoolean(KEY_SYSTEM_FIELDS_SET, false)
-        android.util.Log.d("PersonalDataStore", "getSystemFields: isSet=$isSet")
         if (!isSet) {
             return null
         }
         val firstName = encryptedPrefs.getString(KEY_FIRST_NAME, "") ?: ""
         val lastName = encryptedPrefs.getString(KEY_LAST_NAME, "") ?: ""
         val email = encryptedPrefs.getString(KEY_EMAIL, "") ?: ""
-        android.util.Log.d("PersonalDataStore", "getSystemFields returning: $firstName $lastName <$email>")
         return SystemPersonalData(
             firstName = firstName,
             lastName = lastName,
@@ -157,7 +155,6 @@ class PersonalDataStore @Inject constructor(
      * @param data System personal data from registration
      */
     fun storeSystemFields(data: SystemPersonalData) {
-        android.util.Log.d("PersonalDataStore", "storeSystemFields called with: ${data.firstName} ${data.lastName} <${data.email}>")
         encryptedPrefs.edit().apply {
             putString(KEY_FIRST_NAME, data.firstName)
             putString(KEY_LAST_NAME, data.lastName)
@@ -165,10 +162,6 @@ class PersonalDataStore @Inject constructor(
             putBoolean(KEY_SYSTEM_FIELDS_SET, true)
             commit()  // Use commit() instead of apply() to ensure synchronous write
         }
-        // Verify the data was stored correctly
-        val verified = encryptedPrefs.getBoolean(KEY_SYSTEM_FIELDS_SET, false)
-        val storedFirstName = encryptedPrefs.getString(KEY_FIRST_NAME, null)
-        android.util.Log.d("PersonalDataStore", "storeSystemFields verified: flag=$verified, firstName=$storedFirstName")
         markPendingSync()
     }
 
@@ -190,7 +183,6 @@ class PersonalDataStore @Inject constructor(
         val firstName = encryptedPrefs.getString(KEY_OPT_FIRST_NAME, null)
         val middleName = encryptedPrefs.getString(KEY_MIDDLE_NAME, null)
         val lastName = encryptedPrefs.getString(KEY_OPT_LAST_NAME, null)
-        android.util.Log.d(TAG, "getOptionalFields: firstName=$firstName, middleName=$middleName, lastName=$lastName")
         return OptionalPersonalData(
             // Name fields
             prefix = encryptedPrefs.getString(KEY_PREFIX, null),
@@ -259,7 +251,6 @@ class PersonalDataStore @Inject constructor(
      * @param value The new value (null to clear)
      */
     fun updateOptionalField(field: OptionalField, value: String?) {
-        android.util.Log.d(TAG, "updateOptionalField: field=$field, value=$value")
         val key = when (field) {
             // Name fields
             OptionalField.PREFIX -> KEY_PREFIX
@@ -284,7 +275,6 @@ class PersonalDataStore @Inject constructor(
             OptionalField.INSTAGRAM -> KEY_INSTAGRAM
             OptionalField.GITHUB -> KEY_GITHUB
         }
-        android.util.Log.d(TAG, "updateOptionalField: storing to key=$key")
         encryptedPrefs.edit().apply {
             putStringOrRemove(key, value)
             apply()

@@ -117,7 +117,7 @@ class PinUnlockViewModel @Inject constructor(
         Log.d(TAG, "  - UTK pool size: ${credentialStore.getUtkPool().size}")
         Log.d(TAG, "  - Has NATS connection: ${credentialStore.hasNatsConnection()}")
         Log.d(TAG, "  - NATS credentials valid: ${credentialStore.areNatsCredentialsValid()}")
-        Log.d(TAG, "  - User GUID: ${credentialStore.getUserGuid()}")
+        Log.d(TAG, "  - Has user GUID: ${credentialStore.getUserGuid() != null}")
     }
 
     /**
@@ -536,7 +536,7 @@ class PinUnlockViewModel @Inject constructor(
             val systemEmail = result.get("_system_email")?.asString
 
             if (systemFirstName != null && systemLastName != null && systemEmail != null) {
-                Log.d(TAG, "Storing system fields from vault: $systemFirstName $systemLastName")
+                Log.d(TAG, "Storing system fields from vault")
                 personalDataStore.storeSystemFields(
                     SystemPersonalData(
                         firstName = systemFirstName,
