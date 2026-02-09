@@ -1,11 +1,9 @@
 package com.vettid.app.features.feed
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -21,7 +19,6 @@ import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -29,11 +26,12 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.vettid.app.core.nats.FeedEvent
@@ -43,7 +41,6 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.concurrent.TimeUnit
-import kotlin.math.roundToInt
 
 /**
  * Feed screen showing activity events.
@@ -52,6 +49,7 @@ import kotlin.math.roundToInt
 @Composable
 fun FeedContent(
     viewModel: FeedViewModel = hiltViewModel(),
+    searchQuery: String = "",
     onNavigateToConversation: (String) -> Unit = {},
     onNavigateToConnectionRequest: (String) -> Unit = {},
     onNavigateToHandler: (String) -> Unit = {},
@@ -59,11 +57,15 @@ fun FeedContent(
     onNavigateToGuide: (guideId: String, eventId: String, userName: String) -> Unit = { _, _, _ -> },
     onNavigateToAgentApproval: (requestId: String) -> Unit = {}
 ) {
+    // Route search query from top bar to ViewModel
+    LaunchedEffect(searchQuery) {
+        viewModel.updateSearchQuery(searchQuery)
+    }
+
     val state by viewModel.state.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val isOfflineModeEnabled by viewModel.isOfflineModeEnabled.collectAsState()
     val showAuditEvents by viewModel.showAuditEvents.collectAsState()
-    val searchQuery by viewModel.searchQuery.collectAsState()
 
     // Snackbar state for action feedback
     val snackbarHostState = remember { SnackbarHostState() }
@@ -97,6 +99,14 @@ fun FeedContent(
             onAction = { action ->
                 viewModel.executeAction(event.eventId, action)
                 selectedEvent = null
+            },
+            onArchive = {
+                viewModel.archiveEvent(event.eventId)
+                selectedEvent = null
+            },
+            onDelete = {
+                viewModel.deleteEvent(event.eventId)
+                selectedEvent = null
             }
         )
     }
@@ -113,12 +123,10 @@ fun FeedContent(
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // Toolbar: audit toggle chip + search
+        // Toolbar: audit toggle chip
         FeedToolbar(
             showAuditEvents = showAuditEvents,
-            onToggleAudit = { viewModel.toggleAuditEvents() },
-            searchQuery = searchQuery,
-            onSearchQueryChange = { viewModel.updateSearchQuery(it) }
+            onToggleAudit = { viewModel.toggleAuditEvents() }
         )
 
         Box(modifier = Modifier.weight(1f)) {
@@ -212,57 +220,22 @@ private fun OfflineModeContent() {
 @Composable
 private fun FeedToolbar(
     showAuditEvents: Boolean,
-    onToggleAudit: () -> Unit,
-    searchQuery: String,
-    onSearchQueryChange: (String) -> Unit
+    onToggleAudit: () -> Unit
 ) {
-    var searchExpanded by rememberSaveable { mutableStateOf(false) }
-
-    Column {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            FilterChip(
-                selected = showAuditEvents,
-                onClick = onToggleAudit,
-                label = { Text("Audit Log") },
-                leadingIcon = if (showAuditEvents) {
-                    { Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(18.dp)) }
-                } else null
-            )
-
-            Spacer(modifier = Modifier.weight(1f))
-
-            IconButton(onClick = { searchExpanded = !searchExpanded }) {
-                Icon(
-                    imageVector = if (searchExpanded) Icons.Default.SearchOff else Icons.Default.Search,
-                    contentDescription = if (searchExpanded) "Close search" else "Search feed"
-                )
-            }
-        }
-
-        AnimatedVisibility(visible = searchExpanded) {
-            OutlinedTextField(
-                value = searchQuery,
-                onValueChange = onSearchQueryChange,
-                placeholder = { Text("Search events...") },
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp),
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                trailingIcon = {
-                    if (searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { onSearchQueryChange("") }) {
-                            Icon(Icons.Default.Clear, contentDescription = "Clear search")
-                        }
-                    }
-                }
-            )
-        }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        FilterChip(
+            selected = showAuditEvents,
+            onClick = onToggleAudit,
+            label = { Text("Audit Log") },
+            leadingIcon = if (showAuditEvents) {
+                { Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(18.dp)) }
+            } else null
+        )
     }
 }
 
@@ -346,6 +319,7 @@ private fun FeedList(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun EventCard(
     event: FeedEvent,
@@ -354,124 +328,106 @@ private fun EventCard(
     onDelete: () -> Unit,
     onAction: (String) -> Unit
 ) {
-    val density = LocalDensity.current
-    val scope = rememberCoroutineScope()
-    val actionButtonWidthPx = with(density) { 160.dp.toPx() }
-    val offsetX = remember { Animatable(0f) }
+    var showMenu by remember { mutableStateOf(false) }
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+    val haptic = LocalHapticFeedback.current
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp)
     ) {
-        // Background action buttons (revealed on swipe)
-        Row(
-            modifier = Modifier
-                .matchParentSize()
-                .clip(RoundedCornerShape(12.dp)),
-            horizontalArrangement = Arrangement.End
-        ) {
-            // Archive button
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .width(80.dp)
-                    .background(MaterialTheme.colorScheme.primary)
-                    .clickable {
-                        scope.launch {
-                            offsetX.animateTo(0f, tween(200))
-                        }
-                        onArchive()
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        Icons.Default.Archive,
-                        contentDescription = "Archive",
-                        tint = MaterialTheme.colorScheme.onPrimary,
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Text(
-                        "Archive",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onPrimary
-                    )
-                }
-            }
-            // Delete button
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .width(80.dp)
-                    .background(MaterialTheme.colorScheme.error)
-                    .clickable {
-                        scope.launch {
-                            offsetX.animateTo(0f, tween(200))
-                        }
-                        onDelete()
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Icon(
-                        Icons.Default.Delete,
-                        contentDescription = "Delete",
-                        tint = MaterialTheme.colorScheme.onError,
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Text(
-                        "Delete",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onError
-                    )
-                }
-            }
-        }
-
-        // Foreground card (slides left on swipe)
         EventCardContent(
             event = event,
-            onClick = {
-                if (offsetX.value < -20f) {
-                    // If swiped open, close first
-                    scope.launch { offsetX.animateTo(0f, tween(200)) }
-                } else {
-                    onClick()
-                }
-            },
+            onClick = onClick,
             onAction = onAction,
-            modifier = Modifier
-                .offset { IntOffset(offsetX.value.roundToInt(), 0) }
-                .pointerInput(Unit) {
-                    detectHorizontalDragGestures(
-                        onDragEnd = {
-                            scope.launch {
-                                if (offsetX.value < -actionButtonWidthPx / 2) {
-                                    offsetX.animateTo(-actionButtonWidthPx, tween(200))
-                                } else {
-                                    offsetX.animateTo(0f, tween(200))
-                                }
-                            }
-                        },
-                        onHorizontalDrag = { _, dragAmount ->
-                            scope.launch {
-                                val newOffset = (offsetX.value + dragAmount)
-                                    .coerceIn(-actionButtonWidthPx, 0f)
-                                offsetX.snapTo(newOffset)
-                            }
-                        }
+            onLongClick = {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                showMenu = true
+            }
+        )
+
+        // Context menu anchored to the card
+        DropdownMenu(
+            expanded = showMenu,
+            onDismissRequest = { showMenu = false }
+        ) {
+            DropdownMenuItem(
+                text = { Text("Archive") },
+                onClick = {
+                    showMenu = false
+                    onArchive()
+                },
+                leadingIcon = {
+                    Icon(
+                        Icons.Default.Archive,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
+            )
+            DropdownMenuItem(
+                text = { Text("Delete") },
+                onClick = {
+                    showMenu = false
+                    showDeleteConfirm = true
+                },
+                leadingIcon = {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            )
+        }
+    }
+
+    // Delete confirmation dialog
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            icon = {
+                Icon(
+                    Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+            },
+            title = { Text("Delete Event?") },
+            text = {
+                Text("This will permanently delete this event. This cannot be undone.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteConfirm = false
+                        onDelete()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
         )
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun EventCardContent(
     event: FeedEvent,
     onClick: () -> Unit,
     onAction: (String) -> Unit,
+    onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val isRead = event.feedStatus == FeedStatus.READ
@@ -481,7 +437,10 @@ private fun EventCardContent(
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            ),
         colors = CardDefaults.cardColors(
             containerColor = if (event.priorityLevel == EventPriority.URGENT) {
                 MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f)
@@ -805,8 +764,48 @@ private fun ErrorContent(
 private fun EventDetailDialog(
     event: FeedEvent,
     onDismiss: () -> Unit,
-    onAction: (String) -> Unit
+    onAction: (String) -> Unit,
+    onArchive: () -> Unit = {},
+    onDelete: () -> Unit = {}
 ) {
+    var showDeleteConfirm by remember { mutableStateOf(false) }
+
+    // Delete confirmation dialog
+    if (showDeleteConfirm) {
+        AlertDialog(
+            onDismissRequest = { showDeleteConfirm = false },
+            icon = {
+                Icon(
+                    Icons.Default.Warning,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error
+                )
+            },
+            title = { Text("Delete Event?") },
+            text = {
+                Text("This will permanently delete this event. This cannot be undone.")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteConfirm = false
+                        onDelete()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Delete")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteConfirm = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = {
@@ -902,6 +901,40 @@ private fun EventDetailDialog(
                                 )
                             }
                         }
+                    }
+                }
+
+                // Archive / Delete actions
+                Spacer(modifier = Modifier.height(16.dp))
+                HorizontalDivider()
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    OutlinedButton(onClick = onArchive) {
+                        Icon(
+                            Icons.Default.Archive,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Archive")
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    OutlinedButton(
+                        onClick = { showDeleteConfirm = true },
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.error
+                        )
+                    ) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Delete")
                     }
                 }
             }

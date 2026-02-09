@@ -45,14 +45,19 @@ enum class ConnectionTypeFilter(val label: String) {
 fun ConnectionsContentEmbedded(
     viewModel: ConnectionsViewModel = hiltViewModel(),
     agentViewModel: AgentManagementViewModel = hiltViewModel(),
+    searchQuery: String = "",
     onConnectionClick: (String) -> Unit = {},
     onCreateInvitation: () -> Unit = {},
     onScanInvitation: () -> Unit = {},
     onCreateAgentInvitation: () -> Unit = {}
 ) {
+    // Route search query from top bar to ViewModel
+    LaunchedEffect(searchQuery) {
+        viewModel.onSearchQueryChanged(searchQuery)
+    }
+
     val state by viewModel.state.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
-    val searchQuery by viewModel.searchQuery.collectAsState()
     val agentState by agentViewModel.state.collectAsState()
 
     var showFabMenu by remember { mutableStateOf(false) }
@@ -153,36 +158,6 @@ fun ConnectionsContentEmbedded(
                 }
                 else -> {
                     // People connections (ALL shows people — agents are in their own tab)
-                    // Search bar
-                    if (state is ConnectionsState.Loaded) {
-                        OutlinedTextField(
-                            value = searchQuery,
-                            onValueChange = { viewModel.onSearchQueryChanged(it) },
-                            placeholder = { Text("Search connections...") },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = Icons.Default.Search,
-                                    contentDescription = null
-                                )
-                            },
-                            trailingIcon = {
-                                if (searchQuery.isNotEmpty()) {
-                                    IconButton(onClick = { viewModel.onSearchQueryChanged("") }) {
-                                        Icon(
-                                            imageVector = Icons.Default.Clear,
-                                            contentDescription = "Clear search"
-                                        )
-                                    }
-                                }
-                            },
-                            singleLine = true,
-                            shape = RoundedCornerShape(24.dp),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp)
-                        )
-                    }
-
                     when (val currentState = state) {
                         is ConnectionsState.Loading -> {
                             Box(

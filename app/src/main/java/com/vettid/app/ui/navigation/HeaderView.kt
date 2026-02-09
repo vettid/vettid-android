@@ -5,19 +5,26 @@ import android.util.Base64
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.vettid.app.NatsConnectionState
 import com.vettid.app.ui.components.NatsConnectionStatusIndicator
@@ -31,10 +38,14 @@ fun HeaderView(
     onNatsStatusClick: () -> Unit = {},
     actionIcon: ImageVector? = null,
     onActionClick: (() -> Unit)? = null,
-    showSearch: Boolean = false,
-    onSearchClick: (() -> Unit)? = null,
     scrollBehavior: TopAppBarScrollBehavior? = null,
-    profilePhotoBase64: String? = null
+    profilePhotoBase64: String? = null,
+    // Unified search
+    isSearchActive: Boolean = false,
+    searchQuery: String = "",
+    onSearchQueryChange: (String) -> Unit = {},
+    onSearchToggle: () -> Unit = {},
+    showSearchIcon: Boolean = true
 ) {
     // Decode profile photo if available
     val profileBitmap = remember(profilePhotoBase64) {
@@ -45,6 +56,15 @@ fun HeaderView(
             } catch (e: Exception) {
                 null
             }
+        }
+    }
+
+    val focusRequester = remember { FocusRequester() }
+
+    // Auto-focus search field when activated
+    LaunchedEffect(isSearchActive) {
+        if (isSearchActive) {
+            focusRequester.requestFocus()
         }
     }
 
@@ -80,26 +100,56 @@ fun HeaderView(
             }
         },
         title = {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.titleLarge
-            )
+            if (isSearchActive) {
+                TextField(
+                    value = searchQuery,
+                    onValueChange = onSearchQueryChange,
+                    placeholder = { Text("Search...") },
+                    singleLine = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = MaterialTheme.colorScheme.surface,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                        focusedIndicatorColor = MaterialTheme.colorScheme.primary,
+                        unfocusedIndicatorColor = MaterialTheme.colorScheme.outline
+                    ),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { /* dismiss keyboard */ })
+                )
+            } else {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleLarge
+                )
+            }
         },
         actions = {
-            // NATS connection status indicator
-            NatsConnectionStatusIndicator(
-                connectionState = natsConnectionState,
-                onClick = onNatsStatusClick
-            )
-
-            if (showSearch && onSearchClick != null) {
-                IconButton(onClick = onSearchClick) {
+            if (isSearchActive) {
+                // Close search button
+                IconButton(onClick = onSearchToggle) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Close search"
+                    )
+                }
+            } else if (showSearchIcon) {
+                // Search icon
+                IconButton(onClick = onSearchToggle) {
                     Icon(
                         imageVector = Icons.Default.Search,
                         contentDescription = "Search"
                     )
                 }
             }
+
+            // NATS connection status indicator (always visible)
+            NatsConnectionStatusIndicator(
+                connectionState = natsConnectionState,
+                onClick = onNatsStatusClick
+            )
+
             if (actionIcon != null && onActionClick != null) {
                 IconButton(onClick = onActionClick) {
                     Icon(
@@ -118,8 +168,7 @@ fun HeaderView(
  */
 data class HeaderConfig(
     val title: String,
-    val actionIcon: ImageVector? = null,
-    val showSearch: Boolean = false
+    val actionIcon: ImageVector? = null
 )
 
 fun getHeaderConfig(
@@ -131,16 +180,13 @@ fun getHeaderConfig(
         AppSection.VAULT -> when (vaultTab) {
             VaultTab.CONNECTIONS -> HeaderConfig(
                 title = "Connections",
-                actionIcon = Icons.Default.PersonAdd,
-                showSearch = true
+                actionIcon = Icons.Default.PersonAdd
             )
             VaultTab.FEED -> HeaderConfig(
-                title = "Feed",
-                showSearch = false
+                title = "Feed"
             )
             VaultTab.MORE -> HeaderConfig(
-                title = "More",
-                showSearch = false
+                title = "More"
             )
         }
         AppSection.VAULT_SERVICES -> when (vaultServicesTab) {

@@ -55,17 +55,20 @@ import java.util.Locale
 @Composable
 fun SecretsContent(
     viewModel: SecretsViewModel = hiltViewModel(),
+    searchQuery: String = "",
     onNavigateToCriticalSecrets: () -> Unit = {}
 ) {
+    // Route search query from top bar to ViewModel
+    LaunchedEffect(searchQuery) {
+        viewModel.onEvent(SecretsEvent.SearchQueryChanged(searchQuery))
+    }
+
     val state by viewModel.state.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val editState by viewModel.editState.collectAsState()
     val showAddDialog by viewModel.showAddDialog.collectAsState()
     val showDeleteConfirmDialog by viewModel.showDeleteConfirmDialog.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
-
-    // Search bar visibility
-    var showSearchBar by remember { mutableStateOf(false) }
 
     // QR code dialog state
     var qrDialogSecret by remember { mutableStateOf<MinorSecret?>(null) }
@@ -137,10 +140,7 @@ fun SecretsContent(
                     SecretsList(
                         groupedByCategory = groupedByCategory,
                         hasUnpublishedChanges = currentState.hasUnpublishedChanges,
-                        showSearchBar = showSearchBar,
                         searchQuery = currentState.searchQuery,
-                        onSearchQueryChanged = { viewModel.onEvent(SecretsEvent.SearchQueryChanged(it)) },
-                        onSearchBarClose = { showSearchBar = false },
                         onSecretClick = { viewModel.onEvent(SecretsEvent.SecretClicked(it)) },
                         onTogglePublicProfile = { viewModel.onEvent(SecretsEvent.TogglePublicProfile(it)) },
                         onMoveUp = { viewModel.onEvent(SecretsEvent.MoveSecretUp(it)) },
@@ -152,34 +152,15 @@ fun SecretsContent(
             }
         }
 
-        // FABs - always show when not in error state
+        // FAB - always show when not in error state
         if (state !is SecretsState.Error) {
-            Column(
+            FloatingActionButton(
+                onClick = { showTemplateChooser = true },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(16.dp),
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                    .padding(16.dp)
             ) {
-                // Search FAB (smaller)
-                SmallFloatingActionButton(
-                    onClick = { showSearchBar = !showSearchBar },
-                    containerColor = if (showSearchBar)
-                        MaterialTheme.colorScheme.primaryContainer
-                    else
-                        MaterialTheme.colorScheme.secondaryContainer
-                ) {
-                    Icon(
-                        if (showSearchBar) Icons.Default.Close else Icons.Default.Search,
-                        contentDescription = if (showSearchBar) "Close search" else "Search"
-                    )
-                }
-                // Add FAB (primary)
-                FloatingActionButton(
-                    onClick = { showTemplateChooser = true }
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = "Add secret")
-                }
+                Icon(Icons.Default.Add, contentDescription = "Add secret")
             }
         }
 
@@ -294,10 +275,7 @@ fun SecretsContent(
 private fun SecretsList(
     groupedByCategory: GroupedByCategory,
     hasUnpublishedChanges: Boolean,
-    showSearchBar: Boolean,
     searchQuery: String,
-    onSearchQueryChanged: (String) -> Unit,
-    onSearchBarClose: () -> Unit,
     onSecretClick: (String) -> Unit,
     onTogglePublicProfile: (String) -> Unit,
     onMoveUp: (String) -> Unit,
@@ -333,18 +311,6 @@ private fun SecretsList(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
     ) {
-        // Search bar
-        if (showSearchBar) {
-            item {
-                SearchBar(
-                    query = searchQuery,
-                    onQueryChange = onSearchQueryChanged,
-                    onClose = onSearchBarClose,
-                    modifier = Modifier.padding(bottom = 12.dp)
-                )
-            }
-        }
-
         // Publish banner (if unpublished public keys)
         if (hasUnpublishedChanges) {
             item {

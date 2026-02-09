@@ -613,6 +613,12 @@ class FeedViewModel @Inject constructor(
                         )
                     }
                     _effects.emit(FeedEffect.ShowActionSuccess("Event archived"))
+
+                    // Sync after short delay to pick up the new audit event
+                    viewModelScope.launch {
+                        delay(500)
+                        silentRefresh()
+                    }
                 }
                 .onFailure { error ->
                     // If vault says "event not found", the event was already deleted/cleaned up
@@ -665,6 +671,12 @@ class FeedViewModel @Inject constructor(
                         )
                     }
                     _effects.emit(FeedEffect.ShowActionSuccess("Event deleted"))
+
+                    // Sync after short delay to pick up the new audit event
+                    viewModelScope.launch {
+                        delay(500)
+                        silentRefresh()
+                    }
                 }
                 .onFailure { error ->
                     if (error.message?.contains("event not found", ignoreCase = true) == true) {

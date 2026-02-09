@@ -32,19 +32,31 @@ fun MainScaffold(
     onNatsRetry: () -> Unit = {},
     onNatsStatusClick: () -> Unit = {},
     onHeaderAction: () -> Unit = {},
-    // Content slots
-    feedContent: @Composable () -> Unit,
-    connectionsContent: @Composable () -> Unit,
-    personalDataContent: @Composable () -> Unit,
-    secretsContent: @Composable () -> Unit,
-    archiveContent: @Composable () -> Unit,
-    votingContent: @Composable () -> Unit,
+    // Content slots - each receives the current search query
+    feedContent: @Composable (searchQuery: String) -> Unit,
+    connectionsContent: @Composable (searchQuery: String) -> Unit,
+    personalDataContent: @Composable (searchQuery: String) -> Unit,
+    secretsContent: @Composable (searchQuery: String) -> Unit,
+    archiveContent: @Composable (searchQuery: String) -> Unit,
+    votingContent: @Composable (searchQuery: String) -> Unit,
     settingsContent: @Composable () -> Unit,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
     drawerBadgeCounts: Map<DrawerItem, Int> = emptyMap()
 ) {
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     val density = LocalDensity.current
+
+    // Search state managed at scaffold level
+    var isSearchActive by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+
+    // Clear search when screen changes or settings opens
+    LaunchedEffect(navigationState.currentItem, navigationState.isSettingsOpen) {
+        if (isSearchActive) {
+            isSearchActive = false
+            searchQuery = ""
+        }
+    }
 
     // Track cumulative drag for swipe detection
     var cumulativeDrag by remember { mutableFloatStateOf(0f) }
@@ -106,7 +118,15 @@ fun MainScaffold(
                         onNavigationStateChange(navigationState.copy(isSettingsOpen = !navigationState.isSettingsOpen))
                     },
                     scrollBehavior = scrollBehavior,
-                    profilePhotoBase64 = profilePhotoBase64
+                    profilePhotoBase64 = profilePhotoBase64,
+                    isSearchActive = isSearchActive,
+                    searchQuery = searchQuery,
+                    onSearchQueryChange = { searchQuery = it },
+                    onSearchToggle = {
+                        isSearchActive = !isSearchActive
+                        if (!isSearchActive) searchQuery = ""
+                    },
+                    showSearchIcon = !navigationState.isSettingsOpen
                 )
             },
             snackbarHost = { SnackbarHost(snackbarHostState) }
@@ -122,12 +142,12 @@ fun MainScaffold(
                         settingsContent()
                     } else {
                         when (navigationState.currentItem) {
-                            DrawerItem.FEED -> feedContent()
-                            DrawerItem.CONNECTIONS -> connectionsContent()
-                            DrawerItem.PERSONAL_DATA -> personalDataContent()
-                            DrawerItem.SECRETS -> secretsContent()
-                            DrawerItem.ARCHIVE -> archiveContent()
-                            DrawerItem.VOTING -> votingContent()
+                            DrawerItem.FEED -> feedContent(searchQuery)
+                            DrawerItem.CONNECTIONS -> connectionsContent(searchQuery)
+                            DrawerItem.PERSONAL_DATA -> personalDataContent(searchQuery)
+                            DrawerItem.SECRETS -> secretsContent(searchQuery)
+                            DrawerItem.ARCHIVE -> archiveContent(searchQuery)
+                            DrawerItem.VOTING -> votingContent(searchQuery)
                         }
                     }
                 }

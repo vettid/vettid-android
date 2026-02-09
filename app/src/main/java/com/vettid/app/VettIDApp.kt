@@ -1405,9 +1405,10 @@ fun MainScreen(
         natsErrorMessage = appState.natsError,
         onNatsRetry = { appViewModel.retryNatsConnection() },
         onNatsStatusClick = { showConnectionDetailsDialog = true },
-        // Content for each drawer item
-        feedContent = {
+        // Content for each drawer item - each receives searchQuery from MainScaffold
+        feedContent = { query ->
             FeedContent(
+                searchQuery = query,
                 onNavigateToConversation = onNavigateToConversation,
                 onNavigateToHandler = onNavigateToHandlerDetail,
                 onNavigateToBackup = { onNavigateToBackups() },
@@ -1415,27 +1416,29 @@ fun MainScreen(
                 onNavigateToAgentApproval = onNavigateToAgentApproval
             )
         },
-        connectionsContent = {
+        connectionsContent = { query ->
             ConnectionsContentEmbedded(
+                searchQuery = query,
                 onConnectionClick = onNavigateToConnectionDetail,
                 onCreateInvitation = onNavigateToCreateInvitation,
                 onScanInvitation = onNavigateToScanInvitation,
                 onCreateAgentInvitation = onNavigateToCreateAgentInvitation
             )
         },
-        personalDataContent = {
+        personalDataContent = { _ ->
             PersonalDataContent()
         },
-        secretsContent = {
+        secretsContent = { query ->
             SecretsContentEmbedded(
+                searchQuery = query,
                 onSecretClick = onNavigateToSecretDetail,
                 onNavigateToCriticalSecrets = onNavigateToCriticalSecrets
             )
         },
-        archiveContent = {
-            ArchiveContentEmbedded()
+        archiveContent = { query ->
+            ArchiveContentEmbedded(searchQuery = query)
         },
-        votingContent = {
+        votingContent = { _ ->
             ProposalsContent(
                 onNavigateToProposal = { proposalId -> onNavigateToProposalDetail(proposalId) }
             )
@@ -1964,15 +1967,16 @@ private fun PlaceholderScreenWithBack(
 
 @Composable
 private fun SecretsContentEmbedded(
+    searchQuery: String = "",
     onSecretClick: (String) -> Unit = {},
     onNavigateToCriticalSecrets: () -> Unit = {}
 ) {
-    SecretsContent(onNavigateToCriticalSecrets = onNavigateToCriticalSecrets)
+    SecretsContent(searchQuery = searchQuery, onNavigateToCriticalSecrets = onNavigateToCriticalSecrets)
 }
 
 @Composable
-private fun ArchiveContentEmbedded() {
-    ArchiveContent()
+private fun ArchiveContentEmbedded(searchQuery: String = "") {
+    ArchiveContent(searchQuery = searchQuery)
 }
 
 @Composable
