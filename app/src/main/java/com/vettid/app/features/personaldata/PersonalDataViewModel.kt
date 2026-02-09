@@ -1,5 +1,6 @@
 package com.vettid.app.features.personaldata
 
+import android.content.Context
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -13,7 +14,9 @@ import com.vettid.app.core.storage.CredentialStore
 import com.vettid.app.core.storage.MinorSecretsStore
 import com.vettid.app.core.storage.PersonalDataStore
 import com.vettid.app.core.storage.SecretType
+import com.vettid.app.worker.PersonalDataSyncWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -23,6 +26,7 @@ private const val TAG = "PersonalDataViewModel"
 
 @HiltViewModel
 class PersonalDataViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val credentialStore: CredentialStore,
     private val personalDataStore: PersonalDataStore,
     private val minorSecretsStore: MinorSecretsStore,
@@ -967,12 +971,17 @@ class PersonalDataViewModel @Inject constructor(
                     }
                     is VaultResponse.Error -> {
                         Log.e(TAG, "Vault error saving field: ${response.code} - ${response.message}")
-                        _editState.value = current.copy(isSaving = false)
-                        _effects.emit(PersonalDataEffect.ShowError("Failed to save: ${response.message}"))
-                        return@launch
+                        // Schedule background sync to retry later
+                        personalDataStore.markPendingSync()
+                        PersonalDataSyncWorker.scheduleImmediate(context)
+                        Log.i(TAG, "Scheduled background sync for failed save")
                     }
                     null -> {
                         Log.w(TAG, "Timeout waiting for vault update confirmation")
+                        // Schedule background sync to retry later
+                        personalDataStore.markPendingSync()
+                        PersonalDataSyncWorker.scheduleImmediate(context)
+                        Log.i(TAG, "Scheduled background sync for timed-out save")
                     }
                     else -> {
                         Log.w(TAG, "Unexpected response type: ${response::class.simpleName}")

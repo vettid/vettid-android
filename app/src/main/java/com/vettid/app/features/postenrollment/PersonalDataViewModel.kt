@@ -1,5 +1,6 @@
 package com.vettid.app.features.postenrollment
 
+import android.content.Context
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -16,6 +17,7 @@ import com.vettid.app.core.storage.PersonalDataStore
 import com.vettid.app.core.storage.SystemPersonalData
 import com.vettid.app.worker.PersonalDataSyncWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -37,6 +39,7 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class PersonalDataViewModel @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val personalDataStore: PersonalDataStore,
     private val ownerSpaceClient: OwnerSpaceClient,
     private val connectionManager: NatsConnectionManager,
@@ -296,8 +299,8 @@ class PersonalDataViewModel @Inject constructor(
     private suspend fun continueToNext() {
         // Trigger background sync if there are pending changes
         if (personalDataStore.hasPendingSync()) {
-            // Schedule background sync worker
             Log.d(TAG, "Scheduling background sync for pending changes")
+            PersonalDataSyncWorker.scheduleImmediate(context)
         }
         _effects.emit(PersonalDataEffect.NavigateToMain)
     }

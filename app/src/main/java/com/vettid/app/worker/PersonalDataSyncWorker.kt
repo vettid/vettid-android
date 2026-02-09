@@ -124,7 +124,7 @@ class PersonalDataSyncWorker @AssistedInject constructor(
 
         return try {
             // Get fields map in format expected by enclave: { "fields": { "name": "value" } }
-            val fieldsMap = personalDataStore.exportFieldsMapForProfileUpdate()
+            val fieldsMap = personalDataStore.exportFieldsMapForPersonalData()
 
             // Build payload with correct structure for profile.update
             val payload = buildProfileUpdatePayload(fieldsMap)
