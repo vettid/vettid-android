@@ -3,6 +3,7 @@ package com.vettid.app.features.vault
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.network.*
 import com.vettid.app.core.storage.CredentialStore
@@ -22,7 +23,8 @@ private const val TAG = "VaultStatusViewModel"
 class VaultStatusViewModel @Inject constructor(
     private val vaultServiceClient: VaultServiceClient,
     private val credentialStore: CredentialStore,
-    private val ownerSpaceClient: OwnerSpaceClient
+    private val ownerSpaceClient: OwnerSpaceClient,
+    private val natsAutoConnector: NatsAutoConnector
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<VaultStatusState>(VaultStatusState.Loading)
@@ -75,12 +77,32 @@ class VaultStatusViewModel @Inject constructor(
             // Try to get vault status from server
             val actionToken = currentActionToken
             if (actionToken == null) {
-                // Need authentication to get vault status
-                // For now, show enrolled state based on local credential
-                _state.value = VaultStatusState.Enrolled(
-                    vaultId = credentialStore.getUserGuid() ?: "unknown",
-                    enrolledAt = "" // Would need to store this locally
-                )
+                // No action token - check NATS connection state to determine vault status
+                val vaultId = credentialStore.getUserGuid() ?: "unknown"
+                if (natsAutoConnector.connectionState.value is NatsAutoConnector.AutoConnectState.Connected) {
+                    // NATS connected means vault is running - show Running state with handlers
+                    _state.value = VaultStatusState.Running(
+                        vaultId = vaultId,
+                        instanceId = null,
+                        region = null,
+                        health = VaultHealth(
+                            status = HealthLevel.HEALTHY,
+                            memoryUsagePercent = null,
+                            diskUsagePercent = null,
+                            cpuUsagePercent = null,
+                            natsConnected = true,
+                            lastChecked = null
+                        ),
+                        lastBackup = null,
+                        lastSync = null
+                    )
+                    loadHandlers()
+                } else {
+                    _state.value = VaultStatusState.Enrolled(
+                        vaultId = vaultId,
+                        enrolledAt = ""
+                    )
+                }
                 return@launch
             }
 

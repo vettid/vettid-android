@@ -56,23 +56,26 @@ class ArchiveViewModel @Inject constructor(
         viewModelScope.launch {
             _state.value = ArchiveState.Loading
             try {
-                // First try cached events
-                val cached = feedRepository.getCachedEvents()
-                    .filter { it.feedStatus == FeedStatus.ARCHIVED }
+                // Always fetch from vault first for accurate data
+                var loaded = false
+                feedClient.listFeed(status = "archived")
+                    .onSuccess { response ->
+                        archivedItems.clear()
+                        archivedItems.addAll(response.events.map { it.toArchivedItem() })
+                        loaded = true
+                    }
+                    .onFailure {
+                        Log.w(TAG, "Failed to fetch archived events from vault", it)
+                    }
 
-                if (cached.isNotEmpty()) {
-                    archivedItems.clear()
-                    archivedItems.addAll(cached.map { it.toArchivedItem() })
-                } else {
-                    // Try fetching archived events from vault
-                    feedClient.listFeed(status = "archived")
-                        .onSuccess { response ->
-                            archivedItems.clear()
-                            archivedItems.addAll(response.events.map { it.toArchivedItem() })
-                        }
-                        .onFailure {
-                            Log.w(TAG, "Failed to fetch archived events from vault", it)
-                        }
+                // Fall back to cached events only if vault query failed
+                if (!loaded) {
+                    val cached = feedRepository.getCachedEvents()
+                        .filter { it.feedStatus == FeedStatus.ARCHIVED }
+                    if (cached.isNotEmpty()) {
+                        archivedItems.clear()
+                        archivedItems.addAll(cached.map { it.toArchivedItem() })
+                    }
                 }
 
                 if (archivedItems.isEmpty()) {

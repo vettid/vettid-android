@@ -797,13 +797,13 @@ interface VaultServiceApi {
     suspend fun getPcrValues(): Response<PcrValuesResponse>
 
     // Protean Credential Backup
-    @POST("vault/backup/credential")
+    @POST("vault/credentials/backup")
     suspend fun backupCredential(
         @Header("Authorization") authToken: String,
         @Body request: ProteanBackupRequest
     ): Response<ProteanBackupResponse>
 
-    @GET("vault/backup/credentials")
+    @GET("vault/credentials/backup")
     suspend fun getCredentialBackups(
         @Header("Authorization") authToken: String
     ): Response<ProteanBackupListResponse>

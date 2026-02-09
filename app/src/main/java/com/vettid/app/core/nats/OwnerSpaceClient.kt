@@ -1272,7 +1272,8 @@ class OwnerSpaceClient @Inject constructor(
                     return
                 }
                 // Agent approval request events
-                message.subject.contains(".forApp.agent.") -> {
+                // Exclude .response messages - they should flow through to normal response handling
+                message.subject.contains(".forApp.agent.") && !message.subject.endsWith(".response") -> {
                     handleAgentEvent(message)
                     return
                 }
