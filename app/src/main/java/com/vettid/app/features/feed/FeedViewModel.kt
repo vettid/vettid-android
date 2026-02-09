@@ -168,7 +168,7 @@ class FeedViewModel @Inject constructor(
                     delay(1000)
                     // Sync guides first and wait for completion so events exist before loading feed
                     syncGuides()
-                    loadFeed()
+                    loadFeedAndWait()
                     isInitialLoadComplete = true
                 }
             }
@@ -176,16 +176,23 @@ class FeedViewModel @Inject constructor(
     }
 
     /**
-     * Periodically refresh feed every 30 seconds when online.
-     * Uses silentRefresh() to avoid triggering the pull-to-refresh indicator.
+     * Periodically refresh feed. When loaded, refreshes every 30s.
+     * When not loaded (Loading/Error), retries every 5s for faster recovery.
      */
     private fun startPeriodicRefresh() {
         viewModelScope.launch {
             while (isActive) {
-                delay(30_000) // 30 seconds
-                if (isOnline.value && _state.value is FeedState.Loaded) {
+                val currentState = _state.value
+                val delayMs = if (currentState is FeedState.Loaded) 30_000L else 5_000L
+                delay(delayMs)
+
+                val stateAfterDelay = _state.value
+                if (stateAfterDelay is FeedState.Loaded) {
                     Log.d(TAG, "Periodic feed refresh (silent)")
                     silentRefresh()
+                } else if (stateAfterDelay is FeedState.Loading || stateAfterDelay is FeedState.Error) {
+                    Log.d(TAG, "Periodic retry: feed not loaded yet, retrying")
+                    loadFeed()
                 }
             }
         }
@@ -295,6 +302,66 @@ class FeedViewModel @Inject constructor(
                     )
                 }
             }
+        }
+    }
+
+    /**
+     * Suspend version of loadFeed that waits for the result with retries.
+     * Used by observeConnectionAndLoad() to ensure isInitialLoadComplete is set
+     * only after data is actually loaded (or retries exhausted).
+     * Retries up to 3 times with short delays to handle slow vault startup.
+     */
+    private suspend fun loadFeedAndWait() {
+        val currentState = _state.value
+        if (currentState !is FeedState.Loaded) {
+            _state.value = FeedState.Loading
+        }
+
+        val delays = longArrayOf(2000, 3000, 5000) // delays between retries
+        for (attempt in 0..2) {
+            try {
+                val result = feedRepository.getFeed(forceRefresh = attempt > 0)
+                if (result.isSuccess) {
+                    val events = result.getOrThrow()
+                    val filtered = filterForDisplay(events)
+                    _state.value = if (filtered.isEmpty()) {
+                        FeedState.Empty
+                    } else {
+                        FeedState.Loaded(
+                            events = filtered,
+                            hasMore = false,
+                            unreadCount = filtered.count { it.isUnread },
+                            isOffline = !feedRepository.isOnline.value
+                        )
+                    }
+                    Log.d(TAG, "loadFeedAndWait: loaded ${filtered.size} events on attempt ${attempt + 1}")
+                    return
+                }
+                val error = result.exceptionOrNull()
+                if (error is CancellationException) throw error
+                Log.w(TAG, "loadFeedAndWait: attempt ${attempt + 1} failed: ${error?.message}")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "loadFeedAndWait: attempt ${attempt + 1} exception: ${e.message}")
+            }
+
+            if (attempt < 2) delay(delays[attempt])
+        }
+
+        // All attempts failed — show cached data or error
+        val cached = feedRepository.getCachedEvents()
+        val filtered = filterForDisplay(cached)
+        _state.value = if (filtered.isNotEmpty()) {
+            Log.d(TAG, "loadFeedAndWait: showing ${filtered.size} cached events after retries exhausted")
+            FeedState.Loaded(
+                events = filtered,
+                hasMore = false,
+                unreadCount = filtered.count { it.isUnread },
+                isOffline = true
+            )
+        } else {
+            FeedState.Error("Unable to load feed. Pull down to retry.")
         }
     }
 

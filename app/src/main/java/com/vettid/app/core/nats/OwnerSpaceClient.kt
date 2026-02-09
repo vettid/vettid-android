@@ -720,19 +720,12 @@ class OwnerSpaceClient @Inject constructor(
                 addProperty("new_password_hash", newPasswordHash)
             }
 
-            // Encrypt with X25519 + XChaCha20-Poly1305 to UTK public key
-            val encryptedResult = cryptoManager.encryptToPublicKey(
-                plaintext = passwordPayload.toString().toByteArray(),
-                publicKeyBase64 = availableUtk.publicKey
+            // Encrypt with X25519 + XChaCha20-Poly1305 using UTK (matches enrollment)
+            val encryptedBlob = cryptoManager.encryptToUTK(
+                plaintext = passwordPayload.toString().toByteArray(Charsets.UTF_8),
+                utkPublicKeyBase64 = availableUtk.publicKey
             )
-
-            // Combine ephemeral public key + nonce + ciphertext
-            val ephemeralPubKeyBytes = android.util.Base64.decode(encryptedResult.ephemeralPublicKey, android.util.Base64.NO_WRAP)
-            val nonceBytes = android.util.Base64.decode(encryptedResult.nonce, android.util.Base64.NO_WRAP)
-            val ciphertextBytes = android.util.Base64.decode(encryptedResult.ciphertext, android.util.Base64.NO_WRAP)
-
-            val combined = ephemeralPubKeyBytes + nonceBytes + ciphertextBytes
-            val encryptedPayloadBase64 = android.util.Base64.encodeToString(combined, android.util.Base64.NO_WRAP)
+            val encryptedPayloadBase64 = android.util.Base64.encodeToString(encryptedBlob, android.util.Base64.NO_WRAP)
 
             // Build request payload
             val requestPayload = JsonObject().apply {

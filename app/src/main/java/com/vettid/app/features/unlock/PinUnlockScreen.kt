@@ -170,23 +170,7 @@ private fun PinEntryContent(
             maxLength = PinUnlockViewModel.MAX_PIN_LENGTH
         )
 
-        Spacer(modifier = Modifier.height(12.dp))
-
-        // Error message
-        AnimatedVisibility(
-            visible = error != null,
-            enter = fadeIn(),
-            exit = fadeOut()
-        ) {
-            Text(
-                text = error ?: "",
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodyMedium,
-                textAlign = TextAlign.Center
-            )
-        }
-
-        Spacer(modifier = Modifier.height(20.dp))
+        Spacer(modifier = Modifier.height(32.dp))
 
         // Numeric keypad
         NumericKeypad(
@@ -221,6 +205,25 @@ private fun PinEntryContent(
                 Text("Unlock")
             }
         }
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        // Error message at bottom — doesn't shift keypad or buttons
+        AnimatedVisibility(
+            visible = error != null,
+            enter = fadeIn(),
+            exit = fadeOut()
+        ) {
+            Text(
+                text = error ?: "",
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 32.dp)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(32.dp))
     }
 }
 

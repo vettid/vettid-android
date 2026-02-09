@@ -31,6 +31,7 @@ import com.vettid.app.features.settings.AppTheme
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import kotlinx.coroutines.flow.collectLatest
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -444,6 +445,11 @@ private fun ChangePasswordDialog(
     var confirmPassword by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var isChanging by remember { mutableStateOf(false) }
+    var currentPasswordVisible by remember { mutableStateOf(false) }
+    var newPasswordVisible by remember { mutableStateOf(false) }
+    var confirmPasswordVisible by remember { mutableStateOf(false) }
+
+    val passwordsMatch = newPassword.isNotEmpty() && confirmPassword.isNotEmpty() && newPassword == confirmPassword
 
     AlertDialog(
         onDismissRequest = { if (!isChanging) onDismiss() },
@@ -468,7 +474,15 @@ private fun ChangePasswordDialog(
                         error = null
                     },
                     label = { Text("Current Password") },
-                    visualTransformation = PasswordVisualTransformation(),
+                    visualTransformation = if (currentPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { currentPasswordVisible = !currentPasswordVisible }) {
+                            Icon(
+                                if (currentPasswordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (currentPasswordVisible) "Hide" else "Show"
+                            )
+                        }
+                    },
                     singleLine = true,
                     enabled = !isChanging,
                     modifier = Modifier.fillMaxWidth()
@@ -484,7 +498,15 @@ private fun ChangePasswordDialog(
                         error = null
                     },
                     label = { Text("New Password") },
-                    visualTransformation = PasswordVisualTransformation(),
+                    visualTransformation = if (newPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { newPasswordVisible = !newPasswordVisible }) {
+                            Icon(
+                                if (newPasswordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (newPasswordVisible) "Hide" else "Show"
+                            )
+                        }
+                    },
                     singleLine = true,
                     enabled = !isChanging,
                     modifier = Modifier.fillMaxWidth()
@@ -500,7 +522,27 @@ private fun ChangePasswordDialog(
                         error = null
                     },
                     label = { Text("Confirm New Password") },
-                    visualTransformation = PasswordVisualTransformation(),
+                    visualTransformation = if (confirmPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            // Match indicator
+                            if (confirmPassword.isNotEmpty()) {
+                                Icon(
+                                    imageVector = if (passwordsMatch) Icons.Default.CheckCircle else Icons.Default.Cancel,
+                                    contentDescription = if (passwordsMatch) "Passwords match" else "Passwords don't match",
+                                    tint = if (passwordsMatch) Color(0xFF4CAF50) else MaterialTheme.colorScheme.error,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            IconButton(onClick = { confirmPasswordVisible = !confirmPasswordVisible }) {
+                                Icon(
+                                    if (confirmPasswordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = if (confirmPasswordVisible) "Hide" else "Show"
+                                )
+                            }
+                        }
+                    },
+                    isError = confirmPassword.isNotEmpty() && !passwordsMatch,
                     singleLine = true,
                     enabled = !isChanging,
                     modifier = Modifier.fillMaxWidth()
@@ -544,7 +586,7 @@ private fun ChangePasswordDialog(
                         newPassword.length < 8 -> {
                             error = "New password must be at least 8 characters"
                         }
-                        confirmPassword != newPassword -> {
+                        !passwordsMatch -> {
                             error = "Passwords do not match"
                         }
                         newPassword == currentPassword -> {
