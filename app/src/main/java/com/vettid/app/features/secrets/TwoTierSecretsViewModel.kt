@@ -4,9 +4,9 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.JsonObject
-import com.google.gson.JsonParser
 import com.vettid.app.core.crypto.CryptoManager
 import com.vettid.app.core.nats.OwnerSpaceClient
+import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.core.network.TransactionKeyInfo
 import com.vettid.app.core.storage.CriticalSecretCategory
 import com.vettid.app.core.storage.CriticalSecretMetadata
@@ -367,54 +367,75 @@ class TwoTierSecretsViewModel @Inject constructor(
                 addProperty("key_id", utk.keyId)
             }
 
-            val result = ownerSpaceClient.sendToVault("credential.secret.add", payload)
+            Log.d(TAG, "Sending credential.secret.add (blob length=${encryptedBlob.length})")
 
-            // Parse response to get updated credential blob and new UTKs
-            val responseStr = result.getOrThrow()
-            val responseJson = JsonParser.parseString(responseStr).asJsonObject
+            val response = ownerSpaceClient.sendAndAwaitResponse("credential.secret.add", payload)
 
-            // Update stored credential blob with the re-encrypted one from vault
-            val newEncryptedCredential = responseJson.get("encrypted_credential")?.asString
-            if (newEncryptedCredential != null) {
-                val decodedBlob = android.util.Base64.decode(newEncryptedCredential, android.util.Base64.NO_WRAP)
-                credentialStore.storeCredentialBlob(decodedBlob)
-            }
+            when (response) {
+                is VaultResponse.HandlerResult -> {
+                    if (!response.success) {
+                        throw Exception(response.error ?: "Vault rejected the request")
+                    }
 
-            // Get the vault-assigned secret ID
-            val vaultSecretId = responseJson.get("id")?.asString ?: java.util.UUID.randomUUID().toString()
+                    val result = response.result
 
-            // Add new UTKs from vault response to the pool
-            val newUtksArray = responseJson.getAsJsonArray("new_utks")
-            if (newUtksArray != null && newUtksArray.size() > 0) {
-                val newUtks = newUtksArray.map { utkObj ->
-                    val obj = utkObj.asJsonObject
-                    TransactionKeyInfo(
-                        keyId = obj.get("id").asString,
-                        publicKey = obj.get("public_key").asString,
-                        algorithm = "X25519"
+                    // Update stored credential blob with the re-encrypted one from vault
+                    val newEncryptedCredential = result?.get("encrypted_credential")?.asString
+                    if (newEncryptedCredential != null) {
+                        val decodedBlob = android.util.Base64.decode(newEncryptedCredential, android.util.Base64.NO_WRAP)
+                        credentialStore.storeCredentialBlob(decodedBlob)
+                        Log.d(TAG, "Updated credential blob from vault response")
+                    }
+
+                    // Get the vault-assigned secret ID
+                    val vaultSecretId = result?.get("id")?.asString ?: java.util.UUID.randomUUID().toString()
+
+                    // Add new UTKs from vault response to the pool
+                    // Note: OwnerSpaceClient.extractAndStoreUtks may also handle this automatically
+                    val newUtksArray = result?.getAsJsonArray("new_utks")
+                    if (newUtksArray != null && newUtksArray.size() > 0) {
+                        val newUtks = newUtksArray.map { utkObj ->
+                            val obj = utkObj.asJsonObject
+                            TransactionKeyInfo(
+                                keyId = obj.get("id").asString,
+                                publicKey = obj.get("public_key").asString,
+                                algorithm = "X25519"
+                            )
+                        }
+                        credentialStore.addUtks(newUtks)
+                    }
+
+                    // Remove used UTK
+                    credentialStore.removeUtk(utk.keyId)
+
+                    // Store metadata locally
+                    val metadata = CriticalSecretMetadata(
+                        id = vaultSecretId,
+                        name = name,
+                        category = category,
+                        description = description,
+                        createdAt = System.currentTimeMillis(),
+                        lastAccessedAt = null,
+                        accessCount = 0
                     )
+                    criticalMetadataStore.storeMetadata(metadata)
+
+                    loadAllSecrets()
+                    _effects.emit(TwoTierSecretsEffect.ShowMessage("Critical secret added"))
+                    _effects.emit(TwoTierSecretsEffect.NavigateBack)
                 }
-                credentialStore.addUtks(newUtks)
+                is VaultResponse.Error -> {
+                    Log.e(TAG, "Vault error adding critical secret: ${response.code} - ${response.message}")
+                    _effects.emit(TwoTierSecretsEffect.ShowError("Vault error: ${response.message}"))
+                }
+                null -> {
+                    _effects.emit(TwoTierSecretsEffect.ShowError("Request timed out - check connection"))
+                }
+                else -> {
+                    Log.w(TAG, "Unexpected response type: $response")
+                    _effects.emit(TwoTierSecretsEffect.ShowError("Unexpected response from vault"))
+                }
             }
-
-            // Remove used UTK
-            credentialStore.removeUtk(utk.keyId)
-
-            // Store metadata locally
-            val metadata = CriticalSecretMetadata(
-                id = vaultSecretId,
-                name = name,
-                category = category,
-                description = description,
-                createdAt = System.currentTimeMillis(),
-                lastAccessedAt = null,
-                accessCount = 0
-            )
-            criticalMetadataStore.storeMetadata(metadata)
-
-            loadAllSecrets()
-            _effects.emit(TwoTierSecretsEffect.ShowMessage("Critical secret added"))
-            _effects.emit(TwoTierSecretsEffect.NavigateBack)
 
         } catch (e: Exception) {
             Log.e(TAG, "Failed to add critical secret", e)
