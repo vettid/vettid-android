@@ -40,7 +40,7 @@ fun LocationSettingsScreen(
     val backgroundLocationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        viewModel.onLocationPermissionResult(true)
+        viewModel.onLocationPermissionResult(granted)
     }
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(

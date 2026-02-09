@@ -5,9 +5,11 @@ import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.annotations.SerializedName
+import com.vettid.app.core.attestation.AttestationVerificationException
 import com.vettid.app.core.attestation.ExpectedPcrs
 import com.vettid.app.core.attestation.NitroAttestationVerifier
 import com.vettid.app.core.attestation.PcrConfigManager
+import com.vettid.app.core.attestation.PcrInitializationService
 import com.vettid.app.core.attestation.VerifiedAttestation
 import com.vettid.app.core.crypto.CryptoManager
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -33,6 +35,7 @@ class NitroEnrollmentClient @Inject constructor(
     private val cryptoManager: CryptoManager,
     private val nitroAttestationVerifier: NitroAttestationVerifier,
     private val pcrConfigManager: PcrConfigManager,
+    private val pcrInitializationService: PcrInitializationService,
     private val replayProtection: NatsReplayProtection
 ) {
     companion object {
@@ -245,11 +248,13 @@ class NitroEnrollmentClient @Inject constructor(
                                         return@subscribe
                                     }
 
-                                    // Verify the attestation document
-                                    val verified = verifyAttestationWithNonce(
-                                        attestationDoc,
-                                        nonce
-                                    )
+                                    // Verify the attestation document (suspend call — needs runBlocking in callback context)
+                                    val verified = kotlinx.coroutines.runBlocking {
+                                        verifyAttestationWithNonce(
+                                            attestationDoc,
+                                            nonce
+                                        )
+                                    }
 
                                     if (verified != null) {
                                         verifiedAttestation = verified
@@ -310,16 +315,15 @@ class NitroEnrollmentClient @Inject constructor(
 
     /**
      * Verify attestation document with nonce check.
+     * On PCR mismatch, force-refreshes PCRs and retries once (handles stale cache after enclave redeploy).
      */
-    private fun verifyAttestationWithNonce(
+    private suspend fun verifyAttestationWithNonce(
         attestationDocBase64: String,
         expectedNonce: ByteArray
     ): VerifiedAttestation? {
         return try {
-            // Get cached PCRs
             val expectedPcrs = pcrConfigManager.getCurrentPcrs()
 
-            // Verify the attestation document
             val verified = nitroAttestationVerifier.verify(
                 attestationDocBase64 = attestationDocBase64,
                 expectedPcrs = expectedPcrs,
@@ -328,6 +332,30 @@ class NitroEnrollmentClient @Inject constructor(
 
             Log.i(TAG, "Attestation verified. Module: ${verified.moduleId}")
             verified
+        } catch (e: AttestationVerificationException) {
+            // PCR mismatch — stale cache after enclave redeploy. Force-refresh and retry once.
+            if (e.message?.contains("PCR", ignoreCase = true) == true) {
+                Log.w(TAG, "PCR mismatch, force-refreshing PCRs and retrying...")
+                try {
+                    pcrInitializationService.forceRefresh()
+                    val freshPcrs = pcrConfigManager.getCurrentPcrs()
+                    Log.d(TAG, "Retrying attestation with fresh PCRs version: ${freshPcrs.version}")
+
+                    val verified = nitroAttestationVerifier.verify(
+                        attestationDocBase64 = attestationDocBase64,
+                        expectedPcrs = freshPcrs,
+                        expectedNonce = expectedNonce
+                    )
+                    Log.i(TAG, "Attestation verified after PCR refresh. Module: ${verified.moduleId}")
+                    verified
+                } catch (retryEx: Exception) {
+                    Log.e(TAG, "Attestation verification failed after PCR refresh", retryEx)
+                    null
+                }
+            } else {
+                Log.e(TAG, "Attestation verification failed", e)
+                null
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Attestation verification failed", e)
             null

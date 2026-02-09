@@ -49,7 +49,8 @@ fun VaultPreferencesContent(
     onNavigateToLocationHistory: () -> Unit = {},
     onNavigateToSharedLocations: () -> Unit = {},
     onNavigateToLocationSettings: () -> Unit = {},
-    onNavigateToAgents: () -> Unit = {}
+    onNavigateToAgents: () -> Unit = {},
+    onNavigateToVaultStatus: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -62,7 +63,7 @@ fun VaultPreferencesContent(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
         // Background location is optional - proceed either way
-        viewModel.onLocationPermissionResult(true)
+        viewModel.onLocationPermissionResult(granted)
     }
 
     val locationPermissionLauncher = rememberLauncherForActivityResult(
@@ -145,13 +146,24 @@ fun VaultPreferencesContent(
                 pcrVersion = state.pcrVersion,
                 pcr0Hash = state.pcr0Hash,
                 onRefreshClick = { viewModel.refreshVaultStatus() },
-                onChangePinClick = { showChangePinDialog = true }
+                onChangePinClick = { showChangePinDialog = true },
+                onSectionClick = onNavigateToVaultStatus
             )
 
             Spacer(modifier = Modifier.height(24.dp))
 
             // Credential Settings
             PreferencesSection(title = "CREDENTIAL SETTINGS") {
+                // Change Password
+                PreferencesItem(
+                    icon = Icons.Default.Password,
+                    title = "Change Password",
+                    subtitle = "Update your vault credential password",
+                    onClick = { showChangePasswordDialog = true }
+                )
+
+                HorizontalDivider()
+
                 // Session TTL
                 TTLDropdownItem(
                     currentTtl = state.sessionTtlMinutes,
@@ -160,12 +172,28 @@ fun VaultPreferencesContent(
 
                 HorizontalDivider()
 
-                // Change Password
-                PreferencesItem(
-                    icon = Icons.Default.Password,
-                    title = "Change Password",
-                    subtitle = "Update your vault credential password",
-                    onClick = { showChangePasswordDialog = true }
+                // Credential Backup
+                ListItem(
+                    headlineContent = { Text("Credential Backup") },
+                    supportingContent = {
+                        Text(
+                            if (state.backupEnabled) "Credentials backed up on use"
+                            else "Backups disabled"
+                        )
+                    },
+                    leadingContent = {
+                        Icon(
+                            imageVector = Icons.Default.CloudUpload,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    },
+                    trailingContent = {
+                        Switch(
+                            checked = state.backupEnabled,
+                            onCheckedChange = { viewModel.toggleBackup(it) }
+                        )
+                    }
                 )
             }
 
@@ -199,34 +227,6 @@ fun VaultPreferencesContent(
                     title = "Location Tracking",
                     subtitle = if (state.locationTrackingEnabled) "Enabled" else "Disabled",
                     onClick = { viewModel.onLocationSettingsClick() }
-                )
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Backup section
-            PreferencesSection(title = "BACKUP") {
-                ListItem(
-                    headlineContent = { Text("Credential Backup") },
-                    supportingContent = {
-                        Text(
-                            if (state.backupEnabled) "Credentials backed up on use"
-                            else "Backups disabled"
-                        )
-                    },
-                    leadingContent = {
-                        Icon(
-                            imageVector = Icons.Default.CloudUpload,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    },
-                    trailingContent = {
-                        Switch(
-                            checked = state.backupEnabled,
-                            onCheckedChange = { viewModel.toggleBackup(it) }
-                        )
-                    }
                 )
             }
 
@@ -300,6 +300,8 @@ private fun ChangePinDialog(
     var error by remember { mutableStateOf<String?>(null) }
     var isChanging by remember { mutableStateOf(false) }
 
+    val pinsMatch = newPin.length >= 4 && confirmPin.isNotEmpty() && newPin == confirmPin
+
     AlertDialog(
         onDismissRequest = { if (!isChanging) onDismiss() },
         title = {
@@ -359,6 +361,17 @@ private fun ChangePinDialog(
                     label = { Text("Confirm New PIN") },
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    trailingIcon = {
+                        if (confirmPin.isNotEmpty()) {
+                            Icon(
+                                imageVector = if (pinsMatch) Icons.Default.CheckCircle else Icons.Default.Cancel,
+                                contentDescription = if (pinsMatch) "PINs match" else "PINs don't match",
+                                tint = if (pinsMatch) Color(0xFF4CAF50) else MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    },
+                    isError = confirmPin.isNotEmpty() && !pinsMatch,
                     singleLine = true,
                     enabled = !isChanging,
                     modifier = Modifier.fillMaxWidth()
@@ -862,11 +875,13 @@ private fun VaultServerSection(
     pcrVersion: String?,
     pcr0Hash: String?,
     onRefreshClick: () -> Unit,
-    onChangePinClick: () -> Unit = {}
+    onChangePinClick: () -> Unit = {},
+    onSectionClick: () -> Unit = {}
 ) {
     PreferencesSection(title = "VAULT") {
-        // Status Row
+        // Status Row — tap to navigate to Vault Status screen
         ListItem(
+            modifier = Modifier.clickable(onClick = onSectionClick),
             headlineContent = { Text("Status") },
             supportingContent = {
                 Text(

@@ -12,6 +12,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,7 +36,8 @@ import java.util.*
 enum class ConnectionTypeFilter(val label: String) {
     ALL("All"),
     PEOPLE("People"),
-    AGENTS("Agents")
+    AGENTS("Agents"),
+    SERVICES("Services")
 }
 
 /**
@@ -127,22 +130,44 @@ fun ConnectionsContentEmbedded(
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // Connection type filter chips
+            // Connection type filter dropdown
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                ConnectionTypeFilter.entries.forEach { filter ->
-                    FilterChip(
-                        selected = typeFilter == filter,
-                        onClick = { typeFilter = filter },
-                        label = { Text(filter.label) },
-                        leadingIcon = if (typeFilter == filter) {
-                            { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
-                        } else null
+                var expanded by remember { mutableStateOf(false) }
+                @OptIn(ExperimentalMaterial3Api::class)
+                ExposedDropdownMenuBox(
+                    expanded = expanded,
+                    onExpandedChange = { expanded = it }
+                ) {
+                    OutlinedTextField(
+                        value = typeFilter.label,
+                        onValueChange = {},
+                        readOnly = true,
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+                        modifier = Modifier
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                            .width(160.dp),
+                        textStyle = MaterialTheme.typography.bodyMedium,
+                        singleLine = true
                     )
+                    ExposedDropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false }
+                    ) {
+                        ConnectionTypeFilter.entries.forEach { filter ->
+                            DropdownMenuItem(
+                                text = { Text(filter.label) },
+                                onClick = {
+                                    typeFilter = filter
+                                    expanded = false
+                                }
+                            )
+                        }
+                    }
                 }
             }
 
@@ -155,6 +180,42 @@ fun ConnectionsContentEmbedded(
                         onRetry = { agentViewModel.onEvent(AgentManagementEvent.LoadAgents) },
                         onRevoke = { showRevokeDialog = it }
                     )
+                }
+                ConnectionTypeFilter.SERVICES -> {
+                    // Service connections placeholder (Service Vault is in design phase)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(32.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                imageVector = Icons.Default.Business,
+                                contentDescription = null,
+                                modifier = Modifier.size(64.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                            Spacer(modifier = Modifier.height(24.dp))
+                            Text(
+                                text = "No Services Connected",
+                                style = MaterialTheme.typography.headlineSmall
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Service connections allow third-party services to interact with your vault securely.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = "Coming soon",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.tertiary
+                            )
+                        }
+                    }
                 }
                 else -> {
                     // People connections (ALL shows people — agents are in their own tab)

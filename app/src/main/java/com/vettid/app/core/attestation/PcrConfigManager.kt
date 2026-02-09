@@ -121,15 +121,20 @@ class PcrConfigManager @Inject constructor(
      * Update PCRs from a signed response.
      *
      * @param signedResponse The signed PCR response from the API
+     * @param manifest The original manifest response (for signature verification)
      * @return true if update was successful
      * @throws PcrUpdateException if signature verification fails
      */
-    fun updatePcrs(signedResponse: SignedPcrResponse): Boolean {
+    fun updatePcrs(signedResponse: SignedPcrResponse, manifest: PcrManifestResponse? = null): Boolean {
         Log.d(TAG, "Updating PCRs from signed response, version: ${signedResponse.pcrs.version}")
 
-        // Verify signature
-        if (!verifySignature(signedResponse)) {
-            Log.w(TAG, "PCR signature verification failed - continuing with API PCRs")
+        // Verify signature using the original manifest (has the correct signed data structure)
+        if (manifest != null) {
+            if (!verifySignature(manifest)) {
+                Log.w(TAG, "PCR signature verification failed - continuing with API PCRs")
+            }
+        } else {
+            Log.w(TAG, "No manifest available for signature verification - skipping")
         }
 
         // Check if PCRs actually changed (compare PCR0 hash, not just version)
@@ -237,7 +242,7 @@ class PcrConfigManager @Inject constructor(
 
             Log.d(TAG, "Found current PCR set: ${signedResponse.pcrs.version}, PCR0: ${signedResponse.pcrs.pcr0.take(16)}...")
 
-            val updated = updatePcrs(signedResponse)
+            val updated = updatePcrs(signedResponse, manifest = manifestResponse)
 
             if (updated) {
                 Log.i(TAG, "PCRs updated to ${signedResponse.pcrs.version}")
@@ -338,12 +343,15 @@ class PcrConfigManager @Inject constructor(
     /**
      * Verify the ECDSA P-256 signature on a PCR manifest.
      *
-     * The signature is created by KMS using ECDSA_SHA_256 on the SHA-256 hash
-     * of the manifest JSON (excluding signature and public_key fields).
+     * The backend signs SHA-256(JSON.stringify({version, timestamp, pcr_sets}))
+     * using KMS ECDSA_SHA_256 with MessageType='DIGEST'. This means KMS receives
+     * a pre-computed SHA-256 hash and signs it directly (no additional hashing).
+     *
+     * We must use NONEwithECDSA (raw ECDSA without hashing) and pass the same
+     * SHA-256 hash to match this behavior. Using SHA256withECDSA would double-hash.
      */
-    private fun verifySignature(response: SignedPcrResponse): Boolean {
+    private fun verifySignature(manifest: PcrManifestResponse): Boolean {
         // SECURITY: Always verify signature - never skip in production
-        // The signing key must be properly configured before release
 
         try {
             // SECURITY: Validate signing key is properly configured
@@ -361,25 +369,30 @@ class PcrConfigManager @Inject constructor(
             }
             val keySpec = X509EncodedKeySpec(publicKeyBytes)
 
-            // Use default provider for EC operations (Android's default handles EC well)
-            // Note: Do NOT explicitly specify BouncyCastle - it may not have "EC" on all devices
             val keyFactory = KeyFactory.getInstance("EC")
             val publicKey = keyFactory.generatePublic(keySpec)
 
-            // Build the message that was signed (canonical JSON without signature/public_key)
-            val messageBytes = gson.toJson(response.pcrs).toByteArray(Charsets.UTF_8)
+            // Build the exact data that was signed: {version, timestamp, pcr_sets}
+            // Must match backend: JSON.stringify({version, timestamp, pcr_sets})
+            val dataToSign = com.google.gson.JsonObject().apply {
+                addProperty("version", manifest.version)
+                addProperty("timestamp", manifest.timestamp)
+                add("pcr_sets", gson.toJsonTree(manifest.pcrSets))
+            }
+            val messageBytes = gson.toJson(dataToSign).toByteArray(Charsets.UTF_8)
 
-            // Compute SHA-256 hash (KMS signs the digest, not the raw message)
+            // Compute SHA-256 hash (same as backend: createHash('sha256').update(data).digest())
             val digest = java.security.MessageDigest.getInstance("SHA-256")
             val hash = digest.digest(messageBytes)
 
-            // Verify ECDSA signature (DER-encoded from KMS)
-            // Use default provider for signature verification
-            val signature = Signature.getInstance("SHA256withECDSA")
+            // Use NONEwithECDSA — raw ECDSA without internal hashing.
+            // KMS used MessageType='DIGEST', meaning it signed the raw SHA-256 hash.
+            // SHA256withECDSA would hash again, causing double-hashing mismatch.
+            val signature = Signature.getInstance("NONEwithECDSA")
             signature.initVerify(publicKey)
             signature.update(hash)
 
-            val signatureBytes = Base64.decode(response.signature, Base64.NO_WRAP)
+            val signatureBytes = Base64.decode(manifest.signature, Base64.NO_WRAP)
             val isValid = signature.verify(signatureBytes)
 
             if (!isValid) {

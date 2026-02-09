@@ -187,6 +187,7 @@ sealed class Screen(val route: String) {
     object LocationHistory : Screen("location-history")
     object SharedLocations : Screen("shared-locations")
     object LocationSettings : Screen("location-settings")
+    object VaultStatus : Screen("vault-status")
     // Agent connections
     object AgentManagement : Screen("agents")
     object AgentApproval : Screen("agents/approval/{requestId}") {
@@ -562,6 +563,9 @@ fun VettIDApp(
                 onNavigateToCreateAgentInvitation = {
                     navController.navigate(Screen.CreateAgentInvitation.route)
                 },
+                onNavigateToVaultStatus = {
+                    navController.navigate(Screen.VaultStatus.route)
+                },
                 appViewModel = appViewModel
             )
         }
@@ -774,6 +778,17 @@ fun VettIDApp(
         composable(Screen.AppDetails.route) {
             AppDetailsScreen(
                 onBack = { navController.popBackStack() }
+            )
+        }
+        composable(Screen.VaultStatus.route) {
+            VaultStatusScreen(
+                onNavigateToEnrollment = {
+                    navController.navigate(Screen.EnrollmentWizard.createRoute())
+                },
+                onRequireAuth = { /* Auth handled by app state */ },
+                onNavigateToSettings = {
+                    navController.popBackStack()
+                }
             )
         }
         // App Lock & Setup routes
@@ -1329,6 +1344,7 @@ fun MainScreen(
     onNavigateToAgents: () -> Unit = {},
     onNavigateToAgentApproval: (requestId: String) -> Unit = {},
     onNavigateToCreateAgentInvitation: () -> Unit = {},
+    onNavigateToVaultStatus: () -> Unit = {},
     appViewModel: AppViewModel = hiltViewModel(),
     badgeCountsViewModel: BadgeCountsViewModel = hiltViewModel()
 ) {
@@ -1447,7 +1463,8 @@ fun MainScreen(
             SettingsContent(
                 onNavigateToAppDetails = onNavigateToAppDetails,
                 onNavigateToLocationSettings = onNavigateToLocationSettings,
-                onNavigateToAgents = onNavigateToAgents
+                onNavigateToAgents = onNavigateToAgents,
+                onNavigateToVaultStatus = onNavigateToVaultStatus
             )
         },
         snackbarHostState = snackbarHostState,
@@ -1983,12 +2000,14 @@ private fun ArchiveContentEmbedded(searchQuery: String = "") {
 private fun SettingsContent(
     onNavigateToAppDetails: () -> Unit = {},
     onNavigateToLocationSettings: () -> Unit = {},
-    onNavigateToAgents: () -> Unit = {}
+    onNavigateToAgents: () -> Unit = {},
+    onNavigateToVaultStatus: () -> Unit = {}
 ) {
     VaultPreferencesContent(
         onNavigateToAppDetails = onNavigateToAppDetails,
         onNavigateToLocationSettings = onNavigateToLocationSettings,
-        onNavigateToAgents = onNavigateToAgents
+        onNavigateToAgents = onNavigateToAgents,
+        onNavigateToVaultStatus = onNavigateToVaultStatus
     )
 }
 

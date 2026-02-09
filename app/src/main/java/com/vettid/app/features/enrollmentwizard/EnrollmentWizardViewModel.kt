@@ -225,7 +225,14 @@ class EnrollmentWizardViewModel @Inject constructor(
             // Return to appropriate state based on previous phase
             when (current.previousPhase) {
                 WizardPhase.START -> _state.value = WizardState.ScanningQR()
-                WizardPhase.ATTESTATION -> _state.value = WizardState.ScanningQR()
+                WizardPhase.ATTESTATION -> {
+                    // Retry attestation directly (NATS is already connected)
+                    if (nitroEnrollmentClient.isConnected) {
+                        requestNitroAttestation()
+                    } else {
+                        _state.value = WizardState.ScanningQR()
+                    }
+                }
                 WizardPhase.CONFIRM_IDENTITY -> {
                     // Return to confirm identity with stored data
                     val systemFields = personalDataStore.getSystemFields()
@@ -663,7 +670,7 @@ class EnrollmentWizardViewModel @Inject constructor(
                     Log.e(TAG, "Attestation verification failed", error)
                     _state.value = WizardState.Error(
                         message = "Security verification failed: ${error.message}",
-                        canRetry = false,
+                        canRetry = true,
                         previousPhase = WizardPhase.ATTESTATION
                     )
                 }
@@ -672,7 +679,7 @@ class EnrollmentWizardViewModel @Inject constructor(
             Log.e(TAG, "Attestation error", e)
             _state.value = WizardState.Error(
                 message = "Attestation error: ${e.message}",
-                canRetry = false,
+                canRetry = true,
                 previousPhase = WizardPhase.ATTESTATION
             )
         }
