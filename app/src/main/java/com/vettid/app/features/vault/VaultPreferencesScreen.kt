@@ -22,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -46,7 +47,8 @@ fun VaultPreferencesContent(
     onNavigateToAppDetails: () -> Unit = {},
     onNavigateToLocationHistory: () -> Unit = {},
     onNavigateToSharedLocations: () -> Unit = {},
-    onNavigateToLocationSettings: () -> Unit = {}
+    onNavigateToLocationSettings: () -> Unit = {},
+    onNavigateToAgents: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -234,6 +236,11 @@ fun VaultPreferencesContent(
                 currentTheme = state.theme,
                 onThemeChange = { viewModel.updateTheme(it) }
             )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Agent Connections section
+            AgentConnectionsSection(onNavigateToAgents = onNavigateToAgents)
 
             Spacer(modifier = Modifier.height(24.dp))
 
@@ -985,6 +992,38 @@ private fun VaultServerSection(
 }
 
 // MARK: - About Section
+
+@Composable
+private fun AgentConnectionsSection(onNavigateToAgents: () -> Unit = {}) {
+    Text(
+        text = "AGENT CONNECTIONS",
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+    )
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+    ) {
+        ListItem(
+            modifier = Modifier.clickable { onNavigateToAgents() },
+            headlineContent = { Text("Agent Connections") },
+            supportingContent = { Text("Manage AI agent access to your vault") },
+            leadingContent = {
+                Icon(
+                    imageVector = Icons.Default.SmartToy,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            },
+            trailingContent = {
+                Icon(Icons.Default.ChevronRight, contentDescription = null)
+            }
+        )
+    }
+}
 
 @Composable
 private fun AboutSection(onNavigateToAppDetails: () -> Unit = {}) {

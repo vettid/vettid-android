@@ -440,6 +440,14 @@ class FeedViewModel @Inject constructor(
                         _effects.emit(FeedEffect.ShowEventDetail(event))
                     }
                 }
+                EventTypes.AGENT_SECRET_REQUEST, EventTypes.AGENT_ACTION_REQUEST -> {
+                    val requestId = event.metadata?.get("request_id")
+                    if (requestId != null) {
+                        _effects.emit(FeedEffect.NavigateToAgentApproval(requestId))
+                    } else {
+                        _effects.emit(FeedEffect.ShowEventDetail(event))
+                    }
+                }
                 else -> {
                     // Default: show event detail dialog
                     _effects.emit(FeedEffect.ShowEventDetail(event))

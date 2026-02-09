@@ -177,6 +177,61 @@ sealed class VaultSubmitEvent(val type: String, val payload: JsonObject) {
     )
 
     /**
+     * Approve a pending agent request.
+     */
+    class ApproveAgentRequest(requestId: String) : VaultSubmitEvent(
+        type = "agent.approval",
+        payload = JsonObject().apply {
+            addProperty("request_id", requestId)
+            addProperty("response", "approve")
+        }
+    )
+
+    /**
+     * Deny a pending agent request.
+     */
+    class DenyAgentRequest(requestId: String, reason: String = "Owner denied") : VaultSubmitEvent(
+        type = "agent.approval",
+        payload = JsonObject().apply {
+            addProperty("request_id", requestId)
+            addProperty("response", "deny")
+            addProperty("reason", reason)
+        }
+    )
+
+    /**
+     * List all agent connections.
+     */
+    class ListAgentConnections : VaultSubmitEvent(
+        type = "agent.list",
+        payload = JsonObject()
+    )
+
+    /**
+     * Revoke an agent connection.
+     */
+    class RevokeAgent(connectionId: String) : VaultSubmitEvent(
+        type = "agent.revoke",
+        payload = JsonObject().apply {
+            addProperty("connection_id", connectionId)
+        }
+    )
+
+    /**
+     * Create an agent invitation.
+     */
+    class CreateAgentInvitation(
+        name: String,
+        scope: List<String>,
+        approvalMode: String
+    ) : VaultSubmitEvent(
+        type = "agent.create-invitation",
+        payload = JsonObject().apply {
+            addProperty("label", name)
+        }
+    )
+
+    /**
      * Custom event with arbitrary type and payload.
      */
     class Custom(eventType: String, eventPayload: JsonObject) : VaultSubmitEvent(

@@ -98,6 +98,11 @@ class OwnerSpaceClient @Inject constructor(
     /** Flow of location updates from connections sharing their location. */
     val locationUpdates: SharedFlow<SharedLocationUpdate> = _locationUpdates.asSharedFlow()
 
+    // Agent approval request events
+    private val _agentApprovalRequests = MutableSharedFlow<AgentApprovalRequest>(extraBufferCapacity = 16)
+    /** Flow of agent approval requests (secret/action requests needing owner approval). */
+    val agentApprovalRequests: SharedFlow<AgentApprovalRequest> = _agentApprovalRequests.asSharedFlow()
+
     private var appSubscription: NatsSubscription? = null
     private var eventTypesSubscription: NatsSubscription? = null
 
@@ -1273,6 +1278,11 @@ class OwnerSpaceClient @Inject constructor(
                     handleSecurityEvent(message)
                     return
                 }
+                // Agent approval request events
+                message.subject.contains(".forApp.agent.") -> {
+                    handleAgentEvent(message)
+                    return
+                }
                 // Location sharing events
                 message.subject.endsWith(".forApp.location-update") -> {
                     handleLocationUpdate(message)
@@ -1656,6 +1666,39 @@ class OwnerSpaceClient @Inject constructor(
             _locationUpdates.tryEmit(update)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to parse location-update event", e)
+        }
+    }
+
+    /**
+     * Handle agent events from vault (approval requests).
+     *
+     * Events:
+     * - agent.secret.request: Agent requesting a secret, needs owner approval
+     * - agent.action.request: Agent requesting an action, needs owner approval
+     */
+    private fun handleAgentEvent(message: NatsMessage) {
+        try {
+            val eventType = message.subject.substringAfterLast(".forApp.")
+
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+
+            val request = AgentApprovalRequest(
+                requestId = payload.getString("request_id"),
+                connectionId = payload.getString("connection_id"),
+                agentName = payload.optString("agent_name", "Unknown Agent"),
+                secretId = payload.optString("secret_id", ""),
+                secretName = payload.optString("secret_name", "Unknown"),
+                category = payload.optString("category", ""),
+                purpose = payload.optString("purpose", ""),
+                action = payload.optString("action", "retrieve"),
+                eventType = eventType
+            )
+
+            android.util.Log.i(TAG, "Agent approval request: ${request.requestId} from ${request.agentName}")
+            _agentApprovalRequests.tryEmit(request)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse agent event", e)
         }
     }
 
@@ -2448,4 +2491,21 @@ data class VaultHandler(
     val name: String,
     val description: String,
     val operations: List<String>
+)
+
+/**
+ * An agent approval request received from the vault.
+ * The vault sends this when an agent requests a secret or action and the
+ * approval mode is "always_ask".
+ */
+data class AgentApprovalRequest(
+    val requestId: String,
+    val connectionId: String,
+    val agentName: String,
+    val secretId: String,
+    val secretName: String,
+    val category: String,
+    val purpose: String,
+    val action: String,
+    val eventType: String  // "agent.secret.request" or "agent.action.request"
 )

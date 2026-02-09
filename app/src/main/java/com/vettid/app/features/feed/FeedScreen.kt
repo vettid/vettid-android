@@ -56,7 +56,8 @@ fun FeedContent(
     onNavigateToConnectionRequest: (String) -> Unit = {},
     onNavigateToHandler: (String) -> Unit = {},
     onNavigateToBackup: (String) -> Unit = {},
-    onNavigateToGuide: (guideId: String, eventId: String, userName: String) -> Unit = { _, _, _ -> }
+    onNavigateToGuide: (guideId: String, eventId: String, userName: String) -> Unit = { _, _, _ -> },
+    onNavigateToAgentApproval: (requestId: String) -> Unit = {}
 ) {
     val state by viewModel.state.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
@@ -79,6 +80,7 @@ fun FeedContent(
                 is FeedEffect.NavigateToHandler -> onNavigateToHandler(effect.handlerId)
                 is FeedEffect.NavigateToBackup -> onNavigateToBackup(effect.backupId)
                 is FeedEffect.NavigateToGuide -> onNavigateToGuide(effect.guideId, effect.eventId, effect.userName)
+                is FeedEffect.NavigateToAgentApproval -> onNavigateToAgentApproval(effect.requestId)
                 is FeedEffect.ShowEventDetail -> selectedEvent = effect.event
                 is FeedEffect.ShowError -> snackbarHostState.showSnackbar(effect.message)
                 is FeedEffect.ShowActionSuccess -> snackbarHostState.showSnackbar(effect.message)

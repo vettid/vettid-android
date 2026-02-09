@@ -29,6 +29,7 @@ sealed class FeedEffect {
     data class NavigateToCall(val callId: String) : FeedEffect()
     data class NavigateToTransfer(val transferId: String) : FeedEffect()
     data class NavigateToGuide(val guideId: String, val eventId: String, val userName: String) : FeedEffect()
+    data class NavigateToAgentApproval(val requestId: String) : FeedEffect()
     data class ShowEventDetail(val event: com.vettid.app.core.nats.FeedEvent) : FeedEffect()
     data class ShowError(val message: String) : FeedEffect()
     data class ShowActionSuccess(val message: String) : FeedEffect()
@@ -53,6 +54,9 @@ object EventTypes {
     const val VAULT_STATUS = "vault.status"
     const val HANDLER_COMPLETE = "handler.complete"
     const val GUIDE = "guide"
+    const val AGENT_SECRET_REQUEST = "agent.secret.request"
+    const val AGENT_ACTION_REQUEST = "agent.action.request"
+    const val AGENT_CONNECTED = "agent.connection.approved"
 }
 
 /**

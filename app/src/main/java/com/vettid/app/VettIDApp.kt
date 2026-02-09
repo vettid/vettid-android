@@ -187,6 +187,12 @@ sealed class Screen(val route: String) {
     object LocationHistory : Screen("location-history")
     object SharedLocations : Screen("shared-locations")
     object LocationSettings : Screen("location-settings")
+    // Agent connections
+    object AgentManagement : Screen("agents")
+    object AgentApproval : Screen("agents/approval/{requestId}") {
+        fun createRoute(requestId: String) = "agents/approval/$requestId"
+    }
+    object CreateAgentInvitation : Screen("agents/create-invitation")
     // Guide detail screen
     object Guide : Screen("guide/{guideId}?eventId={eventId}&userName={userName}") {
         fun createRoute(guideId: String, eventId: String = "", userName: String = ""): String {
@@ -547,6 +553,12 @@ fun VettIDApp(
                 onNavigateToLocationSettings = {
                     navController.navigate(Screen.LocationSettings.route)
                 },
+                onNavigateToAgents = {
+                    navController.navigate(Screen.AgentManagement.route)
+                },
+                onNavigateToAgentApproval = { requestId ->
+                    navController.navigate(Screen.AgentApproval.createRoute(requestId))
+                },
                 appViewModel = appViewModel
             )
         }
@@ -871,6 +883,30 @@ fun VettIDApp(
             val transferId = backStackEntry.arguments?.getString("transferId") ?: return@composable
             TransferApprovalScreen(
                 transferId = transferId,
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+        // Agent management
+        composable(Screen.AgentManagement.route) {
+            com.vettid.app.features.agents.AgentManagementScreen(
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToCreateInvitation = {
+                    navController.navigate(Screen.CreateAgentInvitation.route)
+                }
+            )
+        }
+        composable(
+            route = Screen.AgentApproval.route,
+            arguments = listOf(navArgument("requestId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val requestId = backStackEntry.arguments?.getString("requestId") ?: return@composable
+            com.vettid.app.features.agents.AgentApprovalScreen(
+                requestId = requestId,
+                onNavigateBack = { navController.popBackStack() }
+            )
+        }
+        composable(Screen.CreateAgentInvitation.route) {
+            com.vettid.app.features.agents.CreateAgentInvitationScreen(
                 onNavigateBack = { navController.popBackStack() }
             )
         }
@@ -1287,6 +1323,8 @@ fun MainScreen(
     onNavigateToCriticalSecrets: () -> Unit = {},
     onNavigateToAppDetails: () -> Unit = {},
     onNavigateToLocationSettings: () -> Unit = {},
+    onNavigateToAgents: () -> Unit = {},
+    onNavigateToAgentApproval: (requestId: String) -> Unit = {},
     appViewModel: AppViewModel = hiltViewModel(),
     badgeCountsViewModel: BadgeCountsViewModel = hiltViewModel()
 ) {
@@ -1369,7 +1407,8 @@ fun MainScreen(
                 onNavigateToConversation = onNavigateToConversation,
                 onNavigateToHandler = onNavigateToHandlerDetail,
                 onNavigateToBackup = { onNavigateToBackups() },
-                onNavigateToGuide = onNavigateToGuide
+                onNavigateToGuide = onNavigateToGuide,
+                onNavigateToAgentApproval = onNavigateToAgentApproval
             )
         },
         connectionsContent = {
@@ -1399,7 +1438,8 @@ fun MainScreen(
         settingsContent = {
             SettingsContent(
                 onNavigateToAppDetails = onNavigateToAppDetails,
-                onNavigateToLocationSettings = onNavigateToLocationSettings
+                onNavigateToLocationSettings = onNavigateToLocationSettings,
+                onNavigateToAgents = onNavigateToAgents
             )
         },
         snackbarHostState = snackbarHostState,
@@ -1933,11 +1973,13 @@ private fun ArchiveContentEmbedded() {
 @Composable
 private fun SettingsContent(
     onNavigateToAppDetails: () -> Unit = {},
-    onNavigateToLocationSettings: () -> Unit = {}
+    onNavigateToLocationSettings: () -> Unit = {},
+    onNavigateToAgents: () -> Unit = {}
 ) {
     VaultPreferencesContent(
         onNavigateToAppDetails = onNavigateToAppDetails,
-        onNavigateToLocationSettings = onNavigateToLocationSettings
+        onNavigateToLocationSettings = onNavigateToLocationSettings,
+        onNavigateToAgents = onNavigateToAgents
     )
 }
 
