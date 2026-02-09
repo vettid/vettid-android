@@ -10,6 +10,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -62,6 +64,9 @@ class AndroidNatsClient {
     private val lastPongTime = AtomicLong(0)
     private val reconnecting = AtomicBoolean(false)
 
+    // Serialize connect/reconnect to prevent concurrent connection races
+    private val connectMutex = Mutex()
+
     val isConnected: Boolean
         get() = connected.get()
 
@@ -87,6 +92,15 @@ class AndroidNatsClient {
         timeoutMs: Int,
         isReconnect: Boolean
     ): Result<Unit> = withContext(Dispatchers.IO) {
+        // Serialize connection attempts to prevent races where two connects
+        // both succeed and the second closes the first's reader/writer
+        connectMutex.withLock {
+            // If already connected (e.g., a concurrent attempt succeeded while we waited),
+            // skip this attempt
+            if (isReconnect && connected.get()) {
+                return@withContext Result.success(Unit)
+            }
+
         var newSocket: SSLSocket? = null
         var newReader: BufferedReader? = null
         var newWriter: BufferedWriter? = null
@@ -203,6 +217,7 @@ class AndroidNatsClient {
 
             Result.failure(e)
         }
+        } // connectMutex.withLock
     }
 
     /**

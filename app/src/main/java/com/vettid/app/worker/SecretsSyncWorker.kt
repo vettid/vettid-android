@@ -190,16 +190,16 @@ class SecretsSyncWorker @AssistedInject constructor(
     }
 
     private fun buildSecretPayload(data: Map<String, Any?>): JsonObject {
+        // Vault expects: { "key": "...", "value": "...", "metadata": { "category": "..." } }
         return JsonObject().apply {
-            data.forEach { (key, value) ->
-                when (value) {
-                    is String -> addProperty(key, value)
-                    is Number -> addProperty(key, value)
-                    is Boolean -> addProperty(key, value)
-                    null -> {} // Skip null values
-                    else -> addProperty(key, value.toString())
-                }
-            }
+            // Vault expects 'key' field (mapped from app's 'name')
+            addProperty("key", data["name"] as? String ?: data["id"] as String)
+            addProperty("value", data["value"] as? String ?: "")
+
+            // Nest category and other metadata under 'metadata' object
+            val metadata = JsonObject()
+            (data["category"] as? String)?.let { metadata.addProperty("category", it) }
+            add("metadata", metadata)
         }
     }
 }

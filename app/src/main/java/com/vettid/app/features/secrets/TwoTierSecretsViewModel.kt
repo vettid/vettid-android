@@ -4,8 +4,10 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.JsonObject
+import com.google.gson.JsonParser
 import com.vettid.app.core.crypto.CryptoManager
 import com.vettid.app.core.nats.OwnerSpaceClient
+import com.vettid.app.core.network.TransactionKeyInfo
 import com.vettid.app.core.storage.CriticalSecretCategory
 import com.vettid.app.core.storage.CriticalSecretMetadata
 import com.vettid.app.core.storage.CriticalSecretMetadataStore
@@ -336,6 +338,10 @@ class TwoTierSecretsViewModel @Inject constructor(
                 return
             }
 
+            // Get the encrypted credential blob (required by vault to add secret into it)
+            val encryptedBlob = credentialStore.getEncryptedBlob()
+                ?: throw Exception("No credential blob available")
+
             // Send to vault via credential.secret.add
             val saltBytes = credentialStore.getPasswordSaltBytes()
                 ?: throw Exception("No password salt")
@@ -346,15 +352,15 @@ class TwoTierSecretsViewModel @Inject constructor(
 
             val encryptedPassword = cryptoManager.encryptPasswordForServer(password, saltBytes, utk.publicKey)
 
-            // Encrypt the secret value for transmission
-            val secretId = java.util.UUID.randomUUID().toString()
+            // Map RECOVERY_KEY to OTHER (vault doesn't have RECOVERY_KEY category yet)
+            val vaultCategory = if (category == CriticalSecretCategory.RECOVERY_KEY) "OTHER" else category.name
 
             val payload = JsonObject().apply {
-                addProperty("id", secretId)
                 addProperty("name", name)
-                addProperty("category", category.name)
+                addProperty("category", vaultCategory)
                 addProperty("description", description)
-                addProperty("encrypted_value", value)  // TODO: Encrypt properly
+                addProperty("value", value)
+                addProperty("encrypted_credential", encryptedBlob)
                 addProperty("encrypted_password_hash", encryptedPassword.encryptedPasswordHash)
                 addProperty("ephemeral_public_key", encryptedPassword.ephemeralPublicKey)
                 addProperty("nonce", encryptedPassword.nonce)
@@ -363,9 +369,40 @@ class TwoTierSecretsViewModel @Inject constructor(
 
             val result = ownerSpaceClient.sendToVault("credential.secret.add", payload)
 
-            // Store metadata locally (regardless of vault response for now)
+            // Parse response to get updated credential blob and new UTKs
+            val responseStr = result.getOrThrow()
+            val responseJson = JsonParser.parseString(responseStr).asJsonObject
+
+            // Update stored credential blob with the re-encrypted one from vault
+            val newEncryptedCredential = responseJson.get("encrypted_credential")?.asString
+            if (newEncryptedCredential != null) {
+                val decodedBlob = android.util.Base64.decode(newEncryptedCredential, android.util.Base64.NO_WRAP)
+                credentialStore.storeCredentialBlob(decodedBlob)
+            }
+
+            // Get the vault-assigned secret ID
+            val vaultSecretId = responseJson.get("id")?.asString ?: java.util.UUID.randomUUID().toString()
+
+            // Add new UTKs from vault response to the pool
+            val newUtksArray = responseJson.getAsJsonArray("new_utks")
+            if (newUtksArray != null && newUtksArray.size() > 0) {
+                val newUtks = newUtksArray.map { utkObj ->
+                    val obj = utkObj.asJsonObject
+                    TransactionKeyInfo(
+                        keyId = obj.get("id").asString,
+                        publicKey = obj.get("public_key").asString,
+                        algorithm = "X25519"
+                    )
+                }
+                credentialStore.addUtks(newUtks)
+            }
+
+            // Remove used UTK
+            credentialStore.removeUtk(utk.keyId)
+
+            // Store metadata locally
             val metadata = CriticalSecretMetadata(
-                id = secretId,
+                id = vaultSecretId,
                 name = name,
                 category = category,
                 description = description,
@@ -374,9 +411,6 @@ class TwoTierSecretsViewModel @Inject constructor(
                 accessCount = 0
             )
             criticalMetadataStore.storeMetadata(metadata)
-
-            // Remove used UTK
-            credentialStore.removeUtk(utk.keyId)
 
             loadAllSecrets()
             _effects.emit(TwoTierSecretsEffect.ShowMessage("Critical secret added"))
