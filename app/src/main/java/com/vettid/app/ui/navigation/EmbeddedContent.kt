@@ -19,12 +19,23 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import android.widget.Toast
 import com.vettid.app.core.network.Connection
 import com.vettid.app.core.network.ConnectionWithLastMessage
 import com.vettid.app.core.network.Message
+import com.vettid.app.features.agents.*
 import com.vettid.app.features.connections.*
 import java.text.SimpleDateFormat
 import java.util.*
+
+/**
+ * Connection type filter for the embedded connections view.
+ */
+enum class ConnectionTypeFilter(val label: String) {
+    ALL("All"),
+    PEOPLE("People"),
+    AGENTS("Agents")
+}
 
 /**
  * Embedded connections content without Scaffold.
@@ -33,17 +44,23 @@ import java.util.*
 @Composable
 fun ConnectionsContentEmbedded(
     viewModel: ConnectionsViewModel = hiltViewModel(),
+    agentViewModel: AgentManagementViewModel = hiltViewModel(),
     onConnectionClick: (String) -> Unit = {},
     onCreateInvitation: () -> Unit = {},
-    onScanInvitation: () -> Unit = {}
+    onScanInvitation: () -> Unit = {},
+    onCreateAgentInvitation: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
+    val agentState by agentViewModel.state.collectAsState()
 
     var showFabMenu by remember { mutableStateOf(false) }
+    var typeFilter by remember { mutableStateOf(ConnectionTypeFilter.ALL) }
+    var showRevokeDialog by remember { mutableStateOf<AgentConnection?>(null) }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
-    // Handle effects
+    // Handle people connection effects
     LaunchedEffect(Unit) {
         viewModel.effects.collect { effect ->
             when (effect) {
@@ -56,120 +73,377 @@ fun ConnectionsContentEmbedded(
         }
     }
 
+    // Handle agent effects
+    LaunchedEffect(Unit) {
+        agentViewModel.effects.collect { effect ->
+            when (effect) {
+                is AgentManagementEffect.ShowError -> {
+                    Toast.makeText(context, effect.message, Toast.LENGTH_LONG).show()
+                }
+                is AgentManagementEffect.ShowSuccess -> {
+                    Toast.makeText(context, effect.message, Toast.LENGTH_SHORT).show()
+                }
+                is AgentManagementEffect.NavigateToCreateInvitation -> {
+                    onCreateAgentInvitation()
+                }
+            }
+        }
+    }
+
+    // Revoke agent dialog
+    showRevokeDialog?.let { agent ->
+        AlertDialog(
+            onDismissRequest = { showRevokeDialog = null },
+            icon = { Icon(Icons.Default.Warning, contentDescription = null) },
+            title = { Text("Revoke Agent?") },
+            text = {
+                Text("This will permanently disconnect \"${agent.agentName}\" and revoke its access to your secrets. This cannot be undone.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        agentViewModel.onEvent(AgentManagementEvent.RevokeAgent(agent.connectionId))
+                        showRevokeDialog = null
+                    },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Text("Revoke")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRevokeDialog = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // Search bar
-            if (state is ConnectionsState.Loaded) {
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { viewModel.onSearchQueryChanged(it) },
-                    placeholder = { Text("Search connections...") },
-                    leadingIcon = {
-                        Icon(
-                            imageVector = Icons.Default.Search,
-                            contentDescription = null
-                        )
-                    },
-                    trailingIcon = {
-                        if (searchQuery.isNotEmpty()) {
-                            IconButton(onClick = { viewModel.onSearchQueryChanged("") }) {
+            // Connection type filter chips
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                ConnectionTypeFilter.entries.forEach { filter ->
+                    FilterChip(
+                        selected = typeFilter == filter,
+                        onClick = { typeFilter = filter },
+                        label = { Text(filter.label) },
+                        leadingIcon = if (typeFilter == filter) {
+                            { Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(16.dp)) }
+                        } else null
+                    )
+                }
+            }
+
+            when (typeFilter) {
+                ConnectionTypeFilter.AGENTS -> {
+                    // Agent connections view
+                    AgentConnectionsContent(
+                        state = agentState,
+                        onCreateInvitation = { agentViewModel.onEvent(AgentManagementEvent.CreateInvitation) },
+                        onRetry = { agentViewModel.onEvent(AgentManagementEvent.LoadAgents) },
+                        onRevoke = { showRevokeDialog = it }
+                    )
+                }
+                else -> {
+                    // People connections (ALL shows people — agents are in their own tab)
+                    // Search bar
+                    if (state is ConnectionsState.Loaded) {
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { viewModel.onSearchQueryChanged(it) },
+                            placeholder = { Text("Search connections...") },
+                            leadingIcon = {
                                 Icon(
-                                    imageVector = Icons.Default.Clear,
-                                    contentDescription = "Clear search"
+                                    imageVector = Icons.Default.Search,
+                                    contentDescription = null
+                                )
+                            },
+                            trailingIcon = {
+                                if (searchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { viewModel.onSearchQueryChanged("") }) {
+                                        Icon(
+                                            imageVector = Icons.Default.Clear,
+                                            contentDescription = "Clear search"
+                                        )
+                                    }
+                                }
+                            },
+                            singleLine = true,
+                            shape = RoundedCornerShape(24.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                    }
+
+                    when (val currentState = state) {
+                        is ConnectionsState.Loading -> {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator()
+                            }
+                        }
+
+                        is ConnectionsState.Empty -> {
+                            ConnectionsEmptyContent(
+                                onCreateInvitation = { viewModel.onCreateInvitation() },
+                                onScanInvitation = { viewModel.onScanInvitation() }
+                            )
+                        }
+
+                        is ConnectionsState.Loaded -> {
+                            if (currentState.connections.isEmpty() && currentState.isSearchResult) {
+                                NoSearchResultsContent(query = searchQuery)
+                            } else {
+                                ConnectionsListContent(
+                                    connections = currentState.connections,
+                                    isRefreshing = isRefreshing,
+                                    onRefresh = { viewModel.refresh() },
+                                    onConnectionClick = { viewModel.onConnectionClick(it) }
                                 )
                             }
                         }
-                    },
-                    singleLine = true,
-                    shape = RoundedCornerShape(24.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                )
-            }
 
-            when (val currentState = state) {
-                is ConnectionsState.Loading -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator()
+                        is ConnectionsState.Error -> {
+                            ConnectionsErrorContent(
+                                message = currentState.message,
+                                onRetry = { viewModel.loadConnections() }
+                            )
+                        }
                     }
-                }
-
-                is ConnectionsState.Empty -> {
-                    ConnectionsEmptyContent(
-                        onCreateInvitation = { viewModel.onCreateInvitation() },
-                        onScanInvitation = { viewModel.onScanInvitation() }
-                    )
-                }
-
-                is ConnectionsState.Loaded -> {
-                    if (currentState.connections.isEmpty() && currentState.isSearchResult) {
-                        NoSearchResultsContent(query = searchQuery)
-                    } else {
-                        ConnectionsListContent(
-                            connections = currentState.connections,
-                            isRefreshing = isRefreshing,
-                            onRefresh = { viewModel.refresh() },
-                            onConnectionClick = { viewModel.onConnectionClick(it) }
-                        )
-                    }
-                }
-
-                is ConnectionsState.Error -> {
-                    ConnectionsErrorContent(
-                        message = currentState.message,
-                        onRetry = { viewModel.loadConnections() }
-                    )
                 }
             }
         }
 
-        // FAB
+        // FAB - context-aware based on active filter
         Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(16.dp),
             horizontalAlignment = Alignment.End
         ) {
-            if (showFabMenu) {
-                SmallFloatingActionButton(
-                    onClick = {
-                        showFabMenu = false
-                        viewModel.onScanInvitation()
-                    },
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer
+            if (typeFilter == ConnectionTypeFilter.AGENTS) {
+                // Single FAB for creating agent invitation
+                FloatingActionButton(
+                    onClick = { agentViewModel.onEvent(AgentManagementEvent.CreateInvitation) }
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.QrCodeScanner,
-                        contentDescription = "Scan Invitation"
-                    )
+                    Icon(Icons.Default.Add, contentDescription = "Create Agent Invitation")
                 }
-                Spacer(modifier = Modifier.height(12.dp))
-                SmallFloatingActionButton(
-                    onClick = {
-                        showFabMenu = false
-                        viewModel.onCreateInvitation()
-                    },
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.QrCode,
-                        contentDescription = "Create Invitation"
-                    )
+            } else {
+                // People connections FAB menu
+                if (showFabMenu) {
+                    SmallFloatingActionButton(
+                        onClick = {
+                            showFabMenu = false
+                            viewModel.onScanInvitation()
+                        },
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.QrCodeScanner,
+                            contentDescription = "Scan Invitation"
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    SmallFloatingActionButton(
+                        onClick = {
+                            showFabMenu = false
+                            viewModel.onCreateInvitation()
+                        },
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.QrCode,
+                            contentDescription = "Create Invitation"
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
                 }
-                Spacer(modifier = Modifier.height(12.dp))
-            }
 
-            FloatingActionButton(
-                onClick = { showFabMenu = !showFabMenu }
+                FloatingActionButton(
+                    onClick = { showFabMenu = !showFabMenu }
+                ) {
+                    Icon(
+                        imageVector = if (showFabMenu) Icons.Default.Close else Icons.Default.Add,
+                        contentDescription = if (showFabMenu) "Close menu" else "Add connection"
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentConnectionsContent(
+    state: AgentManagementState,
+    onCreateInvitation: () -> Unit,
+    onRetry: () -> Unit,
+    onRevoke: (AgentConnection) -> Unit
+) {
+    when (state) {
+        is AgentManagementState.Loading -> {
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator()
+            }
+        }
+        is AgentManagementState.Empty -> {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Default.SmartToy,
+                        contentDescription = null,
+                        modifier = Modifier.size(64.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
+                    Text(
+                        text = "No Agents Connected",
+                        style = MaterialTheme.typography.headlineSmall
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Connect AI agents to give them secure access to your vault secrets.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
+                    Button(onClick = onCreateInvitation) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Create Agent Invitation")
+                    }
+                }
+            }
+        }
+        is AgentManagementState.Loaded -> {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                items(state.agents) { agent ->
+                    EmbeddedAgentItem(agent = agent, onRevoke = { onRevoke(agent) })
+                }
+            }
+        }
+        is AgentManagementState.Error -> {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(
+                        imageVector = Icons.Default.Error,
+                        contentDescription = null,
+                        modifier = Modifier.size(48.dp),
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(state.message, color = MaterialTheme.colorScheme.error)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    OutlinedButton(onClick = onRetry) { Text("Retry") }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmbeddedAgentItem(agent: AgentConnection, onRevoke: () -> Unit) {
+    val statusColor = when (agent.status) {
+        "active" -> MaterialTheme.colorScheme.primary
+        "invited" -> MaterialTheme.colorScheme.tertiary
+        "revoked" -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Icon(
-                    imageVector = if (showFabMenu) Icons.Default.Close else Icons.Default.Add,
-                    contentDescription = if (showFabMenu) "Close menu" else "Add connection"
+                    imageVector = Icons.Default.SmartToy,
+                    contentDescription = null,
+                    modifier = Modifier.size(40.dp),
+                    tint = MaterialTheme.colorScheme.primary
                 )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = agent.agentName,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold
+                    )
+                    if (agent.agentType.isNotEmpty()) {
+                        Text(
+                            text = agent.agentType.replace("_", " ").replaceFirstChar { it.uppercase() },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Surface(
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                    color = statusColor.copy(alpha = 0.12f)
+                ) {
+                    Text(
+                        text = agent.status.replaceFirstChar { it.uppercase() },
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = statusColor,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = when (agent.approvalMode) {
+                        "always_ask" -> "Always ask for approval"
+                        "auto_within_contract" -> "Auto-approve within scope"
+                        "auto_all" -> "Auto-approve all"
+                        else -> agent.approvalMode
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (agent.status == "active") {
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = onRevoke,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                ) {
+                    Text("Revoke Access")
+                }
             }
         }
     }

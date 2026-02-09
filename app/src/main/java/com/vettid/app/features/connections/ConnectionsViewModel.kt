@@ -485,9 +485,9 @@ class ConnectionsViewModel @Inject constructor(
                 ConnectionStatus.REVOKED -> com.vettid.app.features.connections.models.ConnectionStatus.REVOKED
             },
             direction = ConnectionDirection.OUTBOUND,
-            lastActiveAt = conn.lastMessageAt?.let { Instant.ofEpochMilli(it) },
+            lastActiveAt = conn.lastMessageAt?.let { com.vettid.app.util.toInstant(it) },
             unreadCount = conn.unreadCount,
-            createdAt = Instant.ofEpochMilli(conn.createdAt)
+            createdAt = com.vettid.app.util.toInstant(conn.createdAt)
         )
     }
 }

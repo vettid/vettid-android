@@ -559,6 +559,9 @@ fun VettIDApp(
                 onNavigateToAgentApproval = { requestId ->
                     navController.navigate(Screen.AgentApproval.createRoute(requestId))
                 },
+                onNavigateToCreateAgentInvitation = {
+                    navController.navigate(Screen.CreateAgentInvitation.route)
+                },
                 appViewModel = appViewModel
             )
         }
@@ -1325,6 +1328,7 @@ fun MainScreen(
     onNavigateToLocationSettings: () -> Unit = {},
     onNavigateToAgents: () -> Unit = {},
     onNavigateToAgentApproval: (requestId: String) -> Unit = {},
+    onNavigateToCreateAgentInvitation: () -> Unit = {},
     appViewModel: AppViewModel = hiltViewModel(),
     badgeCountsViewModel: BadgeCountsViewModel = hiltViewModel()
 ) {
@@ -1415,7 +1419,8 @@ fun MainScreen(
             ConnectionsContentEmbedded(
                 onConnectionClick = onNavigateToConnectionDetail,
                 onCreateInvitation = onNavigateToCreateInvitation,
-                onScanInvitation = onNavigateToScanInvitation
+                onScanInvitation = onNavigateToScanInvitation,
+                onCreateAgentInvitation = onNavigateToCreateAgentInvitation
             )
         },
         personalDataContent = {

@@ -153,7 +153,9 @@ class LocationHistoryViewModel @Inject constructor(
 
     private fun parseEntries(result: com.google.gson.JsonObject): List<LocationHistoryEntry> {
         val entries = mutableListOf<LocationHistoryEntry>()
-        val pointsArray = result.getAsJsonArray("points") ?: return entries
+        val pointsElement = result.get("points")
+        if (pointsElement == null || pointsElement.isJsonNull) return entries
+        val pointsArray = pointsElement.asJsonArray
 
         for (element in pointsArray) {
             try {

@@ -63,6 +63,9 @@ class FeedViewModel @Inject constructor(
     // Track current refresh job to prevent multiple concurrent refreshes
     private var refreshJob: Job? = null
 
+    // Track if initial loadFeed() is still in progress
+    private var isInitialLoadComplete = false
+
     init {
         // Show cached data immediately while waiting for connection
         showCachedFeed()
@@ -166,6 +169,7 @@ class FeedViewModel @Inject constructor(
                     // Sync guides first and wait for completion so events exist before loading feed
                     syncGuides()
                     loadFeed()
+                    isInitialLoadComplete = true
                 }
             }
         }
@@ -222,22 +226,36 @@ class FeedViewModel @Inject constructor(
 
     /**
      * Observe real-time feed updates from NATS.
+     * Debounces NewEvent notifications to avoid a storm of refresh() calls
+     * when many events arrive at once (e.g., 9 guide events on first enrollment).
      */
     private fun observeFeedUpdates() {
         // Real-time feed updates (new events, status changes)
         viewModelScope.launch {
-            feedNotificationService.feedUpdates.collect { update ->
-                when (update) {
-                    is FeedUpdate.NewEvent -> {
-                        Log.d(TAG, "New feed event: ${update.eventId}")
-                        refresh() // Refresh to get new event
-                    }
-                    is FeedUpdate.StatusChanged -> {
-                        Log.d(TAG, "Event status changed: ${update.eventId} -> ${update.newStatus}")
-                        handleStatusChange(update.eventId, update.newStatus)
+            feedNotificationService.feedUpdates
+                .collect { update ->
+                    when (update) {
+                        is FeedUpdate.NewEvent -> {
+                            Log.d(TAG, "New feed event: ${update.eventId}")
+                            // Skip refresh during initial load — loadFeed() will fetch everything
+                            if (!isInitialLoadComplete) {
+                                Log.d(TAG, "Skipping refresh during initial load")
+                                return@collect
+                            }
+                            // Debounce: cancel pending refresh and wait before starting a new one
+                            // so rapid-fire notifications (guide sync) become a single refresh
+                            refreshJob?.cancel()
+                            refreshJob = viewModelScope.launch {
+                                delay(1000) // Wait 1s for more notifications to arrive
+                                refresh()
+                            }
+                        }
+                        is FeedUpdate.StatusChanged -> {
+                            Log.d(TAG, "Event status changed: ${update.eventId} -> ${update.newStatus}")
+                            handleStatusChange(update.eventId, update.newStatus)
+                        }
                     }
                 }
-            }
         }
 
         // In-app notifications (when app is in foreground)

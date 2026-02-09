@@ -338,7 +338,7 @@ fun RestoreCompleteContent(
 }
 
 private fun formatDateTime(timestamp: Long): String {
-    val date = Date(timestamp)
+    val date = Date(com.vettid.app.util.toEpochMillis(timestamp))
     val format = SimpleDateFormat("MMM d, yyyy 'at' h:mm a", Locale.getDefault())
     return format.format(date)
 }

@@ -154,7 +154,7 @@ class ContractSigner @Inject constructor(
                     userJwt = creds.userJwt,
                     userSeed = creds.userSeed,
                     subject = creds.subject,
-                    expiresAt = creds.expiresAt?.let { Instant.ofEpochMilli(it) }
+                    expiresAt = creds.expiresAt?.let { com.vettid.app.util.toInstant(it) }
                 )
             )
         }
@@ -180,8 +180,8 @@ class ContractSigner @Inject constructor(
             requiredFields = response.contract.requiredFields,
             optionalFields = response.contract.optionalFields,
             status = ContractStatus.ACTIVE,
-            signedAt = Instant.ofEpochMilli(response.contract.signedAt),
-            expiresAt = response.contract.expiresAt?.let { Instant.ofEpochMilli(it) },
+            signedAt = com.vettid.app.util.toInstant(response.contract.signedAt),
+            expiresAt = response.contract.expiresAt?.let { com.vettid.app.util.toInstant(it) },
             natsEndpoint = response.natsCredentials?.endpoint ?: "",
             natsSubject = response.natsCredentials?.subject ?: "",
             userConnectionPublicKey = connectionKeyPair.publicKeyBase64(),

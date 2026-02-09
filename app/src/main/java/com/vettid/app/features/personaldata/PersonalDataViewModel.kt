@@ -672,8 +672,8 @@ class PersonalDataViewModel @Inject constructor(
                 isSystemField = false,
                 isInPublicProfile = publicFields.contains(namespace),
                 sortOrder = savedSortOrder[namespace] ?: 0,
-                createdAt = Instant.ofEpochMilli(customField.createdAt),
-                updatedAt = Instant.ofEpochMilli(customField.updatedAt)
+                createdAt = com.vettid.app.util.toInstant(customField.createdAt),
+                updatedAt = com.vettid.app.util.toInstant(customField.updatedAt)
             ))
         }
 
@@ -1788,8 +1788,8 @@ class PersonalDataViewModel @Inject constructor(
                     isInPublicProfile = true,
                     isSensitive = false,
                     sortOrder = secret.sortOrder,
-                    createdAt = Instant.ofEpochMilli(secret.createdAt),
-                    updatedAt = Instant.ofEpochMilli(secret.updatedAt)
+                    createdAt = com.vettid.app.util.toInstant(secret.createdAt),
+                    updatedAt = com.vettid.app.util.toInstant(secret.updatedAt)
                 ))
                 addedCount++
             }

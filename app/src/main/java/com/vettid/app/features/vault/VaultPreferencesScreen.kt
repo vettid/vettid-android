@@ -239,11 +239,6 @@ fun VaultPreferencesContent(
 
             Spacer(modifier = Modifier.height(24.dp))
 
-            // Agent Connections section
-            AgentConnectionsSection(onNavigateToAgents = onNavigateToAgents)
-
-            Spacer(modifier = Modifier.height(24.dp))
-
             // About section
             AboutSection(onNavigateToAppDetails = onNavigateToAppDetails)
 

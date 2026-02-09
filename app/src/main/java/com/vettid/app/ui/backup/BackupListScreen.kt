@@ -307,7 +307,7 @@ fun ErrorState(
 }
 
 private fun formatDate(timestamp: Long): String {
-    val date = Date(timestamp)
+    val date = Date(com.vettid.app.util.toEpochMillis(timestamp))
     val format = SimpleDateFormat("MMM d, yyyy HH:mm", Locale.getDefault())
     return format.format(date)
 }

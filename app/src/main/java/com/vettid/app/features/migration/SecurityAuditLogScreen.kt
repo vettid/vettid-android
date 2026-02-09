@@ -234,5 +234,5 @@ private fun getColorForEventType(type: String) = when (type) {
 
 private fun formatTimestamp(timestamp: Long): String {
     val dateFormat = SimpleDateFormat("MMM d, yyyy 'at' h:mm a", Locale.getDefault())
-    return dateFormat.format(Date(timestamp))
+    return dateFormat.format(Date(com.vettid.app.util.toEpochMillis(timestamp)))
 }

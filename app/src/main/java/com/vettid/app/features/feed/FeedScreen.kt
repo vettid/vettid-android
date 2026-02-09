@@ -498,7 +498,9 @@ private fun EventCardContent(
                 // Event icon with priority indicator
                 Box {
                     EventIcon(event = event, isRead = isRead)
-                    if (event.priorityLevel != EventPriority.NORMAL && event.priorityLevel != EventPriority.LOW) {
+                    // Show priority indicator only if unread or still requires action
+                    if (event.priorityLevel != EventPriority.NORMAL && event.priorityLevel != EventPriority.LOW
+                        && (!isRead || event.requiresAction)) {
                         Box(
                             modifier = Modifier
                                 .size(12.dp)
@@ -665,9 +667,10 @@ private fun getPriorityColor(priority: EventPriority): Color {
 }
 
 private fun formatTimestamp(epochMillis: Long): String {
+    val millis = com.vettid.app.util.toEpochMillis(epochMillis)
     val now = System.currentTimeMillis()
-    val diff = now - epochMillis
-    val instant = Instant.ofEpochMilli(epochMillis)
+    val diff = now - millis
+    val instant = Instant.ofEpochMilli(millis)
     val zoned = instant.atZone(ZoneId.systemDefault())
 
     return when {

@@ -75,11 +75,13 @@ class AppViewModel @Inject constructor(
     private val personalDataStore: PersonalDataStore,
 ) : ViewModel() {
 
-    private val _appState = MutableStateFlow(AppState())
+    private val _appState = MutableStateFlow(AppState(
+        // Initialize synchronously to avoid Welcome screen flash on relaunch
+        hasCredential = credentialStore.hasStoredCredential()
+    ))
     val appState: StateFlow<AppState> = _appState.asStateFlow()
 
     init {
-        refreshCredentialStatus()
         observeNatsConnectionState()
         observeProfilePhotoUpdates()
         loadUserProfile()

@@ -102,12 +102,12 @@ class ArchiveViewModel @Inject constructor(
             else -> ArchivedItemType.EVENT
         }
         val archivedInstant = if (archivedAt != null && archivedAt > 0) {
-            Instant.ofEpochMilli(archivedAt)
+            com.vettid.app.util.toInstant(archivedAt)
         } else {
-            Instant.ofEpochMilli(createdAt)
+            com.vettid.app.util.toInstant(createdAt)
         }
         val expiresInstant = if (expiresAt != null && expiresAt > 0) {
-            Instant.ofEpochMilli(expiresAt)
+            com.vettid.app.util.toInstant(expiresAt)
         } else {
             null
         }
