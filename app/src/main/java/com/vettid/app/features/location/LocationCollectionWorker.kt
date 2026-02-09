@@ -222,10 +222,10 @@ class LocationCollectionWorker @AssistedInject constructor(
             }
         }
 
-        // Check NATS connectivity — don't burn retries if vault is unreachable
+        // Check NATS connectivity — retry if vault is unreachable
         if (!connectionManager.isConnected()) {
-            Log.w(TAG, "NATS not connected, skipping location collection (will retry next period)")
-            return Result.success()
+            Log.w(TAG, "NATS not connected, will retry location collection")
+            return if (runAttemptCount < 5) Result.retry() else Result.success()
         }
 
         val result = try {

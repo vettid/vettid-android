@@ -42,7 +42,9 @@ fun MainScaffold(
     auditLogContent: @Composable (searchQuery: String) -> Unit = {},
     settingsContent: @Composable () -> Unit,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() },
-    drawerBadgeCounts: Map<DrawerItem, Int> = emptyMap()
+    drawerBadgeCounts: Map<DrawerItem, Int> = emptyMap(),
+    isLocationTrackingEnabled: Boolean = false,
+    onCaptureLocation: () -> Unit = {}
 ) {
     val scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior()
     val density = LocalDensity.current
@@ -174,7 +176,9 @@ fun MainScaffold(
             userName = userName,
             userEmail = userEmail,
             profilePhotoBase64 = profilePhotoBase64,
-            badgeCounts = drawerBadgeCounts
+            badgeCounts = drawerBadgeCounts,
+            isLocationTrackingEnabled = isLocationTrackingEnabled,
+            onCaptureLocation = onCaptureLocation
         )
     }
 }

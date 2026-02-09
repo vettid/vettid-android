@@ -1392,6 +1392,11 @@ fun MainScreen(
         if (unvotedProposalsCount > 0) put(DrawerItem.VOTING, unvotedProposalsCount)
     }
 
+    // Location tracking state
+    val context = LocalContext.current
+    val appPreferencesStore = remember { com.vettid.app.core.storage.AppPreferencesStore(context) }
+    val isLocationTrackingEnabled = appPreferencesStore.isLocationTrackingEnabled()
+
     // Connection details dialog state
     var showConnectionDetailsDialog by remember { mutableStateOf(false) }
 
@@ -1473,7 +1478,11 @@ fun MainScreen(
             )
         },
         snackbarHostState = snackbarHostState,
-        drawerBadgeCounts = drawerBadgeCounts
+        drawerBadgeCounts = drawerBadgeCounts,
+        isLocationTrackingEnabled = isLocationTrackingEnabled,
+        onCaptureLocation = {
+            com.vettid.app.features.location.LocationCollectionWorker.captureNow(context)
+        }
     )
 }
 

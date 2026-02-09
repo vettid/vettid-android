@@ -38,7 +38,9 @@ fun DrawerView(
     userName: String,
     userEmail: String = "",
     profilePhotoBase64: String? = null,
-    badgeCounts: Map<DrawerItem, Int> = emptyMap()
+    badgeCounts: Map<DrawerItem, Int> = emptyMap(),
+    isLocationTrackingEnabled: Boolean = false,
+    onCaptureLocation: () -> Unit = {}
 ) {
     AnimatedVisibility(
         visible = isOpen,
@@ -61,7 +63,9 @@ fun DrawerView(
                     DrawerHeader(
                         userName = userName,
                         userEmail = userEmail,
-                        profilePhotoBase64 = profilePhotoBase64
+                        profilePhotoBase64 = profilePhotoBase64,
+                        isLocationTrackingEnabled = isLocationTrackingEnabled,
+                        onCaptureLocation = onCaptureLocation
                     )
 
                     HorizontalDivider()
@@ -107,7 +111,9 @@ fun DrawerView(
 private fun DrawerHeader(
     userName: String,
     userEmail: String,
-    profilePhotoBase64: String? = null
+    profilePhotoBase64: String? = null,
+    isLocationTrackingEnabled: Boolean = false,
+    onCaptureLocation: () -> Unit = {}
 ) {
     // Decode profile photo if available
     Log.d(TAG, "DrawerHeader - profilePhotoBase64 length: ${profilePhotoBase64?.length ?: 0}")
@@ -131,41 +137,66 @@ private fun DrawerHeader(
             .fillMaxWidth()
             .padding(24.dp)
     ) {
-        // Profile avatar
-        if (profileBitmap != null) {
-            Image(
-                bitmap = profileBitmap.asImageBitmap(),
-                contentDescription = "Profile photo",
-                modifier = Modifier
-                    .size(72.dp)
-                    .clip(CircleShape),
-                contentScale = ContentScale.Crop
-            )
-        } else {
-            Surface(
-                modifier = Modifier
-                    .size(72.dp)
-                    .clip(CircleShape),
-                color = MaterialTheme.colorScheme.primaryContainer
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    // Show initials if we have a name
-                    val initials = userName.split(" ")
-                        .mapNotNull { it.firstOrNull()?.uppercaseChar() }
-                        .take(2)
-                        .joinToString("")
-                    if (initials.isNotEmpty()) {
-                        Text(
-                            text = initials,
-                            style = MaterialTheme.typography.headlineMedium,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                    } else {
+        // Profile avatar with optional location indicator
+        Row(
+            verticalAlignment = Alignment.Bottom
+        ) {
+            // Profile avatar
+            if (profileBitmap != null) {
+                Image(
+                    bitmap = profileBitmap.asImageBitmap(),
+                    contentDescription = "Profile photo",
+                    modifier = Modifier
+                        .size(72.dp)
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Surface(
+                    modifier = Modifier
+                        .size(72.dp)
+                        .clip(CircleShape),
+                    color = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        // Show initials if we have a name
+                        val initials = userName.split(" ")
+                            .mapNotNull { it.firstOrNull()?.uppercaseChar() }
+                            .take(2)
+                            .joinToString("")
+                        if (initials.isNotEmpty()) {
+                            Text(
+                                text = initials,
+                                style = MaterialTheme.typography.headlineMedium,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Person,
+                                contentDescription = null,
+                                modifier = Modifier.size(40.dp),
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Location tracking indicator
+            if (isLocationTrackingEnabled) {
+                Spacer(modifier = Modifier.width(8.dp))
+                Surface(
+                    modifier = Modifier.size(32.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.tertiaryContainer,
+                    onClick = onCaptureLocation
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
                         Icon(
-                            imageVector = Icons.Default.Person,
-                            contentDescription = null,
-                            modifier = Modifier.size(40.dp),
-                            tint = MaterialTheme.colorScheme.onPrimaryContainer
+                            imageVector = Icons.Default.MyLocation,
+                            contentDescription = "Capture location now",
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onTertiaryContainer
                         )
                     }
                 }

@@ -100,127 +100,136 @@ fun LocationHistoryScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                // Filter dropdown
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Box {
-                        OutlinedButton(onClick = { showFilterDropdown = true }) {
-                            Icon(Icons.Default.FilterList, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(state.selectedFilter.displayName)
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(18.dp))
-                        }
-                        DropdownMenu(
-                            expanded = showFilterDropdown,
-                            onDismissRequest = { showFilterDropdown = false }
-                        ) {
-                            TimeFilter.entries.forEach { filter ->
-                                DropdownMenuItem(
-                                    text = { Text(filter.displayName) },
-                                    onClick = {
-                                        showFilterDropdown = false
-                                        viewModel.setFilter(filter)
-                                    },
-                                    trailingIcon = {
-                                        if (state.selectedFilter == filter) {
-                                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Filter dropdown header
+                item(key = "filter") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Box {
+                            OutlinedButton(onClick = { showFilterDropdown = true }) {
+                                Icon(Icons.Default.FilterList, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(state.selectedFilter.displayName)
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Icon(Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(18.dp))
+                            }
+                            DropdownMenu(
+                                expanded = showFilterDropdown,
+                                onDismissRequest = { showFilterDropdown = false }
+                            ) {
+                                TimeFilter.entries.forEach { filter ->
+                                    DropdownMenuItem(
+                                        text = { Text(filter.displayName) },
+                                        onClick = {
+                                            showFilterDropdown = false
+                                            viewModel.setFilter(filter)
+                                        },
+                                        trailingIcon = {
+                                            if (state.selectedFilter == filter) {
+                                                Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            }
                                         }
-                                    }
-                                )
+                                    )
+                                }
                             }
                         }
-                    }
-                    if (state.entries.isNotEmpty()) {
-                        Text(
-                            text = "${state.entries.size} points",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        if (state.entries.isNotEmpty()) {
+                            Text(
+                                text = "${state.entries.size} points",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
 
-            when {
-                state.isLoading && !isRefreshing -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator()
-                    }
-                }
-                state.error != null -> {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(32.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                imageVector = Icons.Default.Error,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(48.dp)
-                            )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                state.error!!,
-                                color = MaterialTheme.colorScheme.error
-                            )
-                            Spacer(modifier = Modifier.height(16.dp))
-                            OutlinedButton(onClick = { viewModel.loadHistory() }) {
-                                Text("Retry")
+                // Content based on state
+                when {
+                    state.isLoading && !isRefreshing -> {
+                        item(key = "loading") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 64.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator()
                             }
                         }
                     }
-                }
-                state.entries.isEmpty() -> {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(32.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                imageVector = Icons.Default.LocationOff,
-                                contentDescription = null,
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(64.dp)
-                            )
-                            Spacer(modifier = Modifier.height(16.dp))
-                            Text(
-                                "No location data",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                "Location points will appear here once tracking is active",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                    state.error != null -> {
+                        item(key = "error") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 32.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(
+                                        imageVector = Icons.Default.Error,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(48.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(8.dp))
+                                    Text(
+                                        state.error!!,
+                                        color = MaterialTheme.colorScheme.error
+                                    )
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    OutlinedButton(onClick = { viewModel.loadHistory() }) {
+                                        Text("Retry")
+                                    }
+                                }
+                            }
                         }
                     }
-                }
-                else -> {
-                    LazyColumn(
-                        modifier = Modifier.fillMaxSize(),
-                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
+                    state.entries.isEmpty() -> {
+                        item(key = "empty") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 32.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(
+                                        imageVector = Icons.Default.LocationOff,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(64.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    Text(
+                                        "No location data",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        "Location points will appear here once tracking is active",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    else -> {
                         items(state.entries, key = { it.id }) { entry ->
                             LocationEntryCard(entry = entry)
                         }
                     }
                 }
-            }
             }
         }
     }
