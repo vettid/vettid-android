@@ -9,10 +9,12 @@
 #   ./scripts/decommission-vault.sh <user_guid>
 #   ./scripts/decommission-vault.sh <user_guid> --clear-app
 #   ./scripts/decommission-vault.sh --from-device [--clear-app]
+#   ./scripts/decommission-vault.sh --by-email <email> [--clear-app]
 #
 # Options:
 #   --clear-app     Also clear app data on connected Android device
 #   --from-device   Extract user_guid from connected device's logs
+#   --by-email      Look up user_guid by email address from DynamoDB
 #
 # Prerequisites:
 #   - AWS CLI configured with appropriate credentials
@@ -38,15 +40,18 @@ NATS_INSTANCE="i-05a413c217065a2f1"
 print_usage() {
     echo "Usage: $0 <user_guid> [--clear-app]"
     echo "       $0 --from-device [--clear-app]"
+    echo "       $0 --by-email <email> [--clear-app]"
     echo ""
     echo "Options:"
-    echo "  --clear-app     Also clear app data on connected Android device"
-    echo "  --from-device   Extract user_guid from connected device's logs"
+    echo "  --clear-app       Also clear app data on connected Android device"
+    echo "  --from-device     Extract user_guid from connected device's logs"
+    echo "  --by-email <email> Look up user_guid by email from DynamoDB"
     echo ""
     echo "Examples:"
     echo "  $0 af44310d-2051-46a1-afd8-ee275b53f804"
     echo "  $0 af44310d-2051-46a1-afd8-ee275b53f804 --clear-app"
     echo "  $0 --from-device --clear-app"
+    echo "  $0 --by-email user@example.com --clear-app"
 }
 
 extract_guid_from_device() {
@@ -67,6 +72,55 @@ extract_guid_from_device() {
     fi
 
     echo -e "${GREEN}Found user_guid: $GUID${NC}"
+    echo "$GUID"
+}
+
+lookup_guid_by_email() {
+    local EMAIL=$1
+    echo -e "${YELLOW}Looking up user_guid for email: $EMAIL${NC}" >&2
+
+    # Find the Registrations table name dynamically
+    local TABLE_NAME
+    TABLE_NAME=$(aws dynamodb list-tables --output json 2>/dev/null | jq -r '.TableNames[]' | grep -i 'registration' | head -1)
+
+    if [ -z "$TABLE_NAME" ]; then
+        echo -e "${RED}Could not find Registrations table in DynamoDB${NC}" >&2
+        exit 1
+    fi
+
+    echo -e "Using table: $TABLE_NAME" >&2
+
+    # Query by email
+    local RESULT
+    RESULT=$(aws dynamodb scan \
+        --table-name "$TABLE_NAME" \
+        --filter-expression "email = :e" \
+        --expression-attribute-values "{\":e\":{\"S\":\"$EMAIL\"}}" \
+        --projection-expression "user_guid,email" \
+        --output json 2>&1)
+
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}DynamoDB scan failed: $RESULT${NC}" >&2
+        exit 1
+    fi
+
+    local COUNT
+    COUNT=$(echo "$RESULT" | jq -r '.Count')
+
+    if [ "$COUNT" == "0" ] || [ "$COUNT" == "null" ]; then
+        echo -e "${RED}No registration found for email: $EMAIL${NC}" >&2
+        exit 1
+    fi
+
+    local GUID
+    GUID=$(echo "$RESULT" | jq -r '.Items[0].user_guid.S')
+
+    if [ -z "$GUID" ] || [ "$GUID" == "null" ]; then
+        echo -e "${RED}Could not extract user_guid from result${NC}" >&2
+        exit 1
+    fi
+
+    echo -e "${GREEN}Found user_guid: $GUID${NC}" >&2
     echo "$GUID"
 }
 
@@ -246,6 +300,7 @@ clear_app_data() {
 USER_GUID=""
 CLEAR_APP=false
 FROM_DEVICE=false
+BY_EMAIL=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -256,6 +311,15 @@ while [[ $# -gt 0 ]]; do
         --from-device)
             FROM_DEVICE=true
             shift
+            ;;
+        --by-email)
+            BY_EMAIL="$2"
+            if [ -z "$BY_EMAIL" ]; then
+                echo -e "${RED}Error: --by-email requires an email argument${NC}"
+                print_usage
+                exit 1
+            fi
+            shift 2
             ;;
         --help|-h)
             print_usage
@@ -273,6 +337,11 @@ done
 # Get user_guid from device if requested
 if [ "$FROM_DEVICE" = true ]; then
     USER_GUID=$(extract_guid_from_device)
+fi
+
+# Look up user_guid by email if requested
+if [ -n "$BY_EMAIL" ]; then
+    USER_GUID=$(lookup_guid_by_email "$BY_EMAIL")
 fi
 
 # Validate user_guid
