@@ -74,6 +74,7 @@ app/src/main/java/com/vettid/app/
 
 - [vettid-dev](https://github.com/vettid/vettid-dev) - Backend infrastructure
 - [vettid-ios](https://github.com/vettid/vettid-ios) - iOS app
+- [vettid-desktop](https://github.com/vettid/vettid-desktop) - Desktop app (Tauri/Rust/Svelte)
 - [vettid.org](https://github.com/vettid/vettid.org) - Website
 
 ## License
