@@ -204,6 +204,15 @@ class NatsConnectionManager @Inject constructor(
      */
     fun getNatsClient(): NatsClient = natsClient
 
+    /**
+     * Get the underlying AndroidNatsClient for JetStream request helper.
+     * Returns null if not connected.
+     */
+    fun getAndroidClient(): AndroidNatsClient? {
+        if (!natsClient.isConnected) return null
+        return natsClient.getAndroidClient()
+    }
+
     // Shared JetStream client for all components
     private var jetStreamClient: JetStreamNatsClient? = null
 

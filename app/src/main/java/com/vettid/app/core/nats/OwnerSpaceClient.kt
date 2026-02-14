@@ -10,13 +10,10 @@ import com.vettid.app.core.crypto.SessionInfo
 import com.vettid.app.core.crypto.SessionKeyPair
 import com.vettid.app.core.network.TransactionKeyInfo
 import com.vettid.app.core.storage.CredentialStore
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
-import java.util.concurrent.ConcurrentHashMap
 import java.time.Instant
 import java.util.UUID
 import javax.inject.Inject
@@ -48,17 +45,6 @@ class OwnerSpaceClient @Inject constructor(
 
     private val _vaultResponses = MutableSharedFlow<VaultResponse>(extraBufferCapacity = 64)
     val vaultResponses: SharedFlow<VaultResponse> = _vaultResponses.asSharedFlow()
-
-    // Pending request holder with expected request type for validation
-    private data class PendingRequest(
-        val deferred: CompletableDeferred<VaultResponse>,
-        val expectedRequestType: String  // e.g., "pin.unlock", "connection.list"
-    )
-
-    // Pending requests map for direct request/response correlation
-    // This prevents race conditions where multiple collectors compete for responses
-    // Each entry includes the expected request type for validation
-    private val pendingRequests = ConcurrentHashMap<String, PendingRequest>()
 
     private val _vaultEvents = MutableSharedFlow<VaultEvent>(extraBufferCapacity = 64)
     val vaultEvents: SharedFlow<VaultEvent> = _vaultEvents.asSharedFlow()
@@ -202,11 +188,11 @@ class OwnerSpaceClient @Inject constructor(
     }
 
     /**
-     * Send a message to the vault and await the response.
+     * Send a message to the vault and await the response via JetStream.
      *
-     * This is the preferred method for request/response patterns as it properly
-     * correlates responses using CompletableDeferred, avoiding race conditions
-     * that can occur when multiple clients use the SharedFlow approach.
+     * Uses JetStreamRequestHelper to create an ephemeral consumer for reliable
+     * response delivery, solving the issue where regular NATS subscriptions miss
+     * responses after reconnection.
      *
      * @param messageType The message type/action (e.g., "profile.get", "feed.sync")
      * @param payload The message payload
@@ -225,13 +211,17 @@ class OwnerSpaceClient @Inject constructor(
                 message = "No OwnerSpace ID available"
             )
 
-        val requestId = UUID.randomUUID().toString()
-        val subject = "$ownerSpaceId.forVault.$messageType"
+        val androidClient = connectionManager.getAndroidClient()
+            ?: return VaultResponse.Error(
+                requestId = "",
+                code = "NOT_CONNECTED",
+                message = "NATS not connected"
+            )
 
-        // Register the pending request BEFORE sending
-        // Store expected request type for validation when response arrives
-        val deferred = CompletableDeferred<VaultResponse>()
-        pendingRequests[requestId] = PendingRequest(deferred, messageType)
+        val requestId = UUID.randomUUID().toString()
+        val requestSubject = "$ownerSpaceId.forVault.$messageType"
+        // Response subject matches parent's buildAppResponseSubject (parent.go:1103)
+        val responseSubject = "$ownerSpaceId.forApp.$messageType.response"
 
         try {
             // Encrypt payload if E2E session is established (skip for bootstrap)
@@ -249,31 +239,131 @@ class OwnerSpaceClient @Inject constructor(
             )
 
             val json = gson.toJson(message)
-            val publishResult = natsClient.publish(subject, json)
 
-            if (publishResult.isFailure) {
-                pendingRequests.remove(requestId)
+            // Use JetStream for reliable request-response
+            val result = JetStreamRequestHelper.sendAndFetchResponse(
+                client = androidClient,
+                requestSubject = requestSubject,
+                responseSubject = responseSubject,
+                requestPayload = json.toByteArray(Charsets.UTF_8),
+                expectedEventId = requestId,
+                timeoutMs = timeoutMs
+            )
+
+            if (result.isFailure) {
+                val error = result.exceptionOrNull()
+                android.util.Log.w(TAG, "JetStream request failed for $messageType: ${error?.message}")
                 return VaultResponse.Error(
                     requestId = requestId,
-                    code = "PUBLISH_FAILED",
-                    message = publishResult.exceptionOrNull()?.message ?: "Failed to publish"
+                    code = if (error?.message?.contains("timed out") == true) "TIMEOUT" else "REQUEST_FAILED",
+                    message = error?.message ?: "Request failed"
                 )
             }
 
-            // Wait for the response with timeout
-            return withTimeoutOrNull(timeoutMs) {
-                deferred.await()
-            } ?: run {
-                android.util.Log.w(TAG, "Request $requestId ($messageType) timed out after ${timeoutMs}ms")
-                VaultResponse.Error(
-                    requestId = requestId,
-                    code = "TIMEOUT",
-                    message = "Request timed out"
-                )
+            return parseJetStreamResponse(requestId, result.getOrThrow())
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "sendAndAwaitResponse($messageType) exception", e)
+            return VaultResponse.Error(
+                requestId = requestId,
+                code = "EXCEPTION",
+                message = e.message ?: "Unknown error"
+            )
+        }
+    }
+
+    /**
+     * Parse a JetStream response message into a VaultResponse.
+     * Handles decryption, JSON parsing, UTK extraction, and response type mapping.
+     */
+    private fun parseJetStreamResponse(requestId: String, message: NatsMessage): VaultResponse {
+        try {
+            // Decrypt if E2E is enabled
+            val data = decryptPayload(message.data)
+            val responseString = String(data, Charsets.UTF_8)
+
+            android.util.Log.d(TAG, "parseJetStreamResponse raw=${responseString.take(500)}")
+
+            val response = gson.fromJson(responseString, VaultResponseJson::class.java)
+
+            // Extract and store any new UTKs
+            extractAndStoreUtks(responseString)
+
+            // Handle standard vault-manager response format
+            if (response.success != null) {
+                return if (response.success) {
+                    val resultData = response.result ?: run {
+                        try {
+                            gson.fromJson(responseString, JsonObject::class.java)
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
+                    VaultResponse.HandlerResult(
+                        requestId = response.getCorrelationId().ifEmpty { requestId },
+                        handlerId = response.handlerId,
+                        success = true,
+                        result = resultData,
+                        error = null
+                    )
+                } else {
+                    VaultResponse.Error(
+                        requestId = response.getCorrelationId().ifEmpty { requestId },
+                        code = response.errorCode ?: "HANDLER_ERROR",
+                        message = response.error ?: "Unknown error"
+                    )
+                }
             }
-        } finally {
-            // Always clean up the pending request
-            pendingRequests.remove(requestId)
+
+            // Handle typed responses
+            return when (response.type) {
+                "handlerResult" -> VaultResponse.HandlerResult(
+                    requestId = response.getCorrelationId().ifEmpty { requestId },
+                    handlerId = response.handlerId,
+                    success = response.success ?: false,
+                    result = response.result,
+                    error = response.error
+                )
+                "status" -> VaultResponse.StatusResponse(
+                    requestId = response.getCorrelationId().ifEmpty { requestId },
+                    status = parseVaultStatus(response.result)
+                )
+                "eventTypes" -> VaultResponse.EventTypesResponse(
+                    requestId = response.getCorrelationId().ifEmpty { requestId },
+                    eventTypes = parseEventTypes(response.result)
+                )
+                "pong" -> VaultResponse.Pong(
+                    requestId = response.getCorrelationId().ifEmpty { requestId },
+                    timestamp = parseTimestamp(response.timestamp)
+                )
+                "error" -> VaultResponse.Error(
+                    requestId = response.getCorrelationId().ifEmpty { requestId },
+                    code = response.errorCode ?: "UNKNOWN",
+                    message = response.error ?: "Unknown error"
+                )
+                else -> {
+                    val resultData = response.result ?: run {
+                        try {
+                            gson.fromJson(responseString, JsonObject::class.java)
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
+                    VaultResponse.HandlerResult(
+                        requestId = response.getCorrelationId().ifEmpty { requestId },
+                        handlerId = null,
+                        success = response.error == null,
+                        result = resultData,
+                        error = response.error
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse JetStream response", e)
+            return VaultResponse.Error(
+                requestId = requestId,
+                code = "PARSE_ERROR",
+                message = "Failed to parse response: ${e.message}"
+            )
         }
     }
 
@@ -1227,9 +1317,19 @@ class OwnerSpaceClient @Inject constructor(
         }
     }
 
+    /**
+     * Handle messages on the forApp.> subscription.
+     *
+     * This subscription is now used for push notifications only (real-time events
+     * like calls, messages, feed notifications, etc.). Request-response patterns
+     * are handled by JetStream via sendAndAwaitResponse().
+     *
+     * Any .response messages that arrive here are logged and discarded — they are
+     * handled by JetStreamRequestHelper's ephemeral consumers instead.
+     */
     private fun handleVaultResponse(message: NatsMessage) {
         try {
-            // Route based on subject suffix
+            // Route push notifications based on subject suffix
             when {
                 message.subject.endsWith(".forApp.credentials.rotate") -> {
                     handleCredentialRotation(message)
@@ -1271,8 +1371,7 @@ class OwnerSpaceClient @Inject constructor(
                     handleSecurityEvent(message)
                     return
                 }
-                // Agent approval request events
-                // Exclude .response messages - they should flow through to normal response handling
+                // Agent approval request events (exclude .response)
                 message.subject.contains(".forApp.agent.") && !message.subject.endsWith(".response") -> {
                     handleAgentEvent(message)
                     return
@@ -1282,151 +1381,19 @@ class OwnerSpaceClient @Inject constructor(
                     handleLocationUpdate(message)
                     return
                 }
-                // Feed notification events (Issue #15)
-                // Exclude .response messages - they should flow through to normal response handling
+                // Feed notification events (exclude .response)
                 message.subject.contains(".forApp.feed.") && !message.subject.endsWith(".response") -> {
                     handleFeedNotification(message)
                     return
                 }
             }
 
-            // Decrypt if E2E is enabled
-            val data = decryptPayload(message.data)
-            val responseString = String(data, Charsets.UTF_8)
-
-            // DEBUG: Log raw response for troubleshooting
-            android.util.Log.d(TAG, "handleVaultResponse subject=${message.subject} raw=${responseString.take(500)}")
-
-            val response = gson.fromJson(responseString, VaultResponseJson::class.java)
-            val correlationId = response.getCorrelationId()
-
-            // Extract and store any new UTKs from the response (automatic replenishment)
-            extractAndStoreUtks(responseString)
-
-            // Handle standard vault-manager response format (success/error with result)
-            if (response.success != null) {
-                val vaultResponse = if (response.success) {
-                    // If response.result is null, the enclave may have put data at the top level
-                    // (e.g., profile.get returns first_name, last_name, fields at root)
-                    // In this case, parse the whole response as JsonObject to capture all fields
-                    val resultData = response.result ?: run {
-                        try {
-                            gson.fromJson(responseString, JsonObject::class.java)
-                        } catch (e: Exception) {
-                            null
-                        }
-                    }
-                    VaultResponse.HandlerResult(
-                        requestId = correlationId,
-                        handlerId = response.handlerId,
-                        success = true,
-                        result = resultData,
-                        error = null
-                    )
-                } else {
-                    VaultResponse.Error(
-                        requestId = correlationId,
-                        code = response.errorCode ?: "HANDLER_ERROR",
-                        message = response.error ?: "Unknown error"
-                    )
-                }
-                dispatchResponse(correlationId, vaultResponse, response.request_type)
-                return
-            }
-
-            // Handle legacy typed responses
-            val vaultResponse = when (response.type) {
-                "handlerResult" -> VaultResponse.HandlerResult(
-                    requestId = correlationId,
-                    handlerId = response.handlerId,
-                    success = response.success ?: false,
-                    result = response.result,
-                    error = response.error
-                )
-                "status" -> VaultResponse.StatusResponse(
-                    requestId = correlationId,
-                    status = parseVaultStatus(response.result)
-                )
-                "eventTypes" -> VaultResponse.EventTypesResponse(
-                    requestId = correlationId,
-                    eventTypes = parseEventTypes(response.result)
-                )
-                "pong" -> VaultResponse.Pong(
-                    requestId = correlationId,
-                    timestamp = parseTimestamp(response.timestamp)
-                )
-                "error" -> VaultResponse.Error(
-                    requestId = correlationId,
-                    code = response.errorCode ?: "UNKNOWN",
-                    message = response.error ?: "Unknown error"
-                )
-                else -> {
-                    // Treat as generic handler result
-                    // If response.result is null, the enclave may have put data at the top level
-                    // (e.g., feed.sync returns events, has_more at root)
-                    val resultData = response.result ?: run {
-                        try {
-                            gson.fromJson(responseString, JsonObject::class.java)
-                        } catch (e: Exception) {
-                            null
-                        }
-                    }
-                    VaultResponse.HandlerResult(
-                        requestId = correlationId,
-                        handlerId = null,
-                        success = response.error == null,
-                        result = resultData,
-                        error = response.error
-                    )
-                }
-            }
-
-            dispatchResponse(correlationId, vaultResponse, response.request_type)
+            // Anything that falls through is a response message handled by JetStream.
+            // Log and discard — the JetStreamRequestHelper consumer picks these up.
+            android.util.Log.d(TAG, "Discarding response on subscription (handled by JetStream): ${message.subject}")
         } catch (e: Exception) {
-            android.util.Log.e(TAG, "Failed to parse vault response", e)
+            android.util.Log.e(TAG, "Failed to handle vault message", e)
         }
-    }
-
-    /**
-     * Dispatch a response to the appropriate handler.
-     * First checks for a pending request (sendAndAwaitResponse), then falls back to SharedFlow.
-     *
-     * @param requestId Correlation ID from the response
-     * @param response The vault response to dispatch
-     * @param responseRequestType The request_type from the response (for validation)
-     */
-    private fun dispatchResponse(requestId: String, response: VaultResponse, responseRequestType: String?) {
-        // First, try to complete a pending request (direct correlation)
-        val pendingRequest = pendingRequests.remove(requestId)
-        if (pendingRequest != null) {
-            // Validate request type if response includes it
-            // This prevents responses from being delivered to wrong handlers
-            if (responseRequestType != null && responseRequestType != pendingRequest.expectedRequestType) {
-                android.util.Log.e(TAG,
-                    "REQUEST TYPE MISMATCH: Expected '${pendingRequest.expectedRequestType}' " +
-                    "but got '$responseRequestType' for request $requestId. " +
-                    "This indicates a response routing bug in the enclave."
-                )
-                // Return an error instead of the wrong response
-                pendingRequest.deferred.complete(
-                    VaultResponse.Error(
-                        requestId = requestId,
-                        code = "REQUEST_TYPE_MISMATCH",
-                        message = "Expected ${pendingRequest.expectedRequestType} response but got $responseRequestType"
-                    )
-                )
-                return
-            }
-
-            android.util.Log.d(TAG, "Dispatching response to pending request: $requestId (type: ${responseRequestType ?: "unknown"})")
-            pendingRequest.deferred.complete(response)
-            // Don't emit to SharedFlow - the requester will get it directly
-            return
-        }
-
-        // Fall back to SharedFlow for legacy consumers (backward compatibility)
-        android.util.Log.d(TAG, "No pending request for $requestId, emitting to SharedFlow")
-        _vaultResponses.tryEmit(response)
     }
 
     private fun parseTimestamp(timestamp: String?): Long {

@@ -126,16 +126,18 @@ class VaultPreferencesViewModel @Inject constructor(
                 // Load theme preference
                 val theme = appPreferencesStore.getTheme()
 
-                _state.value = VaultPreferencesState(
-                    theme = theme,
-                    sessionTtlMinutes = appPreferencesStore.getSessionTtlMinutes(),
-                    archiveAfterDays = appPreferencesStore.getArchiveAfterDays(),
-                    deleteAfterDays = appPreferencesStore.getDeleteAfterDays(),
-                    isOfflineMode = isOffline,
-                    pcrVersion = pcrVersion,
-                    pcr0Hash = pcr0Hash,
-                    enrollmentPcrVersion = enrollmentPcrVersion
-                )
+                _state.update {
+                    it.copy(
+                        theme = theme,
+                        sessionTtlMinutes = appPreferencesStore.getSessionTtlMinutes(),
+                        archiveAfterDays = appPreferencesStore.getArchiveAfterDays(),
+                        deleteAfterDays = appPreferencesStore.getDeleteAfterDays(),
+                        isOfflineMode = isOffline,
+                        pcrVersion = pcrVersion,
+                        pcr0Hash = pcr0Hash,
+                        enrollmentPcrVersion = enrollmentPcrVersion
+                    )
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load preferences", e)
             }

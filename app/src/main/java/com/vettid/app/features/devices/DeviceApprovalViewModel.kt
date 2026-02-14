@@ -2,7 +2,9 @@ package com.vettid.app.features.devices
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.gson.JsonObject
 import com.vettid.app.core.nats.OwnerSpaceClient
+import com.vettid.app.core.nats.VaultResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,21 +33,6 @@ class DeviceApprovalViewModel @Inject constructor(
         startTimeout()
     }
 
-    /**
-     * Start listening for incoming approval requests via NATS subscription.
-     */
-    fun startListening() {
-        viewModelScope.launch {
-            try {
-                ownerSpaceClient.subscribeToAppTopic<DeviceApprovalRequest>(
-                    topic = "device.approval.request.>"
-                ) { request ->
-                    loadRequest(request)
-                }
-            } catch (_: Exception) { }
-        }
-    }
-
     fun approve() {
         val current = _state.value
         if (current !is DeviceApprovalState.Ready) return
@@ -53,11 +40,30 @@ class DeviceApprovalViewModel @Inject constructor(
         _state.value = DeviceApprovalState.ProcessingApproval
         viewModelScope.launch {
             try {
-                ownerSpaceClient.sendToVault(
-                    topic = "connection.device.approval",
-                    payload = """{"request_id":"${current.request.requestId}","approved":true}"""
+                val payload = JsonObject().apply {
+                    addProperty("request_id", current.request.requestId)
+                    addProperty("approved", true)
+                }
+                val response = ownerSpaceClient.sendAndAwaitResponse(
+                    messageType = "connection.device.approval",
+                    payload = payload,
+                    timeoutMs = 15000L
                 )
-                _state.value = DeviceApprovalState.Approved()
+                when (response) {
+                    is VaultResponse.HandlerResult -> {
+                        if (response.success) {
+                            _state.value = DeviceApprovalState.Approved()
+                        } else {
+                            _state.value = DeviceApprovalState.Error(response.error ?: "Approval failed")
+                        }
+                    }
+                    is VaultResponse.Error -> {
+                        _state.value = DeviceApprovalState.Error(response.message)
+                    }
+                    else -> {
+                        _state.value = DeviceApprovalState.Error("Unexpected response")
+                    }
+                }
             } catch (e: Exception) {
                 _state.value = DeviceApprovalState.Error(e.message ?: "Failed to approve")
             } finally {
@@ -73,11 +79,30 @@ class DeviceApprovalViewModel @Inject constructor(
         _state.value = DeviceApprovalState.ProcessingDenial
         viewModelScope.launch {
             try {
-                ownerSpaceClient.sendToVault(
-                    topic = "connection.device.approval",
-                    payload = """{"request_id":"${current.request.requestId}","approved":false}"""
+                val payload = JsonObject().apply {
+                    addProperty("request_id", current.request.requestId)
+                    addProperty("approved", false)
+                }
+                val response = ownerSpaceClient.sendAndAwaitResponse(
+                    messageType = "connection.device.approval",
+                    payload = payload,
+                    timeoutMs = 15000L
                 )
-                _state.value = DeviceApprovalState.Denied()
+                when (response) {
+                    is VaultResponse.HandlerResult -> {
+                        if (response.success) {
+                            _state.value = DeviceApprovalState.Denied()
+                        } else {
+                            _state.value = DeviceApprovalState.Error(response.error ?: "Denial failed")
+                        }
+                    }
+                    is VaultResponse.Error -> {
+                        _state.value = DeviceApprovalState.Error(response.message)
+                    }
+                    else -> {
+                        _state.value = DeviceApprovalState.Error("Unexpected response")
+                    }
+                }
             } catch (e: Exception) {
                 _state.value = DeviceApprovalState.Error(e.message ?: "Failed to deny")
             } finally {

@@ -355,11 +355,17 @@ class TwoTierSecretsViewModel @Inject constructor(
             // Map RECOVERY_KEY to OTHER (vault doesn't have RECOVERY_KEY category yet)
             val vaultCategory = if (category == CriticalSecretCategory.RECOVERY_KEY) "OTHER" else category.name
 
+            // Base64-encode the secret value as the vault expects base64
+            val valueBase64 = android.util.Base64.encodeToString(
+                value.toByteArray(Charsets.UTF_8),
+                android.util.Base64.NO_WRAP
+            )
+
             val payload = JsonObject().apply {
                 addProperty("name", name)
                 addProperty("category", vaultCategory)
                 addProperty("description", description)
-                addProperty("value", value)
+                addProperty("value", valueBase64)
                 addProperty("encrypted_credential", encryptedBlob)
                 addProperty("encrypted_password_hash", encryptedPassword.encryptedPasswordHash)
                 addProperty("ephemeral_public_key", encryptedPassword.ephemeralPublicKey)

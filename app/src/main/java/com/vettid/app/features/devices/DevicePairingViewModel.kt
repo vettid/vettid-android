@@ -1,9 +1,11 @@
 package com.vettid.app.features.devices
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.gson.JsonObject
 import com.vettid.app.core.nats.OwnerSpaceClient
-import com.vettid.app.core.network.ApiClient
+import com.vettid.app.core.nats.VaultResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,8 +15,7 @@ import javax.inject.Inject
 
 @HiltViewModel
 class DevicePairingViewModel @Inject constructor(
-    private val ownerSpaceClient: OwnerSpaceClient,
-    private val apiClient: ApiClient
+    private val ownerSpaceClient: OwnerSpaceClient
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<DevicePairingState>(DevicePairingState.Idle)
@@ -30,47 +31,51 @@ class DevicePairingViewModel @Inject constructor(
             _state.value = DevicePairingState.Creating
 
             try {
-                // Step 1: Create device invitation via NATS
-                val inviteResponse = ownerSpaceClient.requestFromVault<CreateInviteResponse>(
-                    topic = "connection.device.create-invite",
-                    payload = "{}"
+                // Step 1: Create device invitation via vault
+                val response = ownerSpaceClient.sendAndAwaitResponse(
+                    messageType = "connection.device.create-invite",
+                    payload = JsonObject(),
+                    timeoutMs = 15000L
                 )
 
-                // Step 2: Create shortlink via API
-                val shortlinkResponse = apiClient.createDeviceShortlink(
-                    invitationId = inviteResponse.invitationId,
-                    inviteToken = inviteResponse.inviteToken,
-                    vaultPublicKey = inviteResponse.vaultPublicKey,
-                    messagespaceUri = inviteResponse.messagespaceUri,
-                    ownerGuid = inviteResponse.ownerGuid
-                )
+                when (response) {
+                    is VaultResponse.HandlerResult -> {
+                        if (response.success && response.result != null) {
+                            val code = response.result.get("code")?.asString
+                                ?: response.result.get("invitation_code")?.asString
+                                ?: ""
 
-                val code = shortlinkResponse.code
+                            if (code.isEmpty()) {
+                                _state.value = DevicePairingState.Error("No pairing code received")
+                                return@launch
+                            }
 
-                // Step 3: Show code with countdown
-                _state.value = DevicePairingState.ShowingCode(code, pairingTimeoutSeconds)
-                startCountdown()
+                            // Step 2: Show code with countdown
+                            _state.value = DevicePairingState.ShowingCode(code, pairingTimeoutSeconds)
+                            startCountdown()
 
-                // Step 4: Wait for device connection event from vault
-                val connectionEvent = ownerSpaceClient.waitForEvent<DeviceConnectionEvent>(
-                    topic = "device.connection.request",
-                    timeoutSeconds = pairingTimeoutSeconds
-                )
-
-                if (connectionEvent != null) {
-                    countdownJob?.cancel()
-                    _state.value = DevicePairingState.WaitingApproval
-
-                    // Auto-approve for now (in production, show approval UI)
-                    _state.value = DevicePairingState.Approved(
-                        deviceName = connectionEvent.hostname ?: "Desktop"
-                    )
-                } else {
-                    _state.value = DevicePairingState.Timeout
+                            // Step 3: Wait for device connection event
+                            // The vault will send a push notification on forApp.device.connection.request
+                            // when a device connects. For now we wait for the timeout.
+                            // TODO: Listen for device connection event via vaultEvents flow
+                        } else {
+                            _state.value = DevicePairingState.Error(response.error ?: "Failed to create invitation")
+                        }
+                    }
+                    is VaultResponse.Error -> {
+                        _state.value = DevicePairingState.Error(response.message)
+                    }
+                    null -> {
+                        _state.value = DevicePairingState.Error("Request timed out")
+                    }
+                    else -> {
+                        _state.value = DevicePairingState.Error("Unexpected response")
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                Log.e(TAG, "Pairing failed", e)
                 _state.value = DevicePairingState.Error(e.message ?: "Pairing failed")
             }
         }
@@ -111,9 +116,13 @@ class DevicePairingViewModel @Inject constructor(
         pairingJob?.cancel()
         countdownJob?.cancel()
     }
+
+    companion object {
+        private const val TAG = "DevicePairingVM"
+    }
 }
 
-// Response types
+// Response types (used when device pairing backend is implemented)
 data class CreateInviteResponse(
     val connectionId: String,
     val invitationId: String,
@@ -130,7 +139,6 @@ data class ShortlinkResponse(
 
 data class DeviceConnectionEvent(
     val connectionId: String,
-    val hostname: String?,
-    val platform: String?,
-    val deviceName: String?
+    val deviceName: String?,
+    val platform: String?
 )

@@ -39,7 +39,7 @@ class AndroidNatsClient {
         // Shorter ping interval to prevent NAT/firewall timeouts (mobile networks often timeout at 30-60s)
         private const val PING_INTERVAL_MS = 20000L
         private const val RECONNECT_DELAY_MS = 1000L
-        private const val MAX_RECONNECT_ATTEMPTS = 15
+        private const val MAX_RECONNECT_ATTEMPTS = Int.MAX_VALUE
         private const val PONG_TIMEOUT_MS = 10000L
     }
 
@@ -571,7 +571,9 @@ class AndroidNatsClient {
             attempts++
             delay(backoffMs)
 
-            Log.i(TAG, "Reconnect attempt $attempts/$MAX_RECONNECT_ATTEMPTS (backoff: ${backoffMs}ms)")
+            if (attempts % 10 == 1 || attempts <= 3) {
+                Log.i(TAG, "Reconnect attempt $attempts (backoff: ${backoffMs}ms)")
+            }
 
             val endpoint = currentEndpoint
             val jwt = currentJwt
@@ -641,11 +643,11 @@ class AndroidNatsClient {
                 break
             }
 
-            // Exponential backoff with cap at 30 seconds
-            backoffMs = (backoffMs * 2).coerceAtMost(30000L)
+            // Exponential backoff with cap at 60 seconds
+            backoffMs = (backoffMs * 2).coerceAtMost(60000L)
         }
 
-        Log.e(TAG, "Failed to reconnect after $MAX_RECONNECT_ATTEMPTS attempts")
+        Log.e(TAG, "Failed to reconnect after $attempts attempts")
     }
 
     // --- Helper classes ---
