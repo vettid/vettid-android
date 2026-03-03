@@ -106,12 +106,13 @@ class ConnectionsViewModel @Inject constructor(
 
             // Check if NATS is connected
             if (!natsAutoConnector.isConnected()) {
-                // Not connected to vault - show empty state
-                _state.value = ConnectionsState.Empty
+                _state.value = ConnectionsState.Error(
+                    message = "Not connected to vault \u2014 pull to refresh"
+                )
                 return@launch
             }
 
-            connectionsClient.list(status = "active").fold(
+            connectionsClient.list().fold(
                 onSuccess = { listResult ->
                     // Map ConnectionRecord to ConnectionWithLastMessage for UI
                     val connectionsWithMessages = listResult.items.map { record ->
@@ -125,7 +126,9 @@ class ConnectionsViewModel @Inject constructor(
                         val createdAtMillis = try {
                             java.time.Instant.parse(record.createdAt).toEpochMilli()
                         } catch (e: Exception) {
-                            System.currentTimeMillis()
+                            android.util.Log.w("ConnectionsVM",
+                                "Failed to parse timestamp '${record.createdAt}' for ${record.connectionId}")
+                            0L
                         }
                         ConnectionWithLastMessage(
                             connection = Connection(
@@ -168,11 +171,12 @@ class ConnectionsViewModel @Inject constructor(
                     applyFilterAndSort()
                 },
                 onFailure = { error ->
-                    // If vault not connected or handler failed, show empty state
                     val isConnectionIssue = error.message?.contains("not connected", ignoreCase = true) == true ||
                             error.message?.contains("timeout", ignoreCase = true) == true
                     if (isConnectionIssue) {
-                        _state.value = ConnectionsState.Empty
+                        _state.value = ConnectionsState.Error(
+                            message = "Could not reach vault \u2014 pull to refresh"
+                        )
                     } else {
                         _state.value = ConnectionsState.Error(
                             message = error.message ?: "Failed to load connections"
@@ -349,12 +353,46 @@ class ConnectionsViewModel @Inject constructor(
             var successCount = 0
 
             for (op in operations) {
-                // Process based on operation type
-                // For now, just mark as completed (actual implementation would call APIs)
                 try {
-                    // TODO: Implement actual operation processing
-                    offlineQueueManager.markCompleted(op.id)
-                    successCount++
+                    val connectionId = op.connectionId
+                    val result: Result<*> = when (op.type) {
+                        com.vettid.app.features.connections.offline.OperationType.ACCEPT_CONNECTION -> {
+                            if (connectionId == null) {
+                                Result.failure<Unit>(IllegalStateException("Missing connectionId"))
+                            } else {
+                                // Accept is handled via storeCredentials during scan flow;
+                                // queued accepts should not normally occur
+                                Result.success(Unit)
+                            }
+                        }
+                        com.vettid.app.features.connections.offline.OperationType.REJECT_CONNECTION -> {
+                            if (connectionId == null) {
+                                Result.failure<Unit>(IllegalStateException("Missing connectionId"))
+                            } else {
+                                connectionsClient.revoke(connectionId)
+                            }
+                        }
+                        com.vettid.app.features.connections.offline.OperationType.ROTATE_CREDENTIALS -> {
+                            if (connectionId == null) {
+                                Result.failure<Unit>(IllegalStateException("Missing connectionId"))
+                            } else {
+                                connectionsClient.rotate(connectionId)
+                            }
+                        }
+                        else -> {
+                            // UPDATE_PROFILE and SEND_MESSAGE not handled via connections
+                            Result.success(Unit)
+                        }
+                    }
+                    result.fold(
+                        onSuccess = {
+                            offlineQueueManager.markCompleted(op.id)
+                            successCount++
+                        },
+                        onFailure = { e ->
+                            offlineQueueManager.markFailed(op.id, e.message ?: "Unknown error")
+                        }
+                    )
                 } catch (e: Exception) {
                     offlineQueueManager.markFailed(op.id, e.message ?: "Unknown error")
                 }

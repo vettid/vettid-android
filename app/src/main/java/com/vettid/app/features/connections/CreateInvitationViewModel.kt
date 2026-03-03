@@ -12,6 +12,7 @@ import com.vettid.app.core.security.SecureClipboard
 import com.vettid.app.core.storage.CredentialStore
 import com.vettid.app.features.feed.FeedRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -50,6 +51,9 @@ class CreateInvitationViewModel @Inject constructor(
 
     // Store key pair temporarily until invitation is accepted
     private var pendingKeyPair: ConnectionKeyPair? = null
+
+    // Track expiration timer to cancel on new invitation
+    private var expirationTimerJob: Job? = null
 
     /**
      * Available expiration options.
@@ -239,6 +243,7 @@ class CreateInvitationViewModel @Inject constructor(
      * Cancel the current invitation.
      */
     fun cancel() {
+        expirationTimerJob?.cancel()
         clearPendingKeyPair()
         _state.value = CreateInvitationState.Idle
     }
@@ -254,7 +259,8 @@ class CreateInvitationViewModel @Inject constructor(
      * Start countdown timer for expiration.
      */
     private fun startExpirationTimer(expiresAt: Long) {
-        viewModelScope.launch {
+        expirationTimerJob?.cancel()
+        expirationTimerJob = viewModelScope.launch {
             while (true) {
                 val remaining = calculateRemainingSeconds(expiresAt)
                 if (remaining <= 0) {
@@ -284,6 +290,7 @@ class CreateInvitationViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
+        expirationTimerJob?.cancel()
         clearPendingKeyPair()
     }
 }

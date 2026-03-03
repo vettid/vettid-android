@@ -57,7 +57,10 @@ class ScanInvitationViewModel @Inject constructor(
         if (invitation != null) {
             android.util.Log.d("ScanInvitationVM", "Parsed invitation: connectionId=${invitation.connectionId}, peerGuid=${invitation.peerGuid}")
             parsedInvitation = invitation
-            processInvitation(invitation)
+            _state.value = ScanInvitationState.Preview(
+                creatorName = invitation.label,
+                creatorAvatarUrl = null
+            )
         } else {
             android.util.Log.e("ScanInvitationVM", "Failed to parse invitation data")
             viewModelScope.launch {
@@ -98,7 +101,7 @@ class ScanInvitationViewModel @Inject constructor(
             android.util.Log.d("ScanInvitationVM", "Waiting for NATS connection and E2E session...")
 
             var attempts = 0
-            val maxAttempts = 60 // 30 seconds (500ms each)
+            val maxAttempts = 120 // 60 seconds (500ms each)
             while (attempts < maxAttempts) {
                 val connected = natsAutoConnector.isConnected()
                 val e2eEnabled = ownerSpaceClient.isE2EEnabled
@@ -127,8 +130,34 @@ class ScanInvitationViewModel @Inject constructor(
                 return@launch
             }
 
-            android.util.Log.d("ScanInvitationVM", "NATS connected and E2E enabled, storing credentials...")
+            android.util.Log.d("ScanInvitationVM", "NATS connected and E2E enabled, checking for duplicates...")
             _state.value = ScanInvitationState.Processing
+
+            // Check for duplicate connections before storing
+            connectionsClient.list().fold(
+                onSuccess = { listResult ->
+                    val existingById = listResult.items.find { it.connectionId == invitation.connectionId }
+                    if (existingById != null) {
+                        _state.value = ScanInvitationState.Error(
+                            message = "This invitation has already been accepted"
+                        )
+                        return@launch
+                    }
+                    val existingByPeer = listResult.items.find {
+                        it.peerGuid == invitation.peerGuid && it.status != "revoked" && it.status != "rejected"
+                    }
+                    if (existingByPeer != null) {
+                        _state.value = ScanInvitationState.Error(
+                            message = "You already have a connection with this user"
+                        )
+                        return@launch
+                    }
+                },
+                onFailure = { error ->
+                    android.util.Log.w("ScanInvitationVM", "Could not check for duplicates: ${error.message}")
+                    // Continue anyway - vault will reject duplicates server-side
+                }
+            )
 
             // Store the peer's credentials via vault handler
             connectionsClient.storeCredentials(
