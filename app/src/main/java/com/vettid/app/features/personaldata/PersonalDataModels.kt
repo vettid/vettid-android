@@ -62,6 +62,14 @@ enum class DataCategory(val displayName: String, val iconName: String) {
     ADDRESS("Address", "location_on"),
     FINANCIAL("Financial", "account_balance"),
     MEDICAL("Medical", "medical_services"),
+    PROFESSIONAL("Professional", "work"),
+    EDUCATION("Education", "school"),
+    VEHICLE("Vehicle", "directions_car"),
+    LEGAL("Legal", "gavel"),
+    DIGITAL("Digital", "language"),
+    TRAVEL("Travel", "flight_takeoff"),
+    MEMBERSHIP("Membership", "card_membership"),
+    PROPERTY("Property", "home"),
     OTHER("Other", "category")
 }
 
@@ -91,6 +99,14 @@ object PersonalDataTemplates {
         PersonalDataTemplate("Place of Birth", DataCategory.IDENTITY, FieldType.TEXT, "City/country of birth"),
         PersonalDataTemplate("Nationality", DataCategory.IDENTITY, FieldType.TEXT, "Your nationality/citizenship"),
         PersonalDataTemplate("Gender", DataCategory.IDENTITY, FieldType.TEXT, "Your gender identity"),
+        PersonalDataTemplate("Preferred Name / Nickname", DataCategory.IDENTITY, FieldType.TEXT, "Name you go by"),
+        PersonalDataTemplate("Maiden Name", DataCategory.IDENTITY, FieldType.TEXT, "Birth surname if changed"),
+        PersonalDataTemplate("Marital Status", DataCategory.IDENTITY, FieldType.TEXT, "Single, Married, etc."),
+        PersonalDataTemplate("Spouse Name", DataCategory.IDENTITY, FieldType.TEXT, "Spouse's full name"),
+        PersonalDataTemplate("Number of Dependents", DataCategory.IDENTITY, FieldType.NUMBER, "Dependent count (tax-relevant)"),
+        PersonalDataTemplate("Eye Color", DataCategory.IDENTITY, FieldType.TEXT, "Eye color (for ID matching)"),
+        PersonalDataTemplate("Height", DataCategory.IDENTITY, FieldType.TEXT, "Height (for ID matching)"),
+        PersonalDataTemplate("Weight", DataCategory.IDENTITY, FieldType.TEXT, "Weight (for ID matching)"),
 
         // Contact
         PersonalDataTemplate("Mobile Phone", DataCategory.CONTACT, FieldType.PHONE, "Primary mobile number"),
@@ -100,6 +116,11 @@ object PersonalDataTemplates {
         PersonalDataTemplate("Work Email", DataCategory.CONTACT, FieldType.EMAIL, "Work/business email"),
         PersonalDataTemplate("Website", DataCategory.CONTACT, FieldType.URL, "Personal website URL"),
         PersonalDataTemplate("LinkedIn", DataCategory.CONTACT, FieldType.URL, "LinkedIn profile URL"),
+        PersonalDataTemplate("Fax Number", DataCategory.CONTACT, FieldType.PHONE, "Fax number (legal/medical)"),
+        PersonalDataTemplate("WhatsApp Number", DataCategory.CONTACT, FieldType.PHONE, "WhatsApp contact"),
+        PersonalDataTemplate("Signal Number", DataCategory.CONTACT, FieldType.PHONE, "Signal messenger number"),
+        PersonalDataTemplate("Telegram Handle", DataCategory.CONTACT, FieldType.TEXT, "Telegram username"),
+        PersonalDataTemplate("Skype ID", DataCategory.CONTACT, FieldType.TEXT, "Skype username"),
 
         // Address
         PersonalDataTemplate("Home Address", DataCategory.ADDRESS, FieldType.NOTE, "Full residential address"),
@@ -125,7 +146,98 @@ object PersonalDataTemplates {
         PersonalDataTemplate("Emergency Phone", DataCategory.MEDICAL, FieldType.PHONE, "Emergency contact phone"),
         PersonalDataTemplate("Insurance Provider", DataCategory.MEDICAL, FieldType.TEXT, "Health insurance company"),
         PersonalDataTemplate("Insurance ID", DataCategory.MEDICAL, FieldType.TEXT, "Insurance policy/member ID"),
-        PersonalDataTemplate("Primary Physician", DataCategory.MEDICAL, FieldType.TEXT, "Primary care doctor's name")
+        PersonalDataTemplate("Primary Physician", DataCategory.MEDICAL, FieldType.TEXT, "Primary care doctor's name"),
+        PersonalDataTemplate("Medications", DataCategory.MEDICAL, FieldType.NOTE, "Current medications and dosages"),
+        PersonalDataTemplate("Pharmacy Name", DataCategory.MEDICAL, FieldType.TEXT, "Preferred pharmacy"),
+        PersonalDataTemplate("Pharmacy Phone", DataCategory.MEDICAL, FieldType.PHONE, "Pharmacy phone number"),
+        PersonalDataTemplate("Organ Donor Status", DataCategory.MEDICAL, FieldType.TEXT, "Yes/No/Registered"),
+        PersonalDataTemplate("Advance Directive Location", DataCategory.MEDICAL, FieldType.TEXT, "Where directive is stored"),
+        PersonalDataTemplate("Dentist Name", DataCategory.MEDICAL, FieldType.TEXT, "Dentist's name"),
+        PersonalDataTemplate("Dentist Phone", DataCategory.MEDICAL, FieldType.PHONE, "Dentist's phone"),
+        PersonalDataTemplate("Vision Prescription", DataCategory.MEDICAL, FieldType.NOTE, "Current lens prescription"),
+        PersonalDataTemplate("Medical Power of Attorney", DataCategory.MEDICAL, FieldType.TEXT, "Healthcare proxy name"),
+        PersonalDataTemplate("Health Insurance Group", DataCategory.MEDICAL, FieldType.TEXT, "Group number"),
+        PersonalDataTemplate("Dental Insurance Provider", DataCategory.MEDICAL, FieldType.TEXT, "Dental insurance company"),
+        PersonalDataTemplate("Dental Insurance ID", DataCategory.MEDICAL, FieldType.TEXT, "Dental member ID"),
+        PersonalDataTemplate("Vision Insurance Provider", DataCategory.MEDICAL, FieldType.TEXT, "Vision insurance company"),
+        PersonalDataTemplate("Vision Insurance ID", DataCategory.MEDICAL, FieldType.TEXT, "Vision member ID"),
+
+        // Professional
+        PersonalDataTemplate("Employer", DataCategory.PROFESSIONAL, FieldType.TEXT, "Current employer name"),
+        PersonalDataTemplate("Job Title", DataCategory.PROFESSIONAL, FieldType.TEXT, "Current position/role"),
+        PersonalDataTemplate("Work ID / Badge Number", DataCategory.PROFESSIONAL, FieldType.TEXT, "Employee identification"),
+        PersonalDataTemplate("Department", DataCategory.PROFESSIONAL, FieldType.TEXT, "Department or division"),
+        PersonalDataTemplate("Manager Name", DataCategory.PROFESSIONAL, FieldType.TEXT, "Direct supervisor name"),
+        PersonalDataTemplate("Manager Email", DataCategory.PROFESSIONAL, FieldType.EMAIL, "Supervisor's email"),
+        PersonalDataTemplate("Start Date", DataCategory.PROFESSIONAL, FieldType.DATE, "Employment start date"),
+        PersonalDataTemplate("Professional License", DataCategory.PROFESSIONAL, FieldType.TEXT, "License type and number"),
+        PersonalDataTemplate("License Expiration", DataCategory.PROFESSIONAL, FieldType.DATE, "License expiry date"),
+        PersonalDataTemplate("Professional LinkedIn", DataCategory.PROFESSIONAL, FieldType.URL, "Professional profile URL"),
+
+        // Education
+        PersonalDataTemplate("School Name", DataCategory.EDUCATION, FieldType.TEXT, "Institution name"),
+        PersonalDataTemplate("Degree", DataCategory.EDUCATION, FieldType.TEXT, "Degree earned (e.g., BS Computer Science)"),
+        PersonalDataTemplate("Graduation Date", DataCategory.EDUCATION, FieldType.DATE, "Date of graduation"),
+        PersonalDataTemplate("Student ID", DataCategory.EDUCATION, FieldType.TEXT, "Student identification number"),
+        PersonalDataTemplate("GPA", DataCategory.EDUCATION, FieldType.TEXT, "Grade point average"),
+        PersonalDataTemplate("Major", DataCategory.EDUCATION, FieldType.TEXT, "Primary field of study"),
+        PersonalDataTemplate("Minor", DataCategory.EDUCATION, FieldType.TEXT, "Secondary field of study"),
+
+        // Vehicle
+        PersonalDataTemplate("Vehicle Make", DataCategory.VEHICLE, FieldType.TEXT, "Manufacturer (e.g., Toyota)"),
+        PersonalDataTemplate("Vehicle Model", DataCategory.VEHICLE, FieldType.TEXT, "Model name (e.g., Camry)"),
+        PersonalDataTemplate("Vehicle Year", DataCategory.VEHICLE, FieldType.TEXT, "Model year"),
+        PersonalDataTemplate("VIN", DataCategory.VEHICLE, FieldType.TEXT, "Vehicle Identification Number"),
+        PersonalDataTemplate("License Plate", DataCategory.VEHICLE, FieldType.TEXT, "Plate number and state"),
+        PersonalDataTemplate("Vehicle Color", DataCategory.VEHICLE, FieldType.TEXT, "Exterior color"),
+        PersonalDataTemplate("Registration Expiry", DataCategory.VEHICLE, FieldType.DATE, "Registration expiration date"),
+
+        // Legal
+        PersonalDataTemplate("Attorney Name", DataCategory.LEGAL, FieldType.TEXT, "Primary attorney"),
+        PersonalDataTemplate("Attorney Phone", DataCategory.LEGAL, FieldType.PHONE, "Attorney's phone"),
+        PersonalDataTemplate("Attorney Email", DataCategory.LEGAL, FieldType.EMAIL, "Attorney's email"),
+        PersonalDataTemplate("Power of Attorney", DataCategory.LEGAL, FieldType.TEXT, "POA holder name"),
+        PersonalDataTemplate("Beneficiary Name", DataCategory.LEGAL, FieldType.TEXT, "Primary beneficiary"),
+        PersonalDataTemplate("Beneficiary Relationship", DataCategory.LEGAL, FieldType.TEXT, "Relationship to beneficiary"),
+        PersonalDataTemplate("Will Location", DataCategory.LEGAL, FieldType.NOTE, "Where will/trust documents are stored"),
+
+        // Digital
+        PersonalDataTemplate("GitHub Username", DataCategory.DIGITAL, FieldType.TEXT, "GitHub handle"),
+        PersonalDataTemplate("Twitter/X Handle", DataCategory.DIGITAL, FieldType.TEXT, "Social media handle"),
+        PersonalDataTemplate("Discord Username", DataCategory.DIGITAL, FieldType.TEXT, "Discord identifier"),
+        PersonalDataTemplate("Apple ID Email", DataCategory.DIGITAL, FieldType.EMAIL, "Apple account email"),
+        PersonalDataTemplate("Google Account", DataCategory.DIGITAL, FieldType.EMAIL, "Google/Gmail account"),
+        PersonalDataTemplate("Microsoft Account", DataCategory.DIGITAL, FieldType.EMAIL, "Microsoft account email"),
+        PersonalDataTemplate("Personal Domain", DataCategory.DIGITAL, FieldType.URL, "Owned domain name"),
+        PersonalDataTemplate("Recovery Email", DataCategory.DIGITAL, FieldType.EMAIL, "Account recovery email"),
+
+        // Travel
+        PersonalDataTemplate("Known Traveler Number", DataCategory.TRAVEL, FieldType.TEXT, "TSA PreCheck / Global Entry"),
+        PersonalDataTemplate("Frequent Flyer Number", DataCategory.TRAVEL, FieldType.TEXT, "Airline loyalty ID"),
+        PersonalDataTemplate("Airline Preference", DataCategory.TRAVEL, FieldType.TEXT, "Preferred airline"),
+        PersonalDataTemplate("Hotel Loyalty Number", DataCategory.TRAVEL, FieldType.TEXT, "Hotel rewards ID"),
+        PersonalDataTemplate("Rental Car Loyalty", DataCategory.TRAVEL, FieldType.TEXT, "Car rental rewards ID"),
+        PersonalDataTemplate("Visa Number", DataCategory.TRAVEL, FieldType.TEXT, "Travel visa number"),
+        PersonalDataTemplate("Visa Expiry", DataCategory.TRAVEL, FieldType.DATE, "Visa expiration date"),
+        PersonalDataTemplate("Visa Country", DataCategory.TRAVEL, FieldType.TEXT, "Country that issued visa"),
+
+        // Membership
+        PersonalDataTemplate("Membership Name", DataCategory.MEMBERSHIP, FieldType.TEXT, "Organization or program name"),
+        PersonalDataTemplate("Member ID", DataCategory.MEMBERSHIP, FieldType.TEXT, "Membership number"),
+        PersonalDataTemplate("Membership Type", DataCategory.MEMBERSHIP, FieldType.TEXT, "Level/tier (e.g., Gold, Premium)"),
+        PersonalDataTemplate("Expiration Date", DataCategory.MEMBERSHIP, FieldType.DATE, "Membership expiry"),
+        PersonalDataTemplate("Library Card Number", DataCategory.MEMBERSHIP, FieldType.TEXT, "Library card ID"),
+
+        // Property
+        PersonalDataTemplate("Property Address", DataCategory.PROPERTY, FieldType.NOTE, "Full property address"),
+        PersonalDataTemplate("Property Type", DataCategory.PROPERTY, FieldType.TEXT, "House, Condo, Apartment, etc."),
+        PersonalDataTemplate("Mortgage Lender", DataCategory.PROPERTY, FieldType.TEXT, "Mortgage company name"),
+        PersonalDataTemplate("Mortgage Account", DataCategory.PROPERTY, FieldType.TEXT, "Mortgage account number"),
+        PersonalDataTemplate("HOA Name", DataCategory.PROPERTY, FieldType.TEXT, "HOA organization name"),
+        PersonalDataTemplate("HOA Account", DataCategory.PROPERTY, FieldType.TEXT, "HOA account number"),
+        PersonalDataTemplate("Landlord Name", DataCategory.PROPERTY, FieldType.TEXT, "Landlord or property manager"),
+        PersonalDataTemplate("Landlord Phone", DataCategory.PROPERTY, FieldType.PHONE, "Landlord phone"),
+        PersonalDataTemplate("Lease End Date", DataCategory.PROPERTY, FieldType.DATE, "Lease expiration")
     )
 
     /** Get templates for a specific category */
@@ -243,6 +355,180 @@ data class PersonalDataMultiTemplate(
                     PersonalDataTemplateField("Issuing Authority", "identity.gov_id.issuing_authority", DataCategory.IDENTITY, "e.g., State of California"),
                     PersonalDataTemplateField("Expiry Date", "identity.gov_id.expiry", DataCategory.IDENTITY, "", PersonalDataFieldInputHint.EXPIRY_DATE)
                 )
+            ),
+            PersonalDataMultiTemplate(
+                name = "Dependent",
+                description = "Name, relationship, birth date, school, insurance",
+                category = DataCategory.IDENTITY,
+                fields = listOf(
+                    PersonalDataTemplateField("Full Name", "identity.dependent.name", DataCategory.IDENTITY, "e.g., Jane Doe"),
+                    PersonalDataTemplateField("Relationship", "identity.dependent.relationship", DataCategory.IDENTITY, "e.g., Child, Parent"),
+                    PersonalDataTemplateField("Date of Birth", "identity.dependent.dob", DataCategory.IDENTITY, "", PersonalDataFieldInputHint.DATE),
+                    PersonalDataTemplateField("SSN (last 4)", "identity.dependent.ssn_last4", DataCategory.IDENTITY, "e.g., 1234", PersonalDataFieldInputHint.NUMBER),
+                    PersonalDataTemplateField("School", "identity.dependent.school", DataCategory.IDENTITY, "e.g., Lincoln Elementary"),
+                    PersonalDataTemplateField("Medical Insurance ID", "identity.dependent.insurance_id", DataCategory.IDENTITY, "")
+                )
+            ),
+            PersonalDataMultiTemplate(
+                name = "Social Media Profile",
+                description = "Platform, username, URL, email",
+                category = DataCategory.CONTACT,
+                fields = listOf(
+                    PersonalDataTemplateField("Platform", "contact.social.platform", DataCategory.CONTACT, "e.g., Instagram, Twitter"),
+                    PersonalDataTemplateField("Username / Handle", "contact.social.username", DataCategory.CONTACT, "e.g., @johndoe"),
+                    PersonalDataTemplateField("Profile URL", "contact.social.url", DataCategory.CONTACT, "e.g., https://instagram.com/johndoe"),
+                    PersonalDataTemplateField("Associated Email", "contact.social.email", DataCategory.CONTACT, "", PersonalDataFieldInputHint.EMAIL)
+                )
+            ),
+            PersonalDataMultiTemplate(
+                name = "Employment Record",
+                description = "Company, title, department, dates, contact",
+                category = DataCategory.PROFESSIONAL,
+                fields = listOf(
+                    PersonalDataTemplateField("Company", "professional.employment.company", DataCategory.PROFESSIONAL, "e.g., Acme Corp"),
+                    PersonalDataTemplateField("Job Title", "professional.employment.title", DataCategory.PROFESSIONAL, "e.g., Software Engineer"),
+                    PersonalDataTemplateField("Department", "professional.employment.department", DataCategory.PROFESSIONAL, "e.g., Engineering"),
+                    PersonalDataTemplateField("Start Date", "professional.employment.start_date", DataCategory.PROFESSIONAL, "", PersonalDataFieldInputHint.DATE),
+                    PersonalDataTemplateField("End Date", "professional.employment.end_date", DataCategory.PROFESSIONAL, "", PersonalDataFieldInputHint.DATE),
+                    PersonalDataTemplateField("Work Phone", "professional.employment.phone", DataCategory.PROFESSIONAL, "", PersonalDataFieldInputHint.PHONE),
+                    PersonalDataTemplateField("Work Email", "professional.employment.email", DataCategory.PROFESSIONAL, "", PersonalDataFieldInputHint.EMAIL)
+                )
+            ),
+            PersonalDataMultiTemplate(
+                name = "Professional License",
+                description = "License type, number, authority, dates",
+                category = DataCategory.PROFESSIONAL,
+                fields = listOf(
+                    PersonalDataTemplateField("License Type", "professional.license.type", DataCategory.PROFESSIONAL, "e.g., CPA, RN, PE"),
+                    PersonalDataTemplateField("License Number", "professional.license.number", DataCategory.PROFESSIONAL, "", PersonalDataFieldInputHint.NUMBER),
+                    PersonalDataTemplateField("Issuing Authority", "professional.license.authority", DataCategory.PROFESSIONAL, "e.g., State Board of Nursing"),
+                    PersonalDataTemplateField("Issue Date", "professional.license.issue_date", DataCategory.PROFESSIONAL, "", PersonalDataFieldInputHint.DATE),
+                    PersonalDataTemplateField("Expiry Date", "professional.license.expiry_date", DataCategory.PROFESSIONAL, "", PersonalDataFieldInputHint.DATE),
+                    PersonalDataTemplateField("State / Province", "professional.license.state", DataCategory.PROFESSIONAL, "", PersonalDataFieldInputHint.STATE)
+                )
+            ),
+            PersonalDataMultiTemplate(
+                name = "Degree",
+                description = "Institution, degree, major, graduation date",
+                category = DataCategory.EDUCATION,
+                fields = listOf(
+                    PersonalDataTemplateField("Institution Name", "education.degree.institution", DataCategory.EDUCATION, "e.g., MIT"),
+                    PersonalDataTemplateField("Degree Type", "education.degree.type", DataCategory.EDUCATION, "e.g., Bachelor of Science"),
+                    PersonalDataTemplateField("Major", "education.degree.major", DataCategory.EDUCATION, "e.g., Computer Science"),
+                    PersonalDataTemplateField("Minor", "education.degree.minor", DataCategory.EDUCATION, "e.g., Mathematics"),
+                    PersonalDataTemplateField("Graduation Date", "education.degree.graduation_date", DataCategory.EDUCATION, "", PersonalDataFieldInputHint.DATE),
+                    PersonalDataTemplateField("Student ID", "education.degree.student_id", DataCategory.EDUCATION, "", PersonalDataFieldInputHint.NUMBER),
+                    PersonalDataTemplateField("GPA", "education.degree.gpa", DataCategory.EDUCATION, "e.g., 3.8", PersonalDataFieldInputHint.NUMBER)
+                )
+            ),
+            PersonalDataMultiTemplate(
+                name = "Vehicle Record",
+                description = "Year, make, model, VIN, plate, registration",
+                category = DataCategory.VEHICLE,
+                fields = listOf(
+                    PersonalDataTemplateField("Year", "vehicle.auto.year", DataCategory.VEHICLE, "e.g., 2023", PersonalDataFieldInputHint.NUMBER),
+                    PersonalDataTemplateField("Make", "vehicle.auto.make", DataCategory.VEHICLE, "e.g., Toyota"),
+                    PersonalDataTemplateField("Model", "vehicle.auto.model", DataCategory.VEHICLE, "e.g., Camry"),
+                    PersonalDataTemplateField("Color", "vehicle.auto.color", DataCategory.VEHICLE, "e.g., Silver"),
+                    PersonalDataTemplateField("VIN", "vehicle.auto.vin", DataCategory.VEHICLE, "17-character VIN"),
+                    PersonalDataTemplateField("License Plate", "vehicle.auto.plate", DataCategory.VEHICLE, "e.g., ABC 1234"),
+                    PersonalDataTemplateField("State", "vehicle.auto.state", DataCategory.VEHICLE, "", PersonalDataFieldInputHint.STATE),
+                    PersonalDataTemplateField("Registration Expiry", "vehicle.auto.reg_expiry", DataCategory.VEHICLE, "", PersonalDataFieldInputHint.DATE)
+                )
+            ),
+            PersonalDataMultiTemplate(
+                name = "Visa",
+                description = "Country, type, number, dates",
+                category = DataCategory.TRAVEL,
+                fields = listOf(
+                    PersonalDataTemplateField("Country", "travel.visa.country", DataCategory.TRAVEL, "", PersonalDataFieldInputHint.COUNTRY),
+                    PersonalDataTemplateField("Visa Type", "travel.visa.type", DataCategory.TRAVEL, "e.g., B-1, F-1, Tourist"),
+                    PersonalDataTemplateField("Visa Number", "travel.visa.number", DataCategory.TRAVEL, "", PersonalDataFieldInputHint.NUMBER),
+                    PersonalDataTemplateField("Issue Date", "travel.visa.issue_date", DataCategory.TRAVEL, "", PersonalDataFieldInputHint.DATE),
+                    PersonalDataTemplateField("Expiry Date", "travel.visa.expiry_date", DataCategory.TRAVEL, "", PersonalDataFieldInputHint.DATE),
+                    PersonalDataTemplateField("Entries", "travel.visa.entries", DataCategory.TRAVEL, "e.g., Single, Multiple")
+                )
+            ),
+            PersonalDataMultiTemplate(
+                name = "Loyalty Program",
+                description = "Program, provider, member number, tier",
+                category = DataCategory.TRAVEL,
+                fields = listOf(
+                    PersonalDataTemplateField("Program Name", "travel.loyalty.program", DataCategory.TRAVEL, "e.g., Delta SkyMiles"),
+                    PersonalDataTemplateField("Provider", "travel.loyalty.provider", DataCategory.TRAVEL, "e.g., Airline, Hotel, Rental Car"),
+                    PersonalDataTemplateField("Member Number", "travel.loyalty.number", DataCategory.TRAVEL, "", PersonalDataFieldInputHint.NUMBER),
+                    PersonalDataTemplateField("Tier / Status", "travel.loyalty.tier", DataCategory.TRAVEL, "e.g., Gold, Platinum"),
+                    PersonalDataTemplateField("Expiry Date", "travel.loyalty.expiry_date", DataCategory.TRAVEL, "", PersonalDataFieldInputHint.DATE)
+                )
+            ),
+            PersonalDataMultiTemplate(
+                name = "Beneficiary",
+                description = "Name, relationship, contact, share",
+                category = DataCategory.LEGAL,
+                fields = listOf(
+                    PersonalDataTemplateField("Full Name", "legal.beneficiary.name", DataCategory.LEGAL, "e.g., Jane Doe"),
+                    PersonalDataTemplateField("Relationship", "legal.beneficiary.relationship", DataCategory.LEGAL, "e.g., Spouse, Child"),
+                    PersonalDataTemplateField("Date of Birth", "legal.beneficiary.dob", DataCategory.LEGAL, "", PersonalDataFieldInputHint.DATE),
+                    PersonalDataTemplateField("Phone", "legal.beneficiary.phone", DataCategory.LEGAL, "", PersonalDataFieldInputHint.PHONE),
+                    PersonalDataTemplateField("Email", "legal.beneficiary.email", DataCategory.LEGAL, "", PersonalDataFieldInputHint.EMAIL),
+                    PersonalDataTemplateField("Percentage / Share", "legal.beneficiary.share", DataCategory.LEGAL, "e.g., 50%", PersonalDataFieldInputHint.NUMBER)
+                )
+            ),
+            PersonalDataMultiTemplate(
+                name = "Prescription",
+                description = "Medication, dosage, doctor, pharmacy",
+                category = DataCategory.MEDICAL,
+                fields = listOf(
+                    PersonalDataTemplateField("Medication Name", "medical.prescription.medication", DataCategory.MEDICAL, "e.g., Lisinopril"),
+                    PersonalDataTemplateField("Dosage", "medical.prescription.dosage", DataCategory.MEDICAL, "e.g., 10mg"),
+                    PersonalDataTemplateField("Frequency", "medical.prescription.frequency", DataCategory.MEDICAL, "e.g., Once daily"),
+                    PersonalDataTemplateField("Prescribing Doctor", "medical.prescription.doctor", DataCategory.MEDICAL, "e.g., Dr. Smith"),
+                    PersonalDataTemplateField("Pharmacy", "medical.prescription.pharmacy", DataCategory.MEDICAL, "e.g., CVS Pharmacy"),
+                    PersonalDataTemplateField("Refills Remaining", "medical.prescription.refills", DataCategory.MEDICAL, "", PersonalDataFieldInputHint.NUMBER),
+                    PersonalDataTemplateField("Expiry Date", "medical.prescription.expiry", DataCategory.MEDICAL, "", PersonalDataFieldInputHint.DATE)
+                )
+            ),
+            PersonalDataMultiTemplate(
+                name = "Insurance Policy",
+                description = "Provider, plan, policy, member, dates",
+                category = DataCategory.MEDICAL,
+                fields = listOf(
+                    PersonalDataTemplateField("Provider", "medical.insurance.provider", DataCategory.MEDICAL, "e.g., Blue Cross"),
+                    PersonalDataTemplateField("Plan Name", "medical.insurance.plan", DataCategory.MEDICAL, "e.g., PPO Gold"),
+                    PersonalDataTemplateField("Policy Number", "medical.insurance.policy", DataCategory.MEDICAL, "", PersonalDataFieldInputHint.NUMBER),
+                    PersonalDataTemplateField("Group Number", "medical.insurance.group", DataCategory.MEDICAL, "", PersonalDataFieldInputHint.NUMBER),
+                    PersonalDataTemplateField("Member ID", "medical.insurance.member_id", DataCategory.MEDICAL, ""),
+                    PersonalDataTemplateField("Subscriber Name", "medical.insurance.subscriber", DataCategory.MEDICAL, ""),
+                    PersonalDataTemplateField("Effective Date", "medical.insurance.effective_date", DataCategory.MEDICAL, "", PersonalDataFieldInputHint.DATE),
+                    PersonalDataTemplateField("Copay Amount", "medical.insurance.copay", DataCategory.MEDICAL, "e.g., $25", PersonalDataFieldInputHint.NUMBER)
+                )
+            ),
+            PersonalDataMultiTemplate(
+                name = "Organization Membership",
+                description = "Organization, type, member ID, dates",
+                category = DataCategory.MEMBERSHIP,
+                fields = listOf(
+                    PersonalDataTemplateField("Organization Name", "membership.org.name", DataCategory.MEMBERSHIP, "e.g., YMCA"),
+                    PersonalDataTemplateField("Membership Type / Tier", "membership.org.tier", DataCategory.MEMBERSHIP, "e.g., Gold, Family"),
+                    PersonalDataTemplateField("Member ID", "membership.org.member_id", DataCategory.MEMBERSHIP, ""),
+                    PersonalDataTemplateField("Join Date", "membership.org.join_date", DataCategory.MEMBERSHIP, "", PersonalDataFieldInputHint.DATE),
+                    PersonalDataTemplateField("Expiry Date", "membership.org.expiry_date", DataCategory.MEMBERSHIP, "", PersonalDataFieldInputHint.DATE),
+                    PersonalDataTemplateField("Contact Phone", "membership.org.phone", DataCategory.MEMBERSHIP, "", PersonalDataFieldInputHint.PHONE)
+                )
+            ),
+            PersonalDataMultiTemplate(
+                name = "Property Record",
+                description = "Address, type, mortgage, HOA",
+                category = DataCategory.PROPERTY,
+                fields = listOf(
+                    PersonalDataTemplateField("Property Address", "property.owned.address", DataCategory.PROPERTY, "e.g., 123 Oak Lane"),
+                    PersonalDataTemplateField("Property Type", "property.owned.type", DataCategory.PROPERTY, "e.g., House, Condo"),
+                    PersonalDataTemplateField("Purchase Date", "property.owned.purchase_date", DataCategory.PROPERTY, "", PersonalDataFieldInputHint.DATE),
+                    PersonalDataTemplateField("Mortgage Lender", "property.owned.lender", DataCategory.PROPERTY, "e.g., Wells Fargo"),
+                    PersonalDataTemplateField("Mortgage Account", "property.owned.mortgage_account", DataCategory.PROPERTY, "", PersonalDataFieldInputHint.NUMBER),
+                    PersonalDataTemplateField("HOA Name", "property.owned.hoa_name", DataCategory.PROPERTY, ""),
+                    PersonalDataTemplateField("HOA Account", "property.owned.hoa_account", DataCategory.PROPERTY, "")
+                )
             )
         )
     }
@@ -303,6 +589,14 @@ data class GroupedByCategory(
                 DataCategory.ADDRESS,
                 DataCategory.FINANCIAL,
                 DataCategory.MEDICAL,
+                DataCategory.PROFESSIONAL,
+                DataCategory.EDUCATION,
+                DataCategory.VEHICLE,
+                DataCategory.LEGAL,
+                DataCategory.DIGITAL,
+                DataCategory.TRAVEL,
+                DataCategory.MEMBERSHIP,
+                DataCategory.PROPERTY,
                 DataCategory.OTHER
             ).forEach { category ->
                 grouped[category]?.let { categoryItems ->

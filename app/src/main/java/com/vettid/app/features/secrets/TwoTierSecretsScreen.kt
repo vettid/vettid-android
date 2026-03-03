@@ -11,7 +11,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.Notes
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -758,6 +760,14 @@ private fun getMinorCategoryIcon(category: SecretCategory): ImageVector {
         SecretCategory.WIFI -> Icons.Default.Wifi
         SecretCategory.CERTIFICATE -> Icons.Default.VerifiedUser
         SecretCategory.NOTE -> Icons.AutoMirrored.Filled.Notes
+        SecretCategory.LOGIN -> Icons.AutoMirrored.Filled.Login
+        SecretCategory.TOTP -> Icons.Default.Timer
+        SecretCategory.SOFTWARE_LICENSE -> Icons.Default.Key
+        SecretCategory.VPN -> Icons.Default.VpnKey
+        SecretCategory.SSH -> Icons.Default.Terminal
+        SecretCategory.VEHICLE -> Icons.Default.DirectionsCar
+        SecretCategory.LOYALTY -> Icons.Default.CardGiftcard
+        SecretCategory.TAX -> Icons.AutoMirrored.Filled.ReceiptLong
         SecretCategory.OTHER -> Icons.Default.Lock
     }
 }

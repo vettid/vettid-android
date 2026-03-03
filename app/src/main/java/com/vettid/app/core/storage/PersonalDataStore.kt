@@ -1205,12 +1205,20 @@ enum class FieldType(val displayName: String, val description: String) {
  * Categories for custom fields.
  */
 enum class FieldCategory {
-    IDENTITY,   // Name, SSN, passport, etc.
-    CONTACT,    // Phone, email, social media
-    ADDRESS,    // Physical addresses
-    FINANCIAL,  // Bank accounts, credit cards
-    MEDICAL,    // Health info, allergies
-    OTHER       // Miscellaneous
+    IDENTITY,       // Name, SSN, passport, etc.
+    CONTACT,        // Phone, email, social media
+    ADDRESS,        // Physical addresses
+    FINANCIAL,      // Bank accounts, credit cards
+    MEDICAL,        // Health info, allergies
+    PROFESSIONAL,   // Employment, licenses, certifications
+    EDUCATION,      // Degrees, student IDs, transcripts
+    VEHICLE,        // Cars, registration, VIN
+    LEGAL,          // Power of attorney, beneficiaries
+    DIGITAL,        // Social handles, digital accounts
+    TRAVEL,         // Loyalty programs, visas, traveler IDs
+    MEMBERSHIP,     // Gym, clubs, library cards
+    PROPERTY,       // Real estate, mortgage, HOA
+    OTHER           // Miscellaneous
 }
 
 /**

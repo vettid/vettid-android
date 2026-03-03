@@ -74,6 +74,7 @@ data class GroupedByCategory(
         // Preferred display order for categories
         private val categoryOrder = listOf(
             SecretCategory.IDENTITY,
+            SecretCategory.LOGIN,
             SecretCategory.CERTIFICATE,
             SecretCategory.CRYPTOCURRENCY,
             SecretCategory.BANK_ACCOUNT,
@@ -84,7 +85,14 @@ data class GroupedByCategory(
             SecretCategory.SSN,
             SecretCategory.API_KEY,
             SecretCategory.PASSWORD,
+            SecretCategory.TOTP,
             SecretCategory.WIFI,
+            SecretCategory.VPN,
+            SecretCategory.SSH,
+            SecretCategory.SOFTWARE_LICENSE,
+            SecretCategory.VEHICLE,
+            SecretCategory.LOYALTY,
+            SecretCategory.TAX,
             SecretCategory.NOTE,
             SecretCategory.OTHER
         )
@@ -245,6 +253,178 @@ data class SecretTemplate(
                 fields = listOf(
                     TemplateField("Network Name (SSID)", SecretType.TEXT, ""),
                     TemplateField("Password", SecretType.PASSWORD, "", FieldInputHint.PASSWORD)
+                )
+            ),
+            SecretTemplate(
+                name = "Login Credential",
+                description = "Website, username, password, 2FA",
+                category = SecretCategory.LOGIN,
+                iconName = "login",
+                fields = listOf(
+                    TemplateField("Website / Service", SecretType.TEXT, "e.g., github.com"),
+                    TemplateField("Username", SecretType.TEXT, ""),
+                    TemplateField("Password", SecretType.PASSWORD, "", FieldInputHint.PASSWORD),
+                    TemplateField("2FA Method", SecretType.TEXT, "e.g., TOTP, SMS"),
+                    TemplateField("Recovery Codes", SecretType.TEXT, "Backup codes")
+                )
+            ),
+            SecretTemplate(
+                name = "Debit Card",
+                description = "Card number, PIN, bank",
+                category = SecretCategory.CREDIT_CARD,
+                iconName = "credit_card",
+                fields = listOf(
+                    TemplateField("Cardholder Name", SecretType.TEXT, "Name on card"),
+                    TemplateField("Card Number", SecretType.ACCOUNT_NUMBER, "", FieldInputHint.NUMBER),
+                    TemplateField("Expiration", SecretType.TEXT, "", FieldInputHint.EXPIRY_DATE),
+                    TemplateField("PIN", SecretType.PIN, "", FieldInputHint.PIN),
+                    TemplateField("Bank Name", SecretType.TEXT, "e.g., Chase")
+                )
+            ),
+            SecretTemplate(
+                name = "Software License",
+                description = "Product, license key, expiry",
+                category = SecretCategory.SOFTWARE_LICENSE,
+                iconName = "key",
+                fields = listOf(
+                    TemplateField("Product Name", SecretType.TEXT, "e.g., Microsoft Office"),
+                    TemplateField("License Key", SecretType.ACCOUNT_NUMBER, ""),
+                    TemplateField("Registered Email", SecretType.TEXT, ""),
+                    TemplateField("Expiry Date", SecretType.TEXT, "", FieldInputHint.DATE),
+                    TemplateField("Seats / Devices", SecretType.TEXT, "e.g., 5 devices", FieldInputHint.NUMBER)
+                )
+            ),
+            SecretTemplate(
+                name = "SSH Key",
+                description = "Label, keys, passphrase, host",
+                category = SecretCategory.SSH,
+                iconName = "terminal",
+                fields = listOf(
+                    TemplateField("Label", SecretType.TEXT, "e.g., Production Server"),
+                    TemplateField("Public Key", SecretType.PUBLIC_KEY, "ssh-ed25519 ..."),
+                    TemplateField("Private Key", SecretType.PRIVATE_KEY, ""),
+                    TemplateField("Passphrase", SecretType.PASSWORD, "", FieldInputHint.PASSWORD),
+                    TemplateField("Associated Host", SecretType.TEXT, "e.g., server.example.com")
+                )
+            ),
+            SecretTemplate(
+                name = "PGP/GPG Key",
+                description = "Email, key ID, fingerprint, keys",
+                category = SecretCategory.CERTIFICATE,
+                iconName = "enhanced_encryption",
+                fields = listOf(
+                    TemplateField("Email", SecretType.TEXT, ""),
+                    TemplateField("Key ID", SecretType.TEXT, "e.g., 0xABCD1234"),
+                    TemplateField("Fingerprint", SecretType.TEXT, ""),
+                    TemplateField("Public Key", SecretType.PUBLIC_KEY, ""),
+                    TemplateField("Private Key", SecretType.PRIVATE_KEY, ""),
+                    TemplateField("Passphrase", SecretType.PASSWORD, "", FieldInputHint.PASSWORD)
+                )
+            ),
+            SecretTemplate(
+                name = "VPN Configuration",
+                description = "Provider, server, credentials, protocol",
+                category = SecretCategory.VPN,
+                iconName = "vpn_key",
+                fields = listOf(
+                    TemplateField("Provider", SecretType.TEXT, "e.g., NordVPN"),
+                    TemplateField("Server Address", SecretType.TEXT, "e.g., us-east.vpn.example.com"),
+                    TemplateField("Username", SecretType.TEXT, ""),
+                    TemplateField("Password / Key", SecretType.PASSWORD, "", FieldInputHint.PASSWORD),
+                    TemplateField("Protocol", SecretType.TEXT, "e.g., OpenVPN, WireGuard")
+                )
+            ),
+            SecretTemplate(
+                name = "TOTP Secret",
+                description = "Service, account, secret key, settings",
+                category = SecretCategory.TOTP,
+                iconName = "timer",
+                fields = listOf(
+                    TemplateField("Service Name", SecretType.TEXT, "e.g., GitHub"),
+                    TemplateField("Account / Email", SecretType.TEXT, ""),
+                    TemplateField("Secret Key", SecretType.PRIVATE_KEY, "Base32 encoded"),
+                    TemplateField("Algorithm", SecretType.TEXT, "e.g., SHA1, SHA256"),
+                    TemplateField("Digits", SecretType.TEXT, "e.g., 6, 8", FieldInputHint.NUMBER)
+                )
+            ),
+            SecretTemplate(
+                name = "API Credential",
+                description = "Service, API key, secret, URL",
+                category = SecretCategory.API_KEY,
+                iconName = "api",
+                fields = listOf(
+                    TemplateField("Service Name", SecretType.TEXT, "e.g., Stripe"),
+                    TemplateField("API Key", SecretType.PRIVATE_KEY, ""),
+                    TemplateField("API Secret", SecretType.PRIVATE_KEY, ""),
+                    TemplateField("Base URL", SecretType.TEXT, "e.g., https://api.example.com"),
+                    TemplateField("Rate Limit Notes", SecretType.TEXT, "e.g., 100 req/min")
+                )
+            ),
+            SecretTemplate(
+                name = "Medical Prescription",
+                description = "Medication, dosage, pharmacy, RX number",
+                category = SecretCategory.NOTE,
+                iconName = "medication",
+                fields = listOf(
+                    TemplateField("Medication Name", SecretType.TEXT, "e.g., Lisinopril"),
+                    TemplateField("Dosage", SecretType.TEXT, "e.g., 10mg daily"),
+                    TemplateField("Frequency", SecretType.TEXT, "e.g., Twice daily"),
+                    TemplateField("Prescribing Doctor", SecretType.TEXT, "e.g., Dr. Smith"),
+                    TemplateField("Pharmacy", SecretType.TEXT, "e.g., CVS"),
+                    TemplateField("RX Number", SecretType.ACCOUNT_NUMBER, "", FieldInputHint.NUMBER)
+                )
+            ),
+            SecretTemplate(
+                name = "Vehicle Registration",
+                description = "Plate, VIN, registration, expiry",
+                category = SecretCategory.VEHICLE,
+                iconName = "directions_car",
+                fields = listOf(
+                    TemplateField("Plate Number", SecretType.TEXT, "e.g., ABC 1234"),
+                    TemplateField("State", SecretType.TEXT, "", FieldInputHint.STATE),
+                    TemplateField("VIN", SecretType.ACCOUNT_NUMBER, "17-character VIN"),
+                    TemplateField("Registration Number", SecretType.ACCOUNT_NUMBER, ""),
+                    TemplateField("Expiry Date", SecretType.TEXT, "", FieldInputHint.DATE)
+                )
+            ),
+            SecretTemplate(
+                name = "Loyalty/Rewards Card",
+                description = "Program, member number, tier, PIN",
+                category = SecretCategory.LOYALTY,
+                iconName = "card_giftcard",
+                fields = listOf(
+                    TemplateField("Program Name", SecretType.TEXT, "e.g., Starbucks Rewards"),
+                    TemplateField("Member Number", SecretType.ACCOUNT_NUMBER, "", FieldInputHint.NUMBER),
+                    TemplateField("Tier / Status", SecretType.TEXT, "e.g., Gold"),
+                    TemplateField("PIN", SecretType.PIN, "", FieldInputHint.PIN)
+                )
+            ),
+            SecretTemplate(
+                name = "Tax Filing Reference",
+                description = "Year, status, AGI, preparer, confirmation",
+                category = SecretCategory.TAX,
+                iconName = "receipt_long",
+                fields = listOf(
+                    TemplateField("Tax Year", SecretType.TEXT, "e.g., 2025", FieldInputHint.NUMBER),
+                    TemplateField("Filing Status", SecretType.TEXT, "e.g., Married Filing Jointly"),
+                    TemplateField("AGI", SecretType.ACCOUNT_NUMBER, "", FieldInputHint.NUMBER),
+                    TemplateField("Refund / Owed", SecretType.TEXT, "e.g., Refund $2,500"),
+                    TemplateField("Preparer", SecretType.TEXT, "e.g., H&R Block"),
+                    TemplateField("Confirmation Number", SecretType.ACCOUNT_NUMBER, "")
+                )
+            ),
+            SecretTemplate(
+                name = "Digital Certificate",
+                description = "Subject, issuer, serial, validity, PEM",
+                category = SecretCategory.CERTIFICATE,
+                iconName = "verified_user",
+                fields = listOf(
+                    TemplateField("Subject / Common Name", SecretType.TEXT, "e.g., *.example.com"),
+                    TemplateField("Issuer", SecretType.TEXT, "e.g., Let's Encrypt"),
+                    TemplateField("Serial Number", SecretType.TEXT, ""),
+                    TemplateField("Valid From", SecretType.TEXT, "", FieldInputHint.DATE),
+                    TemplateField("Valid To", SecretType.TEXT, "", FieldInputHint.DATE),
+                    TemplateField("PEM Content", SecretType.PRIVATE_KEY, "-----BEGIN CERTIFICATE-----")
                 )
             )
         )

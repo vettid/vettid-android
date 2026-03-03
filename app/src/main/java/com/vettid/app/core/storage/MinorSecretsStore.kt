@@ -527,6 +527,16 @@ enum class SecretCategory(val displayName: String, val iconName: String) {
     WIFI("WiFi Credential", "wifi"),
     CERTIFICATE("Certificate", "verified_user"),
     NOTE("Secure Note", "note"),
+    // Credentials & Access
+    LOGIN("Login Credential", "login"),
+    TOTP("Authenticator", "timer"),
+    SOFTWARE_LICENSE("Software License", "key"),
+    VPN("VPN", "vpn_key"),
+    SSH("SSH Key", "terminal"),
+    // Real-World
+    VEHICLE("Vehicle", "directions_car"),
+    LOYALTY("Loyalty/Rewards", "card_giftcard"),
+    TAX("Tax", "receipt_long"),
     // Other
     OTHER("Other", "category")
 }

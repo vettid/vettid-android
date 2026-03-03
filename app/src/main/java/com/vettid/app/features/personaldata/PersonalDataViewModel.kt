@@ -458,6 +458,14 @@ class PersonalDataViewModel @Inject constructor(
             namespace.startsWith("address.") -> DataCategory.ADDRESS
             namespace.startsWith("financial.") -> DataCategory.FINANCIAL
             namespace.startsWith("medical.") -> DataCategory.MEDICAL
+            namespace.startsWith("professional.") -> DataCategory.PROFESSIONAL
+            namespace.startsWith("education.") -> DataCategory.EDUCATION
+            namespace.startsWith("vehicle.") -> DataCategory.VEHICLE
+            namespace.startsWith("legal.") -> DataCategory.LEGAL
+            namespace.startsWith("digital.") -> DataCategory.DIGITAL
+            namespace.startsWith("travel.") -> DataCategory.TRAVEL
+            namespace.startsWith("membership.") -> DataCategory.MEMBERSHIP
+            namespace.startsWith("property.") -> DataCategory.PROPERTY
             // Note: crypto.* moved to Secrets screen, map to OTHER for backward compatibility
             namespace.startsWith("crypto.") -> DataCategory.OTHER
             else -> DataCategory.OTHER
@@ -669,6 +677,14 @@ class PersonalDataViewModel @Inject constructor(
                 com.vettid.app.core.storage.FieldCategory.ADDRESS -> DataCategory.ADDRESS
                 com.vettid.app.core.storage.FieldCategory.FINANCIAL -> DataCategory.FINANCIAL
                 com.vettid.app.core.storage.FieldCategory.MEDICAL -> DataCategory.MEDICAL
+                com.vettid.app.core.storage.FieldCategory.PROFESSIONAL -> DataCategory.PROFESSIONAL
+                com.vettid.app.core.storage.FieldCategory.EDUCATION -> DataCategory.EDUCATION
+                com.vettid.app.core.storage.FieldCategory.VEHICLE -> DataCategory.VEHICLE
+                com.vettid.app.core.storage.FieldCategory.LEGAL -> DataCategory.LEGAL
+                com.vettid.app.core.storage.FieldCategory.DIGITAL -> DataCategory.DIGITAL
+                com.vettid.app.core.storage.FieldCategory.TRAVEL -> DataCategory.TRAVEL
+                com.vettid.app.core.storage.FieldCategory.MEMBERSHIP -> DataCategory.MEMBERSHIP
+                com.vettid.app.core.storage.FieldCategory.PROPERTY -> DataCategory.PROPERTY
                 com.vettid.app.core.storage.FieldCategory.OTHER -> DataCategory.OTHER
             }
             val dataType = when (customField.fieldType) {
@@ -1170,6 +1186,14 @@ class PersonalDataViewModel @Inject constructor(
             DataCategory.ADDRESS -> "address.custom"
             DataCategory.FINANCIAL -> "financial.custom"
             DataCategory.MEDICAL -> "medical.custom"
+            DataCategory.PROFESSIONAL -> "professional.custom"
+            DataCategory.EDUCATION -> "education.custom"
+            DataCategory.VEHICLE -> "vehicle.custom"
+            DataCategory.LEGAL -> "legal.custom"
+            DataCategory.DIGITAL -> "digital.custom"
+            DataCategory.TRAVEL -> "travel.custom"
+            DataCategory.MEMBERSHIP -> "membership.custom"
+            DataCategory.PROPERTY -> "property.custom"
             DataCategory.OTHER -> "other.custom"
         }
         val sanitizedName = name.lowercase().replace(" ", "_").replace(Regex("[^a-z0-9_]"), "")
@@ -1190,6 +1214,14 @@ class PersonalDataViewModel @Inject constructor(
                 DataCategory.ADDRESS -> com.vettid.app.core.storage.FieldCategory.ADDRESS
                 DataCategory.FINANCIAL -> com.vettid.app.core.storage.FieldCategory.FINANCIAL
                 DataCategory.MEDICAL -> com.vettid.app.core.storage.FieldCategory.MEDICAL
+                DataCategory.PROFESSIONAL -> com.vettid.app.core.storage.FieldCategory.PROFESSIONAL
+                DataCategory.EDUCATION -> com.vettid.app.core.storage.FieldCategory.EDUCATION
+                DataCategory.VEHICLE -> com.vettid.app.core.storage.FieldCategory.VEHICLE
+                DataCategory.LEGAL -> com.vettid.app.core.storage.FieldCategory.LEGAL
+                DataCategory.DIGITAL -> com.vettid.app.core.storage.FieldCategory.DIGITAL
+                DataCategory.TRAVEL -> com.vettid.app.core.storage.FieldCategory.TRAVEL
+                DataCategory.MEMBERSHIP -> com.vettid.app.core.storage.FieldCategory.MEMBERSHIP
+                DataCategory.PROPERTY -> com.vettid.app.core.storage.FieldCategory.PROPERTY
                 else -> com.vettid.app.core.storage.FieldCategory.OTHER
             }
             val fieldType = when (state.type) {

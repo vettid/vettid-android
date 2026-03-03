@@ -548,6 +548,14 @@ private fun CustomFieldItem(
                     FieldCategory.ADDRESS -> Icons.Default.LocationOn
                     FieldCategory.FINANCIAL -> Icons.Default.AccountBalance
                     FieldCategory.MEDICAL -> Icons.Default.LocalHospital
+                    FieldCategory.PROFESSIONAL -> Icons.Default.Work
+                    FieldCategory.EDUCATION -> Icons.Default.School
+                    FieldCategory.VEHICLE -> Icons.Default.DirectionsCar
+                    FieldCategory.LEGAL -> Icons.Default.Gavel
+                    FieldCategory.DIGITAL -> Icons.Default.Language
+                    FieldCategory.TRAVEL -> Icons.Default.FlightTakeoff
+                    FieldCategory.MEMBERSHIP -> Icons.Default.CardMembership
+                    FieldCategory.PROPERTY -> Icons.Default.Home
                     FieldCategory.OTHER -> Icons.AutoMirrored.Filled.Note
                 },
                 contentDescription = null,
