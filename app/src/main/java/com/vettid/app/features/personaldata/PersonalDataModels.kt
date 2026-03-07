@@ -599,7 +599,9 @@ data class GroupedByCategory(
                 DataCategory.OTHER
             ).forEach { category ->
                 grouped[category]?.let { categoryItems ->
-                    orderedCategories[category] = categoryItems.sortedBy { it.sortOrder }
+                    orderedCategories[category] = categoryItems.sortedWith(
+                        compareBy({ it.sortOrder }, { it.name })
+                    )
                 }
             }
             return GroupedByCategory(orderedCategories)

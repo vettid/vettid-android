@@ -14,6 +14,7 @@ import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.core.storage.CredentialStore
 import com.vettid.app.core.storage.MinorSecret
 import com.vettid.app.core.storage.MinorSecretsStore
+import com.vettid.app.core.storage.PersonalDataStore
 import com.vettid.app.core.storage.SecretCategory
 import com.vettid.app.core.storage.SecretType
 import com.vettid.app.worker.SecretsSyncWorker
@@ -29,6 +30,7 @@ private const val TAG = "SecretsViewModel"
 class SecretsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val minorSecretsStore: MinorSecretsStore,
+    private val personalDataStore: PersonalDataStore,
     private val ownerSpaceClient: OwnerSpaceClient,
     private val credentialStore: CredentialStore,
     private val natsAutoConnector: NatsAutoConnector
@@ -442,12 +444,16 @@ class SecretsViewModel @Inject constructor(
                 }
 
                 // Build the list of public key namespaces to publish
-                val namespaces = publicSecrets.map { secret ->
+                val secretNamespaces = publicSecrets.map { secret ->
                     "secrets.public_key.${secret.id}"
                 }
 
-                // Call profile.publish with the updated fields
-                val result = ownerSpaceClient.publishProfile(namespaces)
+                // Include existing personal data public fields so we don't overwrite them
+                val personalDataFields = personalDataStore.getPublicProfileFields()
+                val allNamespaces = personalDataFields + secretNamespaces
+
+                // Call profile.publish with the combined fields
+                val result = ownerSpaceClient.publishProfile(allNamespaces)
 
                 result.fold(
                     onSuccess = {
