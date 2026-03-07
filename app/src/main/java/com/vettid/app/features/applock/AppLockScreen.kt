@@ -136,26 +136,17 @@ private fun PinDots(
     )
 
     Row(
-        modifier = Modifier.offset(x = offsetX),
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
+        modifier = Modifier
+            .offset(x = offsetX)
+            .defaultMinSize(minHeight = 20.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        repeat(maxLength) { index ->
+        repeat(length) {
             Box(
                 modifier = Modifier
-                    .size(20.dp)
+                    .size(16.dp)
                     .clip(CircleShape)
-                    .background(
-                        if (index < length) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            Color.Transparent
-                        }
-                    )
-                    .border(
-                        width = 2.dp,
-                        color = MaterialTheme.colorScheme.primary,
-                        shape = CircleShape
-                    )
+                    .background(MaterialTheme.colorScheme.primary)
             )
         }
     }

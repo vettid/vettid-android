@@ -24,7 +24,8 @@ fun GuideDetailScreen(
     userName: String = "",
     onBack: () -> Unit,
     onNavigate: (NavigationTarget) -> Unit,
-    onMarkAsRead: () -> Unit = {}
+    onMarkAsRead: () -> Unit = {},
+    onArchive: () -> Unit = {}
 ) {
     val content = GuideContentProvider.getContent(guideId, userName)
 
@@ -73,8 +74,16 @@ fun GuideDetailScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(16.dp),
-                    horizontalArrangement = Arrangement.End
+                    horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End)
                 ) {
+                    OutlinedButton(
+                        onClick = {
+                            onArchive()
+                            onBack()
+                        }
+                    ) {
+                        Text("Archive")
+                    }
                     Button(
                         onClick = {
                             onMarkAsRead()

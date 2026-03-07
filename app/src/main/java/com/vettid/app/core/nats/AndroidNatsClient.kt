@@ -14,8 +14,9 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.BufferedWriter
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.InetSocketAddress
 import java.util.Base64
@@ -30,6 +31,10 @@ import javax.net.ssl.SSLSocketFactory
  *
  * Uses Android's default SSLSocketFactory which properly handles TLS
  * with publicly trusted certificates (like ACM).
+ *
+ * I/O uses raw byte streams (not character readers/writers) so that NATS
+ * protocol byte counts are honoured exactly — avoids desync when payloads
+ * contain multi-byte UTF-8.
  */
 class AndroidNatsClient {
 
@@ -41,11 +46,12 @@ class AndroidNatsClient {
         private const val RECONNECT_DELAY_MS = 1000L
         private const val MAX_RECONNECT_ATTEMPTS = Int.MAX_VALUE
         private const val PONG_TIMEOUT_MS = 10000L
+        private val CRLF = "\r\n".toByteArray(Charsets.US_ASCII)
     }
 
     private var socket: SSLSocket? = null
-    private var reader: BufferedReader? = null
-    private var writer: BufferedWriter? = null
+    private var inputStream: BufferedInputStream? = null
+    private var outputStream: BufferedOutputStream? = null
 
     private val connected = AtomicBoolean(false)
     private val subscriptionIdCounter = AtomicLong(1)
@@ -69,6 +75,64 @@ class AndroidNatsClient {
 
     val isConnected: Boolean
         get() = connected.get()
+
+    // --- Byte-level I/O helpers ---
+
+    /**
+     * Read a NATS protocol line (terminated by \r\n) from the given stream.
+     * Returns the line content WITHOUT the trailing \r\n, or null on EOF.
+     */
+    private fun readProtocolLine(stream: BufferedInputStream? = inputStream): String? {
+        val s = stream ?: return null
+        val baos = ByteArrayOutputStream(256)
+        while (true) {
+            val b = s.read()
+            if (b == -1) return null
+            if (b == '\n'.code) {
+                val bytes = baos.toByteArray()
+                // Strip trailing \r if present (NATS uses \r\n)
+                val len = if (bytes.isNotEmpty() && bytes.last() == '\r'.code.toByte()) bytes.size - 1 else bytes.size
+                return String(bytes, 0, len, Charsets.UTF_8)
+            }
+            baos.write(b)
+        }
+    }
+
+    /**
+     * Read exactly [numBytes] bytes from the given stream.
+     * Returns null on premature EOF.
+     */
+    private fun readExactBytes(numBytes: Int, stream: BufferedInputStream? = inputStream): ByteArray? {
+        val s = stream ?: return null
+        val buffer = ByteArray(numBytes)
+        var read = 0
+        while (read < numBytes) {
+            val n = s.read(buffer, read, numBytes - read)
+            if (n < 0) return null
+            read += n
+        }
+        return buffer
+    }
+
+    /** Write a protocol line (adds \r\n, flushes). */
+    private fun sendLine(line: String) {
+        outputStream?.apply {
+            write(line.toByteArray(Charsets.UTF_8))
+            write(CRLF)
+            flush()
+        }
+    }
+
+    /** Write raw payload bytes (adds trailing \r\n, flushes). */
+    private fun sendPayloadBytes(data: ByteArray) {
+        outputStream?.apply {
+            write(data)
+            write(CRLF)
+            flush()
+        }
+    }
+
+    // --- Public API ---
 
     /**
      * Connect to NATS server with JWT and NKEY seed authentication.
@@ -102,8 +166,8 @@ class AndroidNatsClient {
             }
 
         var newSocket: SSLSocket? = null
-        var newReader: BufferedReader? = null
-        var newWriter: BufferedWriter? = null
+        var newInput: BufferedInputStream? = null
+        var newOutput: BufferedOutputStream? = null
 
         try {
             // Store for reconnection (only on initial connect)
@@ -125,13 +189,13 @@ class AndroidNatsClient {
             newSocket.soTimeout = timeoutMs
             newSocket.startHandshake()
 
-            newReader = newSocket.inputStream.bufferedReader()
-            newWriter = newSocket.outputStream.bufferedWriter()
+            newInput = BufferedInputStream(newSocket.inputStream)
+            newOutput = BufferedOutputStream(newSocket.outputStream)
 
             Log.i(TAG, "TLS connected, reading INFO...")
 
             // Read INFO message
-            val infoLine = newReader.readLine()
+            val infoLine = readProtocolLine(newInput)
                 ?: throw IOException("Connection closed before INFO received")
 
             if (!infoLine.startsWith("INFO ")) {
@@ -158,33 +222,35 @@ class AndroidNatsClient {
                     put("lang", "kotlin")
                     put("version", "1.0.0")
                     put("protocol", 1)
+                    put("headers", true)
+                    put("no_responders", true)
                     put("jwt", jwt)
                     put("nkey", String(nkey.publicKey))
                     put("sig", signature)
                 }
 
-                newWriter.write("CONNECT $connectJson\r\n")
-                newWriter.flush()
+                newOutput.write("CONNECT $connectJson\r\n".toByteArray(Charsets.UTF_8))
+                newOutput.flush()
             }
 
             // Send PING to verify connection
-            newWriter.write("PING\r\n")
-            newWriter.flush()
+            newOutput.write("PING\r\n".toByteArray(Charsets.US_ASCII))
+            newOutput.flush()
 
-            val response = newReader.readLine()
+            val response = readProtocolLine(newInput)
             if (response == "PONG") {
                 // Success - atomically swap in the new connection
                 val oldSocket = socket
-                val oldReader = reader
-                val oldWriter = writer
+                val oldInput = inputStream
+                val oldOutput = outputStream
 
                 socket = newSocket
-                reader = newReader
-                writer = newWriter
+                inputStream = newInput
+                outputStream = newOutput
 
                 // Close old connection (if any)
-                try { oldWriter?.close() } catch (e: Exception) { }
-                try { oldReader?.close() } catch (e: Exception) { }
+                try { oldOutput?.close() } catch (e: Exception) { }
+                try { oldInput?.close() } catch (e: Exception) { }
                 try { oldSocket?.close() } catch (e: Exception) { }
 
                 connected.set(true)
@@ -206,8 +272,8 @@ class AndroidNatsClient {
             Log.e(TAG, "Connection failed: ${e.message}", e)
 
             // Clean up the NEW socket only - don't touch existing state or scope
-            try { newWriter?.close() } catch (ex: Exception) { }
-            try { newReader?.close() } catch (ex: Exception) { }
+            try { newOutput?.close() } catch (ex: Exception) { }
+            try { newInput?.close() } catch (ex: Exception) { }
             try { newSocket?.close() } catch (ex: Exception) { }
 
             // Only do full disconnect on initial connect failure
@@ -235,12 +301,12 @@ class AndroidNatsClient {
             scope = null
 
             // Close streams and socket
-            try { writer?.close() } catch (e: Exception) { }
-            try { reader?.close() } catch (e: Exception) { }
+            try { outputStream?.close() } catch (e: Exception) { }
+            try { inputStream?.close() } catch (e: Exception) { }
             try { socket?.close() } catch (e: Exception) { }
 
-            writer = null
-            reader = null
+            outputStream = null
+            inputStream = null
             socket = null
 
             subscriptions.clear()
@@ -262,9 +328,8 @@ class AndroidNatsClient {
             }
 
             synchronized(this@AndroidNatsClient) {
-                val payload = String(data, Charsets.UTF_8)
-                sendCommand("PUB $subject ${data.size}")
-                sendCommand(payload)
+                sendLine("PUB $subject ${data.size}")
+                sendPayloadBytes(data)
             }
 
             Log.d(TAG, "Published to $subject (${data.size} bytes)")
@@ -298,7 +363,7 @@ class AndroidNatsClient {
             subscriptions[sid] = SubscriptionHandler(subject, callback)
 
             synchronized(this@AndroidNatsClient) {
-                sendCommand("SUB $subject $sid")
+                sendLine("SUB $subject $sid")
             }
 
             Log.d(TAG, "Subscribed to $subject (sid=$sid)")
@@ -318,7 +383,7 @@ class AndroidNatsClient {
 
             if (connected.get()) {
                 synchronized(this@AndroidNatsClient) {
-                    sendCommand("UNSUB $sid")
+                    sendLine("UNSUB $sid")
                 }
             }
 
@@ -352,13 +417,12 @@ class AndroidNatsClient {
             pendingRequests[sid] = handler
 
             synchronized(this@AndroidNatsClient) {
-                sendCommand("SUB $inbox $sid")
-                sendCommand("UNSUB $sid 1") // Auto-unsubscribe after 1 message
+                sendLine("SUB $inbox $sid")
+                sendLine("UNSUB $sid 1") // Auto-unsubscribe after 1 message
 
                 // Publish request with reply-to
-                val payload = String(data, Charsets.UTF_8)
-                sendCommand("PUB $subject $inbox ${data.size}")
-                sendCommand(payload)
+                sendLine("PUB $subject $inbox ${data.size}")
+                sendPayloadBytes(data)
             }
 
             // Wait for response
@@ -382,7 +446,7 @@ class AndroidNatsClient {
     suspend fun flush(): Result<Unit> = withContext(Dispatchers.IO) {
         try {
             synchronized(this@AndroidNatsClient) {
-                writer?.flush()
+                outputStream?.flush()
             }
             Result.success(Unit)
         } catch (e: Exception) {
@@ -403,14 +467,6 @@ class AndroidNatsClient {
         val port = if (parts.size > 1) parts[1].toInt() else 443
 
         return Pair(host, port)
-    }
-
-    private fun sendCommand(command: String) {
-        writer?.apply {
-            write(command)
-            write("\r\n")
-            flush()
-        }
     }
 
     private fun startBackgroundTasks() {
@@ -441,7 +497,7 @@ class AndroidNatsClient {
                     }
 
                     synchronized(this@AndroidNatsClient) {
-                        sendCommand("PING")
+                        sendLine("PING")
                     }
                     Log.d(TAG, "Sent PING")
                 } catch (e: Exception) {
@@ -456,12 +512,12 @@ class AndroidNatsClient {
     private suspend fun readMessages() {
         try {
             while (connected.get()) {
-                val line = reader?.readLine() ?: break
+                val line = readProtocolLine() ?: break
 
                 when {
                     line == "PING" -> {
                         synchronized(this@AndroidNatsClient) {
-                            sendCommand("PONG")
+                            sendLine("PONG")
                         }
                         Log.d(TAG, "Received PING, sent PONG")
                     }
@@ -475,6 +531,11 @@ class AndroidNatsClient {
                         lastPongTime.set(System.currentTimeMillis())
                         handleMessage(line)
                     }
+                    line.startsWith("HMSG ") -> {
+                        // JetStream header message — same as MSG but with headers
+                        lastPongTime.set(System.currentTimeMillis())
+                        handleHeaderMessage(line)
+                    }
                     line.startsWith("-ERR") -> {
                         Log.e(TAG, "Server error: $line")
                     }
@@ -487,6 +548,10 @@ class AndroidNatsClient {
                 }
             }
             Log.w(TAG, "Reader loop exited (connected=${connected.get()})")
+            // EOF or null read — trigger reconnect if we didn't disconnect intentionally
+            if (connected.get()) {
+                handleDisconnect()
+            }
         } catch (e: Exception) {
             if (connected.get()) {
                 Log.e(TAG, "Read error: ${e.message}")
@@ -495,7 +560,7 @@ class AndroidNatsClient {
         }
     }
 
-    private suspend fun handleMessage(msgLine: String) {
+    private fun handleMessage(msgLine: String) {
         // MSG <subject> <sid> [reply-to] <#bytes>
         val parts = msgLine.split(" ")
         if (parts.size < 4) return
@@ -513,33 +578,108 @@ class AndroidNatsClient {
             numBytes = parts[3].toIntOrNull() ?: 0
         }
 
-        // Read payload
+        // Read payload as raw bytes (numBytes is a byte count)
         val payload = if (numBytes > 0) {
-            val buffer = CharArray(numBytes)
-            var read = 0
-            while (read < numBytes) {
-                val n = reader?.read(buffer, read, numBytes - read) ?: break
-                if (n < 0) break
-                read += n
-            }
-            reader?.readLine() // Consume trailing CRLF
-            String(buffer).toByteArray(Charsets.UTF_8)
+            val bytes = readExactBytes(numBytes) ?: return
+            readProtocolLine() // consume trailing CRLF
+            bytes
         } else {
-            reader?.readLine() // Consume trailing CRLF
+            readProtocolLine() // consume trailing CRLF
             ByteArray(0)
         }
 
         val message = NatsMessage(subject, payload, replyTo)
 
-        // Check pending requests first
-        pendingRequests[sid]?.complete(message)
+        // Check pending requests first (inbox responses)
+        if (pendingRequests[sid]?.complete(message) != null) {
+            return
+        }
 
-        // Then check subscriptions
+        // Then check subscriptions (push notifications)
         subscriptions[sid]?.let { handler ->
             try {
                 handler.callback(message)
             } catch (e: Exception) {
                 Log.e(TAG, "Subscription callback error: ${e.message}")
+            }
+        }
+    }
+
+    private fun handleHeaderMessage(hmsgLine: String) {
+        // HMSG <subject> <sid> [reply-to] <header-bytes> <total-bytes>
+        val parts = hmsgLine.split(" ")
+        if (parts.size < 5) return
+
+        val subject = parts[1]
+        val sid = parts[2]
+        val replyTo: String?
+        val headerBytes: Int
+        val totalBytes: Int
+
+        if (parts.size == 6) {
+            replyTo = parts[3]
+            headerBytes = parts[4].toIntOrNull() ?: 0
+            totalBytes = parts[5].toIntOrNull() ?: 0
+        } else {
+            replyTo = null
+            headerBytes = parts[3].toIntOrNull() ?: 0
+            totalBytes = parts[4].toIntOrNull() ?: 0
+        }
+
+        // Read the entire block (headers + payload) as raw bytes
+        val fullBytes = if (totalBytes > 0) {
+            val bytes = readExactBytes(totalBytes) ?: return
+            readProtocolLine() // consume trailing CRLF
+            bytes
+        } else {
+            readProtocolLine() // consume trailing CRLF
+            ByteArray(0)
+        }
+
+        // Extract header section (for status parsing only)
+        val headerSection = if (headerBytes in 1..fullBytes.size) {
+            String(fullBytes, 0, headerBytes, Charsets.UTF_8)
+        } else {
+            String(fullBytes, Charsets.UTF_8)
+        }
+
+        // Parse status from first header line: "NATS/1.0 <status>\r\n"
+        val statusLine = headerSection.lineSequence().firstOrNull() ?: ""
+        val statusCode = if (statusLine.startsWith("NATS/1.0 ")) {
+            statusLine.substring(9).trim().split(" ").firstOrNull()?.toIntOrNull()
+        } else null
+
+        // Status-only messages (no payload) — complete with error info
+        if (statusCode != null && statusCode >= 400) {
+            Log.d(TAG, "HMSG status $statusCode on $subject (sid=$sid, pending=${pendingRequests.containsKey(sid)})")
+            // Complete the pending request so it doesn't hang — caller checks empty payload
+            val message = NatsMessage(subject, ByteArray(0), replyTo)
+            pendingRequests[sid]?.complete(message)
+            return
+        }
+
+        // Extract payload bytes (skip header section)
+        val payloadBytes = if (headerBytes in 1..fullBytes.size) {
+            fullBytes.copyOfRange(headerBytes, fullBytes.size)
+        } else {
+            fullBytes
+        }
+
+        Log.d(TAG, "HMSG $subject (sid=$sid, ${payloadBytes.size} bytes, pending=${pendingRequests.containsKey(sid)}, sub=${subscriptions.containsKey(sid)})")
+
+        val message = NatsMessage(subject, payloadBytes, replyTo)
+
+        // Check pending requests first (JetStream NEXT responses)
+        if (pendingRequests[sid]?.complete(message) != null) {
+            return
+        }
+
+        // Then check subscriptions (push notifications on forApp.>)
+        subscriptions[sid]?.let { handler ->
+            try {
+                handler.callback(message)
+            } catch (e: Exception) {
+                Log.e(TAG, "Subscription callback error (HMSG): ${e.message}")
             }
         }
     }
@@ -592,7 +732,7 @@ class AndroidNatsClient {
                     subscriptions.forEach { (sid, handler) ->
                         try {
                             synchronized(this@AndroidNatsClient) {
-                                sendCommand("SUB ${handler.subject} $sid")
+                                sendLine("SUB ${handler.subject} $sid")
                             }
                             Log.d(TAG, "Resubscribed to ${handler.subject} (sid=$sid)")
                         } catch (e: Exception) {
@@ -625,7 +765,7 @@ class AndroidNatsClient {
                                 }
 
                                 synchronized(this@AndroidNatsClient) {
-                                    sendCommand("PING")
+                                    sendLine("PING")
                                 }
                                 Log.d(TAG, "Sent PING")
                             } catch (e: Exception) {

@@ -746,7 +746,15 @@ fun VettIDApp(
             val isCritical = backStackEntry.arguments?.getBoolean("isCritical") ?: false
             AddSecretScreen(
                 isCritical = isCritical,
-                onBack = { navController.popBackStack() }
+                onBack = { navController.popBackStack() },
+                onSecretAdded = {
+                    if (isCritical) {
+                        navController.previousBackStackEntry
+                            ?.savedStateHandle
+                            ?.set("secretAdded", true)
+                    }
+                    navController.popBackStack()
+                }
             )
         }
         composable(Screen.Archive.route) {
@@ -1011,7 +1019,22 @@ fun VettIDApp(
         }
         // Critical Secrets full screen
         composable(Screen.CriticalSecrets.route) {
+            val criticalSecretsViewModel: com.vettid.app.features.secrets.CriticalSecretsViewModel = hiltViewModel()
+            // Invalidate cache when returning from add secret screen
+            val secretAdded = navController.currentBackStackEntry
+                ?.savedStateHandle
+                ?.getStateFlow("secretAdded", false)
+                ?.collectAsState()
+            LaunchedEffect(secretAdded?.value) {
+                if (secretAdded?.value == true) {
+                    criticalSecretsViewModel.invalidateCache()
+                    navController.currentBackStackEntry
+                        ?.savedStateHandle
+                        ?.set("secretAdded", false)
+                }
+            }
             CriticalSecretsScreen(
+                viewModel = criticalSecretsViewModel,
                 onBack = { navController.popBackStack() },
                 onNavigateToAddSecret = {
                     navController.navigate(Screen.AddSecret.createRoute(isCritical = true))
@@ -1069,6 +1092,11 @@ fun VettIDApp(
                 onMarkAsRead = {
                     if (eventId.isNotEmpty()) {
                         feedViewModel.markAsRead(eventId)
+                    }
+                },
+                onArchive = {
+                    if (eventId.isNotEmpty()) {
+                        feedViewModel.archiveEvent(eventId)
                     }
                 }
             )

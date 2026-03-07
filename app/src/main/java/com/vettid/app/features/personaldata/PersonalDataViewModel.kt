@@ -87,8 +87,18 @@ class PersonalDataViewModel @Inject constructor(
     private val _publicSecrets = MutableStateFlow<List<PublicMetadataItem>>(emptyList())
     val publicSecrets: StateFlow<List<PublicMetadataItem>> = _publicSecrets.asStateFlow()
 
-    private val _publicPersonalData = MutableStateFlow<List<PublicMetadataItem>>(emptyList())
-    val publicPersonalData: StateFlow<List<PublicMetadataItem>> = _publicPersonalData.asStateFlow()
+    val publicPersonalData: StateFlow<List<PublicMetadataItem>> = _state.map { state ->
+        when (state) {
+            is PersonalDataState.Loaded -> state.items.map { item ->
+                PublicMetadataItem(
+                    name = item.name,
+                    type = item.type.name,
+                    category = item.category?.displayName ?: "Other"
+                )
+            }
+            else -> emptyList()
+        }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     // In-memory data store loaded from vault
     private val dataItems = mutableListOf<PersonalDataItem>()
@@ -124,7 +134,7 @@ class PersonalDataViewModel @Inject constructor(
         }
     }
 
-    private fun loadPersonalData() {
+    fun loadPersonalData() {
         viewModelScope.launch {
             // Use refreshing state if already loaded, otherwise show loading
             val isRefresh = _state.value is PersonalDataState.Loaded || _state.value is PersonalDataState.Empty
@@ -1937,29 +1947,7 @@ class PersonalDataViewModel @Inject constructor(
                     category = secret.category.displayName
                 )
             }
-
-            // Public personal data fields
-            val publicFieldIds = personalDataStore.getPublicProfileFields()
-            val customFields = personalDataStore.getCustomFields()
-            val publicItems = mutableListOf<PublicMetadataItem>()
-
-            // System fields (always potentially visible)
-            personalDataStore.getSystemFields()?.let { sys ->
-                if (sys.firstName.isNotBlank()) publicItems.add(PublicMetadataItem("First Name", "System", "Identity"))
-                if (sys.lastName.isNotBlank()) publicItems.add(PublicMetadataItem("Last Name", "System", "Identity"))
-                if (sys.email.isNotBlank()) publicItems.add(PublicMetadataItem("Email", "System", "Contact"))
-            }
-
-            // Custom fields marked as public profile
-            customFields.filter { it.id in publicFieldIds }.forEach { field ->
-                publicItems.add(PublicMetadataItem(
-                    name = field.name,
-                    type = field.fieldType.displayName,
-                    category = field.category.name.lowercase().replaceFirstChar { it.uppercase() }
-                ))
-            }
-
-            _publicPersonalData.value = publicItems
+            // Personal data metadata is derived directly from _state via publicPersonalData flow
         }
     }
 

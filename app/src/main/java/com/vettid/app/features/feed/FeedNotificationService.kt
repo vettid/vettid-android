@@ -162,8 +162,13 @@ class FeedNotificationService @Inject constructor(
         // Emit feed update for real-time UI refresh
         _feedUpdates.emit(FeedUpdate.NewEvent(event.eventId, event.eventType))
 
+        // Show system notification (skip guide events to avoid flooding during enrollment)
+        if (event.eventType != "guide") {
+            showSystemNotification(event)
+        }
+
         if (isInForeground) {
-            // Show in-app notification (toast/snackbar)
+            // Also show in-app snackbar for immediate visibility
             _inAppNotifications.emit(
                 InAppFeedNotification(
                     eventId = event.eventId,
@@ -174,9 +179,6 @@ class FeedNotificationService @Inject constructor(
                     hasAction = event.actionType != null
                 )
             )
-        } else {
-            // Show system notification
-            showSystemNotification(event)
         }
 
         // Update badge count

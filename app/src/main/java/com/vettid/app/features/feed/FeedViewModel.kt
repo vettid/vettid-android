@@ -469,6 +469,23 @@ class FeedViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Navigate to an event by ID (used from notification snackbar "View" action).
+     */
+    fun navigateToEventById(eventId: String) {
+        viewModelScope.launch {
+            val currentState = _state.value
+            if (currentState is FeedState.Loaded) {
+                val event = currentState.events.find { it.eventId == eventId }
+                if (event != null) {
+                    onEventClick(event)
+                } else {
+                    _effects.emit(FeedEffect.ShowError("Event not found"))
+                }
+            }
+        }
+    }
+
     fun onEventClick(event: FeedEvent) {
         viewModelScope.launch {
             // Mark as read

@@ -34,6 +34,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.runtime.mutableIntStateOf
 import kotlinx.coroutines.flow.collectLatest
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -58,6 +59,8 @@ fun VaultPreferencesContent(
     val snackbarHostState = remember { SnackbarHostState() }
     var showChangePinDialog by remember { mutableStateOf(false) }
     var showChangePasswordDialog by remember { mutableStateOf(false) }
+    var pendingTtlSeconds by remember { mutableIntStateOf(0) }
+    var showTtlAuthDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
     // Location permission launchers
@@ -168,8 +171,11 @@ fun VaultPreferencesContent(
 
                 // Session TTL
                 TTLDropdownItem(
-                    currentTtl = state.sessionTtlMinutes,
-                    onTtlChange = { viewModel.updateSessionTtl(it) }
+                    currentTtlSeconds = state.sessionTtlSeconds,
+                    onTtlChange = { newTtlSeconds ->
+                        pendingTtlSeconds = newTtlSeconds
+                        showTtlAuthDialog = true
+                    }
                 )
 
                 HorizontalDivider()
@@ -289,6 +295,24 @@ fun VaultPreferencesContent(
                     result.fold(
                         onSuccess = { showChangePasswordDialog = false },
                         onFailure = { e -> onError(e.message ?: "Password change failed") }
+                    )
+                }
+            }
+        )
+    }
+
+    // TTL change authentication dialog
+    if (showTtlAuthDialog) {
+        val ttlLabel = formatTtlSeconds(pendingTtlSeconds)
+        CredentialAuthDialog(
+            title = "Update Session TTL",
+            message = "Enter your password to change the session TTL to $ttlLabel.",
+            onDismiss = { showTtlAuthDialog = false },
+            onAuthenticate = { password, onError ->
+                viewModel.updateSessionTtl(pendingTtlSeconds, password) { result ->
+                    result.fold(
+                        onSuccess = { showTtlAuthDialog = false },
+                        onFailure = { e -> onError(e.message ?: "Failed to update TTL") }
                     )
                 }
             }
@@ -785,14 +809,21 @@ private fun AppearanceSection(
     }
 }
 
+private fun formatTtlSeconds(seconds: Int): String = when {
+    seconds < 60 -> "${seconds}s"
+    seconds % 60 == 0 -> "${seconds / 60} min"
+    else -> "${seconds / 60}m ${seconds % 60}s"
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TTLDropdownItem(
-    currentTtl: Int,
+    currentTtlSeconds: Int,
     onTtlChange: (Int) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    val options = listOf(5, 15, 30, 60)
+    // Options in seconds: 30s, 1m, 2m, 3m, 4m, 5m, 15m, 30m, 60m
+    val options = listOf(30, 60, 120, 180, 240, 300, 900, 1800, 3600)
 
     ListItem(
         headlineContent = { Text("Session TTL") },
@@ -813,7 +844,7 @@ private fun TTLDropdownItem(
                     onClick = { expanded = true },
                     modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable)
                 ) {
-                    Text("$currentTtl min")
+                    Text(formatTtlSeconds(currentTtlSeconds))
                     Icon(
                         imageVector = Icons.Default.ArrowDropDown,
                         contentDescription = null
@@ -823,11 +854,11 @@ private fun TTLDropdownItem(
                     expanded = expanded,
                     onDismissRequest = { expanded = false }
                 ) {
-                    options.forEach { option ->
+                    options.forEach { seconds ->
                         DropdownMenuItem(
-                            text = { Text("$option minutes") },
+                            text = { Text(formatTtlSeconds(seconds)) },
                             onClick = {
-                                onTtlChange(option)
+                                onTtlChange(seconds)
                                 expanded = false
                             }
                         )
@@ -838,6 +869,120 @@ private fun TTLDropdownItem(
     )
 }
 
+
+@Composable
+private fun CredentialAuthDialog(
+    title: String,
+    message: String,
+    onDismiss: () -> Unit,
+    onAuthenticate: (password: String, onError: (String) -> Unit) -> Unit
+) {
+    var password by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var isAuthenticating by remember { mutableStateOf(false) }
+    var passwordVisible by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = { if (!isAuthenticating) onDismiss() },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Lock,
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(title)
+            }
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = {
+                        password = it
+                        error = null
+                    },
+                    label = { Text("Password") },
+                    visualTransformation = if (passwordVisible) VisualTransformation.None
+                        else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                            Icon(
+                                imageVector = if (passwordVisible) Icons.Default.VisibilityOff
+                                    else Icons.Default.Visibility,
+                                contentDescription = if (passwordVisible) "Hide password" else "Show password"
+                            )
+                        }
+                    },
+                    singleLine = true,
+                    enabled = !isAuthenticating,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                if (error != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = error!!,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                if (isAuthenticating) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Updating...",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    if (password.isEmpty()) {
+                        error = "Enter your password"
+                    } else {
+                        isAuthenticating = true
+                        error = null
+                        onAuthenticate(password) { errorMsg ->
+                            error = errorMsg
+                            isAuthenticating = false
+                        }
+                    }
+                },
+                enabled = !isAuthenticating
+            ) {
+                Text("Confirm")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !isAuthenticating
+            ) {
+                Text("Cancel")
+            }
+        }
+    )
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

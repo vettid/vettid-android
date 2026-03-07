@@ -17,6 +17,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.vettid.app.core.network.Profile
+import com.vettid.app.features.personaldata.PersonalDataViewModel
+import com.vettid.app.features.personaldata.PublicMetadataItem
 
 /**
  * Screen for viewing and editing own profile.
@@ -25,6 +27,7 @@ import com.vettid.app.core.network.Profile
 @Composable
 fun ProfileScreen(
     viewModel: ProfileViewModel = hiltViewModel(),
+    personalDataViewModel: PersonalDataViewModel = hiltViewModel(),
     onBack: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsState()
@@ -34,12 +37,18 @@ fun ProfileScreen(
     val editBio by viewModel.editBio.collectAsState()
     val editLocation by viewModel.editLocation.collectAsState()
     val publicSecrets by viewModel.publicSecrets.collectAsState()
-    val publicPersonalData by viewModel.publicPersonalData.collectAsState()
+    val publicPersonalData by personalDataViewModel.publicPersonalData.collectAsState()
 
     var showSecretsDialog by remember { mutableStateOf(false) }
     var showPersonalDataDialog by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
+
+    // Refresh public data counts when profile screen appears
+    LaunchedEffect(Unit) {
+        viewModel.loadPublicSecrets()
+        personalDataViewModel.loadPersonalData()
+    }
 
     // Handle effects
     LaunchedEffect(Unit) {

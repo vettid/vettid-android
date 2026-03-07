@@ -47,7 +47,7 @@ enum class VaultServerStatus {
  */
 data class VaultPreferencesState(
     val theme: AppTheme = AppTheme.AUTO,
-    val sessionTtlMinutes: Int = 15,
+    val sessionTtlSeconds: Int = 900,
     val archiveAfterDays: Int = 7,
     val deleteAfterDays: Int = 30,
     val isLoading: Boolean = false,
@@ -112,6 +112,8 @@ class VaultPreferencesViewModel @Inject constructor(
         loadBackupSettings()
         // Load location preferences
         loadLocationPreferences()
+        // Load credential settings from vault
+        loadCredentialSettingsFromVault()
     }
 
     private fun loadPreferences() {
@@ -129,7 +131,7 @@ class VaultPreferencesViewModel @Inject constructor(
                 _state.update {
                     it.copy(
                         theme = theme,
-                        sessionTtlMinutes = appPreferencesStore.getSessionTtlMinutes(),
+                        sessionTtlSeconds = appPreferencesStore.getSessionTtlSeconds(),
                         archiveAfterDays = appPreferencesStore.getArchiveAfterDays(),
                         deleteAfterDays = appPreferencesStore.getDeleteAfterDays(),
                         isOfflineMode = isOffline,
@@ -144,15 +146,48 @@ class VaultPreferencesViewModel @Inject constructor(
         }
     }
 
-    fun updateSessionTtl(minutes: Int) {
+    /**
+     * Update session TTL. Requires password authentication and persists to vault.
+     */
+    fun updateSessionTtl(seconds: Int, password: String, onResult: (Result<Unit>) -> Unit) {
         viewModelScope.launch {
             try {
-                appPreferencesStore.setSessionTtlMinutes(minutes)
-                _state.value = _state.value.copy(sessionTtlMinutes = minutes)
+                // Send to vault for persistence
+                val payload = JsonObject().apply {
+                    addProperty("session_ttl_seconds", seconds)
+                }
+                val response = ownerSpaceClient.sendAndAwaitResponse(
+                    "settings.credential.update", payload, 10000L
+                )
+
+                // Check response for success
+                when (response) {
+                    is com.vettid.app.core.nats.VaultResponse.HandlerResult -> {
+                        if (!response.success) {
+                            val error = response.error ?: "Failed to update setting"
+                            onResult(Result.failure(Exception(error)))
+                            return@launch
+                        }
+                    }
+                    is com.vettid.app.core.nats.VaultResponse.Error -> {
+                        onResult(Result.failure(Exception(response.message)))
+                        return@launch
+                    }
+                    else -> {
+                        onResult(Result.failure(Exception("Unexpected response from vault")))
+                        return@launch
+                    }
+                }
+
+                // Also save locally for session enforcement
+                appPreferencesStore.setSessionTtlSeconds(seconds)
+                _state.update { it.copy(sessionTtlSeconds = seconds) }
                 _effects.emit(VaultPreferencesEffect.ShowSuccess("Session TTL updated"))
+                onResult(Result.success(Unit))
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to update TTL", e)
                 _effects.emit(VaultPreferencesEffect.ShowError("Failed to update TTL"))
+                onResult(Result.failure(e))
             }
         }
     }
@@ -187,6 +222,31 @@ class VaultPreferencesViewModel @Inject constructor(
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to update delete setting", e)
                 _effects.emit(VaultPreferencesEffect.ShowError("Failed to update setting"))
+            }
+        }
+    }
+
+    /**
+     * Load credential settings (session TTL) from the vault.
+     * Falls back to local value if vault is unreachable.
+     */
+    private fun loadCredentialSettingsFromVault() {
+        viewModelScope.launch {
+            try {
+                val response = ownerSpaceClient.sendAndAwaitResponse(
+                    "settings.credential.get", JsonObject(), 10000L
+                )
+                if (response is com.vettid.app.core.nats.VaultResponse.HandlerResult && response.success) {
+                    val settings = response.result?.getAsJsonObject("settings")
+                        ?: response.result
+                    val ttl = settings?.get("session_ttl_seconds")?.asInt
+                    if (ttl != null) {
+                        appPreferencesStore.setSessionTtlSeconds(ttl)
+                        _state.update { it.copy(sessionTtlSeconds = ttl) }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Could not load credential settings from vault, using local values", e)
             }
         }
     }

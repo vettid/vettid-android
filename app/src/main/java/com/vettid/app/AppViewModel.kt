@@ -73,6 +73,7 @@ class AppViewModel @Inject constructor(
     private val ownerSpaceClient: OwnerSpaceClient,
     private val profilePhotoEvents: ProfilePhotoEvents,
     private val personalDataStore: PersonalDataStore,
+    private val appLifecycleObserver: com.vettid.app.core.nats.AppLifecycleObserver,
 ) : ViewModel() {
 
     private val _appState = MutableStateFlow(AppState(
@@ -84,7 +85,18 @@ class AppViewModel @Inject constructor(
     init {
         observeNatsConnectionState()
         observeProfilePhotoUpdates()
+        observeSessionExpiry()
         loadUserProfile()
+    }
+
+    private fun observeSessionExpiry() {
+        viewModelScope.launch {
+            appLifecycleObserver.sessionExpired.collect {
+                Log.i(TAG, "Session TTL expired, forcing re-authentication")
+                _appState.update { it.copy(isAuthenticated = false) }
+                natsAutoConnector.disconnect()
+            }
+        }
     }
 
     /**

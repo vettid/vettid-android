@@ -42,6 +42,15 @@ class CriticalSecretsViewModel @Inject constructor(
     // Auto-hide countdown job
     private var countdownJob: Job? = null
 
+    /**
+     * Invalidate cached metadata so the list is refreshed on next authentication.
+     * Called after adding/deleting a critical secret.
+     */
+    fun invalidateCache() {
+        cachedMetadataList = null
+        _state.value = CriticalSecretsState.PasswordPrompt
+    }
+
     fun onEvent(event: CriticalSecretsScreenEvent) {
         when (event) {
             is CriticalSecretsScreenEvent.SubmitPassword -> {

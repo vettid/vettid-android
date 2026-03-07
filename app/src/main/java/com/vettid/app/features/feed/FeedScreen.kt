@@ -111,13 +111,18 @@ fun FeedContent(
     }
 
     // Handle in-app notifications (real-time from NATS)
+    // Skip guide events (shown in feed, not as popup notifications)
     LaunchedEffect(Unit) {
         viewModel.inAppNotification.collect { notification ->
-            snackbarHostState.showSnackbar(
+            if (notification.eventType == "guide") return@collect
+            val result = snackbarHostState.showSnackbar(
                 message = notification.title + (notification.message?.let { ": $it" } ?: ""),
-                actionLabel = if (notification.hasAction) "View" else null,
+                actionLabel = "View",
                 duration = if (notification.priority >= 1) SnackbarDuration.Long else SnackbarDuration.Short
             )
+            if (result == SnackbarResult.ActionPerformed) {
+                viewModel.navigateToEventById(notification.eventId)
+            }
         }
     }
 

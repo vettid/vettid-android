@@ -211,12 +211,26 @@ class OwnerSpaceClient @Inject constructor(
                 message = "No OwnerSpace ID available"
             )
 
-        val androidClient = connectionManager.getAndroidClient()
-            ?: return VaultResponse.Error(
-                requestId = "",
-                code = "NOT_CONNECTED",
-                message = "NATS not connected"
-            )
+        // Wait briefly for reconnection if NATS is temporarily disconnected
+        var androidClient = connectionManager.getAndroidClient()
+        if (androidClient == null) {
+            android.util.Log.w(TAG, "NATS not connected for $messageType, waiting for reconnect...")
+            for (i in 1..10) {
+                kotlinx.coroutines.delay(500L)
+                androidClient = connectionManager.getAndroidClient()
+                if (androidClient != null) {
+                    android.util.Log.i(TAG, "NATS reconnected after ${i * 500}ms")
+                    break
+                }
+            }
+            if (androidClient == null) {
+                return VaultResponse.Error(
+                    requestId = "",
+                    code = "NOT_CONNECTED",
+                    message = "NATS not connected"
+                )
+            }
+        }
 
         val requestId = UUID.randomUUID().toString()
         val requestSubject = "$ownerSpaceId.forVault.$messageType"

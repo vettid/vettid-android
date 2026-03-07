@@ -124,11 +124,11 @@ class AppPreferencesStore(context: Context) {
 
     // --- Credential Settings ---
 
-    fun getSessionTtlMinutes(): Int =
-        prefs.getInt(KEY_SESSION_TTL, 15)
+    fun getSessionTtlSeconds(): Int =
+        prefs.getInt(KEY_SESSION_TTL, 900)
 
-    fun setSessionTtlMinutes(minutes: Int) {
-        prefs.edit().putInt(KEY_SESSION_TTL, minutes).apply()
+    fun setSessionTtlSeconds(seconds: Int) {
+        prefs.edit().putInt(KEY_SESSION_TTL, seconds).apply()
     }
 
     fun getArchiveAfterDays(): Int =
@@ -150,7 +150,7 @@ class AppPreferencesStore(context: Context) {
         private const val KEY_THEME = "app_theme"
 
         // Credential settings keys
-        private const val KEY_SESSION_TTL = "session_ttl_minutes"
+        private const val KEY_SESSION_TTL = "session_ttl_seconds"
         private const val KEY_ARCHIVE_AFTER_DAYS = "archive_after_days"
         private const val KEY_DELETE_AFTER_DAYS = "delete_after_days"
 

@@ -233,24 +233,16 @@ private fun PinDotsDisplay(
     maxLength: Int
 ) {
     Row(
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalAlignment = Alignment.CenterVertically
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.defaultMinSize(minHeight = 20.dp)
     ) {
-        repeat(maxLength) { index ->
-            val isFilled = index < pinLength
+        repeat(pinLength) {
             Box(
                 modifier = Modifier
-                    .size(20.dp)
+                    .size(16.dp)
                     .clip(CircleShape)
-                    .background(
-                        if (isFilled) MaterialTheme.colorScheme.primary
-                        else Color.Transparent
-                    )
-                    .border(
-                        width = 2.dp,
-                        color = MaterialTheme.colorScheme.primary,
-                        shape = CircleShape
-                    )
+                    .background(MaterialTheme.colorScheme.primary)
             )
         }
     }

@@ -41,6 +41,7 @@ import kotlinx.coroutines.flow.collectLatest
 fun AddSecretScreen(
     isCritical: Boolean,
     onBack: () -> Unit,
+    onSecretAdded: () -> Unit = onBack,
     viewModel: TwoTierSecretsViewModel = hiltViewModel()
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
@@ -74,7 +75,7 @@ fun AddSecretScreen(
                     snackbarHostState.showSnackbar(effect.message)
                 }
                 is TwoTierSecretsEffect.NavigateBack -> {
-                    onBack()
+                    onSecretAdded()
                 }
                 else -> { }
             }
