@@ -1,8 +1,10 @@
 package com.vettid.app.features.enrollmentwizard.phases
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
@@ -94,110 +96,118 @@ private fun PasswordEntryContent(
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(modifier = Modifier.height(32.dp))
+        // Scrollable content area
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(modifier = Modifier.height(32.dp))
 
-        // Icon
-        Icon(
-            imageVector = Icons.Default.VerifiedUser,
-            contentDescription = null,
-            modifier = Modifier.size(80.dp),
-            tint = MaterialTheme.colorScheme.primary
-        )
+            // Icon
+            Icon(
+                imageVector = Icons.Default.VerifiedUser,
+                contentDescription = null,
+                modifier = Modifier.size(80.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
 
-        Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
-        // Title
-        Text(
-            text = "Verify Your Credential",
-            style = MaterialTheme.typography.headlineMedium,
-            textAlign = TextAlign.Center
-        )
+            // Title
+            Text(
+                text = "Verify Your Credential",
+                style = MaterialTheme.typography.headlineMedium,
+                textAlign = TextAlign.Center
+            )
 
-        Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-        // Subtitle
-        Text(
-            text = "Enter your password to verify that your credential was created successfully.",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
+            // Subtitle
+            Text(
+                text = "Enter your password to verify that your credential was created successfully.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
 
-        Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(32.dp))
 
-        // Password field
-        OutlinedTextField(
-            value = password,
-            onValueChange = onPasswordChange,
-            label = { Text("Password") },
-            placeholder = { Text("Enter your password") },
-            singleLine = true,
-            visualTransformation = if (isPasswordVisible) {
-                VisualTransformation.None
-            } else {
-                PasswordVisualTransformation()
-            },
-            trailingIcon = {
-                IconButton(onClick = onToggleVisibility) {
-                    Icon(
-                        imageVector = if (isPasswordVisible) {
-                            Icons.Default.VisibilityOff
-                        } else {
-                            Icons.Default.Visibility
-                        },
-                        contentDescription = if (isPasswordVisible) {
-                            "Hide password"
-                        } else {
-                            "Show password"
-                        }
-                    )
-                }
-            },
-            isError = error != null,
-            supportingText = error?.let { { Text(it) } },
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Password,
-                imeAction = ImeAction.Done
-            ),
-            keyboardActions = KeyboardActions(
-                onDone = {
+            // Password field
+            OutlinedTextField(
+                value = password,
+                onValueChange = onPasswordChange,
+                label = { Text("Password") },
+                placeholder = { Text("Enter your password") },
+                singleLine = true,
+                visualTransformation = if (isPasswordVisible) {
+                    VisualTransformation.None
+                } else {
+                    PasswordVisualTransformation()
+                },
+                trailingIcon = {
+                    IconButton(onClick = onToggleVisibility) {
+                        Icon(
+                            imageVector = if (isPasswordVisible) {
+                                Icons.Default.VisibilityOff
+                            } else {
+                                Icons.Default.Visibility
+                            },
+                            contentDescription = if (isPasswordVisible) {
+                                "Hide password"
+                            } else {
+                                "Show password"
+                            }
+                        )
+                    }
+                },
+                isError = error != null,
+                supportingText = error?.let { { Text(it) } },
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Password,
+                    imeAction = ImeAction.Done
+                ),
+                keyboardActions = KeyboardActions(
+                    onDone = {
+                        focusManager.clearFocus()
+                        onSubmit()
+                    }
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester),
+                enabled = !isSubmitting
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Verify button
+            Button(
+                onClick = {
                     focusManager.clearFocus()
                     onSubmit()
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(56.dp),
+                enabled = password.isNotBlank() && !isSubmitting
+            ) {
+                if (isSubmitting) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(Icons.Default.Lock, contentDescription = null)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Verify Credential")
                 }
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .focusRequester(focusRequester),
-            enabled = !isSubmitting
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Verify button
-        Button(
-            onClick = {
-                focusManager.clearFocus()
-                onSubmit()
-            },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp),
-            enabled = password.isNotBlank() && !isSubmitting
-        ) {
-            if (isSubmitting) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(24.dp),
-                    color = MaterialTheme.colorScheme.onPrimary,
-                    strokeWidth = 2.dp
-                )
-            } else {
-                Icon(Icons.Default.Lock, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Verify Credential")
             }
         }
 
-        Spacer(modifier = Modifier.weight(1f))
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Skip button
         TextButton(

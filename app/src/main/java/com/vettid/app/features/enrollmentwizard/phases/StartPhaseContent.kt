@@ -1,8 +1,10 @@
 package com.vettid.app.features.enrollmentwizard.phases
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -170,82 +172,90 @@ private fun ManualEntryContent(
             .fillMaxSize()
             .padding(16.dp)
     ) {
-        // Header
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(onClick = onCancel) {
-                Icon(Icons.Default.Close, contentDescription = "Cancel")
-            }
-            Text(
-                text = "Enter Enrollment Code",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
-            IconButton(onClick = onScanQR) {
-                Icon(Icons.Default.QrCodeScanner, contentDescription = "Scan QR code")
-            }
-        }
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        // Icon
-        Icon(
-            imageVector = Icons.Default.VpnKey,
-            contentDescription = null,
+        // Scrollable content area
+        Column(
             modifier = Modifier
-                .size(64.dp)
-                .align(Alignment.CenterHorizontally),
-            tint = MaterialTheme.colorScheme.primary
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Instructions
-        Text(
-            text = "Enter the enrollment code from your VettID web portal.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        // Invite code input
-        OutlinedTextField(
-            value = inviteCode,
-            onValueChange = onInviteCodeChange,
-            label = { Text("Enrollment Code") },
-            placeholder = { Text("e.g. ABCD-1234") },
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Text,
-                imeAction = ImeAction.Done
-            ),
-            keyboardActions = KeyboardActions(
-                onDone = {
-                    focusManager.clearFocus()
-                    onSubmit()
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onCancel) {
+                    Icon(Icons.Default.Close, contentDescription = "Cancel")
                 }
-            ),
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            isError = error != null
-        )
+                Text(
+                    text = "Enter Enrollment Code",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                IconButton(onClick = onScanQR) {
+                    Icon(Icons.Default.QrCodeScanner, contentDescription = "Scan QR code")
+                }
+            }
 
-        // Error message
-        if (error != null) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = error,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // Icon
+            Icon(
+                imageVector = Icons.Default.VpnKey,
+                contentDescription = null,
+                modifier = Modifier
+                    .size(64.dp)
+                    .align(Alignment.CenterHorizontally),
+                tint = MaterialTheme.colorScheme.primary
             )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Instructions
+            Text(
+                text = "Enter the enrollment code from your VettID web portal.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // Invite code input
+            OutlinedTextField(
+                value = inviteCode,
+                onValueChange = onInviteCodeChange,
+                label = { Text("Enrollment Code") },
+                placeholder = { Text("e.g. ABCD-1234") },
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Text,
+                    imeAction = ImeAction.Done
+                ),
+                keyboardActions = KeyboardActions(
+                    onDone = {
+                        focusManager.clearFocus()
+                        onSubmit()
+                    }
+                ),
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                isError = error != null
+            )
+
+            // Error message
+            if (error != null) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = error,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
 
-        Spacer(modifier = Modifier.weight(1f))
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Submit button
         Button(

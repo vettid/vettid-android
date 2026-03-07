@@ -2,8 +2,10 @@ package com.vettid.app.features.enrollmentwizard.phases
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -43,151 +45,159 @@ fun PinSetupPhaseContent(
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Header
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+        // Scrollable content area
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            TextButton(onClick = onCancel) {
-                Text("Cancel")
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(onClick = onCancel) {
+                    Text("Cancel")
+                }
+                Spacer(modifier = Modifier.width(48.dp))
             }
-            Spacer(modifier = Modifier.width(48.dp))
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            // Title and description
+            Icon(
+                imageVector = Icons.Default.Dialpad,
+                contentDescription = null,
+                modifier = Modifier.size(64.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = "Set Your PIN",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "Create a PIN (4\u20138 digits) to secure your vault. 6+ digits recommended. This PIN is encrypted and sent directly to the secure enclave.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // PIN input
+            OutlinedTextField(
+                value = pin,
+                onValueChange = { if (it.length <= 8) onPinChange(it) },
+                label = { Text("PIN") },
+                placeholder = { Text("Enter 4\u20138 digit PIN") },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !isSubmitting,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.NumberPassword,
+                    imeAction = ImeAction.Next
+                ),
+                keyboardActions = KeyboardActions(
+                    onNext = { focusManager.moveFocus(FocusDirection.Down) }
+                ),
+                visualTransformation = PasswordVisualTransformation()
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Confirm PIN input with match indicator
+            val pinsMatch = pin.length >= 4 && confirmPin.length >= 4 && pin == confirmPin
+            val pinsMismatch = confirmPin.length >= pin.length && pin != confirmPin
+
+            OutlinedTextField(
+                value = confirmPin,
+                onValueChange = { if (it.length <= 8) onConfirmPinChange(it) },
+                label = { Text("Confirm PIN") },
+                placeholder = { Text("Re-enter PIN") },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !isSubmitting,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.NumberPassword,
+                    imeAction = ImeAction.Done
+                ),
+                keyboardActions = KeyboardActions(
+                    onDone = {
+                        focusManager.clearFocus()
+                        if (pinsMatch) {
+                            onSubmit()
+                        }
+                    }
+                ),
+                visualTransformation = PasswordVisualTransformation(),
+                trailingIcon = {
+                    when {
+                        pinsMatch -> Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = "PINs match",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        pinsMismatch -> Icon(
+                            imageVector = Icons.Default.Error,
+                            contentDescription = "PINs don't match",
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                        else -> null
+                    }
+                },
+                isError = pinsMismatch
+            )
+
+            // PIN match feedback
+            if (pinsMatch) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "PINs match",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            } else if (pinsMismatch) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "PINs don't match",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+
+            // Error message
+            if (error != null) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = error,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Title and description
-        Icon(
-            imageVector = Icons.Default.Dialpad,
-            contentDescription = null,
-            modifier = Modifier.size(64.dp),
-            tint = MaterialTheme.colorScheme.primary
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = "Set Your PIN",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold
-        )
 
         Spacer(modifier = Modifier.height(8.dp))
-
-        Text(
-            text = "Create a PIN (4\u20138 digits) to secure your vault. 6+ digits recommended. This PIN is encrypted and sent directly to the secure enclave.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        // PIN input
-        OutlinedTextField(
-            value = pin,
-            onValueChange = { if (it.length <= 8) onPinChange(it) },
-            label = { Text("PIN") },
-            placeholder = { Text("Enter 4\u20138 digit PIN") },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !isSubmitting,
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.NumberPassword,
-                imeAction = ImeAction.Next
-            ),
-            keyboardActions = KeyboardActions(
-                onNext = { focusManager.moveFocus(FocusDirection.Down) }
-            ),
-            visualTransformation = PasswordVisualTransformation()
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Confirm PIN input with match indicator
-        val pinsMatch = pin.length >= 4 && confirmPin.length >= 4 && pin == confirmPin
-        val pinsMismatch = confirmPin.length >= pin.length && pin != confirmPin
-
-        OutlinedTextField(
-            value = confirmPin,
-            onValueChange = { if (it.length <= 8) onConfirmPinChange(it) },
-            label = { Text("Confirm PIN") },
-            placeholder = { Text("Re-enter PIN") },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !isSubmitting,
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.NumberPassword,
-                imeAction = ImeAction.Done
-            ),
-            keyboardActions = KeyboardActions(
-                onDone = {
-                    focusManager.clearFocus()
-                    if (pinsMatch) {
-                        onSubmit()
-                    }
-                }
-            ),
-            visualTransformation = PasswordVisualTransformation(),
-            trailingIcon = {
-                when {
-                    pinsMatch -> Icon(
-                        imageVector = Icons.Default.CheckCircle,
-                        contentDescription = "PINs match",
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    pinsMismatch -> Icon(
-                        imageVector = Icons.Default.Error,
-                        contentDescription = "PINs don't match",
-                        tint = MaterialTheme.colorScheme.error
-                    )
-                    else -> null
-                }
-            },
-            isError = pinsMismatch
-        )
-
-        // PIN match feedback
-        if (pinsMatch) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.CheckCircle,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    text = "PINs match",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-        } else if (pinsMismatch) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "PINs don't match",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error
-            )
-        }
-
-        // Error message
-        if (error != null) {
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = error,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-
-        Spacer(modifier = Modifier.weight(1f))
 
         // Submit button
         Button(

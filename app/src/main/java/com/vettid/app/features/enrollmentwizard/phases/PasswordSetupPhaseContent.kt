@@ -1,8 +1,10 @@
 package com.vettid.app.features.enrollmentwizard.phases
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -83,126 +85,134 @@ private fun PasswordEntryContent(
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Header
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+        // Scrollable content area
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            IconButton(onClick = onCancel) {
-                Icon(Icons.Default.Close, contentDescription = "Cancel")
+            // Header
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onCancel) {
+                    Icon(Icons.Default.Close, contentDescription = "Cancel")
+                }
+                Text(
+                    text = "Create Password",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.width(48.dp))
             }
-            Text(
-                text = "Create Password",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // App icon
+            Icon(
+                painter = painterResource(id = R.drawable.ic_launcher_foreground),
+                contentDescription = "VettID",
+                modifier = Modifier.size(100.dp),
+                tint = Color.Unspecified
             )
-            Spacer(modifier = Modifier.width(48.dp))
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = "Protean Credential Password",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "This password protects your Protean Credential and is required for sensitive operations.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // Password field
+            OutlinedTextField(
+                value = password,
+                onValueChange = onPasswordChange,
+                label = { Text("Password") },
+                placeholder = { Text("Minimum 12 characters") },
+                visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Password,
+                    imeAction = ImeAction.Next
+                ),
+                keyboardActions = KeyboardActions(
+                    onNext = { focusManager.moveFocus(FocusDirection.Down) }
+                ),
+                trailingIcon = {
+                    IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                        Icon(
+                            if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            contentDescription = if (passwordVisible) "Hide password" else "Show password"
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !isSubmitting,
+                singleLine = true
+            )
+
+            // Password strength indicator
+            if (password.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                PasswordStrengthIndicator(strength = strength)
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Confirm password field
+            OutlinedTextField(
+                value = confirmPassword,
+                onValueChange = onConfirmPasswordChange,
+                label = { Text("Confirm Password") },
+                visualTransformation = if (confirmPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Password,
+                    imeAction = ImeAction.Done
+                ),
+                keyboardActions = KeyboardActions(
+                    onDone = { onSubmit() }
+                ),
+                trailingIcon = {
+                    IconButton(onClick = { confirmPasswordVisible = !confirmPasswordVisible }) {
+                        Icon(
+                            if (confirmPasswordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            contentDescription = if (confirmPasswordVisible) "Hide password" else "Show password"
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !isSubmitting,
+                singleLine = true,
+                isError = confirmPassword.isNotEmpty() && password != confirmPassword
+            )
+
+            // Error message
+            if (error != null) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = error,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         }
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        // App icon
-        Icon(
-            painter = painterResource(id = R.drawable.ic_launcher_foreground),
-            contentDescription = "VettID",
-            modifier = Modifier.size(100.dp),
-            tint = Color.Unspecified
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = "Protean Credential Password",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onSurface
-        )
 
         Spacer(modifier = Modifier.height(8.dp))
-
-        Text(
-            text = "This password protects your Protean Credential and is required for sensitive operations.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        // Password field
-        OutlinedTextField(
-            value = password,
-            onValueChange = onPasswordChange,
-            label = { Text("Password") },
-            placeholder = { Text("Minimum 12 characters") },
-            visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Password,
-                imeAction = ImeAction.Next
-            ),
-            keyboardActions = KeyboardActions(
-                onNext = { focusManager.moveFocus(FocusDirection.Down) }
-            ),
-            trailingIcon = {
-                IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                    Icon(
-                        if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                        contentDescription = if (passwordVisible) "Hide password" else "Show password"
-                    )
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !isSubmitting,
-            singleLine = true
-        )
-
-        // Password strength indicator
-        if (password.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(8.dp))
-            PasswordStrengthIndicator(strength = strength)
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Confirm password field
-        OutlinedTextField(
-            value = confirmPassword,
-            onValueChange = onConfirmPasswordChange,
-            label = { Text("Confirm Password") },
-            visualTransformation = if (confirmPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Password,
-                imeAction = ImeAction.Done
-            ),
-            keyboardActions = KeyboardActions(
-                onDone = { onSubmit() }
-            ),
-            trailingIcon = {
-                IconButton(onClick = { confirmPasswordVisible = !confirmPasswordVisible }) {
-                    Icon(
-                        if (confirmPasswordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                        contentDescription = if (confirmPasswordVisible) "Hide password" else "Show password"
-                    )
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = !isSubmitting,
-            singleLine = true,
-            isError = confirmPassword.isNotEmpty() && password != confirmPassword
-        )
-
-        // Error message
-        if (error != null) {
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = error,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodySmall
-            )
-        }
-
-        Spacer(modifier = Modifier.weight(1f))
 
         // Submit button
         Button(

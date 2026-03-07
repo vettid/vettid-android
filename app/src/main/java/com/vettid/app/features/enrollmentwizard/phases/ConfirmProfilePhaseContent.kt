@@ -1,6 +1,8 @@
 package com.vettid.app.features.enrollmentwizard.phases
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Person
@@ -33,6 +35,11 @@ fun ConfirmProfilePhaseContent(
             .fillMaxSize()
             .padding(16.dp)
     ) {
+      Column(
+        modifier = Modifier
+            .weight(1f)
+            .verticalScroll(rememberScrollState())
+      ) {
         // Header
         Text(
             text = "Confirm Your Profile",
@@ -156,7 +163,9 @@ fun ConfirmProfilePhaseContent(
             )
         }
 
-        Spacer(modifier = Modifier.weight(1f))
+      } // end scrollable column
+
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Bottom button
         Surface(shadowElevation = 8.dp) {

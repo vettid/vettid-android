@@ -1,6 +1,8 @@
 package com.vettid.app.features.enrollmentwizard.phases
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -216,52 +218,60 @@ private fun EnrollmentProgressContent(
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(modifier = Modifier.height(48.dp))
-
-        Icon(
-            imageVector = Icons.Default.Security,
-            contentDescription = null,
-            modifier = Modifier.size(64.dp),
-            tint = MaterialTheme.colorScheme.primary
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Text(
-            text = "Setting Up Your Vault",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold
-        )
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        // Step indicators
+        // Scrollable content area
         Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            steps.forEach { (step, label) ->
-                EnrollmentStepRow(
-                    label = label,
-                    state = when {
-                        step.ordinal < currentStep.ordinal -> StepState.COMPLETED
-                        step.ordinal == currentStep.ordinal -> StepState.IN_PROGRESS
-                        else -> StepState.PENDING
-                    }
-                )
+            Spacer(modifier = Modifier.height(48.dp))
+
+            Icon(
+                imageVector = Icons.Default.Security,
+                contentDescription = null,
+                modifier = Modifier.size(64.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Text(
+                text = "Setting Up Your Vault",
+                style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // Step indicators
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                steps.forEach { (step, label) ->
+                    EnrollmentStepRow(
+                        label = label,
+                        state = when {
+                            step.ordinal < currentStep.ordinal -> StepState.COMPLETED
+                            step.ordinal == currentStep.ordinal -> StepState.IN_PROGRESS
+                            else -> StepState.PENDING
+                        }
+                    )
+                }
             }
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
         }
 
-        Spacer(modifier = Modifier.height(32.dp))
-
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.weight(1f))
+        Spacer(modifier = Modifier.height(8.dp))
 
         TextButton(onClick = onCancel) {
             Text("Cancel")

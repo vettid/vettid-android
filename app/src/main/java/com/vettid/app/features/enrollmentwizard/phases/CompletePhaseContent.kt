@@ -1,6 +1,8 @@
 package com.vettid.app.features.enrollmentwizard.phases
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
@@ -27,66 +29,74 @@ fun CompletePhaseContent(
         modifier = Modifier
             .fillMaxSize()
             .padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Success icon
-        Icon(
-            imageVector = Icons.Default.CheckCircle,
-            contentDescription = null,
-            modifier = Modifier.size(100.dp),
-            tint = Color(0xFF4CAF50)
-        )
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        // Title
-        Text(
-            text = "Enrollment Complete!",
-            style = MaterialTheme.typography.headlineMedium,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Description
-        Text(
-            text = "Your Protean Credential has been created and securely stored on this device.",
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        // Features list
-        Card(
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
-            ),
-            modifier = Modifier.fillMaxWidth()
+        // Scrollable content area
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .verticalScroll(rememberScrollState()),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
-            Column(
-                modifier = Modifier.padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+            // Success icon
+            Icon(
+                imageVector = Icons.Default.CheckCircle,
+                contentDescription = null,
+                modifier = Modifier.size(100.dp),
+                tint = Color(0xFF4CAF50)
+            )
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // Title
+            Text(
+                text = "Enrollment Complete!",
+                style = MaterialTheme.typography.headlineMedium,
+                fontWeight = FontWeight.Bold,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Description
+            Text(
+                text = "Your Protean Credential has been created and securely stored on this device.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(modifier = Modifier.height(32.dp))
+
+            // Features list
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                ),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                FeatureRow(
-                    icon = Icons.Default.Security,
-                    text = "Hardware-encrypted credential"
-                )
-                FeatureRow(
-                    icon = Icons.Default.CloudDone,
-                    text = "Connected to secure vault"
-                )
-                FeatureRow(
-                    icon = Icons.Default.VerifiedUser,
-                    text = "Identity verified"
-                )
+                Column(
+                    modifier = Modifier.padding(20.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    FeatureRow(
+                        icon = Icons.Default.Security,
+                        text = "Hardware-encrypted credential"
+                    )
+                    FeatureRow(
+                        icon = Icons.Default.CloudDone,
+                        text = "Connected to secure vault"
+                    )
+                    FeatureRow(
+                        icon = Icons.Default.VerifiedUser,
+                        text = "Identity verified"
+                    )
+                }
             }
         }
 
-        Spacer(modifier = Modifier.weight(1f))
+        Spacer(modifier = Modifier.height(8.dp))
 
         // Continue button
         Button(
