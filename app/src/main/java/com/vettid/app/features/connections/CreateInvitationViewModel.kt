@@ -100,10 +100,18 @@ class CreateInvitationViewModel @Inject constructor(
                     Log.d(TAG, "DEBUG - owner_space: ${natsInvitation.ownerSpaceId}")
                     Log.d(TAG, "DEBUG - message_space: ${natsInvitation.messageSpaceId}")
                     Log.d(TAG, "DEBUG - expires_at: ${natsInvitation.expiresAt}")
+                    Log.d(TAG, "DEBUG - inviter_profile fields: ${natsInvitation.inviterProfile.keys}")
+
+                    // Use vault profile for display name if available
+                    val profile = natsInvitation.inviterProfile
+                    val vaultDisplayName = listOfNotNull(
+                        profile["_system_first_name"],
+                        profile["_system_last_name"]
+                    ).joinToString(" ").trim().ifEmpty { displayName }
 
                     // Build QR code data for sharing
                     val qrData = buildQrCodeData(natsInvitation)
-                    Log.i(TAG, "DEBUG - QR data: $qrData")
+                    Log.i(TAG, "DEBUG - QR data length: ${qrData.length}")
                     val deepLink = buildDeepLink(natsInvitation)
 
                     // Parse expiration timestamp
@@ -115,7 +123,7 @@ class CreateInvitationViewModel @Inject constructor(
                         ownerSpaceId = natsInvitation.ownerSpaceId,
                         messageSpaceId = natsInvitation.messageSpaceId,
                         expiresAt = expiresAtMillis,
-                        creatorDisplayName = displayName,
+                        creatorDisplayName = vaultDisplayName,
                         qrCodeData = qrData,
                         deepLinkUrl = deepLink
                     )
@@ -147,15 +155,20 @@ class CreateInvitationViewModel @Inject constructor(
      * Build QR code data from invitation.
      */
     private fun buildQrCodeData(invitation: com.vettid.app.core.nats.ConnectionInvitation): String {
-        val data = mapOf(
+        val data = mutableMapOf<String, Any>(
             "type" to "vettid_connection",
             "version" to 1,
             "connection_id" to invitation.connectionId,
             "credentials" to invitation.natsCredentials,
             "owner_space" to invitation.ownerSpaceId,
             "message_space" to invitation.messageSpaceId,
-            "expires_at" to invitation.expiresAt
+            "expires_at" to invitation.expiresAt,
+            "label" to invitation.label
         )
+        // Include NATS endpoint so the scanner can connect to read profile
+        credentialStore.getNatsEndpoint()?.let { endpoint ->
+            data["nats_endpoint"] = endpoint
+        }
         return Gson().toJson(data)
     }
 

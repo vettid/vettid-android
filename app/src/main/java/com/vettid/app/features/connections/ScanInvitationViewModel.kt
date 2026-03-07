@@ -8,6 +8,7 @@ import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.network.Connection
 import com.vettid.app.core.network.ConnectionStatus
+import com.vettid.app.core.storage.CredentialStore
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -30,7 +31,8 @@ class ScanInvitationViewModel @Inject constructor(
     private val connectionsClient: ConnectionsClient,
     private val natsAutoConnector: NatsAutoConnector,
     private val ownerSpaceClient: OwnerSpaceClient,
-    private val connectionCryptoManager: ConnectionCryptoManager
+    private val connectionCryptoManager: ConnectionCryptoManager,
+    private val credentialStore: CredentialStore
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<ScanInvitationState>(ScanInvitationState.Scanning)
@@ -57,16 +59,66 @@ class ScanInvitationViewModel @Inject constructor(
         if (invitation != null) {
             android.util.Log.d("ScanInvitationVM", "Parsed invitation: connectionId=${invitation.connectionId}, peerGuid=${invitation.peerGuid}")
             parsedInvitation = invitation
-            _state.value = ScanInvitationState.Preview(
-                creatorName = invitation.label,
-                creatorAvatarUrl = null
-            )
+            // Show loading state while fetching peer profile from their vault
+            _state.value = ScanInvitationState.Processing
+
+            viewModelScope.launch {
+                fetchAndShowPeerProfile(invitation)
+            }
         } else {
             android.util.Log.e("ScanInvitationVM", "Failed to parse invitation data")
             viewModelScope.launch {
                 _effects.emit(ScanInvitationEffect.ShowError("Invalid QR code"))
             }
         }
+    }
+
+    /**
+     * Fetch the peer's published profile via NATS using invitation credentials,
+     * then transition to Preview state with real profile data.
+     */
+    private suspend fun fetchAndShowPeerProfile(invitation: ConnectionInvitationData) {
+        val endpoint = invitation.natsEndpoint
+            ?: credentialStore.getNatsEndpoint()
+
+        if (endpoint == null || invitation.natsCredentials.isEmpty()) {
+            android.util.Log.w("ScanInvitationVM", "No NATS endpoint or credentials, using label only")
+            _state.value = ScanInvitationState.Preview(
+                creatorName = invitation.label,
+                creatorAvatarUrl = null
+            )
+            return
+        }
+
+        android.util.Log.d("ScanInvitationVM", "Fetching peer profile from $endpoint for ${invitation.ownerSpaceId}")
+
+        connectionsClient.fetchPeerProfile(
+            natsCredentials = invitation.natsCredentials,
+            natsEndpoint = endpoint,
+            ownerSpace = invitation.ownerSpaceId
+        ).fold(
+            onSuccess = { profile ->
+                android.util.Log.d("ScanInvitationVM", "Peer profile fetched: ${profile.keys}")
+                val displayName = listOfNotNull(
+                    profile["_system_first_name"],
+                    profile["_system_last_name"]
+                ).joinToString(" ").trim().ifEmpty { invitation.label }
+
+                _state.value = ScanInvitationState.Preview(
+                    creatorName = displayName,
+                    creatorAvatarUrl = null,
+                    creatorEmail = profile["_system_email"]
+                )
+            },
+            onFailure = { error ->
+                android.util.Log.w("ScanInvitationVM", "Failed to fetch peer profile: ${error.message}")
+                // Fall back to label from QR data
+                _state.value = ScanInvitationState.Preview(
+                    creatorName = invitation.label,
+                    creatorAvatarUrl = null
+                )
+            }
+        )
     }
 
     /**
@@ -275,13 +327,16 @@ class ScanInvitationViewModel @Inject constructor(
 
             val label = json.get("label")?.asString ?: peerGuid.take(8)
 
+            val natsEndpoint = json.get("nats_endpoint")?.asString
+
             ConnectionInvitationData(
                 connectionId = connectionId,
                 peerGuid = peerGuid,
                 label = label,
                 natsCredentials = natsCredentials,
                 ownerSpaceId = ownerSpaceId,
-                messageSpaceId = messageSpaceId
+                messageSpaceId = messageSpaceId,
+                natsEndpoint = natsEndpoint
             )
         } catch (e: Exception) {
             null
@@ -333,7 +388,8 @@ private data class ConnectionInvitationData(
     val label: String,
     val natsCredentials: String,
     val ownerSpaceId: String,
-    val messageSpaceId: String
+    val messageSpaceId: String,
+    val natsEndpoint: String? = null
 )
 
 // MARK: - State Types

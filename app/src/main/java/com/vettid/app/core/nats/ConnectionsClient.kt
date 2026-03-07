@@ -4,6 +4,8 @@ import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.google.gson.annotations.SerializedName
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -46,9 +48,7 @@ class ConnectionsClient @Inject constructor(
         val payload = JsonObject().apply {
             addProperty("peer_guid", peerGuid)
             addProperty("label", label)
-            // Send both formats for backward compatibility until enclave is updated
             addProperty("expires_in_minutes", expiresInMinutes)
-            addProperty("expires_in_hours", (expiresInMinutes / 60).coerceAtLeast(1))
         }
 
         return sendAndAwait("connection.create-invite", payload) { result ->
@@ -56,10 +56,16 @@ class ConnectionsClient @Inject constructor(
             // - "credentials" or "nats_credentials" for the NATS credentials
             // - "owner_space" or "owner_space_id" for owner space
             // - "message_space" or "message_space_id" or "message_space_topic" for message space
+            val inviterProfile = mutableMapOf<String, String>()
+            result.getAsJsonObject("inviter_profile")?.entrySet()?.forEach { entry ->
+                entry.value?.asString?.let { inviterProfile[entry.key] = it }
+            }
+            // Use vault-returned label (which may be richer) or fallback to what we sent
+            val vaultLabel = result.get("label")?.asString ?: label
             ConnectionInvitation(
                 connectionId = result.get("connection_id")?.asString ?: "",
                 peerGuid = peerGuid,
-                label = label,
+                label = vaultLabel,
                 natsCredentials = result.get("credentials")?.asString
                     ?: result.get("nats_credentials")?.asString ?: "",
                 ownerSpaceId = result.get("owner_space")?.asString
@@ -67,7 +73,8 @@ class ConnectionsClient @Inject constructor(
                 messageSpaceId = result.get("message_space")?.asString
                     ?: result.get("message_space_id")?.asString
                     ?: result.get("message_space_topic")?.asString ?: "",
-                expiresAt = result.get("expires_at")?.asString ?: ""
+                expiresAt = result.get("expires_at")?.asString ?: "",
+                inviterProfile = inviterProfile
             )
         }
     }
@@ -204,6 +211,163 @@ class ConnectionsClient @Inject constructor(
     }
 
     /**
+     * Fetch a peer's published profile by connecting to NATS with invitation credentials.
+     *
+     * Creates a temporary NATS connection using the scoped credentials from the QR code,
+     * then reads the peer's retained profile from JetStream.
+     *
+     * @param natsCredentials NATS .creds file content from QR code
+     * @param natsEndpoint NATS server endpoint (tls://host:port)
+     * @param ownerSpace Peer's owner space ID
+     * @return Map of profile fields (e.g. _system_first_name, _system_last_name, _system_email)
+     */
+    suspend fun fetchPeerProfile(
+        natsCredentials: String,
+        natsEndpoint: String,
+        ownerSpace: String
+    ): Result<Map<String, String>> = withContext(Dispatchers.IO) {
+        val client = AndroidNatsClient()
+        try {
+            // Parse JWT and seed from .creds file format
+            val (jwt, seed) = parseCredsFile(natsCredentials)
+                ?: return@withContext Result.failure(NatsException("Invalid NATS credentials format"))
+
+            Log.d(TAG, "Connecting to peer NATS for profile fetch: $natsEndpoint")
+
+            // Connect with the scoped invitation credentials
+            val connectResult = client.connect(natsEndpoint, jwt, seed)
+            if (connectResult.isFailure) {
+                return@withContext Result.failure(
+                    NatsException("Failed to connect to peer NATS: ${connectResult.exceptionOrNull()?.message}")
+                )
+            }
+
+            // Create a JetStream consumer to read the retained profile
+            val jsClient = JetStreamNatsClient()
+            jsClient.initialize(client)
+
+            val profileSubject = "OwnerSpace.$ownerSpace.forApp.profile.public"
+
+            // Use a direct JetStream consumer to fetch the last retained profile message
+            val consumerName = "profile-${System.currentTimeMillis()}"
+            val createRequest = JsonObject().apply {
+                addProperty("stream_name", "ENROLLMENT")
+                add("config", JsonObject().apply {
+                    addProperty("name", consumerName)
+                    addProperty("filter_subject", profileSubject)
+                    addProperty("deliver_policy", "last")
+                    addProperty("ack_policy", "none")
+                    addProperty("max_deliver", 1)
+                    addProperty("num_replicas", 1)
+                    addProperty("mem_storage", true)
+                })
+            }
+
+            val createSubject = "\$JS.API.CONSUMER.CREATE.ENROLLMENT.$consumerName"
+            val createResult = client.request(
+                createSubject,
+                gson.toJson(createRequest).toByteArray(),
+                timeoutMs = 10_000
+            )
+
+            if (createResult.isFailure) {
+                Log.e(TAG, "Failed to create profile consumer: ${createResult.exceptionOrNull()?.message}")
+                return@withContext Result.failure(
+                    NatsException("Failed to read peer profile: ${createResult.exceptionOrNull()?.message}")
+                )
+            }
+
+            // Check for JetStream errors
+            val createResponse = gson.fromJson(createResult.getOrThrow().dataString, JsonObject::class.java)
+            if (createResponse.has("error")) {
+                val errMsg = createResponse.getAsJsonObject("error")?.get("description")?.asString ?: "Unknown error"
+                Log.e(TAG, "JetStream error creating profile consumer: $errMsg")
+                return@withContext Result.failure(NatsException("Failed to read peer profile: $errMsg"))
+            }
+
+            // Fetch the profile message
+            val fetchSubject = "\$JS.API.CONSUMER.MSG.NEXT.ENROLLMENT.$consumerName"
+            val fetchRequest = JsonObject().apply {
+                addProperty("batch", 1)
+                addProperty("expires", 10_000_000_000L) // 10s in nanoseconds
+            }
+
+            val fetchResult = client.request(
+                fetchSubject,
+                gson.toJson(fetchRequest).toByteArray(),
+                timeoutMs = 15_000
+            )
+
+            // Clean up consumer
+            try {
+                client.publish("\$JS.API.CONSUMER.DELETE.ENROLLMENT.$consumerName", "{}".toByteArray())
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to delete profile consumer: ${e.message}")
+            }
+
+            if (fetchResult.isFailure || fetchResult.getOrNull()?.data?.isEmpty() == true) {
+                Log.w(TAG, "No retained profile found for $ownerSpace")
+                return@withContext Result.success(emptyMap())
+            }
+
+            // Parse profile JSON (PublishedProfile struct from vault-manager)
+            val profileData = fetchResult.getOrThrow().dataString
+            Log.d(TAG, "Fetched peer profile: ${profileData.take(200)}")
+
+            val profileJson = gson.fromJson(profileData, JsonObject::class.java)
+            val profile = mutableMapOf<String, String>()
+
+            // Extract top-level fields (first_name, last_name, email)
+            profileJson.get("first_name")?.asString?.let { profile["_system_first_name"] = it }
+            profileJson.get("last_name")?.asString?.let { profile["_system_last_name"] = it }
+            profileJson.get("email")?.asString?.let { profile["_system_email"] = it }
+            profileJson.get("user_guid")?.asString?.let { profile["user_guid"] = it }
+            profileJson.get("public_key")?.asString?.let { profile["public_key"] = it }
+
+            // Extract fields map (key -> {display_name, value, field_type})
+            profileJson.getAsJsonObject("fields")?.entrySet()?.forEach { entry ->
+                val fieldObj = entry.value?.asJsonObject
+                val value = fieldObj?.get("value")?.asString
+                if (value != null) {
+                    profile[entry.key] = value
+                }
+            }
+
+            Log.i(TAG, "Fetched peer profile with ${profile.size} fields")
+            Result.success(profile.toMap())
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch peer profile: ${e.message}", e)
+            Result.failure(NatsException("Failed to fetch peer profile: ${e.message}"))
+        } finally {
+            try {
+                client.disconnect()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error disconnecting peer profile client: ${e.message}")
+            }
+        }
+    }
+
+    /**
+     * Parse a NATS .creds file into JWT and seed components.
+     *
+     * Format:
+     * -----BEGIN NATS USER JWT-----
+     * <jwt>
+     * ------END NATS USER JWT------
+     * ...
+     * -----BEGIN USER NKEY SEED-----
+     * <seed>
+     * ------END USER NKEY SEED------
+     */
+    private fun parseCredsFile(creds: String): Pair<String, String>? {
+        val jwtMatch = Regex("-----BEGIN NATS USER JWT-----\\s*([^\\s-]+)\\s*------END NATS USER JWT------")
+            .find(creds) ?: return null
+        val seedMatch = Regex("-----BEGIN USER NKEY SEED-----\\s*([^\\s-]+)\\s*------END USER NKEY SEED------")
+            .find(creds) ?: return null
+        return Pair(jwtMatch.groupValues[1].trim(), seedMatch.groupValues[1].trim())
+    }
+
+    /**
      * Send a request using OwnerSpaceClient.sendAndAwaitResponse() for proper
      * request-response correlation by event_id. This avoids race conditions
      * that occur when using JetStream's subject-based filtering.
@@ -287,7 +451,8 @@ data class ConnectionInvitation(
     val natsCredentials: String,  // NATS .creds file content
     val ownerSpaceId: String,
     val messageSpaceId: String,
-    val expiresAt: String
+    val expiresAt: String,
+    val inviterProfile: Map<String, String> = emptyMap()
 )
 
 /**
