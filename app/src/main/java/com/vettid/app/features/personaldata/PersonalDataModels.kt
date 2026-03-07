@@ -581,7 +581,6 @@ data class GroupedByCategory(
     companion object {
         fun fromItems(items: List<PersonalDataItem>): GroupedByCategory {
             val grouped = items.groupBy { it.category ?: DataCategory.OTHER }
-            // Sort categories in a logical order, and sort items within each category by sortOrder
             val orderedCategories = linkedMapOf<DataCategory, List<PersonalDataItem>>()
             listOf(
                 DataCategory.IDENTITY,
@@ -600,10 +599,7 @@ data class GroupedByCategory(
                 DataCategory.OTHER
             ).forEach { category ->
                 grouped[category]?.let { categoryItems ->
-                    // Sort items within category by sortOrder, then by name as tiebreaker
-                    orderedCategories[category] = categoryItems.sortedWith(
-                        compareBy({ it.sortOrder }, { it.name })
-                    )
+                    orderedCategories[category] = categoryItems.sortedBy { it.sortOrder }
                 }
             }
             return GroupedByCategory(orderedCategories)

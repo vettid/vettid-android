@@ -97,6 +97,30 @@ data class GroupedByCategory(
             SecretCategory.OTHER
         )
 
+        /**
+         * Sort items within a category so that grouped items stay together.
+         * Groups are sorted by their minimum sortOrder, then items within
+         * a group by sortOrder. Ungrouped items sort normally.
+         */
+        private fun sortWithGroups(items: List<MinorSecret>): List<MinorSecret> {
+            // Compute each group's sort key (min sortOrder of its members)
+            val groupMinSort = items
+                .filter { it.groupId != null }
+                .groupBy { it.groupId!! }
+                .mapValues { (_, members) -> members.minOf { it.sortOrder } }
+
+            return items.sortedWith(compareBy(
+                // Primary: group sort key (or own sortOrder for ungrouped)
+                { item -> item.groupId?.let { groupMinSort[it] } ?: item.sortOrder },
+                // Secondary: keep grouped items together by groupId
+                { item -> item.groupId ?: "" },
+                // Tertiary: individual sortOrder within the group
+                { item -> item.sortOrder },
+                // Quaternary: name tiebreaker
+                { item -> item.name }
+            ))
+        }
+
         fun fromItems(items: List<MinorSecret>): GroupedByCategory {
             val grouped = items.groupBy { it.category }
             val orderedCategories = linkedMapOf<SecretCategory, List<MinorSecret>>()
@@ -104,18 +128,14 @@ data class GroupedByCategory(
             // Add categories in preferred order
             categoryOrder.forEach { category ->
                 grouped[category]?.let { categoryItems ->
-                    orderedCategories[category] = categoryItems.sortedWith(
-                        compareBy({ it.sortOrder }, { it.name })
-                    )
+                    orderedCategories[category] = sortWithGroups(categoryItems)
                 }
             }
 
             // Include any categories not in the preferred order list (future-proof)
             grouped.keys.filter { it !in categoryOrder }.forEach { category ->
                 grouped[category]?.let { categoryItems ->
-                    orderedCategories[category] = categoryItems.sortedWith(
-                        compareBy({ it.sortOrder }, { it.name })
-                    )
+                    orderedCategories[category] = sortWithGroups(categoryItems)
                 }
             }
 

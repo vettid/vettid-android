@@ -93,7 +93,9 @@ class MinorSecretsStore @Inject constructor(
         notes: String? = null,
         isShareable: Boolean = true,
         isInPublicProfile: Boolean = false,
-        isSystemField: Boolean = false
+        isSystemField: Boolean = false,
+        groupId: String? = null,
+        groupLabel: String? = null
     ): MinorSecret {
         val secrets = getAllSecrets().toMutableList()
 
@@ -112,6 +114,8 @@ class MinorSecretsStore @Inject constructor(
             isInPublicProfile = isInPublicProfile,
             isSystemField = isSystemField,
             sortOrder = maxSortOrder + 1,
+            groupId = groupId,
+            groupLabel = groupLabel,
             syncStatus = SyncStatus.PENDING,
             createdAt = System.currentTimeMillis(),
             updatedAt = System.currentTimeMillis()
@@ -352,8 +356,8 @@ class MinorSecretsStore @Inject constructor(
     }
 
     /**
-     * Move a secret up in its category (decrease sort order).
-     * Swaps sort order with the item above it.
+     * Move a secret (or its entire group) up in its category.
+     * If the secret belongs to a group, all group members move together.
      */
     fun moveSecretUp(secretId: String): Boolean {
         val secrets = getAllSecrets().toMutableList()
@@ -362,30 +366,30 @@ class MinorSecretsStore @Inject constructor(
         val categorySecrets = secrets.filter { it.category == secret.category }
             .sortedWith(compareBy({ it.sortOrder }, { it.name }))
 
-        val index = categorySecrets.indexOfFirst { it.id == secretId }
-        if (index <= 0) return false
+        // Build ordered list of "items or groups" for swap logic
+        val groupOrder = buildGroupOrder(categorySecrets)
+        val targetGroupKey = secret.groupId ?: secret.id
+        val groupIndex = groupOrder.indexOfFirst { it.key == targetGroupKey }
+        if (groupIndex <= 0) return false
 
-        // Normalize sort orders first to ensure they're distinct
+        // Normalize sort orders
         categorySecrets.forEachIndexed { i, cs ->
             val idx = secrets.indexOfFirst { it.id == cs.id }
             if (idx >= 0) secrets[idx] = secrets[idx].copy(sortOrder = i)
         }
 
-        // Now swap the target with the item above
-        val itemAbove = categorySecrets[index - 1]
-        val secretIndex = secrets.indexOfFirst { it.id == secretId }
-        val aboveIndex = secrets.indexOfFirst { it.id == itemAbove.id }
-
-        secrets[secretIndex] = secrets[secretIndex].copy(sortOrder = index - 1)
-        secrets[aboveIndex] = secrets[aboveIndex].copy(sortOrder = index)
+        // Swap entire group/item with the one above
+        val targetGroup = groupOrder[groupIndex]
+        val aboveGroup = groupOrder[groupIndex - 1]
+        swapGroupSortOrders(secrets, targetGroup, aboveGroup)
 
         saveSecrets(secrets)
         return true
     }
 
     /**
-     * Move a secret down in its category (increase sort order).
-     * Swaps sort order with the item below it.
+     * Move a secret (or its entire group) down in its category.
+     * If the secret belongs to a group, all group members move together.
      */
     fun moveSecretDown(secretId: String): Boolean {
         val secrets = getAllSecrets().toMutableList()
@@ -394,25 +398,69 @@ class MinorSecretsStore @Inject constructor(
         val categorySecrets = secrets.filter { it.category == secret.category }
             .sortedWith(compareBy({ it.sortOrder }, { it.name }))
 
-        val index = categorySecrets.indexOfFirst { it.id == secretId }
-        if (index < 0 || index >= categorySecrets.size - 1) return false
+        val groupOrder = buildGroupOrder(categorySecrets)
+        val targetGroupKey = secret.groupId ?: secret.id
+        val groupIndex = groupOrder.indexOfFirst { it.key == targetGroupKey }
+        if (groupIndex < 0 || groupIndex >= groupOrder.size - 1) return false
 
-        // Normalize sort orders first to ensure they're distinct
+        // Normalize sort orders
         categorySecrets.forEachIndexed { i, cs ->
             val idx = secrets.indexOfFirst { it.id == cs.id }
             if (idx >= 0) secrets[idx] = secrets[idx].copy(sortOrder = i)
         }
 
-        // Now swap the target with the item below
-        val itemBelow = categorySecrets[index + 1]
-        val secretIndex = secrets.indexOfFirst { it.id == secretId }
-        val belowIndex = secrets.indexOfFirst { it.id == itemBelow.id }
-
-        secrets[secretIndex] = secrets[secretIndex].copy(sortOrder = index + 1)
-        secrets[belowIndex] = secrets[belowIndex].copy(sortOrder = index)
+        val targetGroup = groupOrder[groupIndex]
+        val belowGroup = groupOrder[groupIndex + 1]
+        swapGroupSortOrders(secrets, belowGroup, targetGroup)
 
         saveSecrets(secrets)
         return true
+    }
+
+    // MARK: - Group Reorder Helpers
+
+    /** Represents a group or individual item in the sort order. */
+    private data class GroupEntry(val key: String, val itemIds: List<String>)
+
+    /** Build an ordered list of groups/items within a category. */
+    private fun buildGroupOrder(categorySecrets: List<MinorSecret>): List<GroupEntry> {
+        val result = mutableListOf<GroupEntry>()
+        val seenGroups = mutableSetOf<String>()
+        for (item in categorySecrets) {
+            val gid = item.groupId
+            if (gid != null) {
+                if (gid !in seenGroups) {
+                    seenGroups.add(gid)
+                    val memberIds = categorySecrets.filter { it.groupId == gid }.map { it.id }
+                    result.add(GroupEntry(gid, memberIds))
+                }
+            } else {
+                result.add(GroupEntry(item.id, listOf(item.id)))
+            }
+        }
+        return result
+    }
+
+    /** Swap sort orders so that groupA ends up before groupB. */
+    private fun swapGroupSortOrders(secrets: MutableList<MinorSecret>, groupA: GroupEntry, groupB: GroupEntry) {
+        // Collect current sort orders for both groups
+        val aOrders = groupA.itemIds.map { id -> secrets.first { it.id == id }.sortOrder }.sorted()
+        val bOrders = groupB.itemIds.map { id -> secrets.first { it.id == id }.sortOrder }.sorted()
+
+        // Assign B's orders to A, and A's orders to B
+        // If sizes differ, generate a contiguous range
+        val allOrders = (aOrders + bOrders).sorted()
+        val newBOrders = allOrders.take(groupB.itemIds.size)
+        val newAOrders = allOrders.drop(groupB.itemIds.size)
+
+        groupA.itemIds.sortedBy { id -> secrets.first { it.id == id }.sortOrder }.forEachIndexed { i, id ->
+            val idx = secrets.indexOfFirst { it.id == id }
+            if (idx >= 0) secrets[idx] = secrets[idx].copy(sortOrder = newAOrders.getOrElse(i) { newAOrders.last() + i })
+        }
+        groupB.itemIds.sortedBy { id -> secrets.first { it.id == id }.sortOrder }.forEachIndexed { i, id ->
+            val idx = secrets.indexOfFirst { it.id == id }
+            if (idx >= 0) secrets[idx] = secrets[idx].copy(sortOrder = newBOrders.getOrElse(i) { newBOrders.last() + i })
+        }
     }
 
     // MARK: - Enrollment Key
@@ -501,6 +549,8 @@ data class MinorSecret(
     val isInPublicProfile: Boolean = false,          // For PUBLIC_KEY types only
     val isSystemField: Boolean = false,              // For enrollment key (not deletable)
     val sortOrder: Int = 0,                          // Order within category
+    val groupId: String? = null,                     // Links template fields together
+    val groupLabel: String? = null,                  // Display name for the group (e.g., "Bitcoin Main")
     val syncStatus: SyncStatus,
     val createdAt: Long,
     val updatedAt: Long

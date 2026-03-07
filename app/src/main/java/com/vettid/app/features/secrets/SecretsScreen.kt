@@ -348,18 +348,40 @@ private fun SecretsList(
             }
 
             if (!isCollapsed) {
-                itemsIndexed(categoryItems, key = { _, item -> item.id }) { index, secret ->
-                    val isFirst = index == 0
-                    val isLast = index == categoryItems.size - 1
-                    SecretRow(
-                        secret = secret,
-                        isFirst = isFirst,
-                        isLast = isLast,
-                        onClick = { onSecretClick(secret.id) },
-                        onTogglePublic = { onTogglePublicProfile(secret.id) },
-                        onMoveUp = { onMoveUp(secret.id) },
-                        onMoveDown = { onMoveDown(secret.id) }
-                    )
+                // Build group structure for display
+                val groupOrder = buildDisplayGroups(categoryItems)
+
+                groupOrder.forEachIndexed { groupIdx, group ->
+                    val isFirstGroup = groupIdx == 0
+                    val isLastGroup = groupIdx == groupOrder.size - 1
+
+                    if (group.label != null) {
+                        // Group header
+                        item(key = "group_${group.key}") {
+                            GroupHeader(
+                                label = group.label,
+                                isFirst = isFirstGroup,
+                                isLast = isLastGroup,
+                                onMoveUp = { group.items.firstOrNull()?.let { onMoveUp(it.id) } },
+                                onMoveDown = { group.items.firstOrNull()?.let { onMoveDown(it.id) } }
+                            )
+                        }
+                    }
+
+                    items(group.items, key = { it.id }) { secret ->
+                        val isFirst = group.label == null && isFirstGroup
+                        val isLast = group.label == null && isLastGroup
+                        SecretRow(
+                            secret = secret,
+                            isFirst = isFirst,
+                            isLast = isLast,
+                            isInGroup = group.label != null,
+                            onClick = { onSecretClick(secret.id) },
+                            onTogglePublic = { onTogglePublicProfile(secret.id) },
+                            onMoveUp = { onMoveUp(secret.id) },
+                            onMoveDown = { onMoveDown(secret.id) }
+                        )
+                    }
                 }
             }
 
@@ -534,11 +556,118 @@ private fun CollapsibleCategoryHeader(
     }
 }
 
+// Display group: either a named group (template-based) or a single ungrouped item
+private data class DisplayGroup(
+    val key: String,       // groupId or item id
+    val label: String?,    // null for ungrouped singles
+    val items: List<MinorSecret>
+)
+
+private fun buildDisplayGroups(categoryItems: List<MinorSecret>): List<DisplayGroup> {
+    val result = mutableListOf<DisplayGroup>()
+    val seen = mutableSetOf<String>()
+
+    for (item in categoryItems) {
+        if (item.id in seen) continue
+
+        val gid = item.groupId
+        if (gid != null) {
+            if (gid in seen) continue
+            seen.add(gid)
+            val members = categoryItems.filter { it.groupId == gid }
+            members.forEach { seen.add(it.id) }
+            result.add(DisplayGroup(
+                key = gid,
+                label = members.firstOrNull()?.groupLabel ?: gid,
+                items = members
+            ))
+        } else {
+            seen.add(item.id)
+            result.add(DisplayGroup(
+                key = item.id,
+                label = null,
+                items = listOf(item)
+            ))
+        }
+    }
+    return result
+}
+
+@Composable
+private fun GroupHeader(
+    label: String,
+    isFirst: Boolean,
+    isLast: Boolean,
+    onMoveUp: () -> Unit,
+    onMoveDown: () -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                IconButton(
+                    onClick = onMoveUp,
+                    enabled = !isFirst,
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        Icons.Default.KeyboardArrowUp,
+                        contentDescription = "Move group up",
+                        modifier = Modifier.size(20.dp),
+                        tint = if (!isFirst)
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f)
+                    )
+                }
+                IconButton(
+                    onClick = onMoveDown,
+                    enabled = !isLast,
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        Icons.Default.KeyboardArrowDown,
+                        contentDescription = "Move group down",
+                        modifier = Modifier.size(20.dp),
+                        tint = if (!isLast)
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        else
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.width(4.dp))
+            Icon(
+                Icons.Default.Folder,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
 @Composable
 private fun SecretRow(
     secret: MinorSecret,
     isFirst: Boolean,
     isLast: Boolean,
+    isInGroup: Boolean = false,
     onClick: () -> Unit,
     onTogglePublic: () -> Unit,
     onMoveUp: () -> Unit,
@@ -556,7 +685,8 @@ private fun SecretRow(
                 .padding(vertical = 4.dp, horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Up/Down reorder buttons
+            // Up/Down reorder buttons (hidden for grouped items — group header handles reorder)
+            if (!isInGroup) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
@@ -591,6 +721,7 @@ private fun SecretRow(
                     )
                 }
             }
+            } // end if (!isInGroup)
 
             Spacer(modifier = Modifier.width(4.dp))
 

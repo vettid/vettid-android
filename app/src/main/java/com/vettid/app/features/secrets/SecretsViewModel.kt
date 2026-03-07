@@ -300,6 +300,17 @@ class SecretsViewModel @Inject constructor(
                 val template = templateState.template
                 var savedCount = 0
 
+                // Generate a shared groupId for all fields in this template
+                val groupId = java.util.UUID.randomUUID().toString()
+                // Use the first non-blank field value as the group label, or the template name
+                val firstFieldValue = template.fields.indices
+                    .firstNotNullOfOrNull { i -> templateState.getValue(i).takeIf { it.isNotBlank() } }
+                val groupLabel = if (firstFieldValue != null) {
+                    "${template.name}: $firstFieldValue"
+                } else {
+                    template.name
+                }
+
                 template.fields.forEachIndexed { index, field ->
                     val value = templateState.getValue(index)
                     if (value.isNotBlank()) {
@@ -308,7 +319,9 @@ class SecretsViewModel @Inject constructor(
                             value = value,
                             category = template.category,
                             type = field.type,
-                            isInPublicProfile = false
+                            isInPublicProfile = false,
+                            groupId = groupId,
+                            groupLabel = groupLabel
                         )
                         savedCount++
                     }
