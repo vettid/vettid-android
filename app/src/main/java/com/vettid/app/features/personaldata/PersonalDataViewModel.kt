@@ -1837,9 +1837,15 @@ class PersonalDataViewModel @Inject constructor(
                 // Skip system enrollment key if vault already provided it
                 if (secret.isSystemField && hasIdentityKeyFromVault) return@forEach
 
+                // Use group label to identify which wallet/group the key belongs to
+                val displayName = if (secret.groupLabel != null) {
+                    "${secret.groupLabel}: ${secret.name}"
+                } else {
+                    secret.name
+                }
                 items.add(PersonalDataItem(
                     id = "_secret_${secret.id}",
-                    name = secret.name,
+                    name = displayName,
                     type = DataType.KEY,
                     value = secret.value,
                     category = DataCategory.IDENTITY,

@@ -304,14 +304,9 @@ class SecretsViewModel @Inject constructor(
 
                 // Generate a shared groupId for all fields in this template
                 val groupId = java.util.UUID.randomUUID().toString()
-                // Use the first non-blank field value as the group label, or the template name
-                val firstFieldValue = template.fields.indices
-                    .firstNotNullOfOrNull { i -> templateState.getValue(i).takeIf { it.isNotBlank() } }
-                val groupLabel = if (firstFieldValue != null) {
-                    "${template.name}: $firstFieldValue"
-                } else {
-                    template.name
-                }
+                // Use the user-entered group name, or fall back to template name
+                val groupLabel = templateState.groupName.takeIf { it.isNotBlank() }
+                    ?: template.name
 
                 template.fields.forEachIndexed { index, field ->
                     val value = templateState.getValue(index)
@@ -340,6 +335,13 @@ class SecretsViewModel @Inject constructor(
                 _effects.emit(SecretsEffect.ShowError(e.message ?: "Failed to save"))
             }
         }
+    }
+
+    // MARK: - Rename Group
+
+    fun renameGroup(groupId: String, newLabel: String) {
+        minorSecretsStore.updateGroupLabel(groupId, newLabel)
+        loadSecrets()
     }
 
     // MARK: - Delete Secret

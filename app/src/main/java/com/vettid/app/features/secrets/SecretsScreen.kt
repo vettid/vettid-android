@@ -147,6 +147,7 @@ fun SecretsContent(
                         onTogglePublicProfile = { viewModel.onEvent(SecretsEvent.TogglePublicProfile(it)) },
                         onMoveUp = { viewModel.onEvent(SecretsEvent.MoveSecretUp(it)) },
                         onMoveDown = { viewModel.onEvent(SecretsEvent.MoveSecretDown(it)) },
+                        onRenameGroup = { groupId, newLabel -> viewModel.renameGroup(groupId, newLabel) },
                         onPublishClick = { viewModel.onEvent(SecretsEvent.PublishPublicKeys) },
                         onCriticalSecretsTap = onNavigateToCriticalSecrets
                     )
@@ -263,6 +264,9 @@ fun SecretsContent(
                     fieldValues = formState.fieldValues + (index to value)
                 )
             },
+            onGroupNameChange = { name ->
+                templateFormState = formState.copy(groupName = name)
+            },
             onSave = {
                 viewModel.saveTemplate(formState)
                 templateFormState = null
@@ -282,6 +286,7 @@ private fun SecretsList(
     onTogglePublicProfile: (String) -> Unit,
     onMoveUp: (String) -> Unit,
     onMoveDown: (String) -> Unit,
+    onRenameGroup: (String, String) -> Unit,
     onPublishClick: () -> Unit,
     onCriticalSecretsTap: () -> Unit = {}
 ) {
@@ -363,7 +368,8 @@ private fun SecretsList(
                                 isFirst = isFirstGroup,
                                 isLast = isLastGroup,
                                 onMoveUp = { group.items.firstOrNull()?.let { onMoveUp(it.id) } },
-                                onMoveDown = { group.items.firstOrNull()?.let { onMoveDown(it.id) } }
+                                onMoveDown = { group.items.firstOrNull()?.let { onMoveDown(it.id) } },
+                                onRename = { newLabel -> onRenameGroup(group.key, newLabel) }
                             )
                         }
                     }
@@ -599,8 +605,12 @@ private fun GroupHeader(
     isFirst: Boolean,
     isLast: Boolean,
     onMoveUp: () -> Unit,
-    onMoveDown: () -> Unit
+    onMoveDown: () -> Unit,
+    onRename: (String) -> Unit = {}
 ) {
+    var isEditing by remember { mutableStateOf(false) }
+    var editText by remember { mutableStateOf(label) }
+
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
@@ -650,14 +660,51 @@ private fun GroupHeader(
                 tint = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
             )
             Spacer(modifier = Modifier.width(6.dp))
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            if (isEditing) {
+                OutlinedTextField(
+                    value = editText,
+                    onValueChange = { editText = it },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                    textStyle = MaterialTheme.typography.labelMedium,
+                    trailingIcon = {
+                        IconButton(onClick = {
+                            if (editText.isNotBlank()) {
+                                onRename(editText.trim())
+                            }
+                            isEditing = false
+                        }, modifier = Modifier.size(24.dp)) {
+                            Icon(Icons.Default.Check, "Save", modifier = Modifier.size(16.dp))
+                        }
+                    }
+                )
+            } else {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable {
+                            editText = label
+                            isEditing = true
+                        }
+                )
+                Icon(
+                    Icons.Default.Edit,
+                    contentDescription = "Rename group",
+                    modifier = Modifier
+                        .size(14.dp)
+                        .clickable {
+                            editText = label
+                            isEditing = true
+                        },
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.5f)
+                )
+            }
         }
     }
 }
@@ -1302,6 +1349,7 @@ private fun TemplateChooserDialog(
 private fun TemplateFormDialog(
     state: TemplateFormState,
     onFieldValueChange: (Int, String) -> Unit,
+    onGroupNameChange: (String) -> Unit = {},
     onSave: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -1329,6 +1377,18 @@ private fun TemplateFormDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                // Group name prompt (e.g., "Wallet Name" for crypto wallets)
+                state.template.groupNamePrompt?.let { prompt ->
+                    OutlinedTextField(
+                        value = state.groupName,
+                        onValueChange = onGroupNameChange,
+                        label = { Text(prompt) },
+                        placeholder = { Text("e.g., Bitcoin Main") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
                 state.template.fields.forEachIndexed { index, field ->
                     when (field.inputHint) {
                         FieldInputHint.DATE, FieldInputHint.EXPIRY_DATE -> {

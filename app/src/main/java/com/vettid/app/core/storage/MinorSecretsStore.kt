@@ -223,6 +223,21 @@ class MinorSecretsStore @Inject constructor(
     }
 
     /**
+     * Update group label for all secrets sharing a groupId.
+     */
+    fun updateGroupLabel(groupId: String, newLabel: String) {
+        val secrets = getAllSecrets().toMutableList()
+        var changed = false
+        secrets.forEachIndexed { index, secret ->
+            if (secret.groupId == groupId) {
+                secrets[index] = secret.copy(groupLabel = newLabel, updatedAt = System.currentTimeMillis())
+                changed = true
+            }
+        }
+        if (changed) saveSecrets(secrets)
+    }
+
+    /**
      * Get last sync timestamp.
      */
     fun getLastSyncedAt(): Long {

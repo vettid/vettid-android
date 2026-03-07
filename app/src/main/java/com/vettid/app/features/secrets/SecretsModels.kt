@@ -178,7 +178,8 @@ data class SecretTemplate(
     val description: String,
     val category: SecretCategory,
     val iconName: String,
-    val fields: List<TemplateField>
+    val fields: List<TemplateField>,
+    val groupNamePrompt: String? = null  // If set, prompts user for a group name (e.g., "Wallet Name")
 ) {
     companion object {
         val all = listOf(
@@ -238,8 +239,8 @@ data class SecretTemplate(
                 description = "Wallet address, seed phrase",
                 category = SecretCategory.CRYPTOCURRENCY,
                 iconName = "currency_bitcoin",
+                groupNamePrompt = "Wallet Name",
                 fields = listOf(
-                    TemplateField("Wallet Name", SecretType.TEXT, "e.g., Bitcoin Main"),
                     TemplateField("Public Address", SecretType.PUBLIC_KEY, ""),
                     TemplateField("Seed Phrase", SecretType.SEED_PHRASE, "12 or 24 word phrase")
                 )
@@ -457,10 +458,15 @@ data class SecretTemplate(
 data class TemplateFormState(
     val template: SecretTemplate,
     val fieldValues: Map<Int, String> = emptyMap(),
+    val groupName: String = "",
     val isSaving: Boolean = false
 ) {
     fun getValue(fieldIndex: Int): String = fieldValues[fieldIndex] ?: ""
-    fun isComplete(): Boolean = template.fields.indices.all { getValue(it).isNotBlank() }
+    fun isComplete(): Boolean {
+        val fieldsOk = template.fields.indices.all { getValue(it).isNotBlank() }
+        val groupOk = template.groupNamePrompt == null || groupName.isNotBlank()
+        return fieldsOk && groupOk
+    }
 }
 
 // MARK: - Critical Secrets (Credential-Embedded Secrets)
