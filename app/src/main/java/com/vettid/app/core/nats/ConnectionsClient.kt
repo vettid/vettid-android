@@ -348,6 +348,73 @@ class ConnectionsClient @Inject constructor(
     }
 
     /**
+     * Notify the inviter's vault that we accepted the connection.
+     *
+     * Creates a temporary NATS connection using the invitation credentials
+     * and publishes an acceptance notification to the inviter's message space.
+     * This is fire-and-forget - failure is non-fatal.
+     *
+     * @param natsCredentials NATS .creds file content from QR code
+     * @param natsEndpoint NATS server endpoint
+     * @param peerOwnerSpace Inviter's owner space ID
+     * @param connectionId Connection ID from the invitation
+     * @param accepterGuid Our user GUID
+     * @param e2ePublicKey Our E2E public key (hex) from storeCredentials response
+     */
+    suspend fun notifyPeerOfAcceptance(
+        natsCredentials: String,
+        natsEndpoint: String,
+        peerOwnerSpace: String,
+        connectionId: String,
+        accepterGuid: String,
+        e2ePublicKey: String? = null,
+        accepterProfile: Map<String, String>? = null
+    ) = withContext(Dispatchers.IO) {
+        val client = AndroidNatsClient()
+        try {
+            val (jwt, seed) = parseCredsFile(natsCredentials)
+                ?: return@withContext
+
+            Log.d(TAG, "Connecting to peer NATS to send acceptance notification")
+
+            val connectResult = client.connect(natsEndpoint, jwt, seed)
+            if (connectResult.isFailure) {
+                Log.w(TAG, "Failed to connect for acceptance notification: ${connectResult.exceptionOrNull()?.message}")
+                return@withContext
+            }
+
+            // Build acceptance notification
+            val notification = JsonObject().apply {
+                addProperty("connection_id", connectionId)
+                addProperty("peer_guid", accepterGuid)
+                e2ePublicKey?.let { addProperty("e2e_public_key", it) }
+            }
+
+            // Include our profile so the inviter can see our name/email
+            if (accepterProfile != null && accepterProfile.isNotEmpty()) {
+                val profileObj = JsonObject()
+                accepterProfile.forEach { (key, value) -> profileObj.addProperty(key, value) }
+                notification.add("peer_profile", profileObj)
+            }
+
+            // Publish to the inviter's connection notification topic
+            val subject = "MessageSpace.$peerOwnerSpace.forOwner.connection.accepted"
+            val payload = gson.toJson(notification).toByteArray()
+
+            client.publish(subject, payload)
+            Log.i(TAG, "Published acceptance notification to $subject")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to send acceptance notification: ${e.message}")
+        } finally {
+            try {
+                client.disconnect()
+            } catch (e: Exception) {
+                Log.w(TAG, "Error disconnecting notification client: ${e.message}")
+            }
+        }
+    }
+
+    /**
      * Parse a NATS .creds file into JWT and seed components.
      *
      * Format:
@@ -430,7 +497,8 @@ class ConnectionsClient @Inject constructor(
             direction = json.get("direction")?.asString ?: json.get("credentials_type")?.asString ?: "unknown",
             createdAt = json.get("created_at")?.asString ?: "",
             expiresAt = json.get("expires_at")?.asString,
-            lastRotatedAt = json.get("last_rotated_at")?.asString
+            lastRotatedAt = json.get("last_rotated_at")?.asString,
+            e2ePublicKey = json.get("e2e_public_key")?.asString
         )
     }
 
@@ -466,7 +534,8 @@ data class ConnectionRecord(
     val direction: String,     // "outbound" (we invited) or "inbound" (they invited us)
     val createdAt: String,
     val expiresAt: String?,
-    val lastRotatedAt: String?
+    val lastRotatedAt: String?,
+    val e2ePublicKey: String? = null
 )
 
 /**

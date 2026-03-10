@@ -9,6 +9,7 @@ import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.network.Connection
 import com.vettid.app.core.network.ConnectionStatus
 import com.vettid.app.core.storage.CredentialStore
+import com.vettid.app.core.storage.PersonalDataStore
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -32,7 +33,8 @@ class ScanInvitationViewModel @Inject constructor(
     private val natsAutoConnector: NatsAutoConnector,
     private val ownerSpaceClient: OwnerSpaceClient,
     private val connectionCryptoManager: ConnectionCryptoManager,
-    private val credentialStore: CredentialStore
+    private val credentialStore: CredentialStore,
+    private val personalDataStore: PersonalDataStore
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<ScanInvitationState>(ScanInvitationState.Scanning)
@@ -76,8 +78,31 @@ class ScanInvitationViewModel @Inject constructor(
     /**
      * Fetch the peer's published profile via NATS using invitation credentials,
      * then transition to Preview state with real profile data.
+     *
+     * Uses profile embedded in QR data first (fastest), then tries NATS fetch
+     * for the most up-to-date profile, falling back to QR label.
      */
     private suspend fun fetchAndShowPeerProfile(invitation: ConnectionInvitationData) {
+        // Use profile from QR data if available (embedded by inviter)
+        val qrDisplayName = invitation.inviterProfile?.let { profile ->
+            listOfNotNull(
+                profile["_system_first_name"],
+                profile["_system_last_name"]
+            ).joinToString(" ").trim().ifEmpty { null }
+        }
+        val qrEmail = invitation.inviterProfile?.get("_system_email")
+
+        if (qrDisplayName != null) {
+            android.util.Log.d("ScanInvitationVM", "Using profile from QR data: $qrDisplayName")
+            _state.value = ScanInvitationState.Preview(
+                creatorName = qrDisplayName,
+                creatorAvatarUrl = null,
+                creatorEmail = qrEmail
+            )
+            return
+        }
+
+        // Fall back to NATS profile fetch
         val endpoint = invitation.natsEndpoint
             ?: credentialStore.getNatsEndpoint()
 
@@ -221,6 +246,36 @@ class ScanInvitationViewModel @Inject constructor(
                 peerMessageSpaceId = invitation.messageSpaceId
             ).fold(
                 onSuccess = { connectionRecord ->
+                    // Notify the inviter's vault that we accepted the connection
+                    // This is fire-and-forget - don't block on failure
+                    val endpoint = invitation.natsEndpoint
+                        ?: credentialStore.getNatsEndpoint()
+                    if (endpoint != null && invitation.natsCredentials.isNotEmpty()) {
+                        try {
+                            // Get our profile to send to the inviter
+                            val systemData = personalDataStore.getSystemFields()
+                            val ourProfile = mutableMapOf<String, String>()
+                            if (systemData != null) {
+                                ourProfile["_system_first_name"] = systemData.firstName
+                                ourProfile["_system_last_name"] = systemData.lastName
+                                ourProfile["_system_email"] = systemData.email
+                            }
+
+                            connectionsClient.notifyPeerOfAcceptance(
+                                natsCredentials = invitation.natsCredentials,
+                                natsEndpoint = endpoint,
+                                peerOwnerSpace = invitation.ownerSpaceId,
+                                connectionId = invitation.connectionId,
+                                accepterGuid = credentialStore.getUserGuid() ?: "",
+                                e2ePublicKey = connectionRecord.e2ePublicKey,
+                                accepterProfile = ourProfile
+                            )
+                            android.util.Log.i("ScanInvitationVM", "Sent acceptance notification to inviter")
+                        } catch (e: Exception) {
+                            android.util.Log.w("ScanInvitationVM", "Failed to notify inviter (non-fatal): ${e.message}")
+                        }
+                    }
+
                     val connection = Connection(
                         connectionId = connectionRecord.connectionId,
                         peerGuid = connectionRecord.peerGuid,
@@ -329,6 +384,15 @@ class ScanInvitationViewModel @Inject constructor(
 
             val natsEndpoint = json.get("nats_endpoint")?.asString
 
+            // Parse inviter_profile if embedded in QR data
+            val inviterProfile = json.getAsJsonObject("inviter_profile")?.let { profileObj ->
+                val profile = mutableMapOf<String, String>()
+                profileObj.entrySet().forEach { entry ->
+                    entry.value?.asString?.let { profile[entry.key] = it }
+                }
+                profile.toMap()
+            }
+
             ConnectionInvitationData(
                 connectionId = connectionId,
                 peerGuid = peerGuid,
@@ -336,7 +400,8 @@ class ScanInvitationViewModel @Inject constructor(
                 natsCredentials = natsCredentials,
                 ownerSpaceId = ownerSpaceId,
                 messageSpaceId = messageSpaceId,
-                natsEndpoint = natsEndpoint
+                natsEndpoint = natsEndpoint,
+                inviterProfile = inviterProfile
             )
         } catch (e: Exception) {
             null
@@ -389,7 +454,8 @@ private data class ConnectionInvitationData(
     val natsCredentials: String,
     val ownerSpaceId: String,
     val messageSpaceId: String,
-    val natsEndpoint: String? = null
+    val natsEndpoint: String? = null,
+    val inviterProfile: Map<String, String>? = null
 )
 
 // MARK: - State Types

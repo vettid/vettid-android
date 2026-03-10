@@ -81,8 +81,8 @@ class CreateInvitationViewModel @Inject constructor(
             // Generate key pair for this invitation
             pendingKeyPair = connectionCryptoManager.generateConnectionKeyPair()
 
-            // Get user's display name from profile (or use a default)
-            val displayName = credentialStore.getUserGuid()?.take(8) ?: "VettID User"
+            // Send empty label - vault will use profile name (first + last name)
+            val displayName = ""
 
             val expirationMinutes = _expirationMinutes.value
             Log.d(TAG, "Creating invitation via NATS, expires in $expirationMinutes minutes")
@@ -155,6 +155,12 @@ class CreateInvitationViewModel @Inject constructor(
      * Build QR code data from invitation.
      */
     private fun buildQrCodeData(invitation: com.vettid.app.core.nats.ConnectionInvitation): String {
+        // Use profile name as label (vault returns profile-based name)
+        val profileName = listOfNotNull(
+            invitation.inviterProfile["_system_first_name"],
+            invitation.inviterProfile["_system_last_name"]
+        ).joinToString(" ").trim().ifEmpty { invitation.label }
+
         val data = mutableMapOf<String, Any>(
             "type" to "vettid_connection",
             "version" to 1,
@@ -163,8 +169,12 @@ class CreateInvitationViewModel @Inject constructor(
             "owner_space" to invitation.ownerSpaceId,
             "message_space" to invitation.messageSpaceId,
             "expires_at" to invitation.expiresAt,
-            "label" to invitation.label
+            "label" to profileName
         )
+        // Include inviter profile so scanner can show name without NATS fetch
+        if (invitation.inviterProfile.isNotEmpty()) {
+            data["inviter_profile"] = invitation.inviterProfile
+        }
         // Include NATS endpoint so the scanner can connect to read profile
         credentialStore.getNatsEndpoint()?.let { endpoint ->
             data["nats_endpoint"] = endpoint
