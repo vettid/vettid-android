@@ -70,6 +70,10 @@ class OwnerSpaceClient @Inject constructor(
     /** Flow of connection revocation notices from peers. */
     val connectionRevocations: SharedFlow<ConnectionRevoked> = _connectionRevocations.asSharedFlow()
 
+    private val _connectionAcceptances = MutableSharedFlow<ConnectionPeerAccepted>(extraBufferCapacity = 16)
+    /** Flow of connection acceptance notifications (peer accepted our invitation). */
+    val connectionAcceptances: SharedFlow<ConnectionPeerAccepted> = _connectionAcceptances.asSharedFlow()
+
     private val _callEvents = MutableSharedFlow<CallSignalEvent>(extraBufferCapacity = 64)
     /** Flow of call signaling events (vault-routed). */
     val callEvents: SharedFlow<CallSignalEvent> = _callEvents.asSharedFlow()
@@ -1365,6 +1369,10 @@ class OwnerSpaceClient @Inject constructor(
                     handleConnectionRevoked(message)
                     return
                 }
+                message.subject.contains(".forApp.connection.peer-accepted") -> {
+                    handleConnectionPeerAccepted(message)
+                    return
+                }
                 // Call events (vault-routed signaling)
                 message.subject.contains(".forApp.call.") -> {
                     handleCallEvent(message)
@@ -1615,6 +1623,38 @@ class OwnerSpaceClient @Inject constructor(
             _connectionRevocations.tryEmit(connectionRevoked)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to parse connection-revoked event", e)
+        }
+    }
+
+    /**
+     * Handle connection acceptance notification from vault.
+     * Emitted when a peer accepts our connection invitation.
+     */
+    private fun handleConnectionPeerAccepted(message: NatsMessage) {
+        try {
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+
+            val peerProfile = if (payload.has("peer_profile") && !payload.isNull("peer_profile")) {
+                val profileObj = payload.getJSONObject("peer_profile")
+                val map = mutableMapOf<String, String>()
+                profileObj.keys().forEach { key ->
+                    profileObj.optString(key)?.let { map[key] = it }
+                }
+                map.toMap()
+            } else null
+
+            val accepted = ConnectionPeerAccepted(
+                connectionId = payload.getString("connection_id"),
+                peerGuid = payload.optString("peer_guid", ""),
+                peerAlias = if (payload.has("peer_alias")) payload.getString("peer_alias") else null,
+                peerProfile = peerProfile
+            )
+
+            android.util.Log.i(TAG, "Connection peer accepted: ${accepted.connectionId} by ${accepted.peerAlias}")
+            _connectionAcceptances.tryEmit(accepted)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse connection.peer-accepted event", e)
         }
     }
 

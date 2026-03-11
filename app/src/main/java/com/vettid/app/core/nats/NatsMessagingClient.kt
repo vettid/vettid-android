@@ -264,3 +264,18 @@ data class ConnectionRevoked(
     /** ISO 8601 timestamp */
     val revokedAt: String
 )
+
+/**
+ * Notification that a peer accepted a connection invitation.
+ * Sent by the vault when it processes a peer's acceptance via MessageSpace.
+ */
+data class ConnectionPeerAccepted(
+    /** The connection ID that was accepted */
+    val connectionId: String,
+    /** Peer's user GUID */
+    val peerGuid: String,
+    /** Peer's display name */
+    val peerAlias: String?,
+    /** Peer's profile data (first name, last name, email, etc.) */
+    val peerProfile: Map<String, String>?
+)

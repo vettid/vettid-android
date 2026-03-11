@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.nats.ConnectionsClient
 import com.vettid.app.core.nats.NatsAutoConnector
+import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.network.Connection
 import com.vettid.app.core.network.ConnectionStatus
 import com.vettid.app.core.network.ConnectionWithLastMessage
@@ -34,6 +35,7 @@ import javax.inject.Inject
 class ConnectionsViewModel @Inject constructor(
     private val connectionsClient: ConnectionsClient,
     private val natsAutoConnector: NatsAutoConnector,
+    private val ownerSpaceClient: OwnerSpaceClient,
     private val networkMonitor: NetworkMonitor,
     private val offlineQueueManager: OfflineQueueManager
 ) : ViewModel() {
@@ -91,6 +93,18 @@ class ConnectionsViewModel @Inject constructor(
                 if (online && offlineQueueManager.hasPendingOperations()) {
                     processPendingOperations()
                 }
+            }
+        }
+
+        // Auto-refresh when a peer accepts our connection invitation
+        viewModelScope.launch {
+            ownerSpaceClient.connectionAcceptances.collect { accepted ->
+                android.util.Log.i("ConnectionsVM",
+                    "Peer accepted connection: ${accepted.connectionId} (${accepted.peerAlias})")
+                loadConnections()
+                _effects.emit(ConnectionsEffect.ShowSnackbar(
+                    "${accepted.peerAlias ?: "Someone"} accepted your connection invitation"
+                ))
             }
         }
     }
