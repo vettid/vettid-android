@@ -153,33 +153,41 @@ class CreateInvitationViewModel @Inject constructor(
 
     /**
      * Build QR code data from invitation.
+     * Minimal payload: just enough for the scanner to connect to our message space
+     * and fetch our profile via NATS. No profile data embedded.
      */
     private fun buildQrCodeData(invitation: com.vettid.app.core.nats.ConnectionInvitation): String {
-        // Use profile name as label (vault returns profile-based name)
-        val profileName = listOfNotNull(
-            invitation.inviterProfile["_system_first_name"],
-            invitation.inviterProfile["_system_last_name"]
-        ).joinToString(" ").trim().ifEmpty { invitation.label }
+        // Strip .creds boilerplate — just extract JWT and seed for compact QR
+        val compactCreds = compactNatsCreds(invitation.natsCredentials)
 
         val data = mutableMapOf<String, Any>(
             "type" to "vettid_connection",
-            "version" to 1,
             "connection_id" to invitation.connectionId,
-            "credentials" to invitation.natsCredentials,
+            "jwt" to compactCreds.first,
+            "seed" to compactCreds.second,
             "owner_space" to invitation.ownerSpaceId,
             "message_space" to invitation.messageSpaceId,
-            "expires_at" to invitation.expiresAt,
-            "label" to profileName
+            "expires_at" to invitation.expiresAt
         )
-        // Include inviter profile so scanner can show name without NATS fetch
-        if (invitation.inviterProfile.isNotEmpty()) {
-            data["inviter_profile"] = invitation.inviterProfile
-        }
-        // Include NATS endpoint so the scanner can connect to read profile
+        // Include NATS endpoint so the scanner can connect to fetch profile
         credentialStore.getNatsEndpoint()?.let { endpoint ->
             data["nats_endpoint"] = endpoint
         }
         return Gson().toJson(data)
+    }
+
+    /**
+     * Extract JWT and seed from NATS .creds file format, stripping boilerplate.
+     * Returns Pair(jwt, seed).
+     */
+    private fun compactNatsCreds(creds: String): Pair<String, String> {
+        val jwtRegex = Regex("-----BEGIN NATS USER JWT-----\\s*(.+?)\\s*------END NATS USER JWT------", RegexOption.DOT_MATCHES_ALL)
+        val seedRegex = Regex("-----BEGIN USER NKEY SEED-----\\s*(.+?)\\s*------END USER NKEY SEED------", RegexOption.DOT_MATCHES_ALL)
+
+        val jwt = jwtRegex.find(creds)?.groupValues?.get(1)?.trim() ?: creds
+        val seed = seedRegex.find(creds)?.groupValues?.get(1)?.trim() ?: ""
+
+        return Pair(jwt, seed)
     }
 
     /**
@@ -189,7 +197,7 @@ class CreateInvitationViewModel @Inject constructor(
         // Encode invitation data in base64 for the deep link
         val qrData = buildQrCodeData(invitation)
         val encoded = Base64.encodeToString(qrData.toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP)
-        return "https://vettid.com/connect?data=$encoded"
+        return "vettid://connect?data=$encoded"
     }
 
     /**

@@ -78,36 +78,13 @@ class ScanInvitationViewModel @Inject constructor(
     /**
      * Fetch the peer's published profile via NATS using invitation credentials,
      * then transition to Preview state with real profile data.
-     *
-     * Uses profile embedded in QR data first (fastest), then tries NATS fetch
-     * for the most up-to-date profile, falling back to QR label.
      */
     private suspend fun fetchAndShowPeerProfile(invitation: ConnectionInvitationData) {
-        // Use profile from QR data if available (embedded by inviter)
-        val qrDisplayName = invitation.inviterProfile?.let { profile ->
-            listOfNotNull(
-                profile["_system_first_name"],
-                profile["_system_last_name"]
-            ).joinToString(" ").trim().ifEmpty { null }
-        }
-        val qrEmail = invitation.inviterProfile?.get("_system_email")
-
-        if (qrDisplayName != null) {
-            android.util.Log.d("ScanInvitationVM", "Using profile from QR data: $qrDisplayName")
-            _state.value = ScanInvitationState.Preview(
-                creatorName = qrDisplayName,
-                creatorAvatarUrl = null,
-                creatorEmail = qrEmail
-            )
-            return
-        }
-
-        // Fall back to NATS profile fetch
         val endpoint = invitation.natsEndpoint
             ?: credentialStore.getNatsEndpoint()
 
         if (endpoint == null || invitation.natsCredentials.isEmpty()) {
-            android.util.Log.w("ScanInvitationVM", "No NATS endpoint or credentials, using label only")
+            android.util.Log.w("ScanInvitationVM", "No NATS endpoint or credentials")
             _state.value = ScanInvitationState.Preview(
                 creatorName = invitation.label,
                 creatorAvatarUrl = null
@@ -137,7 +114,6 @@ class ScanInvitationViewModel @Inject constructor(
             },
             onFailure = { error ->
                 android.util.Log.w("ScanInvitationVM", "Failed to fetch peer profile: ${error.message}")
-                // Fall back to label from QR data
                 _state.value = ScanInvitationState.Preview(
                     creatorName = invitation.label,
                     creatorAvatarUrl = null
@@ -340,68 +316,51 @@ class ScanInvitationViewModel @Inject constructor(
 
     /**
      * Parse invitation data from QR code.
-     * Expected format: JSON with connection credentials
      *
-     * QR data format from create-invite:
+     * Format:
      * {
      *   "type": "vettid_connection",
-     *   "version": 1,
      *   "connection_id": "conn-xxx",
-     *   "credentials": "-----BEGIN NATS USER JWT-----\n...",
-     *   "owner_space": "OwnerSpace.userXXX",
-     *   "message_space": "MessageSpace.userXXX.forOwner.>",
-     *   "expires_at": "2026-01-31T..."
+     *   "jwt": "<NATS user JWT>",
+     *   "seed": "<NATS user seed>",
+     *   "owner_space": "...",
+     *   "message_space": "...",
+     *   "expires_at": "...",
+     *   "nats_endpoint": "..."
      * }
+     *
+     * Scanner uses the JWT+seed to connect to inviter's message space
+     * and fetch their published profile via NATS.
      */
     private fun parseInvitationData(data: String): ConnectionInvitationData? {
         return try {
-            // Try parsing as JSON
             val json = gson.fromJson(data, JsonObject::class.java)
 
-            // Validate type
             val type = json.get("type")?.asString
             if (type != null && type != "vettid_connection") {
                 return null
             }
 
-            // Parse with flexible field names (backend may use different conventions)
             val connectionId = json.get("connection_id")?.asString ?: return null
-            val natsCredentials = json.get("credentials")?.asString
-                ?: json.get("nats_credentials")?.asString ?: ""
-            val ownerSpaceId = json.get("owner_space")?.asString
-                ?: json.get("owner_space_id")?.asString ?: ""
-            val messageSpaceId = json.get("message_space")?.asString
-                ?: json.get("message_space_id")?.asString
-                ?: json.get("message_space_topic")?.asString ?: return null
-
-            // Derive peer_guid from message_space if not provided
-            // Format: MessageSpace.userXXX.forOwner.> -> userXXX
-            val peerGuid = json.get("peer_guid")?.asString
-                ?: extractUserGuidFromMessageSpace(messageSpaceId)
-                ?: "unknown"
-
-            val label = json.get("label")?.asString ?: peerGuid.take(8)
-
+            val jwt = json.get("jwt")?.asString ?: return null
+            val seed = json.get("seed")?.asString ?: return null
+            val ownerSpaceId = json.get("owner_space")?.asString ?: return null
+            val messageSpaceId = json.get("message_space")?.asString ?: return null
             val natsEndpoint = json.get("nats_endpoint")?.asString
 
-            // Parse inviter_profile if embedded in QR data
-            val inviterProfile = json.getAsJsonObject("inviter_profile")?.let { profileObj ->
-                val profile = mutableMapOf<String, String>()
-                profileObj.entrySet().forEach { entry ->
-                    entry.value?.asString?.let { profile[entry.key] = it }
-                }
-                profile.toMap()
-            }
+            // Reconstruct .creds format for NATS client
+            val natsCredentials = "-----BEGIN NATS USER JWT-----\n$jwt\n------END NATS USER JWT------\n\n-----BEGIN USER NKEY SEED-----\n$seed\n------END USER NKEY SEED------\n"
+
+            val peerGuid = extractUserGuidFromMessageSpace(messageSpaceId) ?: "unknown"
 
             ConnectionInvitationData(
                 connectionId = connectionId,
                 peerGuid = peerGuid,
-                label = label,
+                label = peerGuid.take(8),
                 natsCredentials = natsCredentials,
                 ownerSpaceId = ownerSpaceId,
                 messageSpaceId = messageSpaceId,
-                natsEndpoint = natsEndpoint,
-                inviterProfile = inviterProfile
+                natsEndpoint = natsEndpoint
             )
         } catch (e: Exception) {
             null
@@ -454,8 +413,7 @@ private data class ConnectionInvitationData(
     val natsCredentials: String,
     val ownerSpaceId: String,
     val messageSpaceId: String,
-    val natsEndpoint: String? = null,
-    val inviterProfile: Map<String, String>? = null
+    val natsEndpoint: String? = null
 )
 
 // MARK: - State Types

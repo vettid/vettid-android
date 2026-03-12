@@ -1752,7 +1752,7 @@ private fun BusinessCardView(
     val lastName = profile.items.find { it.name == "Last Name" }?.value ?: ""
     val fullName = listOf(firstName, lastName).filter { it.isNotBlank() }.joinToString(" ")
     val email = profile.items.find { it.name == "Email" }?.value
-    val phone = profile.items.find { it.name.contains("Phone", ignoreCase = true) }?.value
+    val phone = profile.items.find { it.category == DataCategory.CONTACT && it.name.contains("Phone", ignoreCase = true) }?.value
 
     // Group all fields by category, sorted by sortOrder
     // Note: First Name and Last Name are shown in header, Email shown in Contact section,
@@ -2045,7 +2045,7 @@ private fun BusinessCardView(
                     // Skip items already shown in Contact card or Public Keys section
                     val filteredItems = categoryItems.filter { item ->
                         val isEmailShown = email != null && item.name == "Email" && item.value == email
-                        val isPhoneShown = phone != null && item.name.contains("Phone", ignoreCase = true) && item.value == phone
+                        val isPhoneShown = phone != null && item.category == DataCategory.CONTACT && item.name.contains("Phone", ignoreCase = true) && item.value == phone
                         val isKeyShown = item.type == DataType.KEY
                         !isEmailShown && !isPhoneShown && !isKeyShown
                     }

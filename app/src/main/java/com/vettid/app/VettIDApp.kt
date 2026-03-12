@@ -450,6 +450,7 @@ fun VettIDApp(
                     // Wizard handles full flow including verification and personal data
                     // Set authenticated and go to main
                     appViewModel.refreshCredentialStatus()
+                    appViewModel.refreshUserProfile()
                     appViewModel.setAuthenticated(true)
                     navController.navigate(Screen.Main.route) {
                         popUpTo(Screen.EnrollmentWizard.route) { inclusive = true }
@@ -471,6 +472,7 @@ fun VettIDApp(
             PinUnlockScreen(
                 onUnlocked = { offlineMode ->
                     appViewModel.setOfflineMode(offlineMode)
+                    appViewModel.refreshUserProfile()
                     appViewModel.setAuthenticated(true)
                 }
             )
