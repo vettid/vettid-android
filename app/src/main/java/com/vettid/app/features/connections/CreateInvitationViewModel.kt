@@ -153,41 +153,33 @@ class CreateInvitationViewModel @Inject constructor(
 
     /**
      * Build QR code data from invitation.
-     * Minimal payload: just enough for the scanner to connect to our message space
-     * and fetch our profile via NATS. No profile data embedded.
+     * When invite_code is available (broker published), QR is just code + endpoint (~65 chars).
+     * The scanner's vault resolves the code to get full credentials.
      */
     private fun buildQrCodeData(invitation: com.vettid.app.core.nats.ConnectionInvitation): String {
-        // Strip .creds boilerplate — just extract JWT and seed for compact QR
-        val compactCreds = compactNatsCreds(invitation.natsCredentials)
+        if (invitation.inviteCode.isNotEmpty()) {
+            // Compact broker format — scanner resolves via vault
+            val data = mutableMapOf<String, Any>(
+                "c" to invitation.inviteCode
+            )
+            credentialStore.getNatsEndpoint()?.let { endpoint ->
+                data["e"] = endpoint
+            }
+            return Gson().toJson(data)
+        }
 
+        // Fallback: inline credentials (if broker publish failed)
         val data = mutableMapOf<String, Any>(
             "type" to "vettid_connection",
             "connection_id" to invitation.connectionId,
-            "jwt" to compactCreds.first,
-            "seed" to compactCreds.second,
             "owner_space" to invitation.ownerSpaceId,
             "message_space" to invitation.messageSpaceId,
             "expires_at" to invitation.expiresAt
         )
-        // Include NATS endpoint so the scanner can connect to fetch profile
         credentialStore.getNatsEndpoint()?.let { endpoint ->
             data["nats_endpoint"] = endpoint
         }
         return Gson().toJson(data)
-    }
-
-    /**
-     * Extract JWT and seed from NATS .creds file format, stripping boilerplate.
-     * Returns Pair(jwt, seed).
-     */
-    private fun compactNatsCreds(creds: String): Pair<String, String> {
-        val jwtRegex = Regex("-----BEGIN NATS USER JWT-----\\s*(.+?)\\s*------END NATS USER JWT------", RegexOption.DOT_MATCHES_ALL)
-        val seedRegex = Regex("-----BEGIN USER NKEY SEED-----\\s*(.+?)\\s*------END USER NKEY SEED------", RegexOption.DOT_MATCHES_ALL)
-
-        val jwt = jwtRegex.find(creds)?.groupValues?.get(1)?.trim() ?: creds
-        val seed = seedRegex.find(creds)?.groupValues?.get(1)?.trim() ?: ""
-
-        return Pair(jwt, seed)
     }
 
     /**

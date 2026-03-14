@@ -56,23 +56,62 @@ class ScanInvitationViewModel @Inject constructor(
      */
     fun onQrCodeScanned(data: String) {
         android.util.Log.d("ScanInvitationVM", "onQrCodeScanned called with data length: ${data.length}")
-        // Parse the invitation from QR data
-        val invitation = parseInvitationData(data)
-        if (invitation != null) {
-            android.util.Log.d("ScanInvitationVM", "Parsed invitation: connectionId=${invitation.connectionId}, peerGuid=${invitation.peerGuid}")
-            parsedInvitation = invitation
-            // Show loading state while fetching peer profile from their vault
-            _state.value = ScanInvitationState.Processing
 
-            viewModelScope.launch {
-                fetchAndShowPeerProfile(invitation)
-            }
-        } else {
-            android.util.Log.e("ScanInvitationVM", "Failed to parse invitation data")
-            viewModelScope.launch {
+        viewModelScope.launch {
+            try {
+                val json = gson.fromJson(data, JsonObject::class.java)
+
+                // Compact broker format: {"c":"<invite_code>","e":"<nats_endpoint>"}
+                if (json.has("c")) {
+                    val inviteCode = json.get("c").asString
+                    android.util.Log.d("ScanInvitationVM", "Compact QR detected, resolving invite code: $inviteCode")
+                    _state.value = ScanInvitationState.Processing
+                    resolveInviteCode(inviteCode)
+                    return@launch
+                }
+
+                // Full inline format (fallback)
+                val invitation = parseInvitationData(data)
+                if (invitation != null) {
+                    android.util.Log.d("ScanInvitationVM", "Parsed invitation: connectionId=${invitation.connectionId}")
+                    parsedInvitation = invitation
+                    _state.value = ScanInvitationState.Processing
+                    fetchAndShowPeerProfile(invitation)
+                } else {
+                    _effects.emit(ScanInvitationEffect.ShowError("Invalid QR code"))
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("ScanInvitationVM", "Failed to parse QR data: ${e.message}")
                 _effects.emit(ScanInvitationEffect.ShowError("Invalid QR code"))
             }
         }
+    }
+
+    /**
+     * Resolve an invite code by asking our vault to fetch from the NATS broker.
+     */
+    private suspend fun resolveInviteCode(inviteCode: String) {
+        connectionsClient.resolveInvite(inviteCode).fold(
+            onSuccess = { invitation ->
+                android.util.Log.d("ScanInvitationVM", "Invite resolved: connectionId=${invitation.connectionId}")
+                parsedInvitation = ConnectionInvitationData(
+                    connectionId = invitation.connectionId,
+                    peerGuid = extractUserGuidFromMessageSpace(invitation.messageSpaceId) ?: "unknown",
+                    label = invitation.label.ifEmpty { "Unknown" },
+                    natsCredentials = invitation.natsCredentials,
+                    ownerSpaceId = invitation.ownerSpaceId,
+                    messageSpaceId = invitation.messageSpaceId,
+                    natsEndpoint = credentialStore.getNatsEndpoint()
+                )
+                fetchAndShowPeerProfile(parsedInvitation!!)
+            },
+            onFailure = { error ->
+                android.util.Log.e("ScanInvitationVM", "Failed to resolve invite: ${error.message}")
+                _state.value = ScanInvitationState.Error(
+                    message = error.message ?: "Failed to resolve invitation"
+                )
+            }
+        )
     }
 
     /**

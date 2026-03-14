@@ -74,7 +74,8 @@ class ConnectionsClient @Inject constructor(
                     ?: result.get("message_space_id")?.asString
                     ?: result.get("message_space_topic")?.asString ?: "",
                 expiresAt = result.get("expires_at")?.asString ?: "",
-                inviterProfile = inviterProfile
+                inviterProfile = inviterProfile,
+                inviteCode = result.get("invite_code")?.asString ?: ""
             )
         }
     }
@@ -502,10 +503,50 @@ class ConnectionsClient @Inject constructor(
         )
     }
 
+    /**
+     * Resolve an invite code via the vault's broker.
+     * The vault fetches the invitation data from the NATS INVITATIONS stream.
+     */
+    suspend fun resolveInvite(inviteCode: String): Result<ResolvedInvitation> {
+        val payload = JsonObject().apply {
+            addProperty("invite_code", inviteCode)
+        }
+
+        return sendAndAwait("connection.resolve-invite", payload) { result ->
+            val jwt = result.get("jwt")?.asString ?: ""
+            val seed = result.get("seed")?.asString ?: ""
+            // Reconstruct .creds format
+            val natsCredentials = if (jwt.isNotEmpty() && seed.isNotEmpty()) {
+                "-----BEGIN NATS USER JWT-----\n$jwt\n------END NATS USER JWT------\n\n-----BEGIN USER NKEY SEED-----\n$seed\n------END USER NKEY SEED------\n"
+            } else ""
+
+            ResolvedInvitation(
+                connectionId = result.get("connection_id")?.asString ?: "",
+                natsCredentials = natsCredentials,
+                ownerSpaceId = result.get("owner_space")?.asString ?: "",
+                messageSpaceId = result.get("message_space")?.asString ?: "",
+                expiresAt = result.get("expires_at")?.asString ?: "",
+                label = result.get("label")?.asString ?: ""
+            )
+        }
+    }
+
     companion object {
         private const val TAG = "ConnectionsClient"
     }
 }
+
+/**
+ * Resolved invitation data from the broker.
+ */
+data class ResolvedInvitation(
+    val connectionId: String,
+    val natsCredentials: String,
+    val ownerSpaceId: String,
+    val messageSpaceId: String,
+    val expiresAt: String,
+    val label: String
+)
 
 // MARK: - Data Models
 
@@ -520,7 +561,8 @@ data class ConnectionInvitation(
     val ownerSpaceId: String,
     val messageSpaceId: String,
     val expiresAt: String,
-    val inviterProfile: Map<String, String> = emptyMap()
+    val inviterProfile: Map<String, String> = emptyMap(),
+    val inviteCode: String = ""   // Short code for QR broker lookup
 )
 
 /**
