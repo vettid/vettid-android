@@ -188,20 +188,16 @@ class ScanInvitationViewModel @Inject constructor(
         viewModelScope.launch {
             _state.value = ScanInvitationState.Processing
 
-            // Wait for NATS connection AND E2E session (with timeout)
-            // E2E session is required because store-credentials needs full permissions
-            android.util.Log.d("ScanInvitationVM", "Waiting for NATS connection and E2E session...")
+            // Wait for NATS connection (with timeout)
+            android.util.Log.d("ScanInvitationVM", "Waiting for NATS connection...")
 
             var attempts = 0
-            val maxAttempts = 120 // 60 seconds (500ms each)
+            val maxAttempts = 30 // 15 seconds (500ms each)
             while (attempts < maxAttempts) {
-                val connected = natsAutoConnector.isConnected()
-                val e2eEnabled = ownerSpaceClient.isE2EEnabled
-                android.util.Log.d("ScanInvitationVM", "Check #$attempts: connected=$connected, e2e=$e2eEnabled")
-
-                if (connected && e2eEnabled) {
+                if (natsAutoConnector.isConnected()) {
                     break
                 }
+                android.util.Log.d("ScanInvitationVM", "Check #$attempts: connected=false")
                 kotlinx.coroutines.delay(500)
                 attempts++
             }
@@ -210,14 +206,6 @@ class ScanInvitationViewModel @Inject constructor(
                 android.util.Log.e("ScanInvitationVM", "NATS connection timeout")
                 _state.value = ScanInvitationState.Error(
                     message = "Not connected to vault - please try again"
-                )
-                return@launch
-            }
-
-            if (!ownerSpaceClient.isE2EEnabled) {
-                android.util.Log.e("ScanInvitationVM", "E2E session not established (timeout)")
-                _state.value = ScanInvitationState.Error(
-                    message = "Secure session not established - please try again"
                 )
                 return@launch
             }

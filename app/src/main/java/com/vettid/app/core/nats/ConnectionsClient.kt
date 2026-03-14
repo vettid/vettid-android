@@ -428,9 +428,9 @@ class ConnectionsClient @Inject constructor(
      * ------END USER NKEY SEED------
      */
     private fun parseCredsFile(creds: String): Pair<String, String>? {
-        val jwtMatch = Regex("-----BEGIN NATS USER JWT-----\\s*([^\\s-]+)\\s*------END NATS USER JWT------")
+        val jwtMatch = Regex("-----BEGIN NATS USER JWT-----\\s*(.+?)\\s*------END NATS USER JWT------", RegexOption.DOT_MATCHES_ALL)
             .find(creds) ?: return null
-        val seedMatch = Regex("-----BEGIN USER NKEY SEED-----\\s*([^\\s-]+)\\s*------END USER NKEY SEED------")
+        val seedMatch = Regex("-----BEGIN USER NKEY SEED-----\\s*(.+?)\\s*------END USER NKEY SEED------", RegexOption.DOT_MATCHES_ALL)
             .find(creds) ?: return null
         return Pair(jwtMatch.groupValues[1].trim(), seedMatch.groupValues[1].trim())
     }
