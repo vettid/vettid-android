@@ -148,7 +148,8 @@ class ScanInvitationViewModel @Inject constructor(
                 _state.value = ScanInvitationState.Preview(
                     creatorName = displayName,
                     creatorAvatarUrl = null,
-                    creatorEmail = profile["_system_email"]
+                    creatorEmail = profile["_system_email"],
+                    creatorPhoto = profile["photo"]
                 )
             },
             onFailure = { error ->
@@ -249,35 +250,9 @@ class ScanInvitationViewModel @Inject constructor(
                 peerMessageSpaceId = invitation.messageSpaceId
             ).fold(
                 onSuccess = { connectionRecord ->
-                    // Notify the inviter's vault that we accepted the connection
-                    // This is fire-and-forget - don't block on failure
-                    val endpoint = invitation.natsEndpoint
-                        ?: credentialStore.getNatsEndpoint()
-                    if (endpoint != null && invitation.natsCredentials.isNotEmpty()) {
-                        try {
-                            // Get our profile to send to the inviter
-                            val systemData = personalDataStore.getSystemFields()
-                            val ourProfile = mutableMapOf<String, String>()
-                            if (systemData != null) {
-                                ourProfile["_system_first_name"] = systemData.firstName
-                                ourProfile["_system_last_name"] = systemData.lastName
-                                ourProfile["_system_email"] = systemData.email
-                            }
-
-                            connectionsClient.notifyPeerOfAcceptance(
-                                natsCredentials = invitation.natsCredentials,
-                                natsEndpoint = endpoint,
-                                peerOwnerSpace = invitation.ownerSpaceId,
-                                connectionId = invitation.connectionId,
-                                accepterGuid = credentialStore.getUserGuid() ?: "",
-                                e2ePublicKey = connectionRecord.e2ePublicKey,
-                                accepterProfile = ourProfile
-                            )
-                            android.util.Log.i("ScanInvitationVM", "Sent acceptance notification to inviter")
-                        } catch (e: Exception) {
-                            android.util.Log.w("ScanInvitationVM", "Failed to notify inviter (non-fatal): ${e.message}")
-                        }
-                    }
+                    // Acceptance notification is handled by the vault in HandleStoreCredentials
+                    // (published via parent's backend account to peer's MessageSpace)
+                    android.util.Log.i("ScanInvitationVM", "Connection stored, vault will notify peer")
 
                     val connection = Connection(
                         connectionId = connectionRecord.connectionId,
@@ -457,6 +432,7 @@ sealed class ScanInvitationState {
         val creatorName: String,
         val creatorAvatarUrl: String?,
         val creatorEmail: String? = null,
+        val creatorPhoto: String? = null,
         val isEmailVerified: Boolean = false,
         val publicKeyFingerprint: String? = null,
         val trustLevel: String = "New",

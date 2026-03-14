@@ -318,12 +318,13 @@ class ConnectionsClient @Inject constructor(
             val profileJson = gson.fromJson(profileData, JsonObject::class.java)
             val profile = mutableMapOf<String, String>()
 
-            // Extract top-level fields (first_name, last_name, email)
+            // Extract top-level fields (first_name, last_name, email, photo)
             profileJson.get("first_name")?.asString?.let { profile["_system_first_name"] = it }
             profileJson.get("last_name")?.asString?.let { profile["_system_last_name"] = it }
             profileJson.get("email")?.asString?.let { profile["_system_email"] = it }
             profileJson.get("user_guid")?.asString?.let { profile["user_guid"] = it }
             profileJson.get("public_key")?.asString?.let { profile["public_key"] = it }
+            profileJson.get("photo")?.takeIf { !it.isJsonNull }?.asString?.let { profile["photo"] = it }
 
             // Extract fields map (key -> {display_name, value, field_type})
             profileJson.getAsJsonObject("fields")?.entrySet()?.forEach { entry ->

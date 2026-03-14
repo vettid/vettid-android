@@ -300,6 +300,7 @@ private fun EnhancedPreviewContent(
                 displayName = state.creatorName,
                 email = state.creatorEmail,
                 avatarUrl = state.creatorAvatarUrl,
+                photoBase64 = state.creatorPhoto,
                 publicKeyFingerprint = state.publicKeyFingerprint,
                 isEmailVerified = state.isEmailVerified,
                 trustLevel = state.trustLevel,
