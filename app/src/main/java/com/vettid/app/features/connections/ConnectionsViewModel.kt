@@ -209,12 +209,11 @@ class ConnectionsViewModel @Inject constructor(
                     applyFilterAndSort()
 
                     // Check for outbound pending connections that need review
-                    // Skip connections already reviewed or responded to this session
+                    // Only show if status is "pending" (not "active" or other)
                     for (record in listResult.items) {
                         if (record.status.equals("pending", ignoreCase = true) &&
                             record.direction.equals("outbound", ignoreCase = true) &&
-                            record.connectionId !in reviewedConnectionIds &&
-                            !respondedConnectionIds.contains(record.connectionId)) {
+                            record.connectionId !in respondedConnectionIds) {
                             _effects.emit(ConnectionsEffect.ReviewConnection(
                                 connectionId = record.connectionId,
                                 peerAlias = record.label,
@@ -282,15 +281,16 @@ class ConnectionsViewModel @Inject constructor(
      */
     fun onConnectionClick(connectionId: String) {
         viewModelScope.launch {
-            // Check if this is a pending connection (needs review)
+            // Check if this is a pending outbound connection (inviter needs to review)
             val record = allConnections.find { it.connection.connectionId == connectionId }
-            if (record != null &&
-                record.connection.status == ConnectionStatus.PENDING) {
-                // Find the full record with profile data from the last list response
-                val fullRecord = lastListResult?.find { it.connectionId == connectionId }
+            val fullRecord = lastListResult?.find { it.connectionId == connectionId }
+            val isOutboundPending = record?.connection?.status == ConnectionStatus.PENDING &&
+                fullRecord?.direction?.equals("outbound", ignoreCase = true) == true &&
+                connectionId !in respondedConnectionIds
+            if (isOutboundPending) {
                 _effects.emit(ConnectionsEffect.ReviewConnection(
                     connectionId = connectionId,
-                    peerAlias = record.connection.peerDisplayName,
+                    peerAlias = record!!.connection.peerDisplayName,
                     peerProfile = null,
                     peerProfileData = fullRecord?.peerProfile
                 ))

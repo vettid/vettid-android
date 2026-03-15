@@ -255,7 +255,6 @@ class ScanInvitationViewModel @Inject constructor(
             ).fold(
                 onSuccess = { connectionRecord ->
                     // Acceptance notification is handled by the vault in HandleStoreCredentials
-                    // (published via parent's backend account to peer's MessageSpace)
                     android.util.Log.i("ScanInvitationVM", "Connection stored, vault will notify peer")
 
                     val connection = Connection(
@@ -263,12 +262,14 @@ class ScanInvitationViewModel @Inject constructor(
                         peerGuid = connectionRecord.peerGuid,
                         peerDisplayName = connectionRecord.label,
                         peerAvatarUrl = null,
-                        status = ConnectionStatus.ACTIVE,
+                        status = ConnectionStatus.PENDING,
                         createdAt = System.currentTimeMillis(),
                         lastMessageAt = null,
                         unreadCount = 0
                     )
                     _state.value = ScanInvitationState.Success(connection = connection)
+                    // Auto-navigate back after brief display
+                    _effects.emit(ScanInvitationEffect.NavigateToConnection(connectionRecord.connectionId))
                 },
                 onFailure = { error ->
                     _state.value = ScanInvitationState.Error(
