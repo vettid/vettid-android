@@ -70,12 +70,7 @@ fun ScanInvitationScreen(
         }
     }
 
-    // Handle success navigation
-    LaunchedEffect(state) {
-        if (state is ScanInvitationState.Success) {
-            onConnectionEstablished((state as ScanInvitationState.Success).connection.connectionId)
-        }
-    }
+    // Success navigation handled by ScanInvitationEffect.NavigateToConnection
 
     Scaffold(
         topBar = {

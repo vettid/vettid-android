@@ -645,10 +645,9 @@ fun VettIDApp(
             }
             ScanInvitationScreen(
                 initialData = data,
-                onConnectionEstablished = { connectionId ->
-                    navController.navigate(Screen.ConnectionDetail.createRoute(connectionId)) {
-                        popUpTo(Screen.Connections.route)
-                    }
+                onConnectionEstablished = { _ ->
+                    // Navigate back to connections list after successful scan
+                    navController.popBackStack(Screen.Connections.route, false)
                 },
                 onBack = { navController.popBackStack() }
             )
