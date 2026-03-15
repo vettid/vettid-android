@@ -239,19 +239,26 @@ class AndroidNatsClient {
 
             val response = readProtocolLine(newInput)
             if (response == "PONG") {
-                // Success - atomically swap in the new connection
+                // Close old connection FIRST to stop old reader thread.
+                // Closing the input stream causes the blocking read() to throw,
+                // which exits the reader loop cleanly.
                 val oldSocket = socket
                 val oldInput = inputStream
                 val oldOutput = outputStream
 
+                // Close old streams to kill old reader before swapping
+                try { oldInput?.close() } catch (e: Exception) { }
+                try { oldOutput?.close() } catch (e: Exception) { }
+                try { oldSocket?.close() } catch (e: Exception) { }
+
+                // Cancel old reader job and wait for it to finish
+                readerJob?.cancel()
+                pingJob?.cancel()
+
+                // Now swap in the new connection
                 socket = newSocket
                 inputStream = newInput
                 outputStream = newOutput
-
-                // Close old connection (if any)
-                try { oldOutput?.close() } catch (e: Exception) { }
-                try { oldInput?.close() } catch (e: Exception) { }
-                try { oldSocket?.close() } catch (e: Exception) { }
 
                 connected.set(true)
 
@@ -749,11 +756,7 @@ class AndroidNatsClient {
                         }
                     }
 
-                    // Cancel old jobs if any
-                    readerJob?.cancel()
-                    pingJob?.cancel()
-
-                    // Start a new reader job (the old one exited due to read error)
+                    // Start a new reader job (old one was cancelled in connectInternal)
                     readerJob = scope?.launch {
                         readMessages()
                     }
