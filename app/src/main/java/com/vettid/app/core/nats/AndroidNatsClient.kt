@@ -544,6 +544,15 @@ class AndroidNatsClient {
                     }
                     else -> {
                         Log.d(TAG, "Unknown message: $line")
+                        // Try to consume any payload bytes to prevent stream desync.
+                        // Garbled MSG/HMSG lines still have payload bytes following.
+                        val lastPart = line.trimEnd().split(" ").lastOrNull()
+                        val trailingBytes = lastPart?.toIntOrNull()
+                        if (trailingBytes != null && trailingBytes > 0 && trailingBytes < 1_000_000) {
+                            Log.w(TAG, "Consuming $trailingBytes bytes from garbled message to resync")
+                            readExactBytes(trailingBytes)
+                            readProtocolLine() // consume trailing CRLF
+                        }
                     }
                 }
             }
