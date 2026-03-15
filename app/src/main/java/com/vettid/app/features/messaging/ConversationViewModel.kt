@@ -111,15 +111,48 @@ class ConversationViewModel @Inject constructor(
     }
 
     /**
-     * Load message history.
-     * Note: Messages are stored locally and synced via vault JetStream.
-     * For now, start with empty state - messages arrive via real-time subscription.
+     * Load message history from the vault.
      */
     fun loadMessages() {
         viewModelScope.launch {
-            // TODO: Load from local storage or vault JetStream
-            // For now, start with empty state
-            _state.value = ConversationState.Empty
+            messagingClient.listMessages(connectionId).fold(
+                onSuccess = { storedMessages ->
+                    if (storedMessages.isEmpty()) {
+                        _state.value = ConversationState.Empty
+                    } else {
+                        val messages = storedMessages.map { stored ->
+                            val sentAtMillis = try {
+                                java.time.Instant.parse(stored.sentAt).toEpochMilli()
+                            } catch (e: Exception) { System.currentTimeMillis() }
+
+                            Message(
+                                messageId = stored.messageId,
+                                connectionId = stored.connectionId,
+                                senderId = stored.senderGuid,
+                                content = stored.content,
+                                contentType = when (stored.contentType) {
+                                    "image" -> MessageContentType.IMAGE
+                                    "file" -> MessageContentType.FILE
+                                    else -> MessageContentType.TEXT
+                                },
+                                sentAt = sentAtMillis,
+                                receivedAt = null,
+                                readAt = null,
+                                status = when (stored.status) {
+                                    "sent" -> MessageStatus.SENT
+                                    "delivered" -> MessageStatus.DELIVERED
+                                    "read" -> MessageStatus.READ
+                                    else -> MessageStatus.SENT
+                                }
+                            )
+                        }
+                        _state.value = ConversationState.Loaded(messages = messages, hasMore = false)
+                    }
+                },
+                onFailure = {
+                    _state.value = ConversationState.Empty
+                }
+            )
         }
     }
 

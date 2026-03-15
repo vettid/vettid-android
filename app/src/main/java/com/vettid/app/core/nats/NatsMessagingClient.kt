@@ -37,6 +37,37 @@ class NatsMessagingClient @Inject constructor(
      * @param contentType Message content type (default: "text")
      * @return Sent message info with server-assigned ID and timestamp
      */
+    /**
+     * Load message history for a connection from the vault.
+     */
+    suspend fun listMessages(
+        connectionId: String,
+        limit: Int = 50
+    ): Result<List<StoredMessage>> {
+        val payload = JsonObject().apply {
+            addProperty("connection_id", connectionId)
+            addProperty("limit", limit)
+        }
+
+        return sendAndAwait("message.list", payload) { result ->
+            val messages = mutableListOf<StoredMessage>()
+            result.getAsJsonArray("messages")?.forEach { element ->
+                val msg = element.asJsonObject
+                messages.add(StoredMessage(
+                    messageId = msg.get("message_id")?.asString ?: "",
+                    connectionId = connectionId,
+                    direction = msg.get("direction")?.asString ?: "",
+                    content = msg.get("content")?.asString ?: "",
+                    contentType = msg.get("content_type")?.asString ?: "text",
+                    status = msg.get("status")?.asString ?: "",
+                    sentAt = msg.get("sent_at")?.asString ?: "",
+                    senderGuid = msg.get("sender_guid")?.asString ?: ""
+                ))
+            }
+            messages.toList()
+        }
+    }
+
     suspend fun sendMessage(
         connectionId: String,
         content: String? = null,
@@ -207,6 +238,20 @@ data class SentMessage(
     val timestamp: String,
     /** Message status (sent, delivered, etc.) */
     val status: String
+)
+
+/**
+ * Stored message from vault (decrypted).
+ */
+data class StoredMessage(
+    val messageId: String,
+    val connectionId: String,
+    val direction: String,
+    val content: String,
+    val contentType: String,
+    val status: String,
+    val sentAt: String,
+    val senderGuid: String
 )
 
 /**
