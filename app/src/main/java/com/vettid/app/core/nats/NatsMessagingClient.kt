@@ -3,9 +3,6 @@ package com.vettid.app.core.nats
 import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonObject
-import kotlinx.coroutines.flow.filter
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -156,37 +153,42 @@ class NatsMessagingClient @Inject constructor(
         timeoutMs: Long = DEFAULT_TIMEOUT_MS,
         transform: (JsonObject) -> T
     ): Result<T> {
-        val sendResult = ownerSpaceClient.sendToVault(messageType, payload)
-        if (sendResult.isFailure) {
-            return Result.failure(sendResult.exceptionOrNull() ?: NatsException("Send failed"))
-        }
+        Log.d(TAG, "Sending $messageType request via OwnerSpaceClient")
 
-        val requestId = sendResult.getOrThrow()
+        return try {
+            val response = ownerSpaceClient.sendAndAwaitResponse(messageType, payload, timeoutMs)
 
-        // Wait for matching response
-        val response = withTimeoutOrNull(timeoutMs) {
-            ownerSpaceClient.vaultResponses
-                .filter { it.requestId == requestId }
-                .first()
-        }
-
-        return when (response) {
-            null -> Result.failure(NatsException("Request timed out"))
-            is VaultResponse.HandlerResult -> {
-                if (response.success && response.result != null) {
-                    try {
-                        Result.success(transform(response.result))
-                    } catch (e: Exception) {
-                        Result.failure(NatsException("Failed to parse response: ${e.message}"))
+            when (response) {
+                is VaultResponse.HandlerResult -> {
+                    if (response.success && response.result != null) {
+                        try {
+                            Result.success(transform(response.result))
+                        } catch (e: Exception) {
+                            Result.failure(NatsException("Failed to parse response: ${e.message}"))
+                        }
+                    } else {
+                        val errorMsg = response.error ?: "Unknown error"
+                        Log.e(TAG, "$messageType error: $errorMsg")
+                        Result.failure(NatsException(errorMsg))
                     }
-                } else {
-                    Result.failure(NatsException(response.error ?: "Handler failed"))
+                }
+                is VaultResponse.Error -> {
+                    Log.e(TAG, "$messageType error: ${response.code} - ${response.message}")
+                    Result.failure(NatsException(response.message))
+                }
+                null -> {
+                    Log.e(TAG, "$messageType request timed out")
+                    Result.failure(NatsException("Request timed out"))
+                }
+                else -> {
+                    Result.failure(NatsException("Unexpected response type"))
                 }
             }
-            is VaultResponse.Error -> {
-                Result.failure(NatsException("${response.code}: ${response.message}"))
-            }
-            else -> Result.failure(NatsException("Unexpected response type"))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "$messageType failed: ${e.message}", e)
+            Result.failure(e)
         }
     }
 }
