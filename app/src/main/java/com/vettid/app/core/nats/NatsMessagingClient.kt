@@ -42,14 +42,22 @@ class NatsMessagingClient @Inject constructor(
      */
     suspend fun sendMessage(
         connectionId: String,
-        encryptedContent: String,
-        nonce: String,
+        content: String? = null,
+        encryptedContent: String? = null,
+        nonce: String? = null,
         contentType: String = "text"
     ): Result<SentMessage> {
         val payload = JsonObject().apply {
             addProperty("connection_id", connectionId)
-            addProperty("encrypted_content", encryptedContent)
-            addProperty("nonce", nonce)
+            if (content != null) {
+                addProperty("content", content)
+            }
+            if (encryptedContent != null) {
+                addProperty("encrypted_content", encryptedContent)
+            }
+            if (nonce != null) {
+                addProperty("nonce", nonce)
+            }
             addProperty("content_type", contentType)
         }
 

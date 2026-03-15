@@ -203,18 +203,10 @@ class ConversationViewModel @Inject constructor(
 
             _isSending.value = true
 
-            // Encrypt the message
-            val encrypted = connectionCryptoManager.encryptMessageForConnection(text, connectionId)
-            if (encrypted == null) {
-                _effects.emit(ConversationEffect.ShowError("Encryption key not found"))
-                _isSending.value = false
-                return@launch
-            }
-
+            // Send plaintext to vault — vault encrypts with the connection's shared secret
             messagingClient.sendMessage(
                 connectionId = connectionId,
-                encryptedContent = android.util.Base64.encodeToString(encrypted.ciphertext, android.util.Base64.NO_WRAP),
-                nonce = android.util.Base64.encodeToString(encrypted.nonce, android.util.Base64.NO_WRAP),
+                content = text,
                 contentType = "text"
             ).fold(
                 onSuccess = { sentMessage ->
