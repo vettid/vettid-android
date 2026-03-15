@@ -74,6 +74,10 @@ class OwnerSpaceClient @Inject constructor(
     /** Flow of connection acceptance notifications (peer accepted our invitation). */
     val connectionAcceptances: SharedFlow<ConnectionPeerAccepted> = _connectionAcceptances.asSharedFlow()
 
+    private val _connectionStatusUpdates = MutableSharedFlow<ConnectionStatusUpdate>(extraBufferCapacity = 16)
+    /** Flow of connection status updates (activated, key-exchanged, rejected). */
+    val connectionStatusUpdates: SharedFlow<ConnectionStatusUpdate> = _connectionStatusUpdates.asSharedFlow()
+
     private val _callEvents = MutableSharedFlow<CallSignalEvent>(extraBufferCapacity = 64)
     /** Flow of call signaling events (vault-routed). */
     val callEvents: SharedFlow<CallSignalEvent> = _callEvents.asSharedFlow()
@@ -1373,6 +1377,12 @@ class OwnerSpaceClient @Inject constructor(
                     handleConnectionPeerAccepted(message)
                     return
                 }
+                message.subject.contains(".forApp.connection.activated") ||
+                message.subject.contains(".forApp.connection.key-exchanged") ||
+                message.subject.contains(".forApp.connection.rejected") -> {
+                    handleConnectionStatusUpdate(message)
+                    return
+                }
                 // Call events (vault-routed signaling)
                 message.subject.contains(".forApp.call.") -> {
                     handleCallEvent(message)
@@ -1655,6 +1665,25 @@ class OwnerSpaceClient @Inject constructor(
             _connectionAcceptances.tryEmit(accepted)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to parse connection.peer-accepted event", e)
+        }
+    }
+
+    private fun handleConnectionStatusUpdate(message: NatsMessage) {
+        try {
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+
+            val update = ConnectionStatusUpdate(
+                type = payload.optString("type", ""),
+                connectionId = payload.optString("connection_id", ""),
+                peerGuid = payload.optString("peer_guid", null),
+                peerAlias = payload.optString("peer_alias", null)
+            )
+
+            android.util.Log.i(TAG, "Connection status update: ${update.type} for ${update.connectionId}")
+            _connectionStatusUpdates.tryEmit(update)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse connection status update", e)
         }
     }
 

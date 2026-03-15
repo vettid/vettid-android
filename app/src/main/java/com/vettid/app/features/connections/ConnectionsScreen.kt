@@ -38,6 +38,7 @@ fun ConnectionsScreen(
     val searchQuery by viewModel.searchQuery.collectAsState()
 
     var showFabMenu by remember { mutableStateOf(false) }
+    var reviewState by remember { mutableStateOf<ConnectionsEffect.ReviewConnection?>(null) }
 
     // Handle effects
     LaunchedEffect(Unit) {
@@ -58,8 +59,60 @@ fun ConnectionsScreen(
                 is ConnectionsEffect.ShowSnackbar -> {
                     // TODO: Show snackbar with effect.message
                 }
+                is ConnectionsEffect.ReviewConnection -> {
+                    reviewState = effect
+                }
             }
         }
+    }
+
+    // Show review dialog when a peer accepts our invitation
+    reviewState?.let { review ->
+        val peerName = review.peerAlias
+        val peerEmail = review.peerProfile?.get("_system_email")
+
+        AlertDialog(
+            onDismissRequest = { /* Don't dismiss without action */ },
+            title = { Text("Connection Request") },
+            text = {
+                Column {
+                    Text(
+                        text = "$peerName wants to connect with you.",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    peerEmail?.let {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Accept this connection to exchange encrypted messages.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    viewModel.respondToConnection(review.connectionId, true)
+                    reviewState = null
+                }) {
+                    Text("Accept")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = {
+                    viewModel.respondToConnection(review.connectionId, false)
+                    reviewState = null
+                }) {
+                    Text("Decline")
+                }
+            }
+        )
     }
 
     Scaffold(

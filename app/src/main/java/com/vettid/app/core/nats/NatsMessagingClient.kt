@@ -279,3 +279,11 @@ data class ConnectionPeerAccepted(
     /** Peer's profile data (first name, last name, email, etc.) */
     val peerProfile: Map<String, String>?
 )
+
+/** Connection status update from vault (activated, key-exchanged, rejected). */
+data class ConnectionStatusUpdate(
+    val type: String,
+    val connectionId: String,
+    val peerGuid: String?,
+    val peerAlias: String?
+)

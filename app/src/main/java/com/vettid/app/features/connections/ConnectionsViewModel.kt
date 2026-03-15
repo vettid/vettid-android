@@ -96,15 +96,33 @@ class ConnectionsViewModel @Inject constructor(
             }
         }
 
-        // Auto-refresh when a peer accepts our connection invitation
+        // When a peer accepts our invitation, prompt inviter to review
         viewModelScope.launch {
             ownerSpaceClient.connectionAcceptances.collect { accepted ->
                 android.util.Log.i("ConnectionsVM",
                     "Peer accepted connection: ${accepted.connectionId} (${accepted.peerAlias})")
                 loadConnections()
-                _effects.emit(ConnectionsEffect.ShowSnackbar(
-                    "${accepted.peerAlias ?: "Someone"} accepted your connection invitation"
+                _effects.emit(ConnectionsEffect.ReviewConnection(
+                    connectionId = accepted.connectionId,
+                    peerAlias = accepted.peerAlias ?: "Unknown",
+                    peerProfile = accepted.peerProfile
                 ))
+            }
+        }
+
+        // Handle connection status updates (activated, rejected, key-exchanged)
+        viewModelScope.launch {
+            ownerSpaceClient.connectionStatusUpdates.collect { update ->
+                android.util.Log.i("ConnectionsVM", "Connection status update: ${update.type}")
+                loadConnections()
+                when (update.type) {
+                    "connection.activated" -> _effects.emit(ConnectionsEffect.ShowSnackbar(
+                        "Connection with ${update.peerAlias ?: "peer"} is now active"
+                    ))
+                    "connection.rejected" -> _effects.emit(ConnectionsEffect.ShowSnackbar(
+                        "${update.peerAlias ?: "Peer"} declined the connection"
+                    ))
+                }
             }
         }
     }
@@ -251,6 +269,28 @@ class ConnectionsViewModel @Inject constructor(
     fun onCreateInvitation() {
         viewModelScope.launch {
             _effects.emit(ConnectionsEffect.NavigateToCreateInvitation)
+        }
+    }
+
+    /**
+     * Accept or reject a pending connection after reviewing peer's profile.
+     */
+    fun respondToConnection(connectionId: String, accept: Boolean) {
+        viewModelScope.launch {
+            val response = if (accept) "accept" else "reject"
+            connectionsClient.respond(connectionId, response).fold(
+                onSuccess = {
+                    loadConnections()
+                    _effects.emit(ConnectionsEffect.ShowSnackbar(
+                        if (accept) "Connection accepted" else "Connection declined"
+                    ))
+                },
+                onFailure = { error ->
+                    _effects.emit(ConnectionsEffect.ShowSnackbar(
+                        "Failed to respond: ${error.message}"
+                    ))
+                }
+            )
         }
     }
 
@@ -574,4 +614,9 @@ sealed class ConnectionsEffect {
     object NavigateToScanInvitation : ConnectionsEffect()
     object ShowFilterSheet : ConnectionsEffect()
     data class ShowSnackbar(val message: String) : ConnectionsEffect()
+    data class ReviewConnection(
+        val connectionId: String,
+        val peerAlias: String,
+        val peerProfile: Map<String, String>?
+    ) : ConnectionsEffect()
 }

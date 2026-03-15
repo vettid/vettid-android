@@ -505,6 +505,21 @@ class ConnectionsClient @Inject constructor(
     }
 
     /**
+     * Respond to a pending connection (accept or reject).
+     * Used by the inviter to review and approve/decline the peer.
+     */
+    suspend fun respond(connectionId: String, response: String): Result<ConnectionRecord> {
+        val payload = JsonObject().apply {
+            addProperty("connection_id", connectionId)
+            addProperty("response", response)
+        }
+
+        return sendAndAwait("connection.respond", payload) { result ->
+            parseConnectionRecord(result)
+        }
+    }
+
+    /**
      * Resolve an invite code via the vault's broker.
      * The vault fetches the invitation data from the NATS INVITATIONS stream.
      */
