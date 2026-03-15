@@ -131,12 +131,9 @@ class ConversationViewModel @Inject constructor(
             ownerSpaceClient.incomingMessages
                 .filter { it.connectionId == connectionId }
                 .collect { incomingMessage ->
-                    // Decrypt the message content
-                    val decrypted = connectionCryptoManager.decryptMessageFromConnection(
-                        ciphertext = connectionCryptoManager.decodeBase64(incomingMessage.encryptedContent),
-                        nonce = connectionCryptoManager.decodeBase64(incomingMessage.nonce),
-                        connectionId = connectionId
-                    )
+                    // Use decrypted content from vault (vault decrypts with shared secret)
+                    val decrypted = incomingMessage.content
+                        ?: incomingMessage.encryptedContent // fallback to encrypted if no plaintext
 
                     val sentAtMillis = try {
                         java.time.Instant.parse(incomingMessage.sentAt).toEpochMilli()

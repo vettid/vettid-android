@@ -1555,8 +1555,9 @@ class OwnerSpaceClient @Inject constructor(
                 messageId = payload.getString("message_id"),
                 connectionId = payload.getString("connection_id"),
                 senderGuid = payload.getString("sender_guid"),
-                encryptedContent = payload.getString("encrypted_content"),
-                nonce = payload.getString("nonce"),
+                content = payload.optString("content", null),
+                encryptedContent = payload.optString("encrypted_content", ""),
+                nonce = payload.optString("nonce", ""),
                 contentType = payload.optString("content_type", "text"),
                 sentAt = payload.optString("sent_at", "")
             )

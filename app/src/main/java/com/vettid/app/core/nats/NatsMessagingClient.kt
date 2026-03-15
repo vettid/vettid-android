@@ -219,7 +219,9 @@ data class IncomingMessage(
     val connectionId: String,
     /** Sender's user GUID */
     val senderGuid: String,
-    /** Base64-encoded encrypted content */
+    /** Decrypted plaintext content (vault decrypts with shared secret) */
+    val content: String? = null,
+    /** Base64-encoded encrypted content (fallback) */
     val encryptedContent: String,
     /** Base64-encoded nonce */
     val nonce: String,
