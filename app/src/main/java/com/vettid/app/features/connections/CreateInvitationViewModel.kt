@@ -8,6 +8,7 @@ import com.google.gson.Gson
 import com.vettid.app.core.crypto.ConnectionCryptoManager
 import com.vettid.app.core.crypto.ConnectionKeyPair
 import com.vettid.app.core.nats.ConnectionsClient
+import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.security.SecureClipboard
 import com.vettid.app.core.storage.CredentialStore
 import com.vettid.app.features.feed.FeedRepository
@@ -32,7 +33,8 @@ class CreateInvitationViewModel @Inject constructor(
     private val connectionCryptoManager: ConnectionCryptoManager,
     private val credentialStore: CredentialStore,
     private val secureClipboard: SecureClipboard,
-    private val feedRepository: FeedRepository
+    private val feedRepository: FeedRepository,
+    private val ownerSpaceClient: OwnerSpaceClient
 ) : ViewModel() {
 
     companion object {
@@ -137,6 +139,18 @@ class CreateInvitationViewModel @Inject constructor(
                     // Trigger feed sync so the new invitation appears in activity feed
                     viewModelScope.launch {
                         feedRepository.sync()
+                    }
+
+                    // Listen for peer acceptance while QR is showing
+                    viewModelScope.launch {
+                        ownerSpaceClient.connectionAcceptances.collect { accepted ->
+                            if (accepted.connectionId == natsInvitation.connectionId) {
+                                _state.value = CreateInvitationState.PeerAccepted(
+                                    peerAlias = accepted.peerAlias ?: "Someone",
+                                    connectionId = accepted.connectionId
+                                )
+                            }
+                        }
                     }
                 },
                 onFailure = { error ->
@@ -330,6 +344,11 @@ sealed class CreateInvitationState {
     data class Created(
         val invitation: VaultConnectionInvitation,
         val expiresInSeconds: Int
+    ) : CreateInvitationState()
+
+    data class PeerAccepted(
+        val peerAlias: String,
+        val connectionId: String
     ) : CreateInvitationState()
 
     object Expired : CreateInvitationState()

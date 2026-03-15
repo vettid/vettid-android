@@ -11,6 +11,7 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Timer
@@ -99,6 +100,13 @@ fun CreateInvitationScreen(
                         expiresInSeconds = currentState.expiresInSeconds,
                         onShare = { viewModel.shareInvitation() },
                         onCopyLink = { viewModel.copyLink() }
+                    )
+                }
+
+                is CreateInvitationState.PeerAccepted -> {
+                    PeerAcceptedContent(
+                        peerAlias = currentState.peerAlias,
+                        onContinue = onBack
                     )
                 }
 
@@ -310,6 +318,42 @@ private fun ExpirationTimer(expiresInSeconds: Int) {
             style = MaterialTheme.typography.titleMedium,
             color = if (isLow) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
         )
+    }
+}
+
+@Composable
+private fun PeerAcceptedContent(
+    peerAlias: String,
+    onContinue: () -> Unit
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Spacer(modifier = Modifier.height(48.dp))
+        Icon(
+            imageVector = Icons.Default.CheckCircle,
+            contentDescription = null,
+            modifier = Modifier.size(72.dp),
+            tint = MaterialTheme.colorScheme.primary
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = "$peerAlias scanned your invitation",
+            style = MaterialTheme.typography.headlineSmall,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "You'll be prompted to review their profile.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
+        Spacer(modifier = Modifier.height(32.dp))
+        Button(onClick = onContinue) {
+            Text("Continue")
+        }
     }
 }
 
