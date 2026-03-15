@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -134,7 +135,7 @@ private fun IdleContent(
         textAlign = TextAlign.Center
     )
 
-    Spacer(modifier = Modifier.height(32.dp))
+    Spacer(modifier = Modifier.height(24.dp))
 
     Card(
         modifier = Modifier.fillMaxWidth()
@@ -142,41 +143,27 @@ private fun IdleContent(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp)
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            Icon(
+                imageVector = Icons.Default.Timer,
+                contentDescription = null,
+                modifier = Modifier.size(32.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Invitation expires in:",
+                text = "Valid for 5 minutes",
                 style = MaterialTheme.typography.titleMedium
             )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Column(Modifier.selectableGroup()) {
-                expirationOptions.forEach { option ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                            .selectable(
-                                selected = expirationMinutes == option.minutes,
-                                onClick = { onExpirationSelected(option.minutes) },
-                                role = Role.RadioButton
-                            )
-                            .padding(horizontal = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(
-                            selected = expirationMinutes == option.minutes,
-                            onClick = null
-                        )
-                        Text(
-                            text = option.label,
-                            style = MaterialTheme.typography.bodyLarge,
-                            modifier = Modifier.padding(start = 16.dp)
-                        )
-                    }
-                }
-            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "The other person must scan the QR code within 5 minutes",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
         }
     }
 

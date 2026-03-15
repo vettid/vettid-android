@@ -74,6 +74,7 @@ fun ConversationScreen(
     Scaffold(
         topBar = {
             TopAppBar(
+                scrollBehavior = TopAppBarDefaults.pinnedScrollBehavior(),
                 title = {
                     Row(
                         modifier = Modifier.clickable { viewModel.onConnectionDetailClick() },

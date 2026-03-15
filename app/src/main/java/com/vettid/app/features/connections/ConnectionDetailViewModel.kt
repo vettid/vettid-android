@@ -51,9 +51,15 @@ class ConnectionDetailViewModel @Inject constructor(
     private val _effects = MutableSharedFlow<ConnectionDetailEffect>()
     val effects: SharedFlow<ConnectionDetailEffect> = _effects.asSharedFlow()
 
-    // Peer profile photo (base64)
+    // Peer profile data from cached vault storage
     private val _peerPhoto = MutableStateFlow<String?>(null)
     val peerPhoto: StateFlow<String?> = _peerPhoto.asStateFlow()
+
+    private val _peerEmail = MutableStateFlow<String?>(null)
+    val peerEmail: StateFlow<String?> = _peerEmail.asStateFlow()
+
+    private val _peerFields = MutableStateFlow<Map<String, Map<String, String>>?>(null)
+    val peerFields: StateFlow<Map<String, Map<String, String>>?> = _peerFields.asStateFlow()
 
     // Dialog state for revoke confirmation
     private val _showRevokeDialog = MutableStateFlow(false)
@@ -105,6 +111,8 @@ class ConnectionDetailViewModel @Inject constructor(
                             unreadCount = 0
                         )
                         _peerPhoto.value = record.peerProfile?.photo
+                        _peerEmail.value = record.peerProfile?.email
+                        _peerFields.value = record.peerProfile?.fields
                         _state.value = ConnectionDetailState.Loaded(
                             connection = connection,
                             profile = null

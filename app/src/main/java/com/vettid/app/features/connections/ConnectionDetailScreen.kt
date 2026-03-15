@@ -40,6 +40,8 @@ fun ConnectionDetailScreen(
     val state by viewModel.state.collectAsState()
     val showRevokeDialog by viewModel.showRevokeDialog.collectAsState()
     val peerPhoto by viewModel.peerPhoto.collectAsState()
+    val peerEmail by viewModel.peerEmail.collectAsState()
+    val peerFields by viewModel.peerFields.collectAsState()
 
     // Handle effects
     LaunchedEffect(Unit) {
@@ -115,6 +117,8 @@ fun ConnectionDetailScreen(
                     connection = currentState.connection,
                     profile = currentState.profile,
                     peerPhotoBase64 = peerPhoto,
+                    peerEmail = peerEmail,
+                    peerFields = peerFields,
                     isRevoking = currentState.isRevoking,
                     isRotating = currentState.isRotating,
                     isLocationSharingEnabled = currentState.isLocationSharingEnabled,
@@ -155,6 +159,8 @@ private fun LoadedContent(
     connection: Connection,
     profile: Profile?,
     peerPhotoBase64: String? = null,
+    peerEmail: String? = null,
+    peerFields: Map<String, Map<String, String>>? = null,
     isRevoking: Boolean,
     isRotating: Boolean = false,
     isLocationSharingEnabled: Boolean = false,
@@ -217,6 +223,16 @@ private fun LoadedContent(
             style = MaterialTheme.typography.headlineMedium
         )
 
+        // Email
+        peerEmail?.let { email ->
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = email,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
         // Status badge
         Spacer(modifier = Modifier.height(8.dp))
         StatusBadge(status = connection.status)
@@ -274,13 +290,53 @@ private fun LoadedContent(
             }
         }
 
+        // Peer's public profile fields
+        if (!peerFields.isNullOrEmpty()) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text(
+                        text = "PUBLIC PROFILE",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                    peerFields!!.entries.forEachIndexed { index, (_, fieldData) ->
+                        if (index > 0) {
+                            HorizontalDivider(
+                                modifier = Modifier.padding(vertical = 8.dp),
+                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                            )
+                        }
+                        val displayName = fieldData["display_name"] ?: ""
+                        val value = fieldData["value"] ?: ""
+                        if (value.isNotBlank()) {
+                            Text(
+                                text = displayName,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = value,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Profile info card
-        if (profile != null) {
-            ProfileInfoCard(profile = profile)
-            Spacer(modifier = Modifier.height(16.dp))
-        }
+        // --- Manage Connection ---
+        Text(
+            text = "MANAGE CONNECTION",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 8.dp)
+        )
 
         // Connection info card
         ConnectionInfoCard(connection = connection)
