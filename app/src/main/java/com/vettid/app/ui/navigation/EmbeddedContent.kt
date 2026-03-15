@@ -83,50 +83,36 @@ fun ConnectionsContentEmbedded(
         }
     }
 
-    // Review connection dialog
+    // Review connection dialog — show peer's full profile
     reviewState?.let { review ->
-        AlertDialog(
-            onDismissRequest = { /* Don't dismiss without action */ },
-            title = { Text("Connection Request") },
-            text = {
-                Column {
-                    Text(
-                        text = "${review.peerAlias} wants to connect with you.",
-                        style = MaterialTheme.typography.bodyLarge
-                    )
-                    review.peerProfile?.get("_system_email")?.let {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = it,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = "Accept this connection to exchange encrypted messages.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            },
-            confirmButton = {
-                Button(onClick = {
+        val profileData = review.peerProfileData
+        val peerDisplayName: String = if (profileData != null) {
+            val fullName = listOfNotNull(profileData.firstName, profileData.lastName).joinToString(" ").trim()
+            fullName.ifEmpty { review.peerAlias }
+        } else review.peerAlias
+        val peerEmail: String? = profileData?.email ?: review.peerProfile?.get("_system_email")
+        val peerPhoto: String? = profileData?.photo
+
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { /* Don't dismiss without action */ }
+        ) {
+            com.vettid.app.features.connections.components.ConnectionPreviewCard(
+                profile = com.vettid.app.features.connections.components.PeerProfilePreview(
+                    displayName = peerDisplayName,
+                    email = peerEmail,
+                    photoBase64 = peerPhoto
+                ),
+                onAccept = {
                     viewModel.respondToConnection(review.connectionId, true)
                     reviewState = null
-                }) {
-                    Text("Accept")
-                }
-            },
-            dismissButton = {
-                OutlinedButton(onClick = {
+                },
+                onDecline = {
                     viewModel.respondToConnection(review.connectionId, false)
                     reviewState = null
-                }) {
-                    Text("Decline")
-                }
-            }
-        )
+                },
+                isProcessing = false
+            )
+        }
     }
 
     // Handle agent effects

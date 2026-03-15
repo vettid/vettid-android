@@ -491,6 +491,28 @@ class ConnectionsClient @Inject constructor(
     }
 
     private fun parseConnectionRecord(json: JsonObject): ConnectionRecord {
+        val peerProfile = json.getAsJsonObject("peer_profile")?.let { profileObj ->
+            PeerProfileData(
+                firstName = profileObj.get("_system_first_name")?.asString,
+                lastName = profileObj.get("_system_last_name")?.asString,
+                email = profileObj.get("_system_email")?.asString,
+                photo = profileObj.get("photo")?.takeIf { !it.isJsonNull }?.asString,
+                fields = profileObj.getAsJsonObject("fields")?.let { fieldsObj ->
+                    val map = mutableMapOf<String, Map<String, String>>()
+                    fieldsObj.entrySet().forEach { (key, value) ->
+                        val fieldObj = value?.asJsonObject
+                        if (fieldObj != null) {
+                            map[key] = mapOf(
+                                "display_name" to (fieldObj.get("display_name")?.asString ?: key),
+                                "value" to (fieldObj.get("value")?.asString ?: "")
+                            )
+                        }
+                    }
+                    map
+                }
+            )
+        }
+
         return ConnectionRecord(
             connectionId = json.get("connection_id")?.asString ?: "",
             peerGuid = json.get("peer_guid")?.asString ?: "",
@@ -500,7 +522,8 @@ class ConnectionsClient @Inject constructor(
             createdAt = json.get("created_at")?.asString ?: "",
             expiresAt = json.get("expires_at")?.asString,
             lastRotatedAt = json.get("last_rotated_at")?.asString,
-            e2ePublicKey = json.get("e2e_public_key")?.asString
+            e2ePublicKey = json.get("e2e_public_key")?.asString,
+            peerProfile = peerProfile
         )
     }
 
@@ -588,12 +611,24 @@ data class ConnectionRecord(
     val connectionId: String,
     val peerGuid: String,
     val label: String,
-    val status: String,        // "active", "revoked", "expired"
+    val status: String,        // "active", "pending", "revoked", "expired"
     val direction: String,     // "outbound" (we invited) or "inbound" (they invited us)
     val createdAt: String,
     val expiresAt: String?,
     val lastRotatedAt: String?,
-    val e2ePublicKey: String? = null
+    val e2ePublicKey: String? = null,
+    val peerProfile: PeerProfileData? = null
+)
+
+/**
+ * Cached peer profile data from the vault.
+ */
+data class PeerProfileData(
+    val firstName: String? = null,
+    val lastName: String? = null,
+    val email: String? = null,
+    val photo: String? = null,
+    val fields: Map<String, Map<String, String>>? = null
 )
 
 /**

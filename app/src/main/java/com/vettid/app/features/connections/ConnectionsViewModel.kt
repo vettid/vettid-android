@@ -2,9 +2,11 @@ package com.vettid.app.features.connections
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.app.core.nats.ConnectionRecord
 import com.vettid.app.core.nats.ConnectionsClient
 import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.nats.OwnerSpaceClient
+import com.vettid.app.core.nats.PeerProfileData
 import com.vettid.app.core.network.Connection
 import com.vettid.app.core.network.ConnectionStatus
 import com.vettid.app.core.network.ConnectionWithLastMessage
@@ -82,6 +84,7 @@ class ConnectionsViewModel @Inject constructor(
 
     // Full list of connections (for filtering)
     private var allConnections: List<ConnectionWithLastMessage> = emptyList()
+    private var lastListResult: List<ConnectionRecord>? = null
     private var allEnhancedConnections: List<ConnectionListItem> = emptyList()
 
     init {
@@ -178,6 +181,7 @@ class ConnectionsViewModel @Inject constructor(
                     }.sortedByDescending { it.connection.createdAt }
 
                     allConnections = connectionsWithMessages
+                    lastListResult = listResult.items
 
                     // Check for stale key rotation (> 30 days)
                     val thirtyDaysAgo = Instant.now().minusSeconds(30L * 24 * 60 * 60)
@@ -210,7 +214,8 @@ class ConnectionsViewModel @Inject constructor(
                             _effects.emit(ConnectionsEffect.ReviewConnection(
                                 connectionId = record.connectionId,
                                 peerAlias = record.label,
-                                peerProfile = null
+                                peerProfile = null,
+                                peerProfileData = record.peerProfile
                             ))
                             break // Show one at a time
                         }
@@ -273,14 +278,17 @@ class ConnectionsViewModel @Inject constructor(
      */
     fun onConnectionClick(connectionId: String) {
         viewModelScope.launch {
-            // Check if this is a pending outbound connection (needs review)
+            // Check if this is a pending connection (needs review)
             val record = allConnections.find { it.connection.connectionId == connectionId }
             if (record != null &&
                 record.connection.status == ConnectionStatus.PENDING) {
+                // Find the full record with profile data from the last list response
+                val fullRecord = lastListResult?.find { it.connectionId == connectionId }
                 _effects.emit(ConnectionsEffect.ReviewConnection(
                     connectionId = connectionId,
                     peerAlias = record.connection.peerDisplayName,
-                    peerProfile = null
+                    peerProfile = null,
+                    peerProfileData = fullRecord?.peerProfile
                 ))
             } else {
                 _effects.emit(ConnectionsEffect.NavigateToConnection(connectionId))
@@ -642,6 +650,7 @@ sealed class ConnectionsEffect {
     data class ReviewConnection(
         val connectionId: String,
         val peerAlias: String,
-        val peerProfile: Map<String, String>?
+        val peerProfile: Map<String, String>?,
+        val peerProfileData: PeerProfileData? = null
     ) : ConnectionsEffect()
 }
