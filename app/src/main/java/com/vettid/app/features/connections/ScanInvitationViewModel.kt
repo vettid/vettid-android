@@ -98,7 +98,7 @@ class ScanInvitationViewModel @Inject constructor(
                 android.util.Log.d("ScanInvitationVM", "Invite resolved: connectionId=${invitation.connectionId}")
                 parsedInvitation = ConnectionInvitationData(
                     connectionId = invitation.connectionId,
-                    peerGuid = extractUserGuidFromMessageSpace(invitation.messageSpaceId) ?: "unknown",
+                    peerGuid = invitation.ownerSpaceId,
                     label = invitation.label.ifEmpty { "Unknown" },
                     natsCredentials = invitation.natsCredentials,
                     ownerSpaceId = invitation.ownerSpaceId,
@@ -376,19 +376,14 @@ class ScanInvitationViewModel @Inject constructor(
 
     /**
      * Extract user GUID from message space ID.
-     * Format: MessageSpace.userXXX.forOwner.> -> user-XXX (with hyphen)
+     * Format: MessageSpace.<guid>.forOwner.> -> <guid>
      */
     private fun extractUserGuidFromMessageSpace(messageSpace: String): String? {
-        // Pattern: MessageSpace.userXXX.forOwner.>
-        val regex = Regex("MessageSpace\\.(user[A-F0-9]+)\\.forOwner")
+        // Pattern: MessageSpace.<anything>.forOwner
+        val regex = Regex("MessageSpace\\.([^.]+)\\.forOwner")
         val match = regex.find(messageSpace)
-        return match?.groupValues?.get(1)?.let { userPart ->
-            // Insert hyphen after "user" if not present
-            if (userPart.startsWith("user") && !userPart.contains("-")) {
-                "user-${userPart.substring(4)}"
-            } else {
-                userPart
-            }
+        return match?.groupValues?.get(1)?.let { guid ->
+            guid
         }
     }
 
