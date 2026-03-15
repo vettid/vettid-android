@@ -51,6 +51,10 @@ class ConnectionDetailViewModel @Inject constructor(
     private val _effects = MutableSharedFlow<ConnectionDetailEffect>()
     val effects: SharedFlow<ConnectionDetailEffect> = _effects.asSharedFlow()
 
+    // Peer profile photo (base64)
+    private val _peerPhoto = MutableStateFlow<String?>(null)
+    val peerPhoto: StateFlow<String?> = _peerPhoto.asStateFlow()
+
     // Dialog state for revoke confirmation
     private val _showRevokeDialog = MutableStateFlow(false)
     val showRevokeDialog: StateFlow<Boolean> = _showRevokeDialog.asStateFlow()
@@ -100,7 +104,7 @@ class ConnectionDetailViewModel @Inject constructor(
                             lastMessageAt = null,
                             unreadCount = 0
                         )
-                        // Profile comes from peer via NATS, not available here
+                        _peerPhoto.value = record.peerProfile?.photo
                         _state.value = ConnectionDetailState.Loaded(
                             connection = connection,
                             profile = null

@@ -1,5 +1,8 @@
 package com.vettid.app.features.connections
 
+import android.graphics.BitmapFactory
+import android.util.Base64
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -12,6 +15,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -33,6 +39,7 @@ fun ConnectionDetailScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val showRevokeDialog by viewModel.showRevokeDialog.collectAsState()
+    val peerPhoto by viewModel.peerPhoto.collectAsState()
 
     // Handle effects
     LaunchedEffect(Unit) {
@@ -107,6 +114,7 @@ fun ConnectionDetailScreen(
                 LoadedContent(
                     connection = currentState.connection,
                     profile = currentState.profile,
+                    peerPhotoBase64 = peerPhoto,
                     isRevoking = currentState.isRevoking,
                     isRotating = currentState.isRotating,
                     isLocationSharingEnabled = currentState.isLocationSharingEnabled,
@@ -146,6 +154,7 @@ private fun LoadingContent(modifier: Modifier = Modifier) {
 private fun LoadedContent(
     connection: Connection,
     profile: Profile?,
+    peerPhotoBase64: String? = null,
     isRevoking: Boolean,
     isRotating: Boolean = false,
     isLocationSharingEnabled: Boolean = false,
@@ -158,6 +167,15 @@ private fun LoadedContent(
     onLocationSharingToggle: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val photoBitmap = remember(peerPhotoBase64) {
+        peerPhotoBase64?.let { base64 ->
+            try {
+                val bytes = Base64.decode(base64, Base64.DEFAULT)
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            } catch (e: Exception) { null }
+        }
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -165,18 +183,29 @@ private fun LoadedContent(
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Avatar
-        Surface(
-            modifier = Modifier.size(100.dp),
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.primaryContainer
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Text(
-                    text = connection.peerDisplayName.take(2).uppercase(),
-                    style = MaterialTheme.typography.displaySmall,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
+        // Avatar — photo if available, otherwise initials
+        if (photoBitmap != null) {
+            Image(
+                bitmap = photoBitmap.asImageBitmap(),
+                contentDescription = "Profile photo",
+                modifier = Modifier
+                    .size(100.dp)
+                    .clip(CircleShape),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Surface(
+                modifier = Modifier.size(100.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primaryContainer
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = connection.peerDisplayName.take(2).uppercase(),
+                        style = MaterialTheme.typography.displaySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
             }
         }
 
@@ -194,54 +223,54 @@ private fun LoadedContent(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Action buttons row: Message | Call | Video
+        // Action icons row: Message | Call | Video
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.SpaceEvenly
         ) {
-            // Message button
-            Button(
+            // Message
+            IconButton(
                 onClick = onMessageClick,
-                modifier = Modifier.weight(1f),
                 enabled = connection.status == ConnectionStatus.ACTIVE
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.Chat,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
+                    contentDescription = "Message",
+                    modifier = Modifier.size(28.dp),
+                    tint = if (connection.status == ConnectionStatus.ACTIVE)
+                        MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                 )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Message")
             }
 
-            // Call button (voice)
-            OutlinedButton(
+            // Voice call
+            IconButton(
                 onClick = onVoiceCallClick,
-                modifier = Modifier.weight(1f),
                 enabled = connection.status == ConnectionStatus.ACTIVE
             ) {
                 Icon(
                     imageVector = Icons.Default.Call,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
+                    contentDescription = "Voice Call",
+                    modifier = Modifier.size(28.dp),
+                    tint = if (connection.status == ConnectionStatus.ACTIVE)
+                        MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                 )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Call")
             }
 
-            // Video button
-            OutlinedButton(
+            // Video call
+            IconButton(
                 onClick = onVideoCallClick,
-                modifier = Modifier.weight(1f),
                 enabled = connection.status == ConnectionStatus.ACTIVE
             ) {
                 Icon(
                     imageVector = Icons.Default.Videocam,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
+                    contentDescription = "Video Call",
+                    modifier = Modifier.size(28.dp),
+                    tint = if (connection.status == ConnectionStatus.ACTIVE)
+                        MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                 )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Video")
             }
         }
 
