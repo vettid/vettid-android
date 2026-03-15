@@ -66,6 +66,7 @@ fun ConnectionsContentEmbedded(
     var showFabMenu by remember { mutableStateOf(false) }
     var typeFilter by remember { mutableStateOf(ConnectionTypeFilter.ALL) }
     var showRevokeDialog by remember { mutableStateOf<AgentConnection?>(null) }
+    var reviewState by remember { mutableStateOf<ConnectionsEffect.ReviewConnection?>(null) }
     val context = androidx.compose.ui.platform.LocalContext.current
 
     // Handle people connection effects
@@ -77,9 +78,55 @@ fun ConnectionsContentEmbedded(
                 is ConnectionsEffect.NavigateToScanInvitation -> onScanInvitation()
                 is ConnectionsEffect.ShowFilterSheet -> { /* TODO: Show filter bottom sheet */ }
                 is ConnectionsEffect.ShowSnackbar -> { /* TODO: Show snackbar */ }
-                is ConnectionsEffect.ReviewConnection -> { /* Handled in ConnectionsScreen */ }
+                is ConnectionsEffect.ReviewConnection -> { reviewState = effect }
             }
         }
+    }
+
+    // Review connection dialog
+    reviewState?.let { review ->
+        AlertDialog(
+            onDismissRequest = { /* Don't dismiss without action */ },
+            title = { Text("Connection Request") },
+            text = {
+                Column {
+                    Text(
+                        text = "${review.peerAlias} wants to connect with you.",
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                    review.peerProfile?.get("_system_email")?.let {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Accept this connection to exchange encrypted messages.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    viewModel.respondToConnection(review.connectionId, true)
+                    reviewState = null
+                }) {
+                    Text("Accept")
+                }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = {
+                    viewModel.respondToConnection(review.connectionId, false)
+                    reviewState = null
+                }) {
+                    Text("Decline")
+                }
+            }
+        )
     }
 
     // Handle agent effects

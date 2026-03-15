@@ -201,6 +201,20 @@ class ConnectionsViewModel @Inject constructor(
 
                     // Apply filter and sort
                     applyFilterAndSort()
+
+                    // Check for outbound pending connections that need review
+                    // (inviter needs to review peer's profile)
+                    for (record in listResult.items) {
+                        if (record.status.equals("pending", ignoreCase = true) &&
+                            record.direction.equals("outbound", ignoreCase = true)) {
+                            _effects.emit(ConnectionsEffect.ReviewConnection(
+                                connectionId = record.connectionId,
+                                peerAlias = record.label,
+                                peerProfile = null
+                            ))
+                            break // Show one at a time
+                        }
+                    }
                 },
                 onFailure = { error ->
                     val isConnectionIssue = error.message?.contains("not connected", ignoreCase = true) == true ||
@@ -259,7 +273,18 @@ class ConnectionsViewModel @Inject constructor(
      */
     fun onConnectionClick(connectionId: String) {
         viewModelScope.launch {
-            _effects.emit(ConnectionsEffect.NavigateToConnection(connectionId))
+            // Check if this is a pending outbound connection (needs review)
+            val record = allConnections.find { it.connection.connectionId == connectionId }
+            if (record != null &&
+                record.connection.status == ConnectionStatus.PENDING) {
+                _effects.emit(ConnectionsEffect.ReviewConnection(
+                    connectionId = connectionId,
+                    peerAlias = record.connection.peerDisplayName,
+                    peerProfile = null
+                ))
+            } else {
+                _effects.emit(ConnectionsEffect.NavigateToConnection(connectionId))
+            }
         }
     }
 
