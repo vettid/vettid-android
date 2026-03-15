@@ -65,8 +65,12 @@ class ConversationViewModel @Inject constructor(
     // All loaded messages
     private var allMessages: MutableList<Message> = mutableListOf()
 
+    // Transport key for app-vault encrypted messaging
+    private var transportKey: ByteArray? = null
+
     init {
         loadConnection()
+        fetchTransportKey()
         loadMessages()
         observeIncomingMessages()
     }
@@ -106,6 +110,24 @@ class ConversationViewModel @Inject constructor(
                     }
                 },
                 onFailure = { /* Ignore, not critical */ }
+            )
+        }
+    }
+
+    /**
+     * Fetch transport key from vault for encrypted messaging.
+     */
+    private fun fetchTransportKey() {
+        viewModelScope.launch {
+            messagingClient.getTransportKey(connectionId).fold(
+                onSuccess = { key ->
+                    transportKey = key
+                    android.util.Log.d("ConversationVM", "Transport key fetched for $connectionId")
+                },
+                onFailure = { error ->
+                    android.util.Log.w("ConversationVM", "Failed to get transport key: ${error.message}")
+                    // Non-fatal — will fall back to plaintext if key unavailable
+                }
             )
         }
     }
@@ -233,12 +255,23 @@ class ConversationViewModel @Inject constructor(
 
             _isSending.value = true
 
-            // Send plaintext to vault — vault encrypts with the connection's shared secret
-            messagingClient.sendMessage(
-                connectionId = connectionId,
-                content = text,
-                contentType = "text"
-            ).fold(
+            // Encrypt with transport key if available, otherwise send plaintext
+            val key = transportKey
+            if (key != null) {
+                val encrypted = connectionCryptoManager.encryptMessage(text, key)
+                messagingClient.sendMessage(
+                    connectionId = connectionId,
+                    encryptedContent = android.util.Base64.encodeToString(encrypted.ciphertext, android.util.Base64.NO_WRAP),
+                    nonce = android.util.Base64.encodeToString(encrypted.nonce, android.util.Base64.NO_WRAP),
+                    contentType = "text"
+                )
+            } else {
+                messagingClient.sendMessage(
+                    connectionId = connectionId,
+                    content = text,
+                    contentType = "text"
+                )
+            }.fold(
                 onSuccess = { sentMessage ->
                     // Create message for display
                     val sentAtMillis = try {

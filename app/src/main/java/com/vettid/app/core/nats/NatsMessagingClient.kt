@@ -38,6 +38,22 @@ class NatsMessagingClient @Inject constructor(
      * @return Sent message info with server-assigned ID and timestamp
      */
     /**
+     * Get the transport key for app-vault encrypted messaging.
+     * The vault derives this from the connection's shared secret.
+     */
+    suspend fun getTransportKey(connectionId: String): Result<ByteArray> {
+        val payload = JsonObject().apply {
+            addProperty("connection_id", connectionId)
+        }
+
+        return sendAndAwait("message.get-transport-key", payload) { result ->
+            val keyBase64 = result.get("transport_key")?.asString
+                ?: throw NatsException("No transport key in response")
+            android.util.Base64.decode(keyBase64, android.util.Base64.DEFAULT)
+        }
+    }
+
+    /**
      * Load message history for a connection from the vault.
      */
     suspend fun listMessages(
