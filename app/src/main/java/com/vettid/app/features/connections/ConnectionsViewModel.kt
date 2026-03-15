@@ -87,6 +87,7 @@ class ConnectionsViewModel @Inject constructor(
     private var lastListResult: List<ConnectionRecord>? = null
     private var allEnhancedConnections: List<ConnectionListItem> = emptyList()
     private val reviewedConnectionIds = mutableSetOf<String>()
+    private val respondedConnectionIds = mutableSetOf<String>()
 
     init {
         loadConnections()
@@ -208,11 +209,12 @@ class ConnectionsViewModel @Inject constructor(
                     applyFilterAndSort()
 
                     // Check for outbound pending connections that need review
-                    // Skip connections already reviewed this session
+                    // Skip connections already reviewed or responded to this session
                     for (record in listResult.items) {
                         if (record.status.equals("pending", ignoreCase = true) &&
                             record.direction.equals("outbound", ignoreCase = true) &&
-                            record.connectionId !in reviewedConnectionIds) {
+                            record.connectionId !in reviewedConnectionIds &&
+                            !respondedConnectionIds.contains(record.connectionId)) {
                             _effects.emit(ConnectionsEffect.ReviewConnection(
                                 connectionId = record.connectionId,
                                 peerAlias = record.label,
@@ -312,6 +314,7 @@ class ConnectionsViewModel @Inject constructor(
      */
     fun respondToConnection(connectionId: String, accept: Boolean) {
         reviewedConnectionIds.add(connectionId)
+        respondedConnectionIds.add(connectionId)
         viewModelScope.launch {
             val response = if (accept) "accept" else "reject"
             connectionsClient.respond(connectionId, response).fold(

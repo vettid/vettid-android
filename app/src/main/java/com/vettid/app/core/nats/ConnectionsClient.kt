@@ -100,7 +100,8 @@ class ConnectionsClient @Inject constructor(
         label: String,
         natsCredentials: String,
         peerOwnerSpaceId: String,
-        peerMessageSpaceId: String
+        peerMessageSpaceId: String,
+        peerProfile: Map<String, String>? = null
     ): Result<ConnectionRecord> {
         val payload = JsonObject().apply {
             addProperty("connection_id", connectionId)
@@ -109,6 +110,11 @@ class ConnectionsClient @Inject constructor(
             addProperty("nats_credentials", natsCredentials)
             addProperty("peer_owner_space_id", peerOwnerSpaceId)
             addProperty("peer_message_space_id", peerMessageSpaceId)
+            if (peerProfile != null) {
+                val profileObj = JsonObject()
+                peerProfile.forEach { (key, value) -> profileObj.addProperty(key, value) }
+                add("peer_profile", profileObj)
+            }
         }
 
         android.util.Log.d(TAG, "storeCredentials payload: connection_id=$connectionId, peer_guid=$peerGuid")

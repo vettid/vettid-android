@@ -50,6 +50,8 @@ class ScanInvitationViewModel @Inject constructor(
 
     // Parsed invitation data (from QR)
     private var parsedInvitation: ConnectionInvitationData? = null
+    // Fetched peer profile (for passing to storeCredentials)
+    private var fetchedPeerProfile: Map<String, String>? = null
 
     /**
      * Called when QR code is scanned.
@@ -140,6 +142,7 @@ class ScanInvitationViewModel @Inject constructor(
         ).fold(
             onSuccess = { profile ->
                 android.util.Log.d("ScanInvitationVM", "Peer profile fetched: ${profile.keys}")
+                fetchedPeerProfile = profile
                 val displayName = listOfNotNull(
                     profile["_system_first_name"],
                     profile["_system_last_name"]
@@ -247,7 +250,8 @@ class ScanInvitationViewModel @Inject constructor(
                 label = invitation.label,
                 natsCredentials = invitation.natsCredentials,
                 peerOwnerSpaceId = invitation.ownerSpaceId,
-                peerMessageSpaceId = invitation.messageSpaceId
+                peerMessageSpaceId = invitation.messageSpaceId,
+                peerProfile = fetchedPeerProfile
             ).fold(
                 onSuccess = { connectionRecord ->
                     // Acceptance notification is handled by the vault in HandleStoreCredentials
