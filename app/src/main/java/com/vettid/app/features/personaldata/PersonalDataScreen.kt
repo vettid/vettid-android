@@ -1259,29 +1259,7 @@ private fun AddFieldDialog(
                     )
                 }
 
-                // 5. Show in public profile toggle
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = "Show in public profile",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                        Text(
-                            text = if (state.isInPublicProfile) "Visible to connections" else "Hidden from profile",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(
-                        checked = state.isInPublicProfile,
-                        onCheckedChange = onPublicProfileChange
-                    )
-                }
+                // Public profile toggle removed — use the list toggle instead
             }
         },
         confirmButton = {

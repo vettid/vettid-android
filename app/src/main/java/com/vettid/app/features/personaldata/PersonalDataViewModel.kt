@@ -857,6 +857,7 @@ class PersonalDataViewModel @Inject constructor(
                         if (response.success) {
                             Log.i(TAG, "Profile published successfully")
                             _hasUnpublishedChanges.value = false
+                            loadPublicMetadata()
                             _effects.emit(PersonalDataEffect.ShowSuccess("Public profile published"))
                         } else {
                             val errorMsg = response.error ?: "Unknown error"
@@ -1071,6 +1072,7 @@ class PersonalDataViewModel @Inject constructor(
                 ))
 
                 Log.i(TAG, "Save completed, local state updated optimistically")
+                loadPublicMetadata()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to save data", e)
                 _effects.emit(PersonalDataEffect.ShowError(e.message ?: "Failed to save"))
@@ -1376,6 +1378,7 @@ class PersonalDataViewModel @Inject constructor(
                     _effects.emit(PersonalDataEffect.ShowSuccess("${item.name} $statusText public profile"))
 
                     Log.d(TAG, "Toggled public profile for $itemId: $newValue")
+                    loadPublicMetadata()
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to toggle public profile", e)
@@ -1580,6 +1583,9 @@ class PersonalDataViewModel @Inject constructor(
      * Uses sendAndAwaitResponse() for proper request/response correlation.
      */
     private fun fetchPublishedProfile() {
+        // Refresh public metadata (secrets count may have changed since init)
+        loadPublicMetadata()
+
         viewModelScope.launch {
             _isLoadingPublishedProfile.value = true
 
