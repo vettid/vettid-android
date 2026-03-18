@@ -57,7 +57,8 @@ data class ConnectionInvitation(
  */
 data class ConnectionWithLastMessage(
     val connection: Connection,
-    val lastMessage: Message?
+    val lastMessage: Message?,
+    val peerPhotoBase64: String? = null
 )
 
 // MARK: - Message Models

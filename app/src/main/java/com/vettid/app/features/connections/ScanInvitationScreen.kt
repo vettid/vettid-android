@@ -308,7 +308,8 @@ private fun EnhancedPreviewContent(
                 },
                 sharedDataTypes = state.sharedDataCategories.map { category ->
                     SharedDataType(category = category)
-                }
+                },
+                profileFields = state.profileFields
             ),
             onAccept = onAccept,
             onDecline = onDecline,

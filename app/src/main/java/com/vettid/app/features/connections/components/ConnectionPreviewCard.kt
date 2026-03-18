@@ -37,7 +37,8 @@ data class PeerProfilePreview(
     val isEmailVerified: Boolean = false,
     val trustLevel: String = "New",
     val capabilities: List<CapabilityInfo> = emptyList(),
-    val sharedDataTypes: List<SharedDataType> = emptyList()
+    val sharedDataTypes: List<SharedDataType> = emptyList(),
+    val profileFields: Map<String, Map<String, String>>? = null
 )
 
 /**
@@ -161,22 +162,50 @@ fun ConnectionPreviewCard(
             Spacer(modifier = Modifier.height(8.dp))
             TrustIndicatorChip(level = profile.trustLevel)
 
+            // Public profile fields
+            if (!profile.profileFields.isNullOrEmpty()) {
+                Spacer(modifier = Modifier.height(20.dp))
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "PUBLIC PROFILE",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(bottom = 12.dp)
+                        )
+                        profile.profileFields!!.entries.forEachIndexed { index, (_, fieldData) ->
+                            if (index > 0) {
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(vertical = 6.dp),
+                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                                )
+                            }
+                            val displayName = fieldData["display_name"] ?: ""
+                            val value = fieldData["value"] ?: ""
+                            if (value.isNotBlank()) {
+                                Text(
+                                    text = displayName,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = value,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             // Public key fingerprint (collapsed by default)
             profile.publicKeyFingerprint?.let { fingerprint ->
                 Spacer(modifier = Modifier.height(16.dp))
                 KeyFingerprintSection(fingerprint = fingerprint)
-            }
-
-            // Capabilities section
-            if (profile.capabilities.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(24.dp))
-                CapabilitiesSection(capabilities = profile.capabilities)
-            }
-
-            // Shared data section
-            if (profile.sharedDataTypes.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(24.dp))
-                SharedDataSection(dataTypes = profile.sharedDataTypes)
             }
 
             // What you'll share section

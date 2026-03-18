@@ -148,11 +148,24 @@ class ScanInvitationViewModel @Inject constructor(
                     profile["_system_last_name"]
                 ).joinToString(" ").trim().ifEmpty { invitation.label }
 
+                // Build profile fields from non-system entries
+                val profileFields = mutableMapOf<String, Map<String, String>>()
+                profile.forEach { (key, value) ->
+                    if (!key.startsWith("_system_") && key != "photo") {
+                        profileFields[key] = mapOf(
+                            "display_name" to key.replace("_", " ")
+                                .replaceFirstChar { it.titlecase() },
+                            "value" to value
+                        )
+                    }
+                }
+
                 _state.value = ScanInvitationState.Preview(
                     creatorName = displayName,
                     creatorAvatarUrl = null,
                     creatorEmail = profile["_system_email"],
-                    creatorPhoto = profile["photo"]
+                    creatorPhoto = profile["photo"],
+                    profileFields = profileFields.ifEmpty { null }
                 )
             },
             onFailure = { error ->
@@ -437,7 +450,8 @@ sealed class ScanInvitationState {
         val publicKeyFingerprint: String? = null,
         val trustLevel: String = "New",
         val capabilities: List<String> = emptyList(),
-        val sharedDataCategories: List<String> = emptyList()
+        val sharedDataCategories: List<String> = emptyList(),
+        val profileFields: Map<String, Map<String, String>>? = null
     ) : ScanInvitationState()
 
     data class Success(

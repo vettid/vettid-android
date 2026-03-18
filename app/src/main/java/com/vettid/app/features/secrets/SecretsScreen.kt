@@ -1088,30 +1088,6 @@ private fun AddSecretDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // Public profile toggle (only for PUBLIC_KEY)
-                if (state.type == SecretType.PUBLIC_KEY) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.Public,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Share to public profile",
-                            style = MaterialTheme.typography.bodyMedium,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Switch(
-                            checked = state.isInPublicProfile,
-                            onCheckedChange = { onStateChange(state.copy(isInPublicProfile = it)) }
-                        )
-                    }
-                }
             }
         },
         confirmButton = {

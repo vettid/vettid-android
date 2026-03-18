@@ -16,6 +16,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import android.graphics.BitmapFactory
+import android.util.Base64
+import androidx.compose.foundation.Image
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import com.vettid.app.core.network.Connection
 import com.vettid.app.core.network.ConnectionWithLastMessage
 import com.vettid.app.core.network.Message
@@ -38,7 +44,7 @@ fun ConnectionsScreen(
     val searchQuery by viewModel.searchQuery.collectAsState()
 
     var showFabMenu by remember { mutableStateOf(false) }
-    var reviewState by remember { mutableStateOf<ConnectionsEffect.ReviewConnection?>(null) }
+    val pendingReview by viewModel.pendingReview.collectAsState()
 
     // Handle effects
     LaunchedEffect(Unit) {
@@ -60,22 +66,47 @@ fun ConnectionsScreen(
                     // TODO: Show snackbar with effect.message
                 }
                 is ConnectionsEffect.ReviewConnection -> {
-                    reviewState = effect
+                    // Handled via pendingReview StateFlow
                 }
             }
         }
     }
 
     // Show review dialog when a peer accepts our invitation
-    reviewState?.let { review ->
+    pendingReview?.let { review ->
         val peerName = review.peerAlias
         val peerEmail = review.peerProfile?.get("_system_email")
+            ?: review.peerProfileData?.email
+        val peerPhoto = review.peerProfileData?.photo
+        val peerFields = review.peerProfileData?.fields
+
+        val photoBitmap = remember(peerPhoto) {
+            peerPhoto?.let { base64 ->
+                try {
+                    val bytes = Base64.decode(base64, Base64.DEFAULT)
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                } catch (e: Exception) { null }
+            }
+        }
 
         AlertDialog(
             onDismissRequest = { /* Don't dismiss without action */ },
             title = { Text("Connection Request") },
             text = {
-                Column {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    // Photo
+                    if (photoBitmap != null) {
+                        Image(
+                            bitmap = photoBitmap.asImageBitmap(),
+                            contentDescription = "Profile photo",
+                            modifier = Modifier
+                                .size(72.dp)
+                                .clip(CircleShape),
+                            contentScale = ContentScale.Crop
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+
                     Text(
                         text = "$peerName wants to connect with you.",
                         style = MaterialTheme.typography.bodyLarge
@@ -88,6 +119,43 @@ fun ConnectionsScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
+
+                    // Profile fields
+                    if (!peerFields.isNullOrEmpty()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                peerFields.entries
+                                    .filter { !it.key.startsWith("_system_") }
+                                    .forEachIndexed { index, (_, fieldData) ->
+                                        if (index > 0) {
+                                            HorizontalDivider(
+                                                modifier = Modifier.padding(vertical = 4.dp),
+                                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                                            )
+                                        }
+                                        val displayName = fieldData["display_name"] ?: ""
+                                        val value = fieldData["value"] ?: ""
+                                        if (value.isNotBlank()) {
+                                            Text(
+                                                text = displayName,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Text(
+                                                text = value,
+                                                style = MaterialTheme.typography.bodySmall
+                                            )
+                                        }
+                                    }
+                            }
+                        }
+                    }
+
                     Spacer(modifier = Modifier.height(12.dp))
                     Text(
                         text = "Accept this connection to exchange encrypted messages.",
@@ -99,7 +167,6 @@ fun ConnectionsScreen(
             confirmButton = {
                 Button(onClick = {
                     viewModel.respondToConnection(review.connectionId, true)
-                    reviewState = null
                 }) {
                     Text("Accept")
                 }
@@ -107,7 +174,6 @@ fun ConnectionsScreen(
             dismissButton = {
                 OutlinedButton(onClick = {
                     viewModel.respondToConnection(review.connectionId, false)
-                    reviewState = null
                 }) {
                     Text("Decline")
                 }
@@ -281,6 +347,7 @@ private fun ConnectionsList(
                 ConnectionListItem(
                     connection = connectionWithMessage.connection,
                     lastMessage = connectionWithMessage.lastMessage,
+                    peerPhotoBase64 = connectionWithMessage.peerPhotoBase64,
                     onClick = { onConnectionClick(connectionWithMessage.connection.connectionId) }
                 )
             }
@@ -302,8 +369,18 @@ private fun ConnectionsList(
 fun ConnectionListItem(
     connection: Connection,
     lastMessage: Message?,
+    peerPhotoBase64: String? = null,
     onClick: () -> Unit
 ) {
+    val photoBitmap = remember(peerPhotoBase64) {
+        peerPhotoBase64?.let { base64 ->
+            try {
+                val bytes = Base64.decode(base64, Base64.DEFAULT)
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            } catch (e: Exception) { null }
+        }
+    }
+
     ListItem(
         modifier = Modifier
             .clickable(onClick = onClick)
@@ -324,18 +401,29 @@ fun ConnectionListItem(
             )
         },
         leadingContent = {
-            // Avatar
-            Surface(
-                modifier = Modifier.size(48.dp),
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.primaryContainer
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        text = connection.peerDisplayName.take(2).uppercase(),
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
+            // Avatar - show photo if available, otherwise initials
+            if (photoBitmap != null) {
+                Image(
+                    bitmap = photoBitmap.asImageBitmap(),
+                    contentDescription = "Profile photo",
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape),
+                    contentScale = ContentScale.Crop
+                )
+            } else {
+                Surface(
+                    modifier = Modifier.size(48.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = connection.peerDisplayName.take(2).uppercase(),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
                 }
             }
         },

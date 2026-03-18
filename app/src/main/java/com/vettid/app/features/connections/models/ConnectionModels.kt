@@ -86,6 +86,7 @@ data class ConnectionListItem(
     val peerName: String,
     val peerEmail: String? = null,
     val peerAvatarUrl: String? = null,
+    val peerPhotoBase64: String? = null,
     val status: ConnectionStatus,
     val direction: ConnectionDirection,
 

@@ -292,25 +292,69 @@ private fun LoadedContent(
 
         // Peer's public profile fields
         if (!peerFields.isNullOrEmpty()) {
-            Spacer(modifier = Modifier.height(16.dp))
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "PUBLIC PROFILE",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(bottom = 12.dp)
-                    )
-                    peerFields!!.entries.forEachIndexed { index, (_, fieldData) ->
-                        if (index > 0) {
-                            HorizontalDivider(
-                                modifier = Modifier.padding(vertical = 8.dp),
-                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+            // Separate system fields from custom profile fields
+            val customFields = peerFields!!.entries
+                .filter { !it.key.startsWith("_system_") }
+                .filter { (it.value["value"] ?: "").isNotBlank() }
+            val systemFields = peerFields!!.entries
+                .filter { it.key.startsWith("_system_") }
+                .filter { (it.value["value"] ?: "").isNotBlank() }
+                // Don't duplicate email/name already shown above
+                .filter { it.key != "_system_email" && it.key != "_system_first_name" && it.key != "_system_last_name" }
+
+            if (customFields.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "PUBLIC PROFILE",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(bottom = 12.dp)
+                        )
+                        customFields.forEachIndexed { index, (_, fieldData) ->
+                            if (index > 0) {
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(vertical = 8.dp),
+                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                                )
+                            }
+                            val displayName = fieldData["display_name"] ?: ""
+                            val value = fieldData["value"] ?: ""
+                            Text(
+                                text = displayName.trim(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = value,
+                                style = MaterialTheme.typography.bodyMedium
                             )
                         }
-                        val displayName = fieldData["display_name"] ?: ""
-                        val value = fieldData["value"] ?: ""
-                        if (value.isNotBlank()) {
+                    }
+                }
+            }
+
+            if (systemFields.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "SYSTEM INFORMATION",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 12.dp)
+                        )
+                        systemFields.forEachIndexed { index, (_, fieldData) ->
+                            if (index > 0) {
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(vertical = 8.dp),
+                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                                )
+                            }
+                            val displayName = (fieldData["display_name"] ?: "")
+                                .trim().removePrefix("System ").removePrefix("system ")
+                            val value = fieldData["value"] ?: ""
                             Text(
                                 text = displayName,
                                 style = MaterialTheme.typography.labelSmall,

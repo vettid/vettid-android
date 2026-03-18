@@ -82,6 +82,10 @@ class ConnectionsViewModel @Inject constructor(
     private val _lastSyncTime = MutableStateFlow<Instant?>(null)
     val lastSyncTime: StateFlow<Instant?> = _lastSyncTime.asStateFlow()
 
+    // Pending review dialog (persists until user responds)
+    private val _pendingReview = MutableStateFlow<ConnectionsEffect.ReviewConnection?>(null)
+    val pendingReview: StateFlow<ConnectionsEffect.ReviewConnection?> = _pendingReview.asStateFlow()
+
     // Full list of connections (for filtering)
     private var allConnections: List<ConnectionWithLastMessage> = emptyList()
     private var lastListResult: List<ConnectionRecord>? = null
@@ -107,11 +111,13 @@ class ConnectionsViewModel @Inject constructor(
                 android.util.Log.i("ConnectionsVM",
                     "Peer accepted connection: ${accepted.connectionId} (${accepted.peerAlias})")
                 loadConnections()
-                _effects.emit(ConnectionsEffect.ReviewConnection(
+                val review = ConnectionsEffect.ReviewConnection(
                     connectionId = accepted.connectionId,
                     peerAlias = accepted.peerAlias ?: "Unknown",
                     peerProfile = accepted.peerProfile
-                ))
+                )
+                _pendingReview.value = review
+                _effects.emit(review)
             }
         }
 
@@ -178,7 +184,8 @@ class ConnectionsViewModel @Inject constructor(
                                 lastMessageAt = null,
                                 unreadCount = 0
                             ),
-                            lastMessage = null
+                            lastMessage = null,
+                            peerPhotoBase64 = record.peerProfile?.photo
                         )
                     }.sortedByDescending { it.connection.createdAt }
 
@@ -315,6 +322,7 @@ class ConnectionsViewModel @Inject constructor(
     fun respondToConnection(connectionId: String, accept: Boolean) {
         reviewedConnectionIds.add(connectionId)
         respondedConnectionIds.add(connectionId)
+        _pendingReview.value = null
         viewModelScope.launch {
             val response = if (accept) "accept" else "reject"
             connectionsClient.respond(connectionId, response).fold(
@@ -577,7 +585,8 @@ class ConnectionsViewModel @Inject constructor(
                     lastMessageAt = enhanced.lastActiveAt?.toEpochMilli(),
                     unreadCount = enhanced.unreadCount
                 ),
-                lastMessage = null
+                lastMessage = null,
+                peerPhotoBase64 = enhanced.peerPhotoBase64
             )
         }
 
@@ -610,6 +619,7 @@ class ConnectionsViewModel @Inject constructor(
             peerGuid = conn.peerGuid,
             peerName = conn.peerDisplayName,
             peerAvatarUrl = conn.peerAvatarUrl,
+            peerPhotoBase64 = this.peerPhotoBase64,
             status = when (conn.status) {
                 ConnectionStatus.ACTIVE -> com.vettid.app.features.connections.models.ConnectionStatus.ACTIVE
                 ConnectionStatus.PENDING -> com.vettid.app.features.connections.models.ConnectionStatus.PENDING_OUR_REVIEW

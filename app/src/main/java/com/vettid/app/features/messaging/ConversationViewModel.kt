@@ -255,23 +255,12 @@ class ConversationViewModel @Inject constructor(
 
             _isSending.value = true
 
-            // Encrypt with transport key if available, otherwise send plaintext
-            val key = transportKey
-            if (key != null) {
-                val encrypted = connectionCryptoManager.encryptMessage(text, key)
-                messagingClient.sendMessage(
-                    connectionId = connectionId,
-                    encryptedContent = android.util.Base64.encodeToString(encrypted.ciphertext, android.util.Base64.NO_WRAP),
-                    nonce = android.util.Base64.encodeToString(encrypted.nonce, android.util.Base64.NO_WRAP),
-                    contentType = "text"
-                )
-            } else {
-                messagingClient.sendMessage(
-                    connectionId = connectionId,
-                    content = text,
-                    contentType = "text"
-                )
-            }.fold(
+            // Send plaintext to vault — vault handles E2E encryption with peer's shared secret
+            messagingClient.sendMessage(
+                connectionId = connectionId,
+                content = text,
+                contentType = "text"
+            ).fold(
                 onSuccess = { sentMessage ->
                     // Create message for display
                     val sentAtMillis = try {
