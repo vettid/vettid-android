@@ -3,6 +3,7 @@ package com.vettid.app.core.crypto
 import android.util.Base64
 import com.google.crypto.tink.subtle.Hkdf
 import com.google.crypto.tink.subtle.X25519
+import com.google.crypto.tink.subtle.XChaCha20Poly1305
 import com.vettid.app.core.network.EncryptedMessage
 import com.vettid.app.core.storage.CredentialStore
 import javax.crypto.Cipher
@@ -281,6 +282,41 @@ class ConnectionCryptoManager @Inject constructor(
      */
     fun deleteConnectionKey(connectionId: String) {
         credentialStore.deleteConnectionKey(connectionId)
+    }
+
+    // MARK: - XChaCha20-Poly1305 (for vault transport encryption)
+
+    /**
+     * Encrypt with XChaCha20-Poly1305 using Tink, matching vault's Go implementation.
+     * Uses 24-byte nonce (vs 12-byte for standard ChaCha20-Poly1305).
+     *
+     * @param plaintext The message to encrypt
+     * @param key 32-byte encryption key (transport key from vault)
+     * @return EncryptedMessage with ciphertext and 24-byte nonce
+     */
+    fun encryptXChaCha20(plaintext: String, key: ByteArray): EncryptedMessage {
+        val aead = XChaCha20Poly1305(key)
+        // Tink prepends 24-byte nonce to ciphertext
+        val combined = aead.encrypt(plaintext.toByteArray(Charsets.UTF_8), ByteArray(0))
+        val nonce = combined.copyOfRange(0, XCHACHA_NONCE_LENGTH)
+        val ciphertext = combined.copyOfRange(XCHACHA_NONCE_LENGTH, combined.size)
+        return EncryptedMessage(ciphertext, nonce)
+    }
+
+    /**
+     * Decrypt XChaCha20-Poly1305 ciphertext.
+     *
+     * @param ciphertext Encrypted data (without nonce)
+     * @param nonce 24-byte nonce
+     * @param key 32-byte encryption key
+     * @return Decrypted plaintext
+     */
+    fun decryptXChaCha20(ciphertext: ByteArray, nonce: ByteArray, key: ByteArray): String {
+        val aead = XChaCha20Poly1305(key)
+        // Tink expects nonce prepended to ciphertext
+        val combined = nonce + ciphertext
+        val plaintext = aead.decrypt(combined, ByteArray(0))
+        return String(plaintext, Charsets.UTF_8)
     }
 
     // MARK: - Utility Functions

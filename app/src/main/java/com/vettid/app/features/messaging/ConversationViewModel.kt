@@ -255,12 +255,26 @@ class ConversationViewModel @Inject constructor(
 
             _isSending.value = true
 
-            // Send plaintext to vault — vault handles E2E encryption with peer's shared secret
-            messagingClient.sendMessage(
-                connectionId = connectionId,
-                content = text,
-                contentType = "text"
-            ).fold(
+            // Encrypt with transport key (XChaCha20-Poly1305) so content is not visible in NATS.
+            // Vault decrypts with matching transport key, then re-encrypts for peer delivery.
+            val key = transportKey
+            if (key != null) {
+                val encrypted = connectionCryptoManager.encryptXChaCha20(text, key)
+                messagingClient.sendMessage(
+                    connectionId = connectionId,
+                    encryptedContent = android.util.Base64.encodeToString(encrypted.ciphertext, android.util.Base64.NO_WRAP),
+                    nonce = android.util.Base64.encodeToString(encrypted.nonce, android.util.Base64.NO_WRAP),
+                    contentType = "text"
+                )
+            } else {
+                // Fallback: send plaintext (session encryption still wraps the NATS payload)
+                android.util.Log.w("ConversationVM", "No transport key — sending plaintext to vault")
+                messagingClient.sendMessage(
+                    connectionId = connectionId,
+                    content = text,
+                    contentType = "text"
+                )
+            }.fold(
                 onSuccess = { sentMessage ->
                     // Create message for display
                     val sentAtMillis = try {
