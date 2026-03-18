@@ -1548,14 +1548,27 @@ class OwnerSpaceClient @Inject constructor(
      */
     private fun handleNewMessage(message: NatsMessage) {
         try {
-            val json = JSONObject(String(message.data, Charsets.UTF_8))
-            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+            val rawString = String(message.data, Charsets.UTF_8)
+
+            // Guard: skip if not valid JSON object
+            val trimmed = rawString.trimStart()
+            if (!trimmed.startsWith("{")) {
+                android.util.Log.w(TAG, "Skipping non-JSON message data: ${trimmed.take(100)}")
+                return
+            }
+
+            val json = JSONObject(rawString)
+            val payload = if (json.has("payload")) {
+                val payloadVal = json.get("payload")
+                if (payloadVal is org.json.JSONObject) payloadVal else json
+            } else json
 
             val incomingMessage = IncomingMessage(
                 messageId = payload.getString("message_id"),
                 connectionId = payload.getString("connection_id"),
                 senderGuid = payload.getString("sender_guid"),
-                content = payload.optString("content", null),
+                content = payload.optString("content", null)
+                    ?.takeIf { it != "null" && it.isNotEmpty() },
                 encryptedContent = payload.optString("encrypted_content", ""),
                 nonce = payload.optString("nonce", ""),
                 contentType = payload.optString("content_type", "text"),
@@ -1646,20 +1659,49 @@ class OwnerSpaceClient @Inject constructor(
             val json = JSONObject(String(message.data, Charsets.UTF_8))
             val payload = if (json.has("payload")) json.getJSONObject("payload") else json
 
-            val peerProfile = if (payload.has("peer_profile") && !payload.isNull("peer_profile")) {
+            var peerProfile: Map<String, String>? = null
+            var peerPhoto: String? = null
+            var peerFields: Map<String, Map<String, String>>? = null
+
+            if (payload.has("peer_profile") && !payload.isNull("peer_profile")) {
                 val profileObj = payload.getJSONObject("peer_profile")
                 val map = mutableMapOf<String, String>()
                 profileObj.keys().forEach { key ->
-                    profileObj.optString(key)?.let { map[key] = it }
+                    if (key != "fields" && key != "photo") {
+                        profileObj.optString(key)?.let { map[key] = it }
+                    }
                 }
-                map.toMap()
-            } else null
+                peerProfile = map.toMap()
+
+                // Extract photo
+                peerPhoto = profileObj.optString("photo", null)
+                    ?.takeIf { it.isNotEmpty() && it != "null" }
+
+                // Extract structured fields
+                if (profileObj.has("fields") && !profileObj.isNull("fields")) {
+                    val fieldsObj = profileObj.getJSONObject("fields")
+                    val fieldsMap = mutableMapOf<String, Map<String, String>>()
+                    fieldsObj.keys().forEach { fieldKey ->
+                        val fieldObj = fieldsObj.optJSONObject(fieldKey)
+                        if (fieldObj != null) {
+                            val fieldData = mutableMapOf<String, String>()
+                            fieldObj.keys().forEach { k ->
+                                fieldObj.optString(k)?.let { fieldData[k] = it }
+                            }
+                            fieldsMap[fieldKey] = fieldData.toMap()
+                        }
+                    }
+                    peerFields = fieldsMap.toMap()
+                }
+            }
 
             val accepted = ConnectionPeerAccepted(
                 connectionId = payload.getString("connection_id"),
                 peerGuid = payload.optString("peer_guid", ""),
                 peerAlias = if (payload.has("peer_alias")) payload.getString("peer_alias") else null,
-                peerProfile = peerProfile
+                peerProfile = peerProfile,
+                peerPhoto = peerPhoto,
+                peerFields = peerFields
             )
 
             android.util.Log.i(TAG, "Connection peer accepted: ${accepted.connectionId} by ${accepted.peerAlias}")

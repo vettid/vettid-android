@@ -114,7 +114,9 @@ class ConnectionsViewModel @Inject constructor(
                 val review = ConnectionsEffect.ReviewConnection(
                     connectionId = accepted.connectionId,
                     peerAlias = accepted.peerAlias ?: "Unknown",
-                    peerProfile = accepted.peerProfile
+                    peerProfile = accepted.peerProfile,
+                    peerPhoto = accepted.peerPhoto,
+                    peerReviewFields = accepted.peerFields
                 )
                 _pendingReview.value = review
                 _effects.emit(review)
@@ -667,6 +669,8 @@ sealed class ConnectionsEffect {
         val connectionId: String,
         val peerAlias: String,
         val peerProfile: Map<String, String>?,
-        val peerProfileData: PeerProfileData? = null
+        val peerProfileData: PeerProfileData? = null,
+        val peerPhoto: String? = null,
+        val peerReviewFields: Map<String, Map<String, String>>? = null
     ) : ConnectionsEffect()
 }

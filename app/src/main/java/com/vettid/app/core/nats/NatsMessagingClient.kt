@@ -350,7 +350,11 @@ data class ConnectionPeerAccepted(
     /** Peer's display name */
     val peerAlias: String?,
     /** Peer's profile data (first name, last name, email, etc.) */
-    val peerProfile: Map<String, String>?
+    val peerProfile: Map<String, String>?,
+    /** Peer's profile photo (base64) */
+    val peerPhoto: String? = null,
+    /** Peer's structured profile fields */
+    val peerFields: Map<String, Map<String, String>>? = null
 )
 
 /** Connection status update from vault (activated, key-exchanged, rejected). */

@@ -47,8 +47,8 @@ class CreateInvitationViewModel @Inject constructor(
     private val _effects = MutableSharedFlow<CreateInvitationEffect>()
     val effects: SharedFlow<CreateInvitationEffect> = _effects.asSharedFlow()
 
-    // Selected expiration time in minutes (default: 15 minutes)
-    private val _expirationMinutes = MutableStateFlow(15)
+    // Selected expiration time in minutes (default: 5 minutes)
+    private val _expirationMinutes = MutableStateFlow(5)
     val expirationMinutes: StateFlow<Int> = _expirationMinutes.asStateFlow()
 
     // Store key pair temporarily until invitation is accepted
@@ -61,9 +61,9 @@ class CreateInvitationViewModel @Inject constructor(
      * Available expiration options.
      */
     val expirationOptions = listOf(
+        ExpirationOption(5, "5 minutes"),
         ExpirationOption(15, "15 minutes"),
-        ExpirationOption(60, "1 hour"),
-        ExpirationOption(1440, "24 hours")
+        ExpirationOption(60, "1 hour")
     )
 
     /**
@@ -147,7 +147,10 @@ class CreateInvitationViewModel @Inject constructor(
                             if (accepted.connectionId == natsInvitation.connectionId) {
                                 _state.value = CreateInvitationState.PeerAccepted(
                                     peerAlias = accepted.peerAlias ?: "Someone",
-                                    connectionId = accepted.connectionId
+                                    connectionId = accepted.connectionId,
+                                    peerPhoto = accepted.peerPhoto,
+                                    peerEmail = accepted.peerProfile?.get("_system_email"),
+                                    peerFields = accepted.peerFields
                                 )
                             }
                         }
@@ -277,6 +280,24 @@ class CreateInvitationViewModel @Inject constructor(
     }
 
     /**
+     * Accept or reject the peer's connection from the QR screen.
+     */
+    fun respondToConnection(accept: Boolean) {
+        val currentState = _state.value as? CreateInvitationState.PeerAccepted ?: return
+        viewModelScope.launch {
+            val response = if (accept) "accept" else "reject"
+            connectionsClient.respond(currentState.connectionId, response).fold(
+                onSuccess = {
+                    Log.i(TAG, "Connection ${if (accept) "accepted" else "rejected"}")
+                },
+                onFailure = { error ->
+                    Log.e(TAG, "Failed to respond: ${error.message}")
+                }
+            )
+        }
+    }
+
+    /**
      * Cancel the current invitation.
      */
     fun cancel() {
@@ -348,7 +369,10 @@ sealed class CreateInvitationState {
 
     data class PeerAccepted(
         val peerAlias: String,
-        val connectionId: String
+        val connectionId: String,
+        val peerPhoto: String? = null,
+        val peerEmail: String? = null,
+        val peerFields: Map<String, Map<String, String>>? = null
     ) : CreateInvitationState()
 
     object Expired : CreateInvitationState()

@@ -142,9 +142,9 @@ fun ScanInvitationScreen(
                 }
 
                 is ScanInvitationState.Success -> {
-                    SuccessContent(
+                    PendingApprovalContent(
                         connectionName = currentState.connection.peerDisplayName,
-                        onContinue = { onConnectionEstablished(currentState.connection.connectionId) }
+                        onBack = onBack
                     )
                 }
 
@@ -417,9 +417,9 @@ private fun PreviewContent(
 }
 
 @Composable
-private fun SuccessContent(
+private fun PendingApprovalContent(
     connectionName: String,
-    onContinue: () -> Unit
+    onBack: () -> Unit
 ) {
     Box(
         modifier = Modifier
@@ -430,24 +430,22 @@ private fun SuccessContent(
         Column(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Icon(
-                imageVector = Icons.Default.CheckCircle,
-                contentDescription = null,
+            CircularProgressIndicator(
                 modifier = Modifier.size(64.dp),
-                tint = MaterialTheme.colorScheme.primary
+                strokeWidth = 4.dp
             )
 
             Spacer(modifier = Modifier.height(24.dp))
 
             Text(
-                text = "Connected!",
+                text = "Waiting for Approval",
                 style = MaterialTheme.typography.headlineMedium
             )
 
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "You are now connected with $connectionName",
+                text = "$connectionName needs to review and accept your connection request.",
                 style = MaterialTheme.typography.bodyLarge,
                 textAlign = TextAlign.Center,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -455,8 +453,8 @@ private fun SuccessContent(
 
             Spacer(modifier = Modifier.height(32.dp))
 
-            Button(onClick = onContinue) {
-                Text("Continue")
+            OutlinedButton(onClick = onBack) {
+                Text("Back to Connections")
             }
         }
     }

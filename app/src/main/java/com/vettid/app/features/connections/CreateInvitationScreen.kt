@@ -3,12 +3,17 @@ package com.vettid.app.features.connections
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.util.Base64
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
@@ -19,7 +24,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
@@ -106,7 +113,17 @@ fun CreateInvitationScreen(
                 is CreateInvitationState.PeerAccepted -> {
                     PeerAcceptedContent(
                         peerAlias = currentState.peerAlias,
-                        onContinue = onBack
+                        peerPhoto = currentState.peerPhoto,
+                        peerEmail = currentState.peerEmail,
+                        peerFields = currentState.peerFields,
+                        onAccept = {
+                            viewModel.respondToConnection(true)
+                            onBack()
+                        },
+                        onDecline = {
+                            viewModel.respondToConnection(false)
+                            onBack()
+                        }
                     )
                 }
 
@@ -270,28 +287,30 @@ private fun CreatedContent(
     ) {
         OutlinedButton(
             onClick = onCopyLink,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
         ) {
             Icon(
                 imageVector = Icons.Default.ContentCopy,
                 contentDescription = null,
                 modifier = Modifier.size(18.dp)
             )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Copy Link")
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Copy", maxLines = 1)
         }
 
         Button(
             onClick = onShare,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 12.dp)
         ) {
             Icon(
                 imageVector = Icons.Default.Share,
                 contentDescription = null,
                 modifier = Modifier.size(18.dp)
             )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text("Share")
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Share", maxLines = 1)
         }
     }
 }
@@ -324,35 +343,147 @@ private fun ExpirationTimer(expiresInSeconds: Int) {
 @Composable
 private fun PeerAcceptedContent(
     peerAlias: String,
-    onContinue: () -> Unit
+    peerPhoto: String?,
+    peerEmail: String?,
+    peerFields: Map<String, Map<String, String>>?,
+    onAccept: () -> Unit,
+    onDecline: () -> Unit
 ) {
+    val photoBitmap = remember(peerPhoto) {
+        peerPhoto?.let { base64 ->
+            try {
+                val bytes = Base64.decode(base64, Base64.DEFAULT)
+                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            } catch (e: Exception) { null }
+        }
+    }
+
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Spacer(modifier = Modifier.height(48.dp))
-        Icon(
-            imageVector = Icons.Default.CheckCircle,
-            contentDescription = null,
-            modifier = Modifier.size(72.dp),
-            tint = MaterialTheme.colorScheme.primary
-        )
         Spacer(modifier = Modifier.height(16.dp))
+
         Text(
-            text = "$peerAlias scanned your invitation",
+            text = "Connection Request",
+            style = MaterialTheme.typography.titleLarge
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Photo or initials
+        if (photoBitmap != null) {
+            Image(
+                bitmap = photoBitmap.asImageBitmap(),
+                contentDescription = "Profile photo",
+                modifier = Modifier
+                    .size(96.dp)
+                    .clip(CircleShape),
+                contentScale = ContentScale.Crop
+            )
+        } else {
+            Surface(
+                modifier = Modifier.size(96.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.primaryContainer
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        text = peerAlias.take(2).uppercase(),
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = peerAlias,
             style = MaterialTheme.typography.headlineSmall,
             textAlign = TextAlign.Center
         )
+
+        peerEmail?.let {
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = "You'll be prompted to review their profile.",
+            text = "wants to connect with you",
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        Spacer(modifier = Modifier.height(32.dp))
-        Button(onClick = onContinue) {
-            Text("Continue")
+
+        // Profile fields
+        if (!peerFields.isNullOrEmpty()) {
+            val customFields = peerFields.entries
+                .filter { !it.key.startsWith("_system_") }
+                .filter { (it.value["value"] ?: "").isNotBlank() }
+
+            if (customFields.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "PUBLIC PROFILE",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                        customFields.forEachIndexed { index, (_, fieldData) ->
+                            if (index > 0) {
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(vertical = 4.dp),
+                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                                )
+                            }
+                            Text(
+                                text = (fieldData["display_name"] ?: "").trim(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = fieldData["value"] ?: "",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        // Accept / Decline buttons
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            OutlinedButton(
+                onClick = onDecline,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Decline")
+            }
+            Button(
+                onClick = onAccept,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text("Accept")
+            }
         }
     }
 }

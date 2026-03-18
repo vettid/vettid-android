@@ -77,8 +77,10 @@ fun ConnectionsScreen(
         val peerName = review.peerAlias
         val peerEmail = review.peerProfile?.get("_system_email")
             ?: review.peerProfileData?.email
-        val peerPhoto = review.peerProfileData?.photo
-        val peerFields = review.peerProfileData?.fields
+        val peerPhoto = review.peerPhoto
+            ?: review.peerProfileData?.photo
+        val peerFields = review.peerReviewFields
+            ?: review.peerProfileData?.fields
 
         val photoBitmap = remember(peerPhoto) {
             peerPhoto?.let { base64 ->
