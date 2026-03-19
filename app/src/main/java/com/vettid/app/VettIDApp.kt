@@ -86,6 +86,10 @@ import com.vettid.app.features.postenrollment.PostEnrollmentScreen
 import com.vettid.app.features.postenrollment.PersonalDataCollectionScreen
 import com.vettid.app.features.migration.EmergencyRecoveryScreen
 import com.vettid.app.features.migration.SecurityAuditLogScreen
+import com.vettid.app.features.migration.VaultUpdateCard
+import com.vettid.app.features.migration.VaultUpdateSuccessCard
+import com.vettid.app.features.migration.VaultUpdateViewModel
+import com.vettid.app.features.migration.VaultUpdateState
 import com.vettid.app.features.enrollmentwizard.EnrollmentWizardScreen
 import com.vettid.app.features.feed.GuideDetailScreen
 import com.vettid.app.features.settings.AppDetailsScreen
@@ -1411,8 +1415,18 @@ fun MainScreen(
     onNavigateToCreateAgentInvitation: () -> Unit = {},
     onNavigateToVaultStatus: () -> Unit = {},
     appViewModel: AppViewModel = hiltViewModel(),
-    badgeCountsViewModel: BadgeCountsViewModel = hiltViewModel()
+    badgeCountsViewModel: BadgeCountsViewModel = hiltViewModel(),
+    vaultUpdateViewModel: VaultUpdateViewModel = hiltViewModel()
 ) {
+    // Check for vault security updates after vault unlock
+    val vaultUpdateState by vaultUpdateViewModel.state.collectAsState()
+    LaunchedEffect(Unit) {
+        vaultUpdateViewModel.checkForUpdate()
+    }
+
+    // Handle "Review Details" — open browser
+    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+
     var navigationState by rememberSaveable(
         stateSaver = listSaver(
             save = { listOf(it.currentItem.name, it.isDrawerOpen, it.isSettingsOpen) },
@@ -1479,6 +1493,52 @@ fun MainScreen(
             onDismiss = { showConnectionDetailsDialog = false }
         )
     }
+
+    // Vault security update card (shown above main content)
+    Column(modifier = Modifier.fillMaxSize()) {
+        when (val updateState = vaultUpdateState) {
+            is VaultUpdateState.UpdateAvailable -> {
+                VaultUpdateCard(
+                    config = updateState.config,
+                    isMandatory = updateState.isMandatory,
+                    isUpdating = false,
+                    onUpdateNow = { vaultUpdateViewModel.startUpdate() },
+                    onRemindLater = { vaultUpdateViewModel.remindLater() },
+                    onReviewDetails = {
+                        val url = updateState.config.detailsUrl
+                        if (!url.isNullOrEmpty()) {
+                            uriHandler.openUri(url)
+                        }
+                    }
+                )
+            }
+            is VaultUpdateState.Updating -> {
+                VaultUpdateCard(
+                    config = updateState.config,
+                    isMandatory = true,
+                    isUpdating = true,
+                    onUpdateNow = {},
+                    onRemindLater = {},
+                    onReviewDetails = {}
+                )
+            }
+            is VaultUpdateState.Updated -> {
+                VaultUpdateSuccessCard(
+                    onDismiss = { vaultUpdateViewModel.dismissSuccess() }
+                )
+            }
+            is VaultUpdateState.Error -> {
+                VaultUpdateCard(
+                    config = updateState.config,
+                    isMandatory = true,
+                    isUpdating = false,
+                    onUpdateNow = { vaultUpdateViewModel.retry() },
+                    onRemindLater = {},
+                    onReviewDetails = {}
+                )
+            }
+            else -> { /* No update card for Checking/NoUpdate */ }
+        }
 
     MainScaffold(
         navigationState = navigationState,
@@ -1547,6 +1607,7 @@ fun MainScreen(
             com.vettid.app.features.location.LocationCollectionWorker.captureNow(context)
         }
     )
+    } // End Column wrapping update card + MainScaffold
 }
 
 /**

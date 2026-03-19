@@ -225,6 +225,104 @@ class MigrationClient @Inject constructor(
         }
     }
 
+    /**
+     * Check if a vault security update is available.
+     * Sends credential.migration.config to the vault.
+     *
+     * @return MigrationConfig if update is available, null otherwise
+     */
+    suspend fun getMigrationConfig(): MigrationConfig? {
+        Log.d(TAG, "Checking for migration config")
+
+        val requestIdResult = ownerSpaceClient.sendToVault("credential.migration.config", JsonObject())
+        if (requestIdResult.isFailure) {
+            Log.e(TAG, "Failed to send migration config request", requestIdResult.exceptionOrNull())
+            return null
+        }
+
+        val requestId = requestIdResult.getOrThrow()
+
+        val response = withTimeoutOrNull(TIMEOUT_MS) {
+            ownerSpaceClient.vaultResponses.first { it.requestId == requestId }
+        }
+
+        return when (response) {
+            is VaultResponse.HandlerResult -> {
+                if (response.success && response.result != null) {
+                    parseMigrationConfig(response.result)
+                } else {
+                    Log.w(TAG, "Migration config check failed: ${response.error}")
+                    null
+                }
+            }
+            else -> {
+                Log.w(TAG, "Migration config: unexpected response or timeout")
+                null
+            }
+        }
+    }
+
+    /**
+     * Start the migration (re-seal vault for new enclave).
+     * Called when user taps "Update Now".
+     *
+     * @return Result<String> with the migration version on success
+     */
+    suspend fun startMigration(): Result<String> {
+        Log.i(TAG, "Starting vault migration (re-seal)")
+
+        val requestIdResult = ownerSpaceClient.sendToVault("credential.migration.start", JsonObject())
+        if (requestIdResult.isFailure) {
+            return Result.failure(requestIdResult.exceptionOrNull() ?: Exception("Failed to send migration start"))
+        }
+
+        val requestId = requestIdResult.getOrThrow()
+
+        // Longer timeout for re-sealing operation
+        val response = withTimeoutOrNull(30_000L) {
+            ownerSpaceClient.vaultResponses.first { it.requestId == requestId }
+        }
+
+        return when (response) {
+            is VaultResponse.HandlerResult -> {
+                if (response.success) {
+                    val version = response.result?.get("version")?.asString ?: ""
+                    Log.i(TAG, "Migration completed successfully: $version")
+                    _migrationEvents.tryEmit(MigrationEvent.MigrationCompleted(version))
+                    Result.success(version)
+                } else {
+                    val error = response.error ?: "Migration failed"
+                    Log.e(TAG, "Migration failed: $error")
+                    _migrationEvents.tryEmit(MigrationEvent.MigrationFailed(error))
+                    Result.failure(Exception(error))
+                }
+            }
+            is VaultResponse.Error -> {
+                val error = "${response.code}: ${response.message}"
+                _migrationEvents.tryEmit(MigrationEvent.MigrationFailed(error))
+                Result.failure(Exception(error))
+            }
+            else -> {
+                val error = "Timeout waiting for migration response"
+                _migrationEvents.tryEmit(MigrationEvent.MigrationFailed(error))
+                Result.failure(Exception(error))
+            }
+        }
+    }
+
+    private fun parseMigrationConfig(json: JsonObject): MigrationConfig? {
+        val available = json.get("available")?.asBoolean ?: false
+        if (!available) return null
+
+        return MigrationConfig(
+            version = json.get("version")?.asString ?: "",
+            summary = json.get("summary")?.asString ?: "",
+            detailsUrl = json.get("details_url")?.asString,
+            publishedAt = json.get("published_at")?.asString,
+            mandatoryAfter = json.get("mandatory_after")?.asString
+        )
+    }
+
     private fun parseMigrationStatus(json: JsonObject): MigrationStatus {
         val status = json.get("status")?.asString
 
@@ -305,9 +403,22 @@ sealed class MigrationStatus {
 }
 
 /**
+ * Migration config returned by the vault when an update is available.
+ */
+data class MigrationConfig(
+    val version: String,
+    val summary: String,
+    val detailsUrl: String?,
+    val publishedAt: String?,
+    val mandatoryAfter: String?
+)
+
+/**
  * Migration events for UI updates.
  */
 sealed class MigrationEvent {
+    data class MigrationCompleted(val version: String) : MigrationEvent()
+    data class MigrationFailed(val error: String) : MigrationEvent()
     object RecoveryCompleted : MigrationEvent()
     data class RecoveryFailed(val error: String) : MigrationEvent()
 }
