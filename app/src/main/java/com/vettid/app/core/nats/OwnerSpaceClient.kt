@@ -305,6 +305,17 @@ class OwnerSpaceClient @Inject constructor(
 
             android.util.Log.d(TAG, "parseJetStreamResponse raw=${responseString.take(500)}")
 
+            // Guard: skip garbled/non-JSON responses (NATS framing issue)
+            val trimmed = responseString.trimStart()
+            if (!trimmed.startsWith("{")) {
+                android.util.Log.w(TAG, "Skipping non-JSON response (garbled NATS data): ${trimmed.take(80)}")
+                return VaultResponse.Error(
+                    requestId = requestId,
+                    code = "GARBLED",
+                    message = "Received garbled response — retrying may help"
+                )
+            }
+
             val response = gson.fromJson(responseString, VaultResponseJson::class.java)
 
             // Extract and store any new UTKs

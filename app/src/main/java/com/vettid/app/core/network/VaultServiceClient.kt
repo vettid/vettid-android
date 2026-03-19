@@ -846,7 +846,7 @@ interface VaultServiceApi {
     /**
      * Get list of proposals available for voting.
      */
-    @GET("vault/voting/proposals")
+    @GET("proposals")
     suspend fun getProposals(
         @Header("Authorization") authToken: String,
         @Query("organization_id") organizationId: String? = null,
@@ -858,7 +858,7 @@ interface VaultServiceApi {
     /**
      * Get a single proposal by ID.
      */
-    @GET("vault/voting/proposals/{proposal_id}")
+    @GET("proposals/{proposal_id}")
     suspend fun getProposal(
         @Header("Authorization") authToken: String,
         @Path("proposal_id") proposalId: String
@@ -867,7 +867,7 @@ interface VaultServiceApi {
     /**
      * Get the user's votes.
      */
-    @GET("vault/voting/my-votes")
+    @GET("votes/history")
     suspend fun getMyVotes(
         @Header("Authorization") authToken: String,
         @Query("page") page: Int = 1,
@@ -877,7 +877,7 @@ interface VaultServiceApi {
     /**
      * Verify a vote receipt.
      */
-    @POST("vault/voting/verify")
+    @POST("member/votes/verify")
     suspend fun verifyVote(
         @Header("Authorization") authToken: String,
         @Body request: VerifyVoteRequest
@@ -886,7 +886,7 @@ interface VaultServiceApi {
     /**
      * Get the public bulletin board for a proposal.
      */
-    @GET("vault/voting/proposals/{proposal_id}/bulletin")
+    @GET("votes/{proposal_id}/published")
     suspend fun getBulletinBoard(
         @Header("Authorization") authToken: String,
         @Path("proposal_id") proposalId: String,
