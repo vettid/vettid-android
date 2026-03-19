@@ -93,6 +93,10 @@ class ConnectionsViewModel @Inject constructor(
     private val reviewedConnectionIds = mutableSetOf<String>()
     private val respondedConnectionIds = mutableSetOf<String>()
 
+    // Debounce rapid loadConnections calls
+    private var lastLoadTime = 0L
+    private val loadDebounceMs = 3000L
+
     init {
         loadConnections()
 
@@ -145,6 +149,13 @@ class ConnectionsViewModel @Inject constructor(
      */
     fun loadConnections() {
         viewModelScope.launch {
+            // Debounce rapid calls (key-exchanged + activated fire within seconds)
+            val now = System.currentTimeMillis()
+            if (now - lastLoadTime < loadDebounceMs && _state.value is ConnectionsState.Loaded) {
+                return@launch
+            }
+            lastLoadTime = now
+
             if (_state.value !is ConnectionsState.Loaded) {
                 _state.value = ConnectionsState.Loading
             }

@@ -148,13 +148,17 @@ class ScanInvitationViewModel @Inject constructor(
                     profile["_system_last_name"]
                 ).joinToString(" ").trim().ifEmpty { invitation.label }
 
-                // Build profile fields from non-system entries
+                // Build profile fields from non-system, non-internal entries
+                val internalKeys = setOf("photo", "user_guid", "public_key")
                 val profileFields = mutableMapOf<String, Map<String, String>>()
                 profile.forEach { (key, value) ->
-                    if (!key.startsWith("_system_") && key != "photo") {
+                    if (!key.startsWith("_system_") && key !in internalKeys && value.isNotBlank()) {
+                        // For dotted keys like "other.custom.mini", use last segment as display name
+                        val displayName = key.substringAfterLast(".")
+                            .replace("_", " ")
+                            .replaceFirstChar { it.titlecase() }
                         profileFields[key] = mapOf(
-                            "display_name" to key.replace("_", " ")
-                                .replaceFirstChar { it.titlecase() },
+                            "display_name" to displayName,
                             "value" to value
                         )
                     }

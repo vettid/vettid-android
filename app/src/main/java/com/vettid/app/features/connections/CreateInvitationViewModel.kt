@@ -145,12 +145,33 @@ class CreateInvitationViewModel @Inject constructor(
                     viewModelScope.launch {
                         ownerSpaceClient.connectionAcceptances.collect { accepted ->
                             if (accepted.connectionId == natsInvitation.connectionId) {
+                                // Show immediately with what we have
                                 _state.value = CreateInvitationState.PeerAccepted(
                                     peerAlias = accepted.peerAlias ?: "Someone",
                                     connectionId = accepted.connectionId,
                                     peerPhoto = accepted.peerPhoto,
                                     peerEmail = accepted.peerProfile?.get("_system_email"),
                                     peerFields = accepted.peerFields
+                                )
+                                // Then reload connection list to get full profile (photo, fields)
+                                connectionsClient.list().fold(
+                                    onSuccess = { listResult ->
+                                        val record = listResult.items.find {
+                                            it.connectionId == accepted.connectionId
+                                        }
+                                        if (record?.peerProfile != null) {
+                                            val pp = record.peerProfile!!
+                                            _state.value = CreateInvitationState.PeerAccepted(
+                                                peerAlias = accepted.peerAlias ?: record.label,
+                                                connectionId = accepted.connectionId,
+                                                peerPhoto = pp.photo ?: accepted.peerPhoto,
+                                                peerEmail = pp.email
+                                                    ?: accepted.peerProfile?.get("_system_email"),
+                                                peerFields = pp.fields ?: accepted.peerFields
+                                            )
+                                        }
+                                    },
+                                    onFailure = { /* Keep what we have */ }
                                 )
                             }
                         }
