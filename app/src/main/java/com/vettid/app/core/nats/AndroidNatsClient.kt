@@ -517,9 +517,15 @@ class AndroidNatsClient {
     }
 
     private suspend fun readMessages() {
+        // Capture the stream reference locally so this reader ONLY reads from
+        // the stream that was current when it started. During reconnect,
+        // inputStream is swapped to a new stream — if we used the class field,
+        // both old and new readers would read from the same stream, causing
+        // garbled data (bytes split between two concurrent readers).
+        val myStream = inputStream
         try {
             while (connected.get()) {
-                val line = readProtocolLine() ?: break
+                val line = readProtocolLine(myStream) ?: break
 
                 when {
                     line == "PING" -> {
@@ -536,12 +542,12 @@ class AndroidNatsClient {
                     line.startsWith("MSG ") -> {
                         // Any message means connection is alive
                         lastPongTime.set(System.currentTimeMillis())
-                        handleMessage(line)
+                        handleMessage(line, myStream)
                     }
                     line.startsWith("HMSG ") -> {
                         // JetStream header message — same as MSG but with headers
                         lastPongTime.set(System.currentTimeMillis())
-                        handleHeaderMessage(line)
+                        handleHeaderMessage(line, myStream)
                     }
                     line.startsWith("-ERR") -> {
                         Log.e(TAG, "Server error: $line")
@@ -552,31 +558,38 @@ class AndroidNatsClient {
                     else -> {
                         Log.d(TAG, "Unknown message: $line")
                         // Try to consume any payload bytes to prevent stream desync.
-                        // Garbled MSG/HMSG lines still have payload bytes following.
                         val lastPart = line.trimEnd().split(" ").lastOrNull()
                         val trailingBytes = lastPart?.toIntOrNull()
                         if (trailingBytes != null && trailingBytes > 0 && trailingBytes < 1_000_000) {
                             Log.w(TAG, "Consuming $trailingBytes bytes from garbled message to resync")
-                            readExactBytes(trailingBytes)
-                            readProtocolLine() // consume trailing CRLF
+                            readExactBytes(trailingBytes, myStream)
+                            readProtocolLine(myStream) // consume trailing CRLF
                         }
                     }
                 }
             }
             Log.w(TAG, "Reader loop exited (connected=${connected.get()})")
-            // EOF or null read — trigger reconnect if we didn't disconnect intentionally
-            if (connected.get()) {
+            // EOF or null read — only trigger reconnect if OUR stream is still current.
+            // If inputStream was swapped (reconnect happened), another reader owns the
+            // new stream, so we just exit silently.
+            if (connected.get() && inputStream === myStream) {
                 handleDisconnect()
             }
         } catch (e: Exception) {
-            if (connected.get()) {
+            // Only trigger reconnect if our stream is still the active one.
+            // After reconnect, the old stream is closed (causing this exception),
+            // but the new connection is already live — calling handleDisconnect
+            // here would kill it.
+            if (connected.get() && inputStream === myStream) {
                 Log.e(TAG, "Read error: ${e.message}")
                 handleDisconnect()
+            } else {
+                Log.d(TAG, "Reader exiting (stream replaced by reconnect)")
             }
         }
     }
 
-    private fun handleMessage(msgLine: String) {
+    private fun handleMessage(msgLine: String, stream: BufferedInputStream? = inputStream) {
         // MSG <subject> <sid> [reply-to] <#bytes>
         val parts = msgLine.split(" ")
         if (parts.size < 4) return
@@ -596,11 +609,11 @@ class AndroidNatsClient {
 
         // Read payload as raw bytes (numBytes is a byte count)
         val payload = if (numBytes > 0) {
-            val bytes = readExactBytes(numBytes) ?: return
-            readProtocolLine() // consume trailing CRLF
+            val bytes = readExactBytes(numBytes, stream) ?: return
+            readProtocolLine(stream) // consume trailing CRLF
             bytes
         } else {
-            readProtocolLine() // consume trailing CRLF
+            readProtocolLine(stream) // consume trailing CRLF
             ByteArray(0)
         }
 
@@ -621,7 +634,7 @@ class AndroidNatsClient {
         }
     }
 
-    private fun handleHeaderMessage(hmsgLine: String) {
+    private fun handleHeaderMessage(hmsgLine: String, stream: BufferedInputStream? = inputStream) {
         // HMSG <subject> <sid> [reply-to] <header-bytes> <total-bytes>
         val parts = hmsgLine.split(" ")
         if (parts.size < 5) return
@@ -644,11 +657,11 @@ class AndroidNatsClient {
 
         // Read the entire block (headers + payload) as raw bytes
         val fullBytes = if (totalBytes > 0) {
-            val bytes = readExactBytes(totalBytes) ?: return
-            readProtocolLine() // consume trailing CRLF
+            val bytes = readExactBytes(totalBytes, stream) ?: return
+            readProtocolLine(stream) // consume trailing CRLF
             bytes
         } else {
-            readProtocolLine() // consume trailing CRLF
+            readProtocolLine(stream) // consume trailing CRLF
             ByteArray(0)
         }
 
