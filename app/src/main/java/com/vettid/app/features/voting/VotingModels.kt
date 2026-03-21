@@ -1,7 +1,6 @@
 package com.vettid.app.features.voting
 
 import com.google.gson.annotations.SerializedName
-import java.time.Instant
 
 /**
  * Voting data models for Issue #50: Vault-Based Voting.
@@ -25,45 +24,60 @@ data class Proposal(
 
     /** Organization that created the proposal */
     @SerializedName("organization_id")
-    val organizationId: String,
+    val organizationId: String = "",
 
     /** Human-readable title */
     val title: String,
 
     /** Full description (may contain markdown) */
-    val description: String,
+    val description: String = "",
 
     /** Available choices for voting */
-    val choices: List<VoteChoice>,
+    val choices: List<VoteChoice> = emptyList(),
 
-    /** When voting opens */
+    /** When voting opens (ISO 8601 string) */
     @SerializedName("voting_starts_at")
-    val votingStartsAt: Instant,
+    val votingStartsAt: String = "",
 
-    /** When voting closes */
+    /** When voting closes (ISO 8601 string) */
     @SerializedName("voting_ends_at")
-    val votingEndsAt: Instant,
+    val votingEndsAt: String = "",
 
     /** Current status */
-    val status: ProposalStatus,
+    val status: ProposalStatus = ProposalStatus.UPCOMING,
 
     /** VettID signature over proposal content (Ed25519) */
-    val signature: String,
+    val signature: String = "",
 
     /** Signing key ID for verification */
     @SerializedName("signature_key_id")
-    val signatureKeyId: String,
+    val signatureKeyId: String = "",
 
-    /** When the proposal was created */
+    /** When the proposal was created (ISO 8601 string) */
     @SerializedName("created_at")
-    val createdAt: Instant,
+    val createdAt: String = "",
 
     /** Whether the user has already voted */
     @SerializedName("user_has_voted")
     val userHasVoted: Boolean = false,
 
     /** Results if voting has ended and results are released */
-    val results: VoteResults? = null
+    val results: VoteResults? = null,
+
+    /** Proposal number (e.g. P0000006) */
+    @SerializedName("proposal_number")
+    val proposalNumber: String? = null,
+
+    /** Category (e.g. budget, governance) */
+    val category: String? = null,
+
+    /** Quorum type (e.g. none, majority, supermajority) */
+    @SerializedName("quorum_type")
+    val quorumType: String? = null,
+
+    /** Quorum value (e.g. percentage or count) */
+    @SerializedName("quorum_value")
+    val quorumValue: String? = null
 )
 
 /**
@@ -123,7 +137,7 @@ data class VoteResults(
 
     /** When results were finalized */
     @SerializedName("finalized_at")
-    val finalizedAt: Instant
+    val finalizedAt: String = ""
 )
 
 // MARK: - Vote Models
@@ -143,7 +157,7 @@ data class Vote(
 
     /** When the vote was cast */
     @SerializedName("cast_at")
-    val castAt: Instant,
+    val castAt: String = "",
 
     /** Receipt for verification */
     val receipt: VoteReceipt
@@ -174,7 +188,7 @@ data class VoteReceipt(
     val signature: String,
 
     /** When the vote was recorded */
-    val timestamp: Instant,
+    val timestamp: String = "",
 
     /** Position in the bulletin board Merkle tree */
     @SerializedName("merkle_index")

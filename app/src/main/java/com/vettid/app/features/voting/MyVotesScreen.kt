@@ -385,14 +385,24 @@ private fun ReceiptField(label: String, value: String) {
     }
 }
 
-private fun formatDate(instant: java.time.Instant): String {
-    val formatter = DateTimeFormatter.ofPattern("MMM d, yyyy")
-    return instant.atZone(ZoneId.systemDefault()).format(formatter)
+private fun formatDate(isoTimestamp: String): String {
+    return try {
+        val instant = java.time.Instant.parse(isoTimestamp)
+        val formatter = DateTimeFormatter.ofPattern("MMM d, yyyy")
+        instant.atZone(ZoneId.systemDefault()).format(formatter)
+    } catch (e: Exception) {
+        isoTimestamp
+    }
 }
 
-private fun formatDateTime(instant: java.time.Instant): String {
-    val formatter = DateTimeFormatter.ofPattern("MMM d, yyyy h:mm a")
-    return instant.atZone(ZoneId.systemDefault()).format(formatter)
+private fun formatDateTime(isoTimestamp: String): String {
+    return try {
+        val instant = java.time.Instant.parse(isoTimestamp)
+        val formatter = DateTimeFormatter.ofPattern("MMM d, yyyy h:mm a")
+        instant.atZone(ZoneId.systemDefault()).format(formatter)
+    } catch (e: Exception) {
+        isoTimestamp
+    }
 }
 
 @Composable

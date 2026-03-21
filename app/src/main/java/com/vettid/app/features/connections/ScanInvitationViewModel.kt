@@ -95,7 +95,7 @@ class ScanInvitationViewModel @Inject constructor(
     private suspend fun resolveInviteCode(inviteCode: String) {
         connectionsClient.resolveInvite(inviteCode).fold(
             onSuccess = { invitation ->
-                android.util.Log.d("ScanInvitationVM", "Invite resolved: connectionId=${invitation.connectionId}")
+                android.util.Log.d("ScanInvitationVM", "Invite resolved: connectionId=${invitation.connectionId}, profile keys=${invitation.inviterProfile?.keys}")
                 parsedInvitation = ConnectionInvitationData(
                     connectionId = invitation.connectionId,
                     peerGuid = invitation.ownerSpaceId,
@@ -105,7 +105,24 @@ class ScanInvitationViewModel @Inject constructor(
                     messageSpaceId = invitation.messageSpaceId,
                     natsEndpoint = credentialStore.getNatsEndpoint()
                 )
-                fetchAndShowPeerProfile(parsedInvitation!!)
+
+                // Use inviter profile from broker payload if available
+                val profile = invitation.inviterProfile
+                if (!profile.isNullOrEmpty()) {
+                    android.util.Log.d("ScanInvitationVM", "Using profile from broker: ${profile.keys}")
+                    fetchedPeerProfile = profile
+                    showProfilePreview(profile, invitation.label)
+                } else {
+                    // No profile in broker — show preview with label immediately,
+                    // then try async JetStream fetch as enhancement
+                    android.util.Log.d("ScanInvitationVM", "No profile in broker, showing label: ${invitation.label}")
+                    _state.value = ScanInvitationState.Preview(
+                        creatorName = invitation.label.ifEmpty { "VettID User" },
+                        creatorAvatarUrl = null
+                    )
+                    // Try JetStream fetch in background to enhance the preview
+                    fetchAndShowPeerProfile(parsedInvitation!!)
+                }
             },
             onFailure = { error ->
                 android.util.Log.e("ScanInvitationVM", "Failed to resolve invite: ${error.message}")
@@ -113,6 +130,38 @@ class ScanInvitationViewModel @Inject constructor(
                     message = error.message ?: "Failed to resolve invitation"
                 )
             }
+        )
+    }
+
+    /**
+     * Show profile preview from a profile map (e.g., from broker payload).
+     */
+    private fun showProfilePreview(profile: Map<String, String>, fallbackLabel: String) {
+        val displayName = listOfNotNull(
+            profile["_system_first_name"],
+            profile["_system_last_name"]
+        ).joinToString(" ").trim().ifEmpty { fallbackLabel }
+
+        val internalKeys = setOf("photo", "user_guid", "public_key")
+        val profileFields = mutableMapOf<String, Map<String, String>>()
+        profile.forEach { (key, value) ->
+            if (!key.startsWith("_system_") && key !in internalKeys && value.isNotBlank()) {
+                val fieldDisplayName = key.substringAfterLast(".")
+                    .replace("_", " ")
+                    .replaceFirstChar { it.titlecase() }
+                profileFields[key] = mapOf(
+                    "display_name" to fieldDisplayName,
+                    "value" to value
+                )
+            }
+        }
+
+        _state.value = ScanInvitationState.Preview(
+            creatorName = displayName,
+            creatorAvatarUrl = null,
+            creatorEmail = profile["_system_email"],
+            creatorPhoto = profile["photo"],
+            profileFields = profileFields.ifEmpty { null }
         )
     }
 

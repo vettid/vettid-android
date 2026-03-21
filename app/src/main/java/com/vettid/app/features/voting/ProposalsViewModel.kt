@@ -3,7 +3,6 @@ package com.vettid.app.features.voting
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.nats.OwnerSpaceClient
@@ -88,10 +87,9 @@ class ProposalsViewModel @Inject constructor(
                                 return@launch
                             }
 
-                            val gson = Gson()
                             val proposals = proposalsArray.mapNotNull { element ->
                                 try {
-                                    gson.fromJson(element, Proposal::class.java)
+                                    parseProposalFromJson(element.asJsonObject)
                                 } catch (e: Exception) {
                                     Log.w(TAG, "Failed to parse proposal: ${e.message}")
                                     null
@@ -117,6 +115,15 @@ class ProposalsViewModel @Inject constructor(
                         } else {
                             Log.e(TAG, "Vault error: ${response.error}")
                             showCachedOrError(response.error ?: "Failed to load proposals")
+                        }
+                    }
+                    is VaultResponse.Error -> {
+                        if (response.code == "TIMEOUT") {
+                            Log.w(TAG, "Proposals request timed out")
+                            showCachedOrEmpty()
+                        } else {
+                            Log.e(TAG, "Vault error: ${response.code} - ${response.message}")
+                            showCachedOrError(response.message ?: "Failed to load proposals")
                         }
                     }
                     else -> {
@@ -178,8 +185,11 @@ class ProposalsViewModel @Inject constructor(
     }
 
     private fun selectProposal(proposalId: String) {
+        Log.d(TAG, "selectProposal called: $proposalId")
         viewModelScope.launch {
+            Log.d(TAG, "Emitting NavigateToProposal effect for: $proposalId")
             _effects.emit(ProposalsEffect.NavigateToProposal(proposalId))
+            Log.d(TAG, "Effect emitted for: $proposalId")
         }
     }
 
@@ -244,6 +254,69 @@ class ProposalsViewModel @Inject constructor(
                 }
             }.thenByDescending { it.createdAt }
         )
+    }
+
+    /**
+     * Parse a proposal from the DynamoDB JSON format returned by the vault.
+     * Maps field names: proposal_id→id, proposal_title→title, opens_at→votingStartsAt, etc.
+     */
+    private fun parseProposalFromJson(json: JsonObject): Proposal {
+        val choices = json.getAsJsonArray("choices")?.map { choiceEl ->
+            val c = choiceEl.asJsonObject
+            VoteChoice(
+                id = c.get("id")?.asString ?: "",
+                label = c.get("label")?.asString ?: "",
+                description = c.get("description")?.asString
+            )
+        } ?: emptyList()
+
+        val statusStr = json.get("status")?.asString ?: "upcoming"
+        val status = when (statusStr) {
+            "active" -> ProposalStatus.ACTIVE
+            "upcoming" -> ProposalStatus.UPCOMING
+            "ended" -> ProposalStatus.ENDED
+            "finalized" -> ProposalStatus.FINALIZED
+            "cancelled" -> ProposalStatus.CANCELLED
+            else -> ProposalStatus.UPCOMING
+        }
+
+        return Proposal(
+            id = json.get("proposal_id")?.asString ?: json.get("id")?.asString ?: "",
+            organizationId = json.get("organization_id")?.asString ?: "",
+            title = json.get("proposal_title")?.asString ?: json.get("title")?.asString ?: "",
+            description = json.get("proposal_text")?.asString ?: json.get("description")?.asString ?: "",
+            choices = choices,
+            votingStartsAt = json.get("opens_at")?.asString ?: json.get("voting_starts_at")?.asString ?: "",
+            votingEndsAt = json.get("closes_at")?.asString ?: json.get("voting_ends_at")?.asString ?: "",
+            status = status,
+            signature = json.get("signature")?.asString ?: "",
+            signatureKeyId = json.get("signature_key_id")?.asString ?: "",
+            createdAt = json.get("created_at")?.asString ?: "",
+            userHasVoted = json.get("user_has_voted")?.asBoolean ?: false,
+            proposalNumber = json.get("proposal_number")?.asString,
+            category = json.get("category")?.asString,
+            quorumType = json.get("quorum_type")?.asString,
+            quorumValue = json.get("quorum_value")?.asString
+        )
+    }
+
+    /**
+     * Re-check voted status from VotingRepository for all loaded proposals.
+     * Called when the proposals list becomes visible again (e.g., after navigating
+     * back from ProposalDetailScreen where a vote may have been cast).
+     */
+    fun refreshVotedFlags() {
+        val currentState = _state.value
+        if (currentState is ProposalsState.Loaded) {
+            val updatedProposals = currentState.proposals.map { proposal ->
+                if (!proposal.userHasVoted && votingRepository.hasVotedOnProposal(proposal.id)) {
+                    proposal.copy(userHasVoted = true)
+                } else {
+                    proposal
+                }
+            }
+            _state.value = currentState.copy(proposals = sortProposals(updatedProposals))
+        }
     }
 
     /**

@@ -186,7 +186,7 @@ class VotingViewModel @Inject constructor(
                     val vote = Vote(
                         proposalId = currentState.proposal.id,
                         choiceId = currentState.selectedChoice.id,
-                        castAt = Instant.now(),
+                        castAt = Instant.now().toString(),
                         receipt = receipt
                     )
                     votingRepository.storeVote(vote)
@@ -244,11 +244,11 @@ class VotingViewModel @Inject constructor(
         val passwordSalt = credentialStore.getPasswordSaltBytes()
             ?: throw IllegalStateException("No password salt")
 
-        // Encrypt password for enclave
-        val passwordEncryption = cryptoManager.encryptPasswordForEnclave(
+        // Encrypt password with UTK using domain-separated XChaCha20-Poly1305
+        val passwordEncryption = cryptoManager.encryptPasswordForServer(
             password = password,
             salt = passwordSalt,
-            enclavePublicKeyBase64 = utk.publicKey
+            utkPublicKeyBase64 = utk.publicKey
         )
 
         // Build vote request payload as JsonObject for OwnerSpaceClient
@@ -304,11 +304,8 @@ class VotingViewModel @Inject constructor(
                         choiceId = choiceId,
                         votingPublicKey = votingPubKey,
                         signature = r.get("vote_signature")?.asString ?: "",
-                        timestamp = try {
-                            Instant.parse(r.get("voted_at")?.asString)
-                        } catch (e: Exception) {
-                            Instant.now()
-                        }
+                        timestamp = r.get("voted_at")?.asString
+                            ?: Instant.now().toString()
                     )
                 } else {
                     throw Exception(response.error ?: "Vote failed")

@@ -175,6 +175,65 @@ private fun ProposalContent(
 
         Spacer(modifier = Modifier.height(24.dp))
 
+        // Proposal metadata
+        if (proposal.proposalNumber != null || proposal.category != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                proposal.proposalNumber?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                proposal.category?.let {
+                    Text(
+                        text = it.replaceFirstChar { c -> c.uppercase() },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        // Quorum requirements
+        if (proposal.quorumType != null && proposal.quorumType != "none") {
+            Card(
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.Groups,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    val quorumText = when (proposal.quorumType) {
+                        "majority" -> "Requires majority (>${proposal.quorumValue ?: "50"}%)"
+                        "supermajority" -> "Requires supermajority (>${proposal.quorumValue ?: "66"}%)"
+                        "absolute" -> "Requires ${proposal.quorumValue ?: "N/A"} votes"
+                        else -> "Quorum: ${proposal.quorumType} (${proposal.quorumValue ?: "N/A"})"
+                    }
+                    Text(
+                        text = quorumText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
         // Choices section
         Text(
             text = "Choices",
@@ -736,16 +795,24 @@ private fun StatusChip(status: ProposalStatus) {
 }
 
 private fun formatVotingPeriod(proposal: Proposal): String {
-    val formatter = DateTimeFormatter.ofPattern("MMM d, yyyy 'at' h:mm a")
-    val zone = ZoneId.systemDefault()
-    val start = proposal.votingStartsAt.atZone(zone).format(formatter)
-    val end = proposal.votingEndsAt.atZone(zone).format(formatter)
-    return "$start - $end"
+    return try {
+        val formatter = DateTimeFormatter.ofPattern("MMM d, yyyy 'at' h:mm a")
+        val zone = ZoneId.systemDefault()
+        val start = Instant.parse(proposal.votingStartsAt).atZone(zone).format(formatter)
+        val end = Instant.parse(proposal.votingEndsAt).atZone(zone).format(formatter)
+        "$start - $end"
+    } catch (e: Exception) {
+        "${proposal.votingStartsAt} - ${proposal.votingEndsAt}"
+    }
 }
 
-private fun formatTimestamp(instant: Instant): String {
-    val formatter = DateTimeFormatter.ofPattern("MMM d, yyyy h:mm a")
-    return instant.atZone(ZoneId.systemDefault()).format(formatter)
+private fun formatTimestamp(timestamp: String): String {
+    return try {
+        val formatter = DateTimeFormatter.ofPattern("MMM d, yyyy h:mm a")
+        Instant.parse(timestamp).atZone(ZoneId.systemDefault()).format(formatter)
+    } catch (e: Exception) {
+        timestamp
+    }
 }
 
 @Composable

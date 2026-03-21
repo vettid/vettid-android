@@ -547,6 +547,9 @@ fun VettIDApp(
                 onNavigateToProposals = {
                     navController.navigate(Screen.Proposals.route)
                 },
+                onNavigateToProposalDetail = { proposalId ->
+                    navController.navigate(Screen.ProposalDetail.createRoute(proposalId))
+                },
                 onNavigateToMyVotes = {
                     navController.navigate(Screen.MyVotes.route)
                 },

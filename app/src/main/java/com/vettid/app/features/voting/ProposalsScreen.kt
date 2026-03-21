@@ -10,6 +10,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -114,11 +116,26 @@ fun ProposalsContent(
     val state by viewModel.state.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
 
+    // Re-check voted flags whenever this composable is resumed (e.g., after voting)
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshVotedFlags()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     // Handle effects
     LaunchedEffect(Unit) {
         viewModel.effects.collect { effect ->
             when (effect) {
-                is ProposalsEffect.NavigateToProposal -> onNavigateToProposal(effect.proposalId)
+                is ProposalsEffect.NavigateToProposal -> {
+                    android.util.Log.d("ProposalsContent", "Navigating to proposal: ${effect.proposalId}")
+                    onNavigateToProposal(effect.proposalId)
+                }
                 is ProposalsEffect.ShowError -> { /* Handle error */ }
             }
         }
@@ -142,6 +159,7 @@ fun ProposalsContent(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ProposalsList(
     proposals: List<Proposal>,
@@ -151,7 +169,14 @@ private fun ProposalsList(
     onProposalClick: (Proposal) -> Unit,
     onLoadMore: () -> Unit
 ) {
-    Box(modifier = Modifier.fillMaxSize()) {
+    val pullToRefreshState = rememberPullToRefreshState()
+
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = onRefresh,
+        state = pullToRefreshState,
+        modifier = Modifier.fillMaxSize()
+    ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(vertical = 8.dp)
@@ -178,14 +203,6 @@ private fun ProposalsList(
                     }
                 }
             }
-        }
-
-        if (isRefreshing) {
-            LinearProgressIndicator(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .align(Alignment.TopCenter)
-            )
         }
     }
 }
@@ -232,38 +249,6 @@ private fun ProposalCard(
             )
 
             Spacer(modifier = Modifier.height(8.dp))
-
-            // Description preview
-            Text(
-                text = proposal.description,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Choices preview
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                proposal.choices.take(3).forEach { choice ->
-                    SuggestionChip(
-                        onClick = onClick,
-                        label = { Text(choice.label, maxLines = 1) }
-                    )
-                }
-                if (proposal.choices.size > 3) {
-                    Text(
-                        text = "+${proposal.choices.size - 3}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.align(Alignment.CenterVertically)
-                    )
-                }
-            }
 
             // Unvoted active indicator
             if (proposal.status == ProposalStatus.ACTIVE && !proposal.userHasVoted) {
@@ -334,20 +319,27 @@ private fun StatusChip(status: ProposalStatus) {
 
 private fun formatVotingTime(proposal: Proposal): String {
     val now = Instant.now()
-    return when (proposal.status) {
-        ProposalStatus.UPCOMING -> {
-            val duration = Duration.between(now, proposal.votingStartsAt)
-            "Starts in ${formatDuration(duration)}"
+    return try {
+        when (proposal.status) {
+            ProposalStatus.UPCOMING -> {
+                val startsAt = Instant.parse(proposal.votingStartsAt)
+                val duration = Duration.between(now, startsAt)
+                "Starts in ${formatDuration(duration)}"
+            }
+            ProposalStatus.ACTIVE -> {
+                val endsAt = Instant.parse(proposal.votingEndsAt)
+                val duration = Duration.between(now, endsAt)
+                "Ends in ${formatDuration(duration)}"
+            }
+            ProposalStatus.ENDED, ProposalStatus.FINALIZED -> {
+                val endsAt = Instant.parse(proposal.votingEndsAt)
+                val formatter = DateTimeFormatter.ofPattern("MMM d, yyyy")
+                "Ended ${endsAt.atZone(ZoneId.systemDefault()).format(formatter)}"
+            }
+            ProposalStatus.CANCELLED -> "Cancelled"
         }
-        ProposalStatus.ACTIVE -> {
-            val duration = Duration.between(now, proposal.votingEndsAt)
-            "Ends in ${formatDuration(duration)}"
-        }
-        ProposalStatus.ENDED, ProposalStatus.FINALIZED -> {
-            val formatter = DateTimeFormatter.ofPattern("MMM d, yyyy")
-            "Ended ${proposal.votingEndsAt.atZone(ZoneId.systemDefault()).format(formatter)}"
-        }
-        ProposalStatus.CANCELLED -> "Cancelled"
+    } catch (e: Exception) {
+        proposal.status.name.lowercase().replaceFirstChar { it.uppercase() }
     }
 }
 

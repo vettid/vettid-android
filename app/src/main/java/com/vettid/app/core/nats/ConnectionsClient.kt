@@ -565,13 +565,22 @@ class ConnectionsClient @Inject constructor(
                 "-----BEGIN NATS USER JWT-----\n$jwt\n------END NATS USER JWT------\n\n-----BEGIN USER NKEY SEED-----\n$seed\n------END USER NKEY SEED------\n"
             } else ""
 
+            // Extract inviter profile from broker payload
+            val inviterProfile = mutableMapOf<String, String>()
+            result.getAsJsonObject("inviter_profile")?.entrySet()?.forEach { (key, value) ->
+                if (!value.isJsonNull && value.isJsonPrimitive) {
+                    inviterProfile[key] = value.asString
+                }
+            }
+
             ResolvedInvitation(
                 connectionId = result.get("connection_id")?.asString ?: "",
                 natsCredentials = natsCredentials,
                 ownerSpaceId = result.get("owner_space")?.asString ?: "",
                 messageSpaceId = result.get("message_space")?.asString ?: "",
                 expiresAt = result.get("expires_at")?.asString ?: "",
-                label = result.get("label")?.asString ?: ""
+                label = result.get("label")?.asString ?: "",
+                inviterProfile = inviterProfile.ifEmpty { null }
             )
         }
     }
@@ -590,7 +599,8 @@ data class ResolvedInvitation(
     val ownerSpaceId: String,
     val messageSpaceId: String,
     val expiresAt: String,
-    val label: String
+    val label: String,
+    val inviterProfile: Map<String, String>? = null
 )
 
 // MARK: - Data Models

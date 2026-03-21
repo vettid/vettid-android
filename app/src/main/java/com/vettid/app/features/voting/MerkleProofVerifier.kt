@@ -5,7 +5,6 @@ import android.util.Log
 import java.security.MessageDigest
 import java.security.Signature
 import java.security.spec.X509EncodedKeySpec
-import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -34,7 +33,7 @@ class MerkleProofVerifier @Inject constructor() {
         votingPublicKey: String,
         proposalId: String,
         choiceId: String,
-        timestamp: Instant,
+        timestamp: String,
         signature: String
     ): Boolean {
         return try {

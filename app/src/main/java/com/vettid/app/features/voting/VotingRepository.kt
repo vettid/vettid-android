@@ -225,7 +225,9 @@ class VotingRepository @Inject constructor(
      * Useful for cleaning up old vote history.
      */
     fun clearVotesOlderThan(instant: Instant) {
-        val votes = getStoredVotes().filter { it.castAt.isAfter(instant) }
+        val votes = getStoredVotes().filter {
+            try { Instant.parse(it.castAt).isAfter(instant) } catch (_: Exception) { true }
+        }
         encryptedPrefs.edit()
             .putString(KEY_VOTES, gson.toJson(votes))
             .apply()

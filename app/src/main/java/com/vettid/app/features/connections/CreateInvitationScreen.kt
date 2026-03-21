@@ -184,7 +184,7 @@ private fun IdleContent(
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "The other person must scan the QR code within 5 minutes",
+                text = "The invitation must be used within 5 minutes",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
@@ -235,14 +235,14 @@ private fun CreatedContent(
     Spacer(modifier = Modifier.height(16.dp))
 
     Text(
-        text = "Scan this QR code",
+        text = "Share this invitation",
         style = MaterialTheme.typography.headlineSmall
     )
 
     Spacer(modifier = Modifier.height(8.dp))
 
     Text(
-        text = "Ask the other person to scan this QR code to connect with you.",
+        text = "Scan this QR code or share the link to connect.",
         style = MaterialTheme.typography.bodyMedium,
         textAlign = TextAlign.Center,
         color = MaterialTheme.colorScheme.onSurfaceVariant
