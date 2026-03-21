@@ -53,7 +53,8 @@ fun VaultPreferencesContent(
     onNavigateToSharedLocations: () -> Unit = {},
     onNavigateToLocationSettings: () -> Unit = {},
     onNavigateToAgents: () -> Unit = {},
-    onNavigateToVaultStatus: () -> Unit = {}
+    onNavigateToVaultStatus: () -> Unit = {},
+    onNavigateToSecurityAuditLog: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -133,43 +134,36 @@ fun VaultPreferencesContent(
         }
     }
 
+    // Expandable section state
+    var expandedSection by remember { mutableStateOf<String?>(null) }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(16.dp)
         ) {
-            // Vault Server Section
-            VaultServerSection(
-                status = state.vaultServerStatus,
-                instanceId = state.vaultInstanceId,
-                instanceIp = state.vaultInstanceIp,
-                natsEndpoint = state.natsEndpoint,
-                actionInProgress = state.vaultActionInProgress,
-                errorMessage = state.vaultErrorMessage,
-                pcrVersion = state.pcrVersion,
-                pcr0Hash = state.pcr0Hash,
-                onRefreshClick = { viewModel.refreshVaultStatus() },
-                onChangePinClick = { showChangePinDialog = true },
-                onSectionClick = onNavigateToVaultStatus
+            // Account
+            SettingsCategoryHeader(
+                icon = Icons.Default.Person,
+                title = "Account",
+                subtitle = "Password, PIN, session, backup",
+                expanded = expandedSection == "account",
+                onClick = { expandedSection = if (expandedSection == "account") null else "account" }
             )
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Credential Settings
-            PreferencesSection(title = "CREDENTIAL SETTINGS") {
-                // Change Password
+            if (expandedSection == "account") {
                 PreferencesItem(
                     icon = Icons.Default.Password,
                     title = "Change Password",
-                    subtitle = "Update your vault credential password",
                     onClick = { showChangePasswordDialog = true }
                 )
-
-                HorizontalDivider()
-
-                // Session TTL
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                PreferencesItem(
+                    icon = Icons.Default.Pin,
+                    title = "Change PIN",
+                    onClick = { showChangePinDialog = true }
+                )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                 TTLDropdownItem(
                     currentTtlSeconds = state.sessionTtlSeconds,
                     onTtlChange = { newTtlSeconds ->
@@ -177,24 +171,12 @@ fun VaultPreferencesContent(
                         showTtlAuthDialog = true
                     }
                 )
-
-                HorizontalDivider()
-
-                // Credential Backup
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                 ListItem(
                     headlineContent = { Text("Credential Backup") },
-                    supportingContent = {
-                        Text(
-                            if (state.backupEnabled) "Credentials backed up on use"
-                            else "Backups disabled"
-                        )
-                    },
                     leadingContent = {
-                        Icon(
-                            imageVector = Icons.Default.CloudUpload,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Icon(Icons.Default.CloudUpload, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     },
                     trailingContent = {
                         Switch(
@@ -205,19 +187,31 @@ fun VaultPreferencesContent(
                 )
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            HorizontalDivider()
 
-            // Archive Settings
-            PreferencesSection(title = "ARCHIVE SETTINGS") {
+            // Privacy & Security
+            SettingsCategoryHeader(
+                icon = Icons.Default.Shield,
+                title = "Privacy & Security",
+                subtitle = "Location, notifications, data retention",
+                expanded = expandedSection == "privacy",
+                onClick = { expandedSection = if (expandedSection == "privacy") null else "privacy" }
+            )
+            if (expandedSection == "privacy") {
+                PreferencesItem(
+                    icon = Icons.Default.LocationOn,
+                    title = "Location",
+                    subtitle = if (state.locationTrackingEnabled) "Enabled" else "Disabled",
+                    onClick = { viewModel.onLocationSettingsClick() }
+                )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                 ArchiveDropdownItem(
                     label = "Archive after",
                     currentValue = state.archiveAfterDays,
                     options = listOf(7, 14, 30, 60, 90),
                     onValueChange = { viewModel.updateArchiveAfterDays(it) }
                 )
-
-                HorizontalDivider()
-
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                 ArchiveDropdownItem(
                     label = "Delete after",
                     currentValue = state.deleteAfterDays,
@@ -226,40 +220,70 @@ fun VaultPreferencesContent(
                 )
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            HorizontalDivider()
 
-            // Location Tracking link
-            PreferencesSection(title = "LOCATION") {
-                PreferencesItem(
-                    icon = Icons.Default.LocationOn,
-                    title = "Location Tracking",
-                    subtitle = if (state.locationTrackingEnabled) "Enabled" else "Disabled",
-                    onClick = { viewModel.onLocationSettingsClick() }
+            // Appearance
+            SettingsCategoryHeader(
+                icon = Icons.Default.Palette,
+                title = "Appearance",
+                subtitle = state.theme.name.lowercase().replaceFirstChar { it.uppercase() },
+                expanded = expandedSection == "appearance",
+                onClick = { expandedSection = if (expandedSection == "appearance") null else "appearance" }
+            )
+            if (expandedSection == "appearance") {
+                AppearanceSection(
+                    currentTheme = state.theme,
+                    onThemeChange = { viewModel.updateTheme(it) }
                 )
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            HorizontalDivider()
 
-            // Notifications section
-            NotificationsSection()
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Appearance section
-            AppearanceSection(
-                currentTheme = state.theme,
-                onThemeChange = { viewModel.updateTheme(it) }
+            // Logging
+            SettingsCategoryHeader(
+                icon = Icons.Default.Security,
+                title = "Logging",
+                subtitle = "Audit logs and retention",
+                expanded = expandedSection == "logging",
+                onClick = { expandedSection = if (expandedSection == "logging") null else "logging" }
             )
+            if (expandedSection == "logging") {
+                PreferencesItem(
+                    icon = Icons.Default.List,
+                    title = "View Audit Logs",
+                    onClick = onNavigateToSecurityAuditLog
+                )
+            }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            HorizontalDivider()
 
-            // About section
-            AboutSection(onNavigateToAppDetails = onNavigateToAppDetails)
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Help & Support section
-            HelpSupportSection()
+            // About
+            SettingsCategoryHeader(
+                icon = Icons.Default.Info,
+                title = "About",
+                subtitle = "Version, vault status, help",
+                expanded = expandedSection == "about",
+                onClick = { expandedSection = if (expandedSection == "about") null else "about" }
+            )
+            if (expandedSection == "about") {
+                PreferencesItem(
+                    icon = Icons.Default.PhoneAndroid,
+                    title = "App Details",
+                    onClick = onNavigateToAppDetails
+                )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                PreferencesItem(
+                    icon = Icons.Default.Dashboard,
+                    title = "Vault Status",
+                    onClick = onNavigateToVaultStatus
+                )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                PreferencesItem(
+                    icon = Icons.Default.SmartToy,
+                    title = "Agent Connections",
+                    onClick = onNavigateToAgents
+                )
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
         }
@@ -686,13 +710,13 @@ private fun PreferencesSection(
 private fun PreferencesItem(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
-    subtitle: String,
+    subtitle: String? = null,
     onClick: () -> Unit
 ) {
     ListItem(
         modifier = Modifier.clickable(onClick = onClick),
         headlineContent = { Text(title) },
-        supportingContent = { Text(subtitle) },
+        supportingContent = subtitle?.let { s -> { Text(s) } },
         leadingContent = {
             Icon(
                 imageVector = icon,
@@ -1285,6 +1309,68 @@ private fun AgentConnectionsSection(onNavigateToAgents: () -> Unit = {}) {
             },
             trailingContent = {
                 Icon(Icons.Default.ChevronRight, contentDescription = null)
+            }
+        )
+    }
+}
+
+@Composable
+private fun SettingsCategoryHeader(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    expanded: Boolean,
+    onClick: () -> Unit
+) {
+    ListItem(
+        modifier = Modifier.clickable(onClick = onClick),
+        headlineContent = {
+            Text(title, fontWeight = FontWeight.Medium)
+        },
+        supportingContent = {
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        leadingContent = {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary
+            )
+        },
+        trailingContent = {
+            Icon(
+                imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    )
+}
+
+@Composable
+private fun LoggingSection(onNavigateToSecurityAuditLog: () -> Unit = {}) {
+    PreferencesSection(title = "LOGGING") {
+        ListItem(
+            modifier = Modifier.clickable { onNavigateToSecurityAuditLog() },
+            headlineContent = { Text("Audit Logs") },
+            supportingContent = { Text("View security and activity audit logs") },
+            leadingContent = {
+                Icon(
+                    imageVector = Icons.Default.Security,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            trailingContent = {
+                Icon(
+                    imageVector = Icons.Default.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         )
     }

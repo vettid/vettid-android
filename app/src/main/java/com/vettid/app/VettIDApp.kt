@@ -74,6 +74,8 @@ import com.vettid.app.ui.components.NatsConnectionDetailsDialog
 import com.vettid.app.ui.components.QrCodeScanner
 import com.vettid.app.ui.navigation.*
 import com.vettid.app.ui.navigation.BadgeCountsViewModel
+import com.vettid.app.ui.navigation.MainActivityScaffold
+import com.vettid.app.ui.navigation.VaultScaffold
 import com.vettid.app.ui.recovery.ProteanRecoveryScreen
 import com.vettid.app.features.debug.CredentialDebugScreen
 import com.vettid.app.features.voting.MyVotesScreen
@@ -120,6 +122,7 @@ sealed class Screen(val route: String) {
     }
     object Authentication : Screen("authentication")
     object Main : Screen("main")
+    object VaultHome : Screen("vault-home")
     object HandlerDiscovery : Screen("handlers")
     object HandlerDetail : Screen("handlers/{handlerId}") {
         fun createRoute(handlerId: String) = "handlers/$handlerId"
@@ -544,6 +547,9 @@ fun VettIDApp(
                 onNavigateToCredentialDebug = {
                     navController.navigate(Screen.CredentialDebug.route)
                 },
+                onNavigateToVaultHome = {
+                    navController.navigate(Screen.VaultHome.route)
+                },
                 onNavigateToProposals = {
                     navController.navigate(Screen.Proposals.route)
                 },
@@ -873,6 +879,43 @@ fun VettIDApp(
         composable(Screen.CredentialDebug.route) {
             CredentialDebugScreen(
                 onBack = { navController.popBackStack() }
+            )
+        }
+        // Vault Home screen (avatar tap)
+        composable(Screen.VaultHome.route) {
+            var vaultSegment by rememberSaveable { mutableStateOf(VaultSegment.CONNECTIONS) }
+            VaultScaffold(
+                vaultSegment = vaultSegment,
+                onVaultSegmentChange = { vaultSegment = it },
+                profilePhotoBase64 = appViewModel.appState.collectAsState().value.profilePhoto,
+                natsConnectionState = appViewModel.appState.collectAsState().value.natsConnectionState,
+                onBack = { navController.popBackStack() },
+                connectionsContent = { query ->
+                    ConnectionsContentEmbedded(
+                        searchQuery = query,
+                        onConnectionClick = { connectionId ->
+                            navController.navigate(Screen.ConnectionDetail.createRoute(connectionId))
+                        },
+                        onCreateInvitation = { navController.navigate(Screen.CreateInvitation.route) },
+                        onScanInvitation = { navController.navigate(Screen.ScanInvitation.route) },
+                        onCreateAgentInvitation = { navController.navigate(Screen.CreateAgentInvitation.route) }
+                    )
+                },
+                personalDataContent = { _ -> PersonalDataContent() },
+                secretsContent = { query ->
+                    SecretsContentEmbedded(
+                        searchQuery = query,
+                        onSecretClick = { _ -> /* Secret detail view */ },
+                        onNavigateToCriticalSecrets = { navController.navigate(Screen.CriticalSecrets.route) }
+                    )
+                },
+                onFabClick = {
+                    when (vaultSegment) {
+                        VaultSegment.CONNECTIONS -> navController.navigate(Screen.CreateInvitation.route)
+                        VaultSegment.DATA -> { /* Navigate to add data field */ }
+                        VaultSegment.SECRETS -> navController.navigate(Screen.AddSecret.createRoute(isCritical = false))
+                    }
+                }
             )
         }
         // Voting screens (Issue #50)
@@ -1417,6 +1460,7 @@ fun MainScreen(
     onNavigateToAgentApproval: (requestId: String) -> Unit = {},
     onNavigateToCreateAgentInvitation: () -> Unit = {},
     onNavigateToVaultStatus: () -> Unit = {},
+    onNavigateToVaultHome: () -> Unit = {},
     appViewModel: AppViewModel = hiltViewModel(),
     badgeCountsViewModel: BadgeCountsViewModel = hiltViewModel(),
     vaultUpdateViewModel: VaultUpdateViewModel = hiltViewModel()
@@ -1430,29 +1474,20 @@ fun MainScreen(
     // Handle "Review Details" — open browser
     val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
 
-    var navigationState by rememberSaveable(
-        stateSaver = listSaver(
-            save = { listOf(it.currentItem.name, it.isDrawerOpen, it.isSettingsOpen) },
-            restore = {
-                NavigationState(
-                    currentItem = DrawerItem.valueOf(it[0] as String),
-                    isDrawerOpen = it[1] as Boolean,
-                    isSettingsOpen = it[2] as Boolean
-                )
-            }
-        )
-    ) { mutableStateOf(NavigationState()) }
+    var activitySegment by rememberSaveable { mutableStateOf(ActivitySegment.FEED) }
+    var isSettingsOpen by rememberSaveable { mutableStateOf(false) }
 
     // Handle navigation results from guide screens
     LaunchedEffect(initialDrawerItem, initialOpenSettings) {
         if (initialDrawerItem != null) {
-            val item = try { DrawerItem.valueOf(initialDrawerItem) } catch (_: Exception) { null }
-            if (item != null) {
-                navigationState = navigationState.copy(currentItem = item, isSettingsOpen = false)
+            when (initialDrawerItem) {
+                "FEED" -> { activitySegment = ActivitySegment.FEED; isSettingsOpen = false }
+                "ARCHIVE" -> { activitySegment = ActivitySegment.ARCHIVE; isSettingsOpen = false }
+                "VOTING" -> { activitySegment = ActivitySegment.VOTING; isSettingsOpen = false }
             }
             onConsumeNavResult()
         } else if (initialOpenSettings) {
-            navigationState = navigationState.copy(isSettingsOpen = true)
+            isSettingsOpen = true
             onConsumeNavResult()
         }
     }
@@ -1465,12 +1500,7 @@ fun MainScreen(
     val pendingConnectionsCount by badgeCountsViewModel.pendingConnectionsCount.collectAsState()
     val unvotedProposalsCount by badgeCountsViewModel.unvotedProposalsCount.collectAsState()
 
-    // Build drawer badge counts map
-    val drawerBadgeCounts = buildMap {
-        if (unreadFeedCount > 0) put(DrawerItem.FEED, unreadFeedCount)
-        if (pendingConnectionsCount > 0) put(DrawerItem.CONNECTIONS, pendingConnectionsCount)
-        if (unvotedProposalsCount > 0) put(DrawerItem.VOTING, unvotedProposalsCount)
-    }
+    // Badge counts (used by vault screen if needed)
 
     // Location tracking state
     val context = LocalContext.current
@@ -1543,18 +1573,15 @@ fun MainScreen(
             else -> { /* No update card for Checking/NoUpdate */ }
         }
 
-    MainScaffold(
-        navigationState = navigationState,
-        onNavigationStateChange = { navigationState = it },
-        userName = appState.displayName,
-        userEmail = appState.userEmail,
+    MainActivityScaffold(
+        activitySegment = activitySegment,
+        onActivitySegmentChange = { activitySegment = it },
+        isSettingsOpen = isSettingsOpen,
+        onSettingsToggle = { isSettingsOpen = !isSettingsOpen },
         profilePhotoBase64 = appState.profilePhoto,
-        // NATS connection state
         natsConnectionState = appState.natsConnectionState,
-        natsErrorMessage = appState.natsError,
-        onNatsRetry = { appViewModel.retryNatsConnection() },
-        onNatsStatusClick = { showConnectionDetailsDialog = true },
-        // Content for each drawer item - each receives searchQuery from MainScaffold
+        onAvatarClick = onNavigateToVaultHome,
+        // Activity content
         feedContent = { query ->
             FeedContent(
                 searchQuery = query,
@@ -1565,50 +1592,24 @@ fun MainScreen(
                 onNavigateToAgentApproval = onNavigateToAgentApproval
             )
         },
-        connectionsContent = { query ->
-            ConnectionsContentEmbedded(
-                searchQuery = query,
-                onConnectionClick = onNavigateToConnectionDetail,
-                onCreateInvitation = onNavigateToCreateInvitation,
-                onScanInvitation = onNavigateToScanInvitation,
-                onCreateAgentInvitation = onNavigateToCreateAgentInvitation
-            )
-        },
-        personalDataContent = { _ ->
-            PersonalDataContent()
-        },
-        secretsContent = { query ->
-            SecretsContentEmbedded(
-                searchQuery = query,
-                onSecretClick = onNavigateToSecretDetail,
-                onNavigateToCriticalSecrets = onNavigateToCriticalSecrets
-            )
-        },
-        archiveContent = { query ->
-            ArchiveContentEmbedded(searchQuery = query)
-        },
         votingContent = { _ ->
             ProposalsContent(
                 onNavigateToProposal = { proposalId -> onNavigateToProposalDetail(proposalId) }
             )
         },
-        auditLogContent = { _ ->
-            AuditLogContent()
+        archiveContent = { query ->
+            ArchiveContentEmbedded(searchQuery = query)
         },
         settingsContent = {
             SettingsContent(
                 onNavigateToAppDetails = onNavigateToAppDetails,
                 onNavigateToLocationSettings = onNavigateToLocationSettings,
                 onNavigateToAgents = onNavigateToAgents,
-                onNavigateToVaultStatus = onNavigateToVaultStatus
+                onNavigateToVaultStatus = onNavigateToVaultStatus,
+                onNavigateToSecurityAuditLog = onNavigateToSecurityAuditLog
             )
         },
-        snackbarHostState = snackbarHostState,
-        drawerBadgeCounts = drawerBadgeCounts,
-        isLocationTrackingEnabled = isLocationTrackingEnabled,
-        onCaptureLocation = {
-            com.vettid.app.features.location.LocationCollectionWorker.captureNow(context)
-        }
+        snackbarHostState = snackbarHostState
     )
     } // End Column wrapping update card + MainScaffold
 }
@@ -2142,13 +2143,15 @@ private fun SettingsContent(
     onNavigateToAppDetails: () -> Unit = {},
     onNavigateToLocationSettings: () -> Unit = {},
     onNavigateToAgents: () -> Unit = {},
-    onNavigateToVaultStatus: () -> Unit = {}
+    onNavigateToVaultStatus: () -> Unit = {},
+    onNavigateToSecurityAuditLog: () -> Unit = {}
 ) {
     VaultPreferencesContent(
         onNavigateToAppDetails = onNavigateToAppDetails,
         onNavigateToLocationSettings = onNavigateToLocationSettings,
         onNavigateToAgents = onNavigateToAgents,
-        onNavigateToVaultStatus = onNavigateToVaultStatus
+        onNavigateToVaultStatus = onNavigateToVaultStatus,
+        onNavigateToSecurityAuditLog = onNavigateToSecurityAuditLog
     )
 }
 

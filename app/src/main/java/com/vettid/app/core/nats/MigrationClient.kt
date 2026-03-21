@@ -196,16 +196,7 @@ class MigrationClient @Inject constructor(
             addProperty("filter", "migration")
         }
 
-        val requestIdResult = ownerSpaceClient.sendToVault("audit.log.get", payload)
-        if (requestIdResult.isFailure) {
-            return Result.failure(requestIdResult.exceptionOrNull() ?: Exception("Failed to fetch audit log"))
-        }
-
-        val requestId = requestIdResult.getOrThrow()
-
-        val response = withTimeoutOrNull(TIMEOUT_MS) {
-            ownerSpaceClient.vaultResponses.first { it.requestId == requestId }
-        }
+        val response = ownerSpaceClient.sendAndAwaitResponse("audit.query", payload, TIMEOUT_MS)
 
         return when (response) {
             is VaultResponse.HandlerResult -> {
@@ -217,7 +208,12 @@ class MigrationClient @Inject constructor(
                 }
             }
             is VaultResponse.Error -> {
-                Result.failure(Exception("${response.code}: ${response.message}"))
+                if (response.code == "TIMEOUT") {
+                    // No audit logs yet is normal
+                    Result.success(emptyList())
+                } else {
+                    Result.failure(Exception("${response.code}: ${response.message}"))
+                }
             }
             else -> {
                 Result.failure(Exception("Timeout waiting for audit log response"))
