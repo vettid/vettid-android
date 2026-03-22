@@ -366,10 +366,13 @@ fun VettIDApp(
                         navController.navigate(Screen.ScanInvitation.createRoute(data))
                     }
                 } else {
-                    // Only navigate to Main if not already there
-                    // This prevents resetting drawer state when appState changes
+                    // Only navigate to Main if not already there or on a child screen
+                    // This prevents resetting navigation when appState changes
                     // (e.g., photo upload, NATS status change)
-                    if (currentRoute != Screen.Main.route) {
+                    val isOnMainOrChild = currentRoute == Screen.Main.route ||
+                        currentRoute == Screen.VaultHome.route ||
+                        navController.previousBackStackEntry?.destination?.route == Screen.Main.route
+                    if (!isOnMainOrChild) {
                         navController.navigate(Screen.Main.route) {
                             popUpTo(0) { inclusive = true }
                         }
@@ -884,12 +887,16 @@ fun VettIDApp(
         // Vault Home screen (avatar tap)
         composable(Screen.VaultHome.route) {
             var vaultSegment by rememberSaveable { mutableStateOf(VaultSegment.CONNECTIONS) }
+            // Explicit back handler — only pop when user intentionally presses back
+            androidx.activity.compose.BackHandler {
+                navController.popBackStack()
+            }
             VaultScaffold(
                 vaultSegment = vaultSegment,
                 onVaultSegmentChange = { vaultSegment = it },
                 profilePhotoBase64 = appViewModel.appState.collectAsState().value.profilePhoto,
                 natsConnectionState = appViewModel.appState.collectAsState().value.natsConnectionState,
-                onBack = { navController.popBackStack() },
+                onBack = { Log.w("VaultHome", "onBack CALLED - popping!"); navController.popBackStack() },
                 connectionsContent = { query ->
                     ConnectionsContentEmbedded(
                         searchQuery = query,

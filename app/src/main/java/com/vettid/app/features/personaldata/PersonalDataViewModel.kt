@@ -1996,12 +1996,15 @@ class PersonalDataViewModel @Inject constructor(
                 val result = ownerSpaceClient.updateProfilePhoto(base64Photo)
                 result.onSuccess {
                     _profilePhoto.value = base64Photo
-                    _showPhotoCapture.value = false
                     personalDataStore.saveProfilePhoto(base64Photo)
-                    _effects.emit(PersonalDataEffect.ShowSuccess("Profile photo updated"))
-                    // Notify app-level state so header/drawer update
+                    // Notify app-level state so header updates
                     profilePhotoEvents.notifyPhotoUpdated(base64Photo)
                     Log.i(TAG, "Profile photo uploaded successfully")
+                    _effects.emit(PersonalDataEffect.ShowSuccess("Profile photo updated"))
+                    // Delay dialog dismissal to prevent Dialog back-handler removal
+                    // from cascading to NavController pop on Android 14+
+                    kotlinx.coroutines.delay(100)
+                    _showPhotoCapture.value = false
                 }.onFailure { error ->
                     Log.e(TAG, "Failed to upload profile photo", error)
                     _effects.emit(PersonalDataEffect.ShowError("Failed to upload photo: ${error.message}"))

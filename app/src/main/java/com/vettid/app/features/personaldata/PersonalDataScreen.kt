@@ -287,6 +287,10 @@ fun PersonalDataContent(
                 usePlatformDefaultWidth = false
             )
         ) {
+            // Consume back press within dialog to prevent propagation to NavController
+            androidx.activity.compose.BackHandler(enabled = true) {
+                viewModel.hidePhotoCaptureDialog()
+            }
             ProfilePhotoCapture(
                 onPhotoCapture = { bytes ->
                     viewModel.uploadPhoto(bytes)
