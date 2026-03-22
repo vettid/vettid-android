@@ -12,6 +12,10 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.Label
 import androidx.compose.material.icons.automirrored.filled.Message
 import androidx.compose.material.icons.automirrored.filled.PhoneMissed
@@ -25,7 +29,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalDensity
@@ -50,6 +56,7 @@ import java.util.concurrent.TimeUnit
 @Composable
 fun FeedContent(
     viewModel: FeedViewModel = hiltViewModel(),
+    connectionsViewModel: com.vettid.app.features.connections.ConnectionsViewModel = hiltViewModel(),
     searchQuery: String = "",
     onNavigateToConversation: (String) -> Unit = {},
     onNavigateToConnectionRequest: (String) -> Unit = {},
@@ -58,6 +65,9 @@ fun FeedContent(
     onNavigateToGuide: (guideId: String, eventId: String, userName: String) -> Unit = { _, _, _ -> },
     onNavigateToAgentApproval: (requestId: String) -> Unit = {}
 ) {
+    var showFabMenu by remember { mutableStateOf(false) }
+    var showConnectionPicker by remember { mutableStateOf(false) }
+    val connectionsState by connectionsViewModel.state.collectAsState()
     // Route search query from top bar to ViewModel
     LaunchedEffect(searchQuery) {
         viewModel.updateSearchQuery(searchQuery)
@@ -127,8 +137,8 @@ fun FeedContent(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        Box(modifier = Modifier.weight(1f)) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.fillMaxSize()) {
             when (val currentState = state) {
                 is FeedState.Loading -> {
                     // If in offline mode, don't show loading - show empty or cached
@@ -176,6 +186,45 @@ fun FeedContent(
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
         }
+
+        // FAB with menu
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(16.dp),
+            horizontalAlignment = Alignment.End
+        ) {
+            if (showFabMenu) {
+                FeedFabMenuItem(label = "New Message", icon = Icons.AutoMirrored.Filled.Chat) {
+                    showFabMenu = false
+                    showConnectionPicker = true
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                FeedFabMenuItem(label = "New Request", icon = Icons.Default.RequestPage) {
+                    showFabMenu = false
+                    // TODO: New request flow
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+            FloatingActionButton(onClick = { showFabMenu = !showFabMenu }) {
+                Icon(
+                    if (showFabMenu) Icons.Default.Close else Icons.Default.Add,
+                    contentDescription = if (showFabMenu) "Close" else "New"
+                )
+            }
+        }
+    }
+
+    // Connection picker dialog
+    if (showConnectionPicker) {
+        ConnectionPickerDialog(
+            connectionsState = connectionsState,
+            onSelectConnection = { connectionId ->
+                showConnectionPicker = false
+                onNavigateToConversation(connectionId)
+            },
+            onDismiss = { showConnectionPicker = false }
+        )
     }
 }
 
@@ -924,6 +973,124 @@ private fun EventDetailDialog(
         },
         dismissButton = if (event.requiresAction && event.actionType == ActionTypes.ACCEPT_DECLINE) null else {
             { /* No dismiss button for action dialogs */ }
+        }
+    )
+}
+
+@Composable
+private fun FeedFabMenuItem(
+    label: String,
+    icon: ImageVector,
+    onClick: () -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.End
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.inverseSurface,
+            shape = RoundedCornerShape(4.dp)
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.inverseOnSurface,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        SmallFloatingActionButton(
+            onClick = onClick,
+            containerColor = MaterialTheme.colorScheme.secondaryContainer
+        ) {
+            Icon(icon, contentDescription = label)
+        }
+    }
+}
+
+@Composable
+private fun ConnectionPickerDialog(
+    connectionsState: com.vettid.app.features.connections.ConnectionsState,
+    onSelectConnection: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Send Message To") },
+        text = {
+            when (connectionsState) {
+                is com.vettid.app.features.connections.ConnectionsState.Loaded -> {
+                    if (connectionsState.connections.isEmpty()) {
+                        Text(
+                            "No active connections. Create a connection first.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        Column(
+                            modifier = Modifier.verticalScroll(rememberScrollState())
+                        ) {
+                            connectionsState.connections
+                                .filter { it.connection.status == com.vettid.app.core.network.ConnectionStatus.ACTIVE }
+                                .forEach { connWithMsg ->
+                                    val conn = connWithMsg.connection
+                                    val photoBitmap = remember(connWithMsg.peerPhotoBase64) {
+                                        connWithMsg.peerPhotoBase64?.let { base64 ->
+                                            try {
+                                                val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
+                                                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                            } catch (e: Exception) { null }
+                                        }
+                                    }
+                                    ListItem(
+                                        modifier = Modifier.clickable { onSelectConnection(conn.connectionId) },
+                                        headlineContent = { Text(conn.peerDisplayName) },
+                                        leadingContent = {
+                                            if (photoBitmap != null) {
+                                                Image(
+                                                    bitmap = photoBitmap.asImageBitmap(),
+                                                    contentDescription = null,
+                                                    modifier = Modifier
+                                                        .size(40.dp)
+                                                        .clip(CircleShape),
+                                                    contentScale = ContentScale.Crop
+                                                )
+                                            } else {
+                                                Surface(
+                                                    modifier = Modifier.size(40.dp),
+                                                    shape = CircleShape,
+                                                    color = MaterialTheme.colorScheme.primaryContainer
+                                                ) {
+                                                    Box(contentAlignment = Alignment.Center) {
+                                                        Text(
+                                                            conn.peerDisplayName.take(2).uppercase(),
+                                                            style = MaterialTheme.typography.titleSmall,
+                                                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    )
+                                }
+                        }
+                    }
+                }
+                is com.vettid.app.features.connections.ConnectionsState.Loading -> {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().padding(32.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        CircularProgressIndicator()
+                    }
+                }
+                else -> {
+                    Text("Unable to load connections", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
 }
