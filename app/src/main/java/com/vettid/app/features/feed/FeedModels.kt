@@ -47,6 +47,7 @@ object EventTypes {
     const val CONNECTION_ACCEPTED = "connection.accepted"
     const val CONNECTION_REVOKED = "connection.revoked"
     const val MESSAGE_RECEIVED = "message.received"
+    const val MESSAGE_SENT = "message.sent"
     const val SECURITY_ALERT = "security.alert"
     const val SECURITY_MIGRATION = "security.migration"
     const val TRANSFER_REQUEST = "transfer.request"

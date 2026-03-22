@@ -366,13 +366,11 @@ fun VettIDApp(
                         navController.navigate(Screen.ScanInvitation.createRoute(data))
                     }
                 } else {
-                    // Only navigate to Main if not already there or on a child screen
-                    // This prevents resetting navigation when appState changes
-                    // (e.g., photo upload, NATS status change)
-                    val isOnMainOrChild = currentRoute == Screen.Main.route ||
-                        currentRoute == Screen.VaultHome.route ||
-                        navController.previousBackStackEntry?.destination?.route == Screen.Main.route
-                    if (!isOnMainOrChild) {
+                    // Only navigate to Main from auth screens (Welcome, Authentication)
+                    // Do NOT navigate if user is already past auth — any appState change
+                    // (photo, UTKs, NATS reconnect) would wipe their current screen
+                    if (currentRoute == Screen.Authentication.route ||
+                        currentRoute == Screen.Welcome.route) {
                         navController.navigate(Screen.Main.route) {
                             popUpTo(0) { inclusive = true }
                         }

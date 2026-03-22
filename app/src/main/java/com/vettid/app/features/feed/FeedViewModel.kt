@@ -494,9 +494,10 @@ class FeedViewModel @Inject constructor(
             // Navigate based on event type
             val sourceId = event.sourceId
             when (event.eventType) {
-                EventTypes.MESSAGE_RECEIVED -> {
-                    if (sourceId != null) {
-                        _effects.emit(FeedEffect.NavigateToConversation(sourceId))
+                EventTypes.MESSAGE_RECEIVED, EventTypes.MESSAGE_SENT -> {
+                    val connectionId = event.metadata?.get("connection_id") ?: sourceId
+                    if (connectionId != null) {
+                        _effects.emit(FeedEffect.NavigateToConversation(connectionId))
                     } else {
                         _effects.emit(FeedEffect.ShowEventDetail(event))
                     }
