@@ -109,9 +109,9 @@ class ScanInvitationViewModel @Inject constructor(
                 // Use inviter profile from broker payload if available
                 val profile = invitation.inviterProfile
                 if (!profile.isNullOrEmpty()) {
-                    android.util.Log.d("ScanInvitationVM", "Using profile from broker: ${profile.keys}")
+                    android.util.Log.d("ScanInvitationVM", "Using profile from broker: ${profile.keys}, fields: ${invitation.inviterFields?.keys}")
                     fetchedPeerProfile = profile
-                    showProfilePreview(profile, invitation.label)
+                    showProfilePreview(profile, invitation.label, invitation.inviterFields)
                 } else {
                     // No profile in broker — show preview with label immediately,
                     // then try async JetStream fetch as enhancement
@@ -136,7 +136,7 @@ class ScanInvitationViewModel @Inject constructor(
     /**
      * Show profile preview from a profile map (e.g., from broker payload).
      */
-    private fun showProfilePreview(profile: Map<String, String>, fallbackLabel: String) {
+    private fun showProfilePreview(profile: Map<String, String>, fallbackLabel: String, fields: Map<String, Map<String, String>>? = null) {
         val displayName = listOfNotNull(
             profile["_system_first_name"],
             profile["_system_last_name"]
@@ -153,6 +153,15 @@ class ScanInvitationViewModel @Inject constructor(
                     "display_name" to fieldDisplayName,
                     "value" to value
                 )
+            }
+        }
+
+        // Merge inline profile fields with broker fields
+        if (fields != null) {
+            fields.forEach { (key, fieldData) ->
+                if (!key.startsWith("_system_") && key !in internalKeys) {
+                    profileFields[key] = fieldData
+                }
             }
         }
 

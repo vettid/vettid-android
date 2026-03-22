@@ -567,9 +567,28 @@ class ConnectionsClient @Inject constructor(
 
             // Extract inviter profile from broker payload
             val inviterProfile = mutableMapOf<String, String>()
-            result.getAsJsonObject("inviter_profile")?.entrySet()?.forEach { (key, value) ->
-                if (!value.isJsonNull && value.isJsonPrimitive) {
-                    inviterProfile[key] = value.asString
+            var inviterFields: Map<String, Map<String, String>>? = null
+            result.getAsJsonObject("inviter_profile")?.let { profileObj ->
+                profileObj.entrySet().forEach { (key, value) ->
+                    when {
+                        key == "fields" && value.isJsonObject -> {
+                            // Parse nested profile fields
+                            val fieldsMap = mutableMapOf<String, Map<String, String>>()
+                            value.asJsonObject.entrySet().forEach { (fieldKey, fieldValue) ->
+                                if (fieldValue.isJsonObject) {
+                                    val fieldData = mutableMapOf<String, String>()
+                                    fieldValue.asJsonObject.entrySet().forEach { (k, v) ->
+                                        if (v.isJsonPrimitive) fieldData[k] = v.asString
+                                    }
+                                    fieldsMap[fieldKey] = fieldData
+                                }
+                            }
+                            inviterFields = fieldsMap.ifEmpty { null }
+                        }
+                        !value.isJsonNull && value.isJsonPrimitive -> {
+                            inviterProfile[key] = value.asString
+                        }
+                    }
                 }
             }
 
@@ -580,7 +599,8 @@ class ConnectionsClient @Inject constructor(
                 messageSpaceId = result.get("message_space")?.asString ?: "",
                 expiresAt = result.get("expires_at")?.asString ?: "",
                 label = result.get("label")?.asString ?: "",
-                inviterProfile = inviterProfile.ifEmpty { null }
+                inviterProfile = inviterProfile.ifEmpty { null },
+                inviterFields = inviterFields
             )
         }
     }
@@ -600,7 +620,8 @@ data class ResolvedInvitation(
     val messageSpaceId: String,
     val expiresAt: String,
     val label: String,
-    val inviterProfile: Map<String, String>? = null
+    val inviterProfile: Map<String, String>? = null,
+    val inviterFields: Map<String, Map<String, String>>? = null
 )
 
 // MARK: - Data Models
