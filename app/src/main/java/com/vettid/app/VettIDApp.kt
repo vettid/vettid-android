@@ -551,7 +551,7 @@ fun VettIDApp(
                     navController.navigate(Screen.CredentialDebug.route)
                 },
                 onNavigateToVaultHome = {
-                    navController.navigate(Screen.VaultHome.route)
+                    navController.navigate(Screen.VaultHome.route) { launchSingleTop = true }
                 },
                 onNavigateToProposals = {
                     navController.navigate(Screen.Proposals.route)
