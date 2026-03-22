@@ -109,11 +109,17 @@ class ConnectionsViewModel @Inject constructor(
             }
         }
 
-        // When a peer accepts our invitation, prompt inviter to review
+        // When a peer accepts our invitation, prompt inviter to review (deduplicated)
         viewModelScope.launch {
             ownerSpaceClient.connectionAcceptances.collect { accepted ->
+                // Skip if already reviewed or responded to this connection
+                if (accepted.connectionId in reviewedConnectionIds ||
+                    accepted.connectionId in respondedConnectionIds) {
+                    return@collect
+                }
                 android.util.Log.i("ConnectionsVM",
                     "Peer accepted connection: ${accepted.connectionId} (${accepted.peerAlias})")
+                reviewedConnectionIds.add(accepted.connectionId)
                 loadConnections()
                 val review = ConnectionsEffect.ReviewConnection(
                     connectionId = accepted.connectionId,
@@ -235,7 +241,8 @@ class ConnectionsViewModel @Inject constructor(
                     for (record in listResult.items) {
                         if (record.status.equals("pending", ignoreCase = true) &&
                             record.direction.equals("outbound", ignoreCase = true) &&
-                            record.connectionId !in respondedConnectionIds) {
+                            record.connectionId !in respondedConnectionIds &&
+                            record.connectionId !in reviewedConnectionIds) {
                             _effects.emit(ConnectionsEffect.ReviewConnection(
                                 connectionId = record.connectionId,
                                 peerAlias = record.label,
