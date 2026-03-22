@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -203,10 +204,10 @@ private fun MessageList(
         reverseLayout = true,
         contentPadding = PaddingValues(vertical = 8.dp, horizontal = 8.dp)
     ) {
-        items(
+        itemsIndexed(
             items = messages,
-            key = { it.messageId }
-        ) { message ->
+            key = { index, msg -> "${msg.messageId}-$index" }
+        ) { _, message ->
             val isSent = isFromCurrentUser(message)
             MessageBubble(
                 message = message,

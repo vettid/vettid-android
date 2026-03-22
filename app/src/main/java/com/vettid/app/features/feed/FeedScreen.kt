@@ -18,6 +18,7 @@ import androidx.compose.material.icons.automirrored.filled.PhoneMissed
 import androidx.compose.material.icons.automirrored.filled.Reply
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.Alignment
@@ -227,30 +228,12 @@ private fun FeedList(
     onTogglePriority: (FeedEvent) -> Unit = {}
 ) {
     val listState = rememberLazyListState()
-    var pullDistance by remember { mutableFloatStateOf(0f) }
-    val pullThreshold = 100f
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .pointerInput(isRefreshing) {
-                if (!isRefreshing) {
-                    detectVerticalDragGestures(
-                        onDragEnd = {
-                            if (pullDistance > pullThreshold && listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0) {
-                                onRefresh()
-                            }
-                            pullDistance = 0f
-                        },
-                        onDragCancel = { pullDistance = 0f },
-                        onVerticalDrag = { _, dragAmount ->
-                            if (listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0 && dragAmount > 0) {
-                                pullDistance += dragAmount
-                            }
-                        }
-                    )
-                }
-            }
+    @OptIn(ExperimentalMaterial3Api::class)
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = onRefresh,
+        modifier = Modifier.fillMaxSize()
     ) {
         LazyColumn(
             state = listState,
@@ -269,31 +252,6 @@ private fun FeedList(
             }
         }
 
-        // Pull indicator at top — only show during user-initiated pull or active refresh from pull
-        if (pullDistance > 20 || (isRefreshing && pullDistance > 0)) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp),
-                contentAlignment = Alignment.TopCenter
-            ) {
-                if (isRefreshing) {
-                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                } else if (pullDistance > pullThreshold) {
-                    Text(
-                        "Release to refresh",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                } else {
-                    Text(
-                        "Pull to refresh",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
     }
 }
 
@@ -696,19 +654,11 @@ private fun EmptyContent(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Your activity feed is empty.",
+                text = "Your activity feed is empty.\nPull down to refresh.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            OutlinedButton(onClick = onRefresh, enabled = !isRefreshing) {
-                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Refresh")
-            }
         }
     }
 }

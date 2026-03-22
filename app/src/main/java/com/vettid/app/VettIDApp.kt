@@ -886,7 +886,7 @@ fun VettIDApp(
         }
         // Vault Home screen (avatar tap)
         composable(Screen.VaultHome.route) {
-            var vaultSegment by rememberSaveable { mutableStateOf(VaultSegment.CONNECTIONS) }
+            var vaultSegment by rememberSaveable { mutableStateOf(VaultSegment.DATA) }
             // Explicit back handler — only pop when user intentionally presses back
             androidx.activity.compose.BackHandler {
                 navController.popBackStack()

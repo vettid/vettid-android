@@ -3,6 +3,8 @@ package com.vettid.app.features.archive
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
@@ -114,10 +116,6 @@ fun ArchiveContent(
                             onDelete = {
                                 viewModel.onEvent(ArchiveEvent.DismissDetail)
                                 viewModel.onEvent(ArchiveEvent.DeleteItem(item.id))
-                            },
-                            onRestore = {
-                                viewModel.onEvent(ArchiveEvent.DismissDetail)
-                                viewModel.onEvent(ArchiveEvent.RestoreItem(item.id))
                             },
                             onDismiss = { viewModel.onEvent(ArchiveEvent.DismissDetail) }
                         )
@@ -421,38 +419,24 @@ private fun ErrorContent(
 private fun ArchivedItemDetailDialog(
     item: ArchivedItem,
     onDelete: () -> Unit,
-    onRestore: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val dateFormatter = DateTimeFormatter.ofPattern("MMM d, yyyy 'at' h:mm a")
     val formattedDate = dateFormatter.format(item.archivedAt.atZone(java.time.ZoneId.systemDefault()))
-    val formattedExpiry = item.expiresAt?.let {
-        dateFormatter.format(it.atZone(java.time.ZoneId.systemDefault()))
-    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        icon = {
-            Icon(
-                imageVector = when (item.type) {
-                    ArchivedItemType.MESSAGE -> Icons.AutoMirrored.Filled.Chat
-                    ArchivedItemType.CONNECTION -> Icons.Default.Person
-                    ArchivedItemType.FILE -> Icons.Default.Description
-                    ArchivedItemType.AUTH_REQUEST -> Icons.Default.VerifiedUser
-                    ArchivedItemType.EVENT -> Icons.Default.Event
-                },
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary
-            )
-        },
         title = {
             Text(
                 text = item.title,
-                style = MaterialTheme.typography.titleLarge
+                style = MaterialTheme.typography.titleMedium
             )
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 // Type badge
                 Surface(
                     color = MaterialTheme.colorScheme.secondaryContainer,
@@ -460,108 +444,109 @@ private fun ArchivedItemDetailDialog(
                 ) {
                     Text(
                         text = item.type.displayName,
-                        style = MaterialTheme.typography.labelMedium,
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSecondaryContainer,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                     )
                 }
 
-                // Message / subtitle
-                if (!item.subtitle.isNullOrBlank()) {
-                    Text(
-                        text = item.subtitle,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                // For guide events, render the full guide content
+                val guideId = item.metadata["guide_id"]
+                val userName = item.metadata["user_name"] ?: ""
+                val guideContent = guideId?.let {
+                    com.vettid.app.features.feed.GuideContentProvider.getContent(it, userName)
+                }
+
+                if (guideContent != null) {
+                    // Render full guide sections
+                    guideContent.sections.forEach { section ->
+                        when (section) {
+                            is com.vettid.app.features.feed.GuideSection.Heading -> {
+                                Text(
+                                    text = section.text,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            is com.vettid.app.features.feed.GuideSection.Paragraph -> {
+                                Text(
+                                    text = section.text,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            is com.vettid.app.features.feed.GuideSection.BulletList -> {
+                                Column {
+                                    section.items.forEach { bullet ->
+                                        Text(
+                                            text = "• $bullet",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(start = 8.dp, bottom = 4.dp)
+                                        )
+                                    }
+                                }
+                            }
+                            is com.vettid.app.features.feed.GuideSection.NavigationLink -> {
+                                // Show as plain text in archive (no navigation)
+                                Text(
+                                    text = "→ ${section.label}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    // Non-guide events: show message
+                    if (!item.subtitle.isNullOrBlank()) {
+                        Text(
+                            text = item.subtitle,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
                 }
 
                 HorizontalDivider()
 
-                // Archived date
+                // Archived timestamp
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
-                        imageVector = Icons.Default.Inventory2,
+                        Icons.Default.Archive,
                         contentDescription = null,
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(14.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Archived: $formattedDate",
+                        text = "Archived $formattedDate",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-
-                // Expiry date if present
-                if (formattedExpiry != null) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.Timer,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.error
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Expires: $formattedExpiry",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    }
-                }
-
-                // Metadata entries
-                if (item.metadata.isNotEmpty()) {
-                    HorizontalDivider()
-                    item.metadata.forEach { (key, value) ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = key.replaceFirstChar { it.uppercase() },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = value,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
-                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
             }
         },
         confirmButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = onDismiss) {
-                    Text("Close")
-                }
-                OutlinedButton(onClick = onRestore) {
-                    Icon(
-                        Icons.Default.Restore,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Restore to Feed")
-                }
-                Button(
-                    onClick = onDelete,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error
-                    )
-                ) {
-                    Icon(
-                        Icons.Default.Delete,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Delete")
-                }
+            TextButton(
+                onClick = onDelete,
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.error
+                )
+            ) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("Delete")
             }
         }
     )
