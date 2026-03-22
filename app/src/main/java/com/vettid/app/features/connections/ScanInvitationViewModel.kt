@@ -92,7 +92,7 @@ class ScanInvitationViewModel @Inject constructor(
     /**
      * Resolve an invite code by asking our vault to fetch from the NATS broker.
      */
-    private suspend fun resolveInviteCode(inviteCode: String) {
+    private suspend fun resolveInviteCode(inviteCode: String, retryCount: Int = 0) {
         connectionsClient.resolveInvite(inviteCode).fold(
             onSuccess = { invitation ->
                 android.util.Log.d("ScanInvitationVM", "Invite resolved: connectionId=${invitation.connectionId}, profile keys=${invitation.inviterProfile?.keys}")
@@ -125,10 +125,17 @@ class ScanInvitationViewModel @Inject constructor(
                 }
             },
             onFailure = { error ->
-                android.util.Log.e("ScanInvitationVM", "Failed to resolve invite: ${error.message}")
-                _state.value = ScanInvitationState.Error(
-                    message = error.message ?: "Failed to resolve invitation"
-                )
+                // Auto-retry once on timeout (vault may not be fully connected yet)
+                if (retryCount < 1 && error.message?.contains("timed out", ignoreCase = true) == true) {
+                    android.util.Log.w("ScanInvitationVM", "Invite resolve timed out, retrying...")
+                    kotlinx.coroutines.delay(1000)
+                    resolveInviteCode(inviteCode, retryCount + 1)
+                } else {
+                    android.util.Log.e("ScanInvitationVM", "Failed to resolve invite: ${error.message}")
+                    _state.value = ScanInvitationState.Error(
+                        message = error.message ?: "Failed to resolve invitation"
+                    )
+                }
             }
         )
     }

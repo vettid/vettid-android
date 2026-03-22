@@ -1016,7 +1016,7 @@ private fun ConnectionPickerDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Send Message To") },
+        title = { Text("Start Conversation") },
         text = {
             when (connectionsState) {
                 is com.vettid.app.features.connections.ConnectionsState.Loaded -> {
@@ -1042,7 +1042,6 @@ private fun ConnectionPickerDialog(
                                         }
                                     }
                                     ListItem(
-                                        modifier = Modifier.clickable { onSelectConnection(conn.connectionId) },
                                         headlineContent = { Text(conn.peerDisplayName) },
                                         leadingContent = {
                                             if (photoBitmap != null) {
@@ -1067,6 +1066,19 @@ private fun ConnectionPickerDialog(
                                                             color = MaterialTheme.colorScheme.onPrimaryContainer
                                                         )
                                                     }
+                                                }
+                                            }
+                                        },
+                                        trailingContent = {
+                                            Row {
+                                                IconButton(onClick = { onSelectConnection(conn.connectionId) }) {
+                                                    Icon(Icons.AutoMirrored.Filled.Chat, "Text", modifier = Modifier.size(20.dp))
+                                                }
+                                                IconButton(onClick = { /* TODO: voice call */ }) {
+                                                    Icon(Icons.Default.Call, "Call", modifier = Modifier.size(20.dp))
+                                                }
+                                                IconButton(onClick = { /* TODO: video call */ }) {
+                                                    Icon(Icons.Default.Videocam, "Video", modifier = Modifier.size(20.dp))
                                                 }
                                             }
                                         }

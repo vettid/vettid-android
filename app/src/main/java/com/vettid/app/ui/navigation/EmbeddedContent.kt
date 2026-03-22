@@ -60,6 +60,18 @@ fun ConnectionsContentEmbedded(
         viewModel.onSearchQueryChanged(searchQuery)
     }
 
+    // Reload connections when tab becomes visible (e.g., after scanning invitation)
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                viewModel.loadConnections()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     val state by viewModel.state.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val agentState by agentViewModel.state.collectAsState()
