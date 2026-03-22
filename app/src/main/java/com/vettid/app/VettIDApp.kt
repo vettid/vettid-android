@@ -106,6 +106,13 @@ import com.vettid.app.features.services.AuditLogContent
 
 private const val TAG = "VettIDApp"
 
+/** Safe back navigation — falls back to Main if back stack is empty */
+private fun NavHostController.safePopBackStack() {
+    if (!popBackStack()) {
+        navigate(Screen.Main.route) { popUpTo(0) { inclusive = true } }
+    }
+}
+
 sealed class Screen(val route: String) {
     object Welcome : Screen("welcome")
     object Enrollment : Screen("enrollment?startWithManualEntry={startWithManualEntry}&initialCode={initialCode}") {
@@ -421,10 +428,8 @@ fun VettIDApp(
                     }
                 },
                 onCancel = {
-                    if (!navController.popBackStack()) {
-                        navController.navigate(Screen.Welcome.route) {
-                            popUpTo(0) { inclusive = true }
-                        }
+                    navController.navigate(Screen.Welcome.route) {
+                        popUpTo(0) { inclusive = true }
                     }
                 },
                 startWithManualEntry = startWithManualEntry,
@@ -465,10 +470,8 @@ fun VettIDApp(
                     }
                 },
                 onCancel = {
-                    if (!navController.popBackStack()) {
-                        navController.navigate(Screen.Welcome.route) {
-                            popUpTo(0) { inclusive = true }
-                        }
+                    navController.navigate(Screen.Welcome.route) {
+                        popUpTo(0) { inclusive = true }
                     }
                 },
                 startWithManualEntry = startWithManualEntry,
@@ -595,7 +598,7 @@ fun VettIDApp(
                 onHandlerSelected = { handlerId ->
                     navController.navigate(Screen.HandlerDetail.createRoute(handlerId))
                 },
-                onNavigateBack = { navController.popBackStack() },
+                onNavigateBack = { navController.safePopBackStack() },
                 onRequireAuth = {
                     // TODO: Handle auth requirement
                 }
@@ -606,7 +609,7 @@ fun VettIDApp(
             arguments = listOf(navArgument("handlerId") { type = NavType.StringType })
         ) {
             HandlerDetailScreen(
-                onNavigateBack = { navController.popBackStack() },
+                onNavigateBack = { navController.safePopBackStack() },
                 onNavigateToExecution = { handlerId ->
                     navController.navigate(Screen.HandlerExecution.createRoute(handlerId))
                 },
@@ -620,7 +623,7 @@ fun VettIDApp(
             arguments = listOf(navArgument("handlerId") { type = NavType.StringType })
         ) {
             HandlerExecutionScreen(
-                onNavigateBack = { navController.popBackStack() },
+                onNavigateBack = { navController.safePopBackStack() },
                 onRequireAuth = {
                     // TODO: Handle auth requirement
                 }
@@ -643,7 +646,7 @@ fun VettIDApp(
         composable(Screen.CreateInvitation.route) {
             CreateInvitationScreen(
                 onInvitationCreated = { /* Handle invitation created */ },
-                onBack = { navController.popBackStack() }
+                onBack = { navController.safePopBackStack() }
             )
         }
         composable(
@@ -663,7 +666,7 @@ fun VettIDApp(
                     // Navigate back to connections list after successful scan
                     navController.popBackStack(Screen.Connections.route, false)
                 },
-                onBack = { navController.popBackStack() }
+                onBack = { navController.safePopBackStack() }
             )
         }
         composable(
@@ -675,7 +678,7 @@ fun VettIDApp(
                 onMessageClick = {
                     navController.navigate(Screen.Conversation.createRoute(connectionId))
                 },
-                onBack = { navController.popBackStack() }
+                onBack = { navController.safePopBackStack() }
             )
         }
         composable(
@@ -684,7 +687,7 @@ fun VettIDApp(
         ) { backStackEntry ->
             val connectionId = backStackEntry.arguments?.getString("connectionId") ?: return@composable
             ConversationScreen(
-                onBack = { navController.popBackStack() },
+                onBack = { navController.safePopBackStack() },
                 onConnectionDetail = {
                     navController.navigate(Screen.ConnectionDetail.createRoute(connectionId))
                 }
@@ -693,7 +696,7 @@ fun VettIDApp(
         // Profile route
         composable(Screen.Profile.route) {
             ProfileScreen(
-                onBack = { navController.popBackStack() }
+                onBack = { navController.safePopBackStack() }
             )
         }
         // Backup routes
@@ -705,12 +708,12 @@ fun VettIDApp(
                 onSettingsClick = {
                     navController.navigate(Screen.BackupSettings.route)
                 },
-                onBack = { navController.popBackStack() }
+                onBack = { navController.safePopBackStack() }
             )
         }
         composable(Screen.BackupSettings.route) {
             BackupSettingsScreen(
-                onBack = { navController.popBackStack() }
+                onBack = { navController.safePopBackStack() }
             )
         }
         composable(
@@ -723,8 +726,8 @@ fun VettIDApp(
                         popUpTo(Screen.Backups.route) { inclusive = true }
                     }
                 },
-                onDeleted = { navController.popBackStack() },
-                onBack = { navController.popBackStack() }
+                onDeleted = { navController.safePopBackStack() },
+                onBack = { navController.safePopBackStack() }
             )
         }
         composable(Screen.ProteanRecovery.route) {
@@ -734,18 +737,18 @@ fun VettIDApp(
                         popUpTo(0) { inclusive = true }
                     }
                 },
-                onBack = { navController.popBackStack() }
+                onBack = { navController.safePopBackStack() }
             )
         }
         // More menu screens
         composable(Screen.PersonalData.route) {
             PersonalDataScreenFull(
-                onBack = { navController.popBackStack() }
+                onBack = { navController.safePopBackStack() }
             )
         }
         composable(Screen.Secrets.route) {
             SecretsScreenFull(
-                onBack = { navController.popBackStack() },
+                onBack = { navController.safePopBackStack() },
                 onNavigateToAddSecret = {
                     navController.navigate(Screen.AddSecret.createRoute(isCritical = false))
                 }
@@ -761,25 +764,25 @@ fun VettIDApp(
             val isCritical = backStackEntry.arguments?.getBoolean("isCritical") ?: false
             AddSecretScreen(
                 isCritical = isCritical,
-                onBack = { navController.popBackStack() },
+                onBack = { navController.safePopBackStack() },
                 onSecretAdded = {
                     if (isCritical) {
                         navController.previousBackStackEntry
                             ?.savedStateHandle
                             ?.set("secretAdded", true)
                     }
-                    navController.popBackStack()
+                    navController.safePopBackStack()
                 }
             )
         }
         composable(Screen.Archive.route) {
             ArchiveScreenFull(
-                onBack = { navController.popBackStack() }
+                onBack = { navController.safePopBackStack() }
             )
         }
         composable(Screen.VaultPreferences.route) {
             VaultPreferencesScreenFull(
-                onBack = { navController.popBackStack() },
+                onBack = { navController.safePopBackStack() },
                 onNavigateToAppDetails = { navController.navigate(Screen.AppDetails.route) },
                 onNavigateToLocationHistory = { navController.navigate(Screen.LocationHistory.route) },
                 onNavigateToSharedLocations = { navController.navigate(Screen.SharedLocations.route) },
@@ -788,42 +791,42 @@ fun VettIDApp(
         }
         composable(Screen.LocationHistory.route) {
             LocationHistoryScreen(
-                onBack = { navController.popBackStack() }
+                onBack = { navController.safePopBackStack() }
             )
         }
         composable(Screen.SharedLocations.route) {
             SharedLocationsScreen(
-                onBack = { navController.popBackStack() }
+                onBack = { navController.safePopBackStack() }
             )
         }
         composable(Screen.LocationSettings.route) {
             LocationSettingsScreen(
-                onBack = { navController.popBackStack() },
+                onBack = { navController.safePopBackStack() },
                 onNavigateToLocationHistory = { navController.navigate(Screen.LocationHistory.route) },
                 onNavigateToSharedLocations = { navController.navigate(Screen.SharedLocations.route) }
             )
         }
         composable(Screen.AppDetails.route) {
             AppDetailsScreen(
-                onBack = { navController.popBackStack() }
+                onBack = { navController.safePopBackStack() }
             )
         }
         composable(Screen.VaultStatus.route) {
             VaultStatusScreen(
-                onBack = { navController.popBackStack() },
+                onBack = { navController.safePopBackStack() },
                 onNavigateToEnrollment = {
                     navController.navigate(Screen.EnrollmentWizard.createRoute())
                 },
                 onRequireAuth = { /* Auth handled by app state */ },
                 onNavigateToSettings = {
-                    navController.popBackStack()
+                    navController.safePopBackStack()
                 }
             )
         }
         // App Lock & Setup routes
         composable(Screen.AppLock.route) {
             AppLockScreen(
-                onUnlock = { navController.popBackStack() },
+                onUnlock = { navController.safePopBackStack() },
                 onBiometricAuth = { /* Trigger biometric prompt */ }
             )
         }
@@ -831,9 +834,9 @@ fun VettIDApp(
             PinSetupScreen(
                 onPinCreated = { pin ->
                     // In production, save PIN securely
-                    navController.popBackStack()
+                    navController.safePopBackStack()
                 },
-                onBack = { navController.popBackStack() }
+                onBack = { navController.safePopBackStack() }
             )
         }
         composable(Screen.FirstTimeSetup.route) {
@@ -857,29 +860,29 @@ fun VettIDApp(
                         popUpTo(Screen.DeployVault.route) { inclusive = true }
                     }
                 },
-                onBack = { navController.popBackStack() }
+                onBack = { navController.safePopBackStack() }
             )
         }
         // Call screens
         composable(Screen.IncomingCall.route) {
             IncomingCallScreen(
-                onDismiss = { navController.popBackStack() }
+                onDismiss = { navController.safePopBackStack() }
             )
         }
         composable(Screen.OutgoingCall.route) {
             OutgoingCallScreen(
-                onDismiss = { navController.popBackStack() }
+                onDismiss = { navController.safePopBackStack() }
             )
         }
         composable(Screen.ActiveCall.route) {
             ActiveCallScreen(
-                onDismiss = { navController.popBackStack() }
+                onDismiss = { navController.safePopBackStack() }
             )
         }
         // Debug screens
         composable(Screen.CredentialDebug.route) {
             CredentialDebugScreen(
-                onBack = { navController.popBackStack() }
+                onBack = { navController.safePopBackStack() }
             )
         }
         // Vault Home screen (avatar tap)
@@ -887,14 +890,14 @@ fun VettIDApp(
             var vaultSegment by rememberSaveable { mutableStateOf(VaultSegment.DATA) }
             // Explicit back handler — only pop when user intentionally presses back
             androidx.activity.compose.BackHandler {
-                navController.popBackStack()
+                navController.safePopBackStack()
             }
             VaultScaffold(
                 vaultSegment = vaultSegment,
                 onVaultSegmentChange = { vaultSegment = it },
                 profilePhotoBase64 = appViewModel.appState.collectAsState().value.profilePhoto,
                 natsConnectionState = appViewModel.appState.collectAsState().value.natsConnectionState,
-                onBack = { Log.w("VaultHome", "onBack CALLED - popping!"); navController.popBackStack() },
+                onBack = { Log.w("VaultHome", "onBack CALLED - popping!"); navController.safePopBackStack() },
                 connectionsContent = { query ->
                     ConnectionsContentEmbedded(
                         searchQuery = query,
@@ -929,7 +932,7 @@ fun VettIDApp(
                 onNavigateToProposal = { proposalId ->
                     navController.navigate(Screen.ProposalDetail.createRoute(proposalId))
                 },
-                onNavigateBack = { navController.popBackStack() }
+                onNavigateBack = { navController.safePopBackStack() }
             )
         }
         composable(
@@ -939,7 +942,7 @@ fun VettIDApp(
             val proposalId = backStackEntry.arguments?.getString("proposalId") ?: return@composable
             ProposalDetailScreen(
                 proposalId = proposalId,
-                onNavigateBack = { navController.popBackStack() },
+                onNavigateBack = { navController.safePopBackStack() },
                 onNavigateToMyVotes = {
                     navController.navigate(Screen.MyVotes.route)
                 }
@@ -947,7 +950,7 @@ fun VettIDApp(
         }
         composable(Screen.MyVotes.route) {
             MyVotesScreen(
-                onNavigateBack = { navController.popBackStack() },
+                onNavigateBack = { navController.safePopBackStack() },
                 onNavigateToProposal = { proposalId ->
                     navController.navigate(Screen.ProposalDetail.createRoute(proposalId))
                 }
@@ -956,7 +959,7 @@ fun VettIDApp(
         // Transfer screens (Issue #31: Device-to-device credential transfer)
         composable(Screen.TransferRequest.route) {
             TransferRequestScreen(
-                onNavigateBack = { navController.popBackStack() },
+                onNavigateBack = { navController.safePopBackStack() },
                 onNavigateToMain = {
                     navController.navigate(Screen.Main.route) {
                         popUpTo(0) { inclusive = true }
@@ -971,13 +974,13 @@ fun VettIDApp(
             val transferId = backStackEntry.arguments?.getString("transferId") ?: return@composable
             TransferApprovalScreen(
                 transferId = transferId,
-                onNavigateBack = { navController.popBackStack() }
+                onNavigateBack = { navController.safePopBackStack() }
             )
         }
         // Agent management
         composable(Screen.AgentManagement.route) {
             com.vettid.app.features.agents.AgentManagementScreen(
-                onNavigateBack = { navController.popBackStack() },
+                onNavigateBack = { navController.safePopBackStack() },
                 onNavigateToCreateInvitation = {
                     navController.navigate(Screen.CreateAgentInvitation.route)
                 }
@@ -990,12 +993,12 @@ fun VettIDApp(
             val requestId = backStackEntry.arguments?.getString("requestId") ?: return@composable
             com.vettid.app.features.agents.AgentApprovalScreen(
                 requestId = requestId,
-                onNavigateBack = { navController.popBackStack() }
+                onNavigateBack = { navController.safePopBackStack() }
             )
         }
         composable(Screen.CreateAgentInvitation.route) {
             com.vettid.app.features.agents.CreateAgentInvitationScreen(
-                onNavigateBack = { navController.popBackStack() }
+                onNavigateBack = { navController.safePopBackStack() }
             )
         }
         // Post-Enrollment verification screen
@@ -1060,7 +1063,7 @@ fun VettIDApp(
         // Security Audit Log screen (Issue #18: Enclave migration)
         composable(Screen.SecurityAuditLog.route) {
             SecurityAuditLogScreen(
-                onBack = { navController.popBackStack() }
+                onBack = { navController.safePopBackStack() }
             )
         }
         // Emergency Recovery screen (Issue #18: Enclave migration - disaster scenario)
@@ -1091,7 +1094,7 @@ fun VettIDApp(
             }
             CriticalSecretsScreen(
                 viewModel = criticalSecretsViewModel,
-                onBack = { navController.popBackStack() },
+                onBack = { navController.safePopBackStack() },
                 onNavigateToAddSecret = {
                     navController.navigate(Screen.AddSecret.createRoute(isCritical = true))
                 }
@@ -1121,7 +1124,7 @@ fun VettIDApp(
             GuideDetailScreen(
                 guideId = guideId,
                 userName = userName,
-                onBack = { navController.popBackStack() },
+                onBack = { navController.safePopBackStack() },
                 onNavigate = { target ->
                     when (target) {
                         is NavigationTarget.DrawerNav -> {
@@ -1129,7 +1132,7 @@ fun VettIDApp(
                             navController.previousBackStackEntry
                                 ?.savedStateHandle
                                 ?.set("drawerItem", target.item.name)
-                            navController.popBackStack()
+                            navController.safePopBackStack()
                         }
                         is NavigationTarget.ScreenNav -> {
                             // For settings, toggle settings overlay via saved state
@@ -1137,9 +1140,9 @@ fun VettIDApp(
                                 navController.previousBackStackEntry
                                     ?.savedStateHandle
                                     ?.set("openSettings", true)
-                                navController.popBackStack()
+                                navController.safePopBackStack()
                             } else {
-                                navController.popBackStack()
+                                navController.safePopBackStack()
                                 navController.navigate(target.route)
                             }
                         }
