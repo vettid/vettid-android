@@ -242,8 +242,9 @@ class OwnerSpaceClient @Inject constructor(
 
         val requestId = UUID.randomUUID().toString()
         val requestSubject = "$ownerSpaceId.forVault.$messageType"
-        // Response subject matches parent's buildAppResponseSubject (parent.go:1103)
-        val responseSubject = "$ownerSpaceId.forApp.$messageType.response"
+        // Unique per-request response subject — includes requestId to prevent
+        // stale response pickup from previous requests on the same message type
+        val responseSubject = "$ownerSpaceId.forApp.$messageType.$requestId.response"
 
         try {
             // Encrypt payload if E2E session is established (skip for bootstrap)

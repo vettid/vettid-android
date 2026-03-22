@@ -127,20 +127,17 @@ object JetStreamRequestHelper {
 
                 val fetchResponse = fetchResult.getOrThrow()
 
-                // Verify event_id matches our requestId
+                // With unique per-request response subjects, event_id verification
+                // is no longer needed — the consumer filter guarantees isolation.
+                // Keep as debug logging only.
                 try {
                     val msgJson = gson.fromJson(fetchResponse.dataString, JsonObject::class.java)
                     val eventId = msgJson.get("event_id")?.asString
-                        ?: msgJson.get("id")?.asString
-
                     if (eventId != null && eventId != expectedEventId) {
-                        retries++
-                        Log.w(TAG, "event_id mismatch: expected=$expectedEventId got=$eventId (retry $retries/$MAX_EVENT_ID_RETRIES)")
-                        continue
+                        Log.d(TAG, "Response event_id=$eventId (expected=$expectedEventId) — accepted via unique subject")
                     }
                 } catch (e: Exception) {
-                    // Can't parse as JSON — return as-is, let caller handle
-                    Log.w(TAG, "Could not verify event_id, returning response as-is")
+                    // Not JSON — accept as-is
                 }
 
                 Log.d(TAG, "Response received for $responseSubject")
