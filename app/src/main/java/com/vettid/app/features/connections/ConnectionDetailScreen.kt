@@ -185,6 +185,11 @@ private fun LoadedContent(
         }
     }
 
+    val connectedDateFormatter = java.text.SimpleDateFormat("MMMM d, yyyy 'at' h:mm a", java.util.Locale.getDefault())
+    val connectedDate = connectedDateFormatter.format(java.util.Date(
+        if (connection.createdAt < 10000000000L) connection.createdAt * 1000 else connection.createdAt
+    ))
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -192,14 +197,13 @@ private fun LoadedContent(
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // Avatar — photo if available, otherwise initials
+        // === 1. PUBLIC PROFILE ===
+        // Avatar
         if (photoBitmap != null) {
             Image(
                 bitmap = photoBitmap.asImageBitmap(),
                 contentDescription = "Profile photo",
-                modifier = Modifier
-                    .size(100.dp)
-                    .clip(CircleShape),
+                modifier = Modifier.size(100.dp).clip(CircleShape),
                 contentScale = ContentScale.Crop
             )
         } else {
@@ -219,125 +223,81 @@ private fun LoadedContent(
         }
 
         Spacer(modifier = Modifier.height(16.dp))
+        Text(text = connection.peerDisplayName, style = MaterialTheme.typography.headlineMedium)
 
-        // Name
-        Text(
-            text = connection.peerDisplayName,
-            style = MaterialTheme.typography.headlineMedium
-        )
-
-        // Email
-        peerEmail?.let { email ->
+        peerEmail?.let {
             Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = email,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Text(text = it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
 
-        // Status badge
-        Spacer(modifier = Modifier.height(8.dp))
-        StatusBadge(status = connection.status)
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Action icons row: Message | Call | Video
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
-            // Message
-            IconButton(
-                onClick = onMessageClick,
-                enabled = connection.status == ConnectionStatus.ACTIVE
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Chat,
-                    contentDescription = "Message",
-                    modifier = Modifier.size(28.dp),
-                    tint = if (connection.status == ConnectionStatus.ACTIVE)
-                        MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                )
-            }
-
-            // Voice call
-            IconButton(
-                onClick = onVoiceCallClick,
-                enabled = connection.status == ConnectionStatus.ACTIVE
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Call,
-                    contentDescription = "Voice Call",
-                    modifier = Modifier.size(28.dp),
-                    tint = if (connection.status == ConnectionStatus.ACTIVE)
-                        MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                )
-            }
-
-            // Video call
-            IconButton(
-                onClick = onVideoCallClick,
-                enabled = connection.status == ConnectionStatus.ACTIVE
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Videocam,
-                    contentDescription = "Video Call",
-                    modifier = Modifier.size(28.dp),
-                    tint = if (connection.status == ConnectionStatus.ACTIVE)
-                        MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
-                )
-            }
-        }
-
-        // Peer's public profile fields
+        // Profile fields
         if (!peerFields.isNullOrEmpty()) {
-            val allFields = peerFields!!.entries
+            val displayFields = peerFields!!.entries
                 .filter { (it.value["value"] ?: "").isNotBlank() }
-                // Don't duplicate name already shown above
-                .filter { it.key != "_system_first_name" && it.key != "_system_last_name" }
+                .filter { it.key != "_system_first_name" && it.key != "_system_last_name" && it.key != "_system_email" }
 
-            if (allFields.isNotEmpty()) {
+            if (displayFields.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(16.dp))
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "PUBLIC PROFILE",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(bottom = 12.dp)
-                        )
-                        allFields.forEachIndexed { index, (_, fieldData) ->
+                        displayFields.forEachIndexed { index, (_, fieldData) ->
                             if (index > 0) {
-                                HorizontalDivider(
-                                    modifier = Modifier.padding(vertical = 8.dp),
-                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
-                                )
+                                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                             }
                             val displayName = (fieldData["display_name"] ?: "").trim()
-                                .removePrefix(" System ")
-                                .replaceFirstChar { it.uppercase() }
-                            val value = fieldData["value"] ?: ""
-                            Text(
-                                text = displayName,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = value,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
+                                .removePrefix(" System ").replaceFirstChar { it.uppercase() }
+                            Text(text = displayName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(text = fieldData["value"] ?: "", style = MaterialTheme.typography.bodyMedium)
                         }
                     }
                 }
             }
-
         }
 
-        // --- Security ---
+        // === 2. SHARED WITH CONNECTION ===
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(
+            text = "SHARED WITH CONNECTION",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+        )
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column {
+                ListItem(
+                    headlineContent = { Text("Shared Data") },
+                    supportingContent = { Text("No shared data") },
+                    leadingContent = { Icon(Icons.Default.FolderShared, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+                )
+                HorizontalDivider()
+                ListItem(
+                    headlineContent = { Text("Shared Secrets") },
+                    supportingContent = { Text("No shared secrets") },
+                    leadingContent = { Icon(Icons.Default.Key, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+                )
+                HorizontalDivider()
+                ListItem(
+                    headlineContent = { Text("Handlers") },
+                    supportingContent = { Text("No active handlers") },
+                    leadingContent = { Icon(Icons.Default.Extension, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+                )
+                HorizontalDivider()
+                ListItem(
+                    headlineContent = { Text("Location Sharing") },
+                    supportingContent = { Text(if (isLocationSharingEnabled) "Enabled" else "Disabled") },
+                    leadingContent = { Icon(Icons.Default.LocationOn, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                    trailingContent = {
+                        Switch(
+                            checked = isLocationSharingEnabled,
+                            onCheckedChange = onLocationSharingToggle,
+                            enabled = connection.status == ConnectionStatus.ACTIVE && !isTogglingLocationSharing
+                        )
+                    }
+                )
+            }
+        }
+
+        // === 3. SECURITY ===
         Spacer(modifier = Modifier.height(24.dp))
         Text(
             text = "SECURITY",
@@ -345,35 +305,19 @@ private fun LoadedContent(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
         )
-
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(modifier = Modifier.padding(16.dp)) {
-                // E2E encryption status
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        Icons.Default.Lock,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
+                    Icon(Icons.Default.Lock, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = "End-to-End Encrypted",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
+                    Text("End-to-End Encrypted", style = MaterialTheme.typography.bodyMedium)
                 }
 
-                // Public key fingerprint
                 if (!peerPublicKey.isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(12.dp))
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                     Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = "Public Key",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Text("Public Key", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = peerPublicKey!!.chunked(8).joinToString(" "),
@@ -382,52 +326,31 @@ private fun LoadedContent(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                if (connection.status == ConnectionStatus.ACTIVE) {
+                    OutlinedButton(
+                        onClick = onRotateKeysClick,
+                        enabled = !isRotating,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        if (isRotating) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.Refresh, null, modifier = Modifier.size(18.dp))
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Rotate Keys")
+                    }
+                }
             }
         }
 
-        // --- Shared Data (stub) ---
+        // === 4. MANAGE CONNECTION ===
         Spacer(modifier = Modifier.height(24.dp))
-        Text(
-            text = "SHARED WITH CONNECTION",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
-        )
-
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                ListItem(
-                    headlineContent = { Text("Shared Data") },
-                    supportingContent = { Text("No shared data") },
-                    leadingContent = {
-                        Icon(Icons.Default.FolderShared, contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                )
-                HorizontalDivider()
-                ListItem(
-                    headlineContent = { Text("Shared Secrets") },
-                    supportingContent = { Text("No shared secrets") },
-                    leadingContent = {
-                        Icon(Icons.Default.Key, contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                )
-                HorizontalDivider()
-                ListItem(
-                    headlineContent = { Text("Handlers") },
-                    supportingContent = { Text("No active handlers") },
-                    leadingContent = {
-                        Icon(Icons.Default.Extension, contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // --- Manage Connection ---
         Text(
             text = "MANAGE CONNECTION",
             style = MaterialTheme.typography.labelSmall,
@@ -437,69 +360,35 @@ private fun LoadedContent(
                 .padding(bottom = 8.dp)
         )
 
-        // Connection info card
-        ConnectionInfoCard(connection = connection)
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // Location sharing card
-        LocationSharingCard(
-            isEnabled = isLocationSharingEnabled,
-            isToggling = isTogglingLocationSharing,
-            isActive = connection.status == ConnectionStatus.ACTIVE,
-            onToggle = onLocationSharingToggle
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Rotate Keys button
-        if (connection.status == ConnectionStatus.ACTIVE) {
-            OutlinedButton(
-                onClick = onRotateKeysClick,
-                enabled = !isRotating
-            ) {
-                if (isRotating) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp
-                    )
-                } else {
-                    Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                // Connected date
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Event, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Connected $connectedDate", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Rotate Keys")
-            }
 
-            Spacer(modifier = Modifier.height(8.dp))
-        }
-
-        // Revoke button
-        if (connection.status == ConnectionStatus.ACTIVE) {
-            OutlinedButton(
-                onClick = onRevokeClick,
-                enabled = !isRevoking,
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error
-                )
-            ) {
-                if (isRevoking) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(18.dp),
-                        strokeWidth = 2.dp
-                    )
-                } else {
-                    Icon(
-                        imageVector = Icons.Default.PersonRemove,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp)
-                    )
+                // Revoke button
+                if (connection.status == ConnectionStatus.ACTIVE) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                    Spacer(modifier = Modifier.height(16.dp))
+                    OutlinedButton(
+                        onClick = onRevokeClick,
+                        enabled = !isRevoking,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        if (isRevoking) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.PersonRemove, null, modifier = Modifier.size(18.dp))
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Revoke Connection")
+                    }
                 }
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Revoke Connection")
             }
         }
 
