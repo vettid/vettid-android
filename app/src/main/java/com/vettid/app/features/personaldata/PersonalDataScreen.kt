@@ -1399,6 +1399,7 @@ private fun PublicProfileFullScreen(
 ) {
     var showSecretsDialog by remember { mutableStateOf(false) }
     var showPersonalDataDialog by remember { mutableStateOf(false) }
+    var showHandlersDialog by remember { mutableStateOf(false) }
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background
@@ -1539,26 +1540,37 @@ private fun PublicProfileFullScreen(
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // Public metadata buttons
+                        // Public metadata icon buttons
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            OutlinedButton(
-                                onClick = { showSecretsDialog = true },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Secrets (${publicSecrets.size})", style = MaterialTheme.typography.labelMedium)
+                            // Data
+                            IconButton(onClick = { showPersonalDataDialog = true }) {
+                                BadgedBox(badge = {
+                                    if (publicPersonalData.isNotEmpty()) {
+                                        Badge { Text("${publicPersonalData.size}") }
+                                    }
+                                }) {
+                                    Icon(Icons.Default.Person, contentDescription = "Personal Data")
+                                }
                             }
-                            OutlinedButton(
-                                onClick = { showPersonalDataDialog = true },
-                                modifier = Modifier.weight(1f)
-                            ) {
-                                Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("Personal (${publicPersonalData.size})", style = MaterialTheme.typography.labelMedium)
+                            Spacer(modifier = Modifier.width(16.dp))
+                            // Secrets
+                            IconButton(onClick = { showSecretsDialog = true }) {
+                                BadgedBox(badge = {
+                                    if (publicSecrets.isNotEmpty()) {
+                                        Badge { Text("${publicSecrets.size}") }
+                                    }
+                                }) {
+                                    Icon(Icons.Default.Key, contentDescription = "Secrets")
+                                }
+                            }
+                            Spacer(modifier = Modifier.width(16.dp))
+                            // Handlers
+                            IconButton(onClick = { showHandlersDialog = true }) {
+                                Icon(Icons.Default.Extension, contentDescription = "Handlers")
                             }
                         }
 
@@ -1619,6 +1631,25 @@ private fun PublicProfileFullScreen(
             items = publicPersonalData,
             emptyMessage = "No personal data is shared publicly",
             onDismiss = { showPersonalDataDialog = false }
+        )
+    }
+
+    // Handlers Dialog
+    if (showHandlersDialog) {
+        AlertDialog(
+            onDismissRequest = { showHandlersDialog = false },
+            icon = { Icon(Icons.Default.Extension, contentDescription = null) },
+            title = { Text("Available Handlers") },
+            text = {
+                Text(
+                    "No handlers are currently available.\n\nHandlers allow services and agents to interact with your vault data.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showHandlersDialog = false }) { Text("Close") }
+            }
         )
     }
 }
