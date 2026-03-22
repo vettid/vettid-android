@@ -81,7 +81,8 @@ private fun formatPublishedTimestamp(isoTimestamp: String?): String? {
  */
 @Composable
 fun PersonalDataContent(
-    viewModel: PersonalDataViewModel = hiltViewModel()
+    viewModel: PersonalDataViewModel = hiltViewModel(),
+    searchQuery: String = ""
 ) {
     val state by viewModel.state.collectAsState()
     val showAddDialog by viewModel.showAddDialog.collectAsState()
@@ -160,8 +161,7 @@ fun PersonalDataContent(
                         firstName = systemFields?.firstName ?: "",
                         lastName = systemFields?.lastName ?: "",
                         profilePhotoBase64 = profilePhoto,
-                        showSearchBar = showSearchBar,
-                        onSearchBarClose = { showSearchBar = false },
+                        externalSearchQuery = searchQuery,
                         onItemClick = { viewModel.onEvent(PersonalDataEvent.ItemClicked(it)) },
                         onDeleteClick = { viewModel.onEvent(PersonalDataEvent.DeleteItem(it)) },
                         onTogglePublicProfile = { viewModel.onEvent(PersonalDataEvent.TogglePublicProfile(it)) },
@@ -175,34 +175,15 @@ fun PersonalDataContent(
             }
         }
 
-        // FABs for search and add
+        // Add FAB (search is handled by top bar)
         if (state is PersonalDataState.Loaded || state is PersonalDataState.Empty) {
-            Column(
+            FloatingActionButton(
+                onClick = { showTemplateChooser = true },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(16.dp),
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                    .padding(16.dp)
             ) {
-                // Search FAB (smaller)
-                SmallFloatingActionButton(
-                    onClick = { showSearchBar = !showSearchBar },
-                    containerColor = if (showSearchBar)
-                        MaterialTheme.colorScheme.primaryContainer
-                    else
-                        MaterialTheme.colorScheme.secondaryContainer
-                ) {
-                    Icon(
-                        if (showSearchBar) Icons.Default.Close else Icons.Default.Search,
-                        contentDescription = if (showSearchBar) "Close search" else "Search"
-                    )
-                }
-                // Add FAB (primary) - opens template chooser
-                FloatingActionButton(
-                    onClick = { showTemplateChooser = true }
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = "Add personal data")
-                }
+                Icon(Icons.Default.Add, contentDescription = "Add personal data")
             }
         }
 
@@ -325,8 +306,7 @@ private fun PersonalDataList(
     firstName: String,
     lastName: String,
     profilePhotoBase64: String?,
-    showSearchBar: Boolean,
-    onSearchBarClose: () -> Unit,
+    externalSearchQuery: String = "",
     onItemClick: (String) -> Unit,
     onDeleteClick: (String) -> Unit,
     onTogglePublicProfile: (String) -> Unit,
@@ -339,13 +319,8 @@ private fun PersonalDataList(
     // Track collapsed categories - start with all categories collapsed
     var collapsedCategories by remember { mutableStateOf(DataCategory.values().toSet()) }
 
-    // Search query state
-    var searchQuery by remember { mutableStateOf("") }
-
-    // Clear search when bar is hidden
-    LaunchedEffect(showSearchBar) {
-        if (!showSearchBar) searchQuery = ""
-    }
+    // Use external search query from top bar
+    val searchQuery = externalSearchQuery
 
     // Filter items based on search query
     val filteredGroups: Map<DataCategory, List<PersonalDataItem>> = if (searchQuery.isBlank()) {
@@ -372,37 +347,60 @@ private fun PersonalDataList(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
     ) {
-        // Search bar (only shown when toggled via FAB)
-        if (showSearchBar) {
+        // Unpublished changes notification (matches secrets tab style)
+        if (hasUnpublishedChanges) {
             item {
-                SearchBar(
-                    query = searchQuery,
-                    onQueryChange = { searchQuery = it },
-                    onClose = onSearchBarClose,
-                    modifier = Modifier.padding(bottom = 12.dp)
-                )
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            Icons.Default.CloudUpload,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Unpublished Changes",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                            Text(
+                                text = "Publish to update your public profile",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                            )
+                        }
+                        Button(
+                            onClick = onPublishClick,
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary
+                            )
+                        ) {
+                            Text("Publish")
+                        }
+                    }
+                }
             }
         }
 
-        // Publish button (above photo)
-        item {
-            PublishProfileButton(
-                hasUnpublishedChanges = hasUnpublishedChanges,
-                lastPublishedAt = lastPublishedAt,
-                isProfilePublished = isProfilePublished,
-                onPublishClick = onPublishClick,
-                onPreviewClick = onPreviewClick
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-        }
-
-        // Profile header with photo/initials
+        // Profile header with photo/initials — name tappable for preview
         item {
             ProfileHeaderSection(
                 firstName = firstName,
                 lastName = lastName,
                 photoBase64 = profilePhotoBase64,
-                onEditPhoto = onEditPhoto
+                onEditPhoto = onEditPhoto,
+                onNameClick = onPreviewClick
             )
             Spacer(modifier = Modifier.height(16.dp))
         }
@@ -475,6 +473,19 @@ private fun PersonalDataList(
             }
         }
 
+        // Last published timestamp at the bottom
+        if (lastPublishedAt != null) {
+            item {
+                Text(
+                    text = "Last published: ${formatPublishedTimestamp(lastPublishedAt) ?: lastPublishedAt}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                )
+            }
+        }
+
         // Bottom padding for FAB
         item { Spacer(modifier = Modifier.height(72.dp)) }
     }
@@ -527,7 +538,8 @@ private fun ProfileHeaderSection(
     firstName: String,
     lastName: String,
     photoBase64: String?,
-    onEditPhoto: () -> Unit
+    onEditPhoto: () -> Unit,
+    onNameClick: () -> Unit = {}
 ) {
     // Decode Base64 photo if present
     val photoBitmap = remember(photoBase64) {
@@ -609,7 +621,9 @@ private fun ProfileHeaderSection(
 
         Spacer(modifier = Modifier.width(16.dp))
 
-        Column {
+        Column(
+            modifier = Modifier.clickable(onClick = onNameClick)
+        ) {
             val fullName = listOf(firstName, lastName)
                 .filter { it.isNotBlank() }
                 .joinToString(" ")
@@ -618,9 +632,9 @@ private fun ProfileHeaderSection(
                 style = MaterialTheme.typography.titleMedium
             )
             Text(
-                text = "Tap photo to change",
+                text = "tap for preview",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.primary
             )
         }
     }
@@ -1303,6 +1317,9 @@ private fun AddFieldDialog(
             onDismiss = { showNewCategoryDialog = false },
             onCreate = { categoryName ->
                 onCreateCategory(categoryName)
+                // Auto-select the newly created category
+                onCategoryChange(DataCategory.OTHER)
+                selectedCustomCategoryName = categoryName
                 showNewCategoryDialog = false
             }
         )
@@ -2481,18 +2498,60 @@ private fun PersonalDataTemplateChooserDialog(
 private fun PersonalDataTemplateFormDialog(
     state: PersonalDataTemplateFormState,
     onFieldValueChange: (Int, String) -> Unit,
+    onCategoryChange: (DataCategory) -> Unit = {},
+    customCategories: List<com.vettid.app.core.storage.CategoryInfo> = emptyList(),
+    onCreateCategory: (String) -> Unit = {},
     onSave: () -> Unit,
     onDismiss: () -> Unit
 ) {
     // Track which date picker is open (by field index)
     var datePickerFieldIndex by remember { mutableIntStateOf(-1) }
+    var expandedCategory by remember { mutableStateOf(false) }
+    var selectedCategory by remember { mutableStateOf(state.template.category) }
+    var showNewCategoryDialog by remember { mutableStateOf(false) }
+    var selectedCustomCategoryName by remember { mutableStateOf<String?>(null) }
+
+    // New category creation dialog
+    if (showNewCategoryDialog) {
+        var newCategoryName by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showNewCategoryDialog = false },
+            title = { Text("New Category") },
+            text = {
+                OutlinedTextField(
+                    value = newCategoryName,
+                    onValueChange = { newCategoryName = it },
+                    label = { Text("Category Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (newCategoryName.isNotBlank()) {
+                            onCreateCategory(newCategoryName)
+                            selectedCustomCategoryName = newCategoryName
+                            selectedCategory = DataCategory.OTHER
+                            onCategoryChange(DataCategory.OTHER)
+                            showNewCategoryDialog = false
+                        }
+                    },
+                    enabled = newCategoryName.isNotBlank()
+                ) { Text("Create") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showNewCategoryDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    getDataCategoryIcon(state.template.category),
+                    getDataCategoryIcon(selectedCategory),
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.size(24.dp)
@@ -2508,6 +2567,64 @@ private fun PersonalDataTemplateFormDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                // Category selector
+                ExposedDropdownMenuBox(
+                    expanded = expandedCategory,
+                    onExpandedChange = { expandedCategory = it }
+                ) {
+                    OutlinedTextField(
+                        value = selectedCustomCategoryName ?: selectedCategory.displayName,
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Category") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedCategory) },
+                        modifier = Modifier.fillMaxWidth().menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                    )
+                    ExposedDropdownMenu(
+                        expanded = expandedCategory,
+                        onDismissRequest = { expandedCategory = false }
+                    ) {
+                        DataCategory.values().forEach { category ->
+                            DropdownMenuItem(
+                                text = { Text(category.displayName) },
+                                onClick = {
+                                    selectedCategory = category
+                                    selectedCustomCategoryName = null
+                                    onCategoryChange(category)
+                                    expandedCategory = false
+                                }
+                            )
+                        }
+                        if (customCategories.isNotEmpty()) {
+                            HorizontalDivider()
+                            customCategories.forEach { customCat ->
+                                DropdownMenuItem(
+                                    text = { Text(customCat.name) },
+                                    onClick = {
+                                        selectedCategory = DataCategory.OTHER
+                                        selectedCustomCategoryName = customCat.name
+                                        onCategoryChange(DataCategory.OTHER)
+                                        expandedCategory = false
+                                    }
+                                )
+                            }
+                        }
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Create New Category")
+                                }
+                            },
+                            onClick = {
+                                expandedCategory = false
+                                showNewCategoryDialog = true
+                            }
+                        )
+                    }
+                }
                 state.template.fields.forEachIndexed { index, field ->
                     when (field.inputHint) {
                         PersonalDataFieldInputHint.DATE, PersonalDataFieldInputHint.EXPIRY_DATE -> {

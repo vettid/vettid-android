@@ -12,13 +12,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import android.widget.Toast
@@ -33,11 +34,11 @@ import java.util.*
 /**
  * Connection type filter for the embedded connections view.
  */
-enum class ConnectionTypeFilter(val label: String) {
-    ALL("All"),
-    PEOPLE("People"),
-    AGENTS("Agents"),
-    SERVICES("Services")
+enum class ConnectionTypeFilter(val label: String, val icon: ImageVector) {
+    ALL("All", Icons.Default.SelectAll),
+    PEOPLE("People", Icons.Default.People),
+    AGENTS("Agents", Icons.Default.SmartToy),
+    SERVICES("Services", Icons.Default.Business)
 }
 
 /**
@@ -171,37 +172,13 @@ fun ConnectionsContentEmbedded(
                     .padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                var expanded by remember { mutableStateOf(false) }
-                @OptIn(ExperimentalMaterial3Api::class)
-                ExposedDropdownMenuBox(
-                    expanded = expanded,
-                    onExpandedChange = { expanded = it }
-                ) {
-                    OutlinedTextField(
-                        value = typeFilter.label,
-                        onValueChange = {},
-                        readOnly = true,
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
-                        modifier = Modifier
-                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                            .width(160.dp),
-                        textStyle = MaterialTheme.typography.bodyMedium,
-                        singleLine = true
+                ConnectionTypeFilter.entries.forEach { filter ->
+                    FilterChip(
+                        selected = typeFilter == filter,
+                        onClick = { typeFilter = filter },
+                        label = { Icon(filter.icon, contentDescription = filter.label, modifier = Modifier.size(18.dp)) },
+                        modifier = Modifier.padding(end = 8.dp)
                     )
-                    ExposedDropdownMenu(
-                        expanded = expanded,
-                        onDismissRequest = { expanded = false }
-                    ) {
-                        ConnectionTypeFilter.entries.forEach { filter ->
-                            DropdownMenuItem(
-                                text = { Text(filter.label) },
-                                onClick = {
-                                    typeFilter = filter
-                                    expanded = false
-                                }
-                            )
-                        }
-                    }
                 }
             }
 
@@ -264,10 +241,30 @@ fun ConnectionsContentEmbedded(
                         }
 
                         is ConnectionsState.Empty -> {
-                            ConnectionsEmptyContent(
-                                onCreateInvitation = { viewModel.onCreateInvitation() },
-                                onScanInvitation = { viewModel.onScanInvitation() }
-                            )
+                            Box(
+                                modifier = Modifier.fillMaxSize().padding(32.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Icon(
+                                        Icons.Default.People,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(64.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                    )
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    Text(
+                                        "No connections",
+                                        style = MaterialTheme.typography.titleMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        "Tap + to get started",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                    )
+                                }
+                            }
                         }
 
                         is ConnectionsState.Loaded -> {
@@ -294,60 +291,71 @@ fun ConnectionsContentEmbedded(
             }
         }
 
-        // FAB - context-aware based on active filter
+        // FAB with expandable menu
         Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(16.dp),
             horizontalAlignment = Alignment.End
         ) {
-            if (typeFilter == ConnectionTypeFilter.AGENTS) {
-                // Single FAB for creating agent invitation
-                FloatingActionButton(
-                    onClick = { agentViewModel.onEvent(AgentManagementEvent.CreateInvitation) }
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = "Create Agent Invitation")
+            if (showFabMenu) {
+                FabMenuItem(label = "Scan Invitation", icon = Icons.Default.QrCodeScanner) {
+                    showFabMenu = false; viewModel.onScanInvitation()
                 }
-            } else {
-                // People connections FAB menu
-                if (showFabMenu) {
-                    SmallFloatingActionButton(
-                        onClick = {
-                            showFabMenu = false
-                            viewModel.onScanInvitation()
-                        },
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.QrCodeScanner,
-                            contentDescription = "Scan Invitation"
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(12.dp))
-                    SmallFloatingActionButton(
-                        onClick = {
-                            showFabMenu = false
-                            viewModel.onCreateInvitation()
-                        },
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.QrCode,
-                            contentDescription = "Create Invitation"
-                        )
-                    }
-                    Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(12.dp))
+                FabMenuItem(label = "Create Invitation", icon = Icons.Default.QrCode) {
+                    showFabMenu = false; viewModel.onCreateInvitation()
                 }
-
-                FloatingActionButton(
-                    onClick = { showFabMenu = !showFabMenu }
-                ) {
-                    Icon(
-                        imageVector = if (showFabMenu) Icons.Default.Close else Icons.Default.Add,
-                        contentDescription = if (showFabMenu) "Close menu" else "Add connection"
-                    )
+                Spacer(modifier = Modifier.height(12.dp))
+                FabMenuItem(label = "Connect Agent", icon = Icons.Default.SmartToy) {
+                    showFabMenu = false; agentViewModel.onEvent(AgentManagementEvent.CreateInvitation)
                 }
+                Spacer(modifier = Modifier.height(12.dp))
+                FabMenuItem(label = "Connect Desktop", icon = Icons.Default.Computer) {
+                    showFabMenu = false; /* TODO: Connect desktop */
+                }
+                Spacer(modifier = Modifier.height(12.dp))
             }
+
+            FloatingActionButton(
+                onClick = { showFabMenu = !showFabMenu }
+            ) {
+                Icon(
+                    imageVector = if (showFabMenu) Icons.Default.Close else Icons.Default.Add,
+                    contentDescription = if (showFabMenu) "Close menu" else "Add connection"
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FabMenuItem(
+    label: String,
+    icon: ImageVector,
+    onClick: () -> Unit
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.End
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.inverseSurface,
+            shape = RoundedCornerShape(4.dp)
+        ) {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.inverseOnSurface,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        SmallFloatingActionButton(
+            onClick = onClick,
+            containerColor = MaterialTheme.colorScheme.secondaryContainer
+        ) {
+            Icon(icon, contentDescription = label)
         }
     }
 }

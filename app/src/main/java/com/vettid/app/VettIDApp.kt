@@ -901,7 +901,7 @@ fun VettIDApp(
                         onCreateAgentInvitation = { navController.navigate(Screen.CreateAgentInvitation.route) }
                     )
                 },
-                personalDataContent = { _ -> PersonalDataContent() },
+                personalDataContent = { query -> PersonalDataContent(searchQuery = query) },
                 secretsContent = { query ->
                     SecretsContentEmbedded(
                         searchQuery = query,

@@ -120,8 +120,8 @@ fun VaultScaffold(
         if (isSearchActive) { isSearchActive = false; searchQuery = "" }
     }
 
-    // FAB only for Connections and Data — Secrets has its own built-in FAB with template chooser
-    val showFab = vaultSegment != VaultSegment.SECRETS
+    // All tabs manage their own FABs internally
+    val showFab = false
     val fabIcon = when (vaultSegment) {
         VaultSegment.CONNECTIONS -> Icons.Default.PersonAdd
         VaultSegment.DATA -> Icons.Default.Add

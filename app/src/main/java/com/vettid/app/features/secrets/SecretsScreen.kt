@@ -978,6 +978,41 @@ private fun AddSecretDialog(
 ) {
     var expandedCategory by remember { mutableStateOf(false) }
     var expandedType by remember { mutableStateOf(false) }
+    var showNewCategoryDialog by remember { mutableStateOf(false) }
+    var customCategoryName by remember { mutableStateOf<String?>(null) }
+
+    // New category dialog
+    if (showNewCategoryDialog) {
+        var newName by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showNewCategoryDialog = false },
+            title = { Text("New Category") },
+            text = {
+                OutlinedTextField(
+                    value = newName,
+                    onValueChange = { newName = it },
+                    label = { Text("Category Name") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (newName.isNotBlank()) {
+                            customCategoryName = newName
+                            onStateChange(state.copy(category = SecretCategory.OTHER))
+                            showNewCategoryDialog = false
+                        }
+                    },
+                    enabled = newName.isNotBlank()
+                ) { Text("Create") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showNewCategoryDialog = false }) { Text("Cancel") }
+            }
+        )
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -995,7 +1030,7 @@ private fun AddSecretDialog(
                     onExpandedChange = { expandedCategory = it }
                 ) {
                     OutlinedTextField(
-                        value = state.category.displayName,
+                        value = customCategoryName ?: state.category.displayName,
                         onValueChange = {},
                         readOnly = true,
                         label = { Text("Category") },
@@ -1006,7 +1041,8 @@ private fun AddSecretDialog(
                     )
                     ExposedDropdownMenu(
                         expanded = expandedCategory,
-                        onDismissRequest = { expandedCategory = false }
+                        onDismissRequest = { expandedCategory = false },
+                        modifier = Modifier.heightIn(max = 400.dp)
                     ) {
                         SecretCategory.entries.forEach { category ->
                             DropdownMenuItem(
@@ -1014,10 +1050,25 @@ private fun AddSecretDialog(
                                 leadingIcon = { Icon(getCategoryIcon(category), null) },
                                 onClick = {
                                     onStateChange(state.copy(category = category))
+                                    customCategoryName = null
                                     expandedCategory = false
                                 }
                             )
                         }
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Add, null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text("Create New Category")
+                                }
+                            },
+                            onClick = {
+                                expandedCategory = false
+                                showNewCategoryDialog = true
+                            }
+                        )
                     }
                 }
 

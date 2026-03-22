@@ -6,8 +6,6 @@ import com.vettid.app.core.storage.CredentialStore
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -45,18 +43,9 @@ class MigrationClient @Inject constructor(
     suspend fun checkMigrationStatus(): MigrationStatus {
         Log.d(TAG, "Checking migration status")
 
-        val requestIdResult = ownerSpaceClient.sendToVault("credential.migration.status", JsonObject())
-        if (requestIdResult.isFailure) {
-            Log.e(TAG, "Failed to send migration status request", requestIdResult.exceptionOrNull())
-            return MigrationStatus.Unknown
-        }
-
-        val requestId = requestIdResult.getOrThrow()
-
-        // Wait for response
-        val response = withTimeoutOrNull(TIMEOUT_MS) {
-            ownerSpaceClient.vaultResponses.first { it.requestId == requestId }
-        }
+        val response = ownerSpaceClient.sendAndAwaitResponse(
+            "credential.migration.status", JsonObject(), TIMEOUT_MS
+        )
 
         return when (response) {
             is VaultResponse.HandlerResult -> {
@@ -68,13 +57,10 @@ class MigrationClient @Inject constructor(
                 }
             }
             is VaultResponse.Error -> {
-                Log.e(TAG, "Migration status error: ${response.code} - ${response.message}")
-                MigrationStatus.Unknown
+                Log.d(TAG, "Migration status: ${response.code}")
+                MigrationStatus.None
             }
-            else -> {
-                Log.w(TAG, "Unexpected response type or timeout")
-                MigrationStatus.Unknown
-            }
+            else -> MigrationStatus.Unknown
         }
     }
 
@@ -90,16 +76,9 @@ class MigrationClient @Inject constructor(
             addProperty("acknowledged_at", System.currentTimeMillis())
         }
 
-        val requestIdResult = ownerSpaceClient.sendToVault("credential.migration.acknowledge", payload)
-        if (requestIdResult.isFailure) {
-            return Result.failure(requestIdResult.exceptionOrNull() ?: Exception("Failed to send acknowledgment"))
-        }
-
-        val requestId = requestIdResult.getOrThrow()
-
-        val response = withTimeoutOrNull(TIMEOUT_MS) {
-            ownerSpaceClient.vaultResponses.first { it.requestId == requestId }
-        }
+        val response = ownerSpaceClient.sendAndAwaitResponse(
+            "credential.migration.acknowledge", payload, TIMEOUT_MS
+        )
 
         return when (response) {
             is VaultResponse.HandlerResult -> {
@@ -142,17 +121,9 @@ class MigrationClient @Inject constructor(
             addProperty("nonce", nonce)
         }
 
-        val requestIdResult = ownerSpaceClient.sendToVault("credential.emergency_recovery", payload)
-        if (requestIdResult.isFailure) {
-            return Result.failure(requestIdResult.exceptionOrNull() ?: Exception("Failed to send recovery request"))
-        }
-
-        val requestId = requestIdResult.getOrThrow()
-
-        // Longer timeout for recovery operation
-        val response = withTimeoutOrNull(30_000L) {
-            ownerSpaceClient.vaultResponses.first { it.requestId == requestId }
-        }
+        val response = ownerSpaceClient.sendAndAwaitResponse(
+            "credential.emergency_recovery", payload, 30_000L
+        )
 
         return when (response) {
             is VaultResponse.HandlerResult -> {
@@ -230,17 +201,9 @@ class MigrationClient @Inject constructor(
     suspend fun getMigrationConfig(): MigrationConfig? {
         Log.d(TAG, "Checking for migration config")
 
-        val requestIdResult = ownerSpaceClient.sendToVault("credential.migration.config", JsonObject())
-        if (requestIdResult.isFailure) {
-            Log.e(TAG, "Failed to send migration config request", requestIdResult.exceptionOrNull())
-            return null
-        }
-
-        val requestId = requestIdResult.getOrThrow()
-
-        val response = withTimeoutOrNull(TIMEOUT_MS) {
-            ownerSpaceClient.vaultResponses.first { it.requestId == requestId }
-        }
+        val response = ownerSpaceClient.sendAndAwaitResponse(
+            "credential.migration.config", JsonObject(), TIMEOUT_MS
+        )
 
         return when (response) {
             is VaultResponse.HandlerResult -> {
@@ -252,7 +215,7 @@ class MigrationClient @Inject constructor(
                 }
             }
             else -> {
-                Log.w(TAG, "Migration config: unexpected response or timeout")
+                Log.d(TAG, "Migration config: no update available")
                 null
             }
         }
@@ -267,17 +230,9 @@ class MigrationClient @Inject constructor(
     suspend fun startMigration(): Result<String> {
         Log.i(TAG, "Starting vault migration (re-seal)")
 
-        val requestIdResult = ownerSpaceClient.sendToVault("credential.migration.start", JsonObject())
-        if (requestIdResult.isFailure) {
-            return Result.failure(requestIdResult.exceptionOrNull() ?: Exception("Failed to send migration start"))
-        }
-
-        val requestId = requestIdResult.getOrThrow()
-
-        // Longer timeout for re-sealing operation
-        val response = withTimeoutOrNull(30_000L) {
-            ownerSpaceClient.vaultResponses.first { it.requestId == requestId }
-        }
+        val response = ownerSpaceClient.sendAndAwaitResponse(
+            "credential.migration.start", JsonObject(), 30_000L
+        )
 
         return when (response) {
             is VaultResponse.HandlerResult -> {
