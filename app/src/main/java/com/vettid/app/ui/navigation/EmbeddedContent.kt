@@ -549,9 +549,10 @@ private fun ConnectionsListContent(
                 items = connections,
                 key = { it.connection.connectionId }
             ) { connectionWithMessage ->
-                EmbeddedConnectionListItem(
+                com.vettid.app.features.connections.ConnectionListItem(
                     connection = connectionWithMessage.connection,
                     lastMessage = connectionWithMessage.lastMessage,
+                    peerPhotoBase64 = connectionWithMessage.peerPhotoBase64,
                     onClick = { onConnectionClick(connectionWithMessage.connection.connectionId) }
                 )
             }

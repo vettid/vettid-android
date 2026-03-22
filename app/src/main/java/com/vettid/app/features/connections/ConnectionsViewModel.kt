@@ -199,7 +199,9 @@ class ConnectionsViewModel @Inject constructor(
                             ),
                             lastMessage = null,
                             peerPhotoBase64 = record.peerProfile?.photo
-                        )
+                        ).also {
+                            android.util.Log.d("ConnectionsVM", "Connection ${record.connectionId}: photo=${record.peerProfile?.photo?.take(20) ?: "null"}, fields=${record.peerProfile?.fields?.keys}")
+                        }
                     }.sortedByDescending { it.connection.createdAt }
 
                     allConnections = connectionsWithMessages

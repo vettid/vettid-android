@@ -42,6 +42,7 @@ fun ConnectionDetailScreen(
     val peerPhoto by viewModel.peerPhoto.collectAsState()
     val peerEmail by viewModel.peerEmail.collectAsState()
     val peerFields by viewModel.peerFields.collectAsState()
+    val peerPublicKey by viewModel.peerPublicKey.collectAsState()
 
     // Handle effects
     LaunchedEffect(Unit) {
@@ -119,6 +120,7 @@ fun ConnectionDetailScreen(
                     peerPhotoBase64 = peerPhoto,
                     peerEmail = peerEmail,
                     peerFields = peerFields,
+                    peerPublicKey = peerPublicKey,
                     isRevoking = currentState.isRevoking,
                     isRotating = currentState.isRotating,
                     isLocationSharingEnabled = currentState.isLocationSharingEnabled,
@@ -161,6 +163,7 @@ private fun LoadedContent(
     peerPhotoBase64: String? = null,
     peerEmail: String? = null,
     peerFields: Map<String, Map<String, String>>? = null,
+    peerPublicKey: String? = null,
     isRevoking: Boolean,
     isRotating: Boolean = false,
     isLocationSharingEnabled: Boolean = false,
@@ -292,17 +295,12 @@ private fun LoadedContent(
 
         // Peer's public profile fields
         if (!peerFields.isNullOrEmpty()) {
-            // Separate system fields from custom profile fields
-            val customFields = peerFields!!.entries
-                .filter { !it.key.startsWith("_system_") }
+            val allFields = peerFields!!.entries
                 .filter { (it.value["value"] ?: "").isNotBlank() }
-            val systemFields = peerFields!!.entries
-                .filter { it.key.startsWith("_system_") }
-                .filter { (it.value["value"] ?: "").isNotBlank() }
-                // Don't duplicate email/name already shown above
-                .filter { it.key != "_system_email" && it.key != "_system_first_name" && it.key != "_system_last_name" }
+                // Don't duplicate name already shown above
+                .filter { it.key != "_system_first_name" && it.key != "_system_last_name" }
 
-            if (customFields.isNotEmpty()) {
+            if (allFields.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(16.dp))
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {
@@ -312,48 +310,16 @@ private fun LoadedContent(
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(bottom = 12.dp)
                         )
-                        customFields.forEachIndexed { index, (_, fieldData) ->
+                        allFields.forEachIndexed { index, (_, fieldData) ->
                             if (index > 0) {
                                 HorizontalDivider(
                                     modifier = Modifier.padding(vertical = 8.dp),
                                     color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
                                 )
                             }
-                            val displayName = fieldData["display_name"] ?: ""
-                            val value = fieldData["value"] ?: ""
-                            Text(
-                                text = displayName.trim(),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = value,
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
-                    }
-                }
-            }
-
-            if (systemFields.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(12.dp))
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "SYSTEM INFORMATION",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(bottom = 12.dp)
-                        )
-                        systemFields.forEachIndexed { index, (_, fieldData) ->
-                            if (index > 0) {
-                                HorizontalDivider(
-                                    modifier = Modifier.padding(vertical = 8.dp),
-                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
-                                )
-                            }
-                            val displayName = (fieldData["display_name"] ?: "")
-                                .trim().removePrefix("System ").removePrefix("system ")
+                            val displayName = (fieldData["display_name"] ?: "").trim()
+                                .removePrefix(" System ")
+                                .replaceFirstChar { it.uppercase() }
                             val value = fieldData["value"] ?: ""
                             Text(
                                 text = displayName,
@@ -367,6 +333,95 @@ private fun LoadedContent(
                         }
                     }
                 }
+            }
+
+        }
+
+        // --- Security ---
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(
+            text = "SECURITY",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+        )
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                // E2E encryption status
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Default.Lock,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "End-to-End Encrypted",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+
+                // Public key fingerprint
+                if (!peerPublicKey.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "Public Key",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = peerPublicKey!!.chunked(8).joinToString(" "),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        // --- Shared Data (stub) ---
+        Spacer(modifier = Modifier.height(24.dp))
+        Text(
+            text = "SHARED WITH CONNECTION",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+        )
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                ListItem(
+                    headlineContent = { Text("Shared Data") },
+                    supportingContent = { Text("No shared data") },
+                    leadingContent = {
+                        Icon(Icons.Default.FolderShared, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                )
+                HorizontalDivider()
+                ListItem(
+                    headlineContent = { Text("Shared Secrets") },
+                    supportingContent = { Text("No shared secrets") },
+                    leadingContent = {
+                        Icon(Icons.Default.Key, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                )
+                HorizontalDivider()
+                ListItem(
+                    headlineContent = { Text("Handlers") },
+                    supportingContent = { Text("No active handlers") },
+                    leadingContent = {
+                        Icon(Icons.Default.Extension, contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                )
             }
         }
 

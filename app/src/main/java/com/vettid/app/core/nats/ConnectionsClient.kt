@@ -498,24 +498,46 @@ class ConnectionsClient @Inject constructor(
 
     private fun parseConnectionRecord(json: JsonObject): ConnectionRecord {
         val peerProfile = json.getAsJsonObject("peer_profile")?.let { profileObj ->
+            // Parse nested fields object if present
+            val nestedFields = profileObj.getAsJsonObject("fields")?.let { fieldsObj ->
+                val map = mutableMapOf<String, Map<String, String>>()
+                fieldsObj.entrySet().forEach { (key, value) ->
+                    val fieldObj = value?.asJsonObject
+                    if (fieldObj != null) {
+                        map[key] = mapOf(
+                            "display_name" to (fieldObj.get("display_name")?.asString ?: key),
+                            "value" to (fieldObj.get("value")?.asString ?: "")
+                        )
+                    }
+                }
+                map
+            }
+
+            // If no nested fields, build fields from top-level system entries
+            val fields = if (nestedFields.isNullOrEmpty()) {
+                val fallback = mutableMapOf<String, Map<String, String>>()
+                profileObj.entrySet().forEach { (key, value) ->
+                    if (key.startsWith("_system_") && value.isJsonPrimitive && value.asString.isNotBlank()) {
+                        val displayName = key.removePrefix("_system_")
+                            .replace("_", " ")
+                            .replaceFirstChar { it.uppercase() }
+                        fallback[key] = mapOf(
+                            "display_name" to displayName,
+                            "value" to value.asString
+                        )
+                    }
+                }
+                fallback.ifEmpty { null }
+            } else {
+                nestedFields
+            }
+
             PeerProfileData(
                 firstName = profileObj.get("_system_first_name")?.asString,
                 lastName = profileObj.get("_system_last_name")?.asString,
                 email = profileObj.get("_system_email")?.asString,
                 photo = profileObj.get("photo")?.takeIf { !it.isJsonNull }?.asString,
-                fields = profileObj.getAsJsonObject("fields")?.let { fieldsObj ->
-                    val map = mutableMapOf<String, Map<String, String>>()
-                    fieldsObj.entrySet().forEach { (key, value) ->
-                        val fieldObj = value?.asJsonObject
-                        if (fieldObj != null) {
-                            map[key] = mapOf(
-                                "display_name" to (fieldObj.get("display_name")?.asString ?: key),
-                                "value" to (fieldObj.get("value")?.asString ?: "")
-                            )
-                        }
-                    }
-                    map
-                }
+                fields = fields
             )
         }
 

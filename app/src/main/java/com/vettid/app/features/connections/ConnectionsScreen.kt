@@ -396,9 +396,10 @@ fun ConnectionListItem(
         },
         supportingContent = {
             Text(
-                text = lastMessage?.content ?: "No messages yet",
+                text = "Connected ${formatDateTime(connection.createdAt)}",
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         },
@@ -433,13 +434,7 @@ fun ConnectionListItem(
             Column(
                 horizontalAlignment = Alignment.End
             ) {
-                // Time
-                val timeText = formatTime(connection.lastMessageAt ?: connection.createdAt)
-                Text(
-                    text = timeText,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                // Unread badge only
 
                 // Unread badge
                 if (connection.unreadCount > 0) {
@@ -603,6 +598,12 @@ private fun ErrorContent(
 }
 
 // MARK: - Utility Functions
+
+private fun formatDateTime(timestamp: Long): String {
+    val timestampMillis = if (timestamp < 10000000000L) timestamp * 1000 else timestamp
+    val sdf = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
+    return sdf.format(Date(timestampMillis))
+}
 
 private fun formatTime(timestamp: Long): String {
     val now = System.currentTimeMillis()
