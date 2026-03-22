@@ -58,6 +58,9 @@ class ArchiveViewModel @Inject constructor(
                     _isRefreshing.value = false
                 }
             }
+            is ArchiveEvent.DeleteItem -> deleteItem(event.itemId)
+            is ArchiveEvent.RestoreItem -> restoreItem(event.itemId)
+            is ArchiveEvent.DismissDetail -> dismissDetail()
         }
     }
 
@@ -158,8 +161,11 @@ class ArchiveViewModel @Inject constructor(
         val currentState = _state.value
         if (currentState is ArchiveState.Loaded && currentState.isSelectionMode) {
             toggleSelection(itemId)
-        } else {
-            // View item details (not implemented for archive)
+        } else if (currentState is ArchiveState.Loaded) {
+            val item = currentState.items.find { it.id == itemId }
+            if (item != null) {
+                _state.value = currentState.copy(detailItem = item)
+            }
         }
     }
 
@@ -248,6 +254,43 @@ class ArchiveViewModel @Inject constructor(
                 loadArchive()
                 _effects.emit(ArchiveEffect.ShowSuccess("$restored item${if (restored > 1) "s" else ""} restored"))
             }
+        }
+    }
+
+    private fun deleteItem(itemId: String) {
+        viewModelScope.launch {
+            feedClient.deleteEvent(itemId)
+                .onSuccess {
+                    archivedItems.removeAll { it.id == itemId }
+                    loadArchive()
+                    _effects.emit(ArchiveEffect.ShowSuccess("Item deleted"))
+                }
+                .onFailure {
+                    Log.w(TAG, "Failed to delete event $itemId", it)
+                    _effects.emit(ArchiveEffect.ShowError("Failed to delete item"))
+                }
+        }
+    }
+
+    private fun restoreItem(itemId: String) {
+        viewModelScope.launch {
+            feedClient.executeAction(itemId, "restore")
+                .onSuccess {
+                    archivedItems.removeAll { it.id == itemId }
+                    loadArchive()
+                    _effects.emit(ArchiveEffect.ShowSuccess("Item restored to feed"))
+                }
+                .onFailure {
+                    Log.w(TAG, "Failed to restore event $itemId", it)
+                    _effects.emit(ArchiveEffect.ShowError("Failed to restore item"))
+                }
+        }
+    }
+
+    private fun dismissDetail() {
+        val currentState = _state.value
+        if (currentState is ArchiveState.Loaded) {
+            _state.value = currentState.copy(detailItem = null)
         }
     }
 

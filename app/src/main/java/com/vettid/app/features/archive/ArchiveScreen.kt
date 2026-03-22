@@ -106,6 +106,22 @@ fun ArchiveContent(
                         onItemClick = { viewModel.onEvent(ArchiveEvent.ItemClicked(it)) },
                         onItemLongPress = { viewModel.onEvent(ArchiveEvent.ItemLongPressed(it)) }
                     )
+
+                    // Detail dialog
+                    currentState.detailItem?.let { item ->
+                        ArchivedItemDetailDialog(
+                            item = item,
+                            onDelete = {
+                                viewModel.onEvent(ArchiveEvent.DismissDetail)
+                                viewModel.onEvent(ArchiveEvent.DeleteItem(item.id))
+                            },
+                            onRestore = {
+                                viewModel.onEvent(ArchiveEvent.DismissDetail)
+                                viewModel.onEvent(ArchiveEvent.RestoreItem(item.id))
+                            },
+                            onDismiss = { viewModel.onEvent(ArchiveEvent.DismissDetail) }
+                        )
+                    }
                 }
             }
         }
@@ -399,6 +415,156 @@ private fun ErrorContent(
             }
         }
     }
+}
+
+@Composable
+private fun ArchivedItemDetailDialog(
+    item: ArchivedItem,
+    onDelete: () -> Unit,
+    onRestore: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val dateFormatter = DateTimeFormatter.ofPattern("MMM d, yyyy 'at' h:mm a")
+    val formattedDate = dateFormatter.format(item.archivedAt.atZone(java.time.ZoneId.systemDefault()))
+    val formattedExpiry = item.expiresAt?.let {
+        dateFormatter.format(it.atZone(java.time.ZoneId.systemDefault()))
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = when (item.type) {
+                    ArchivedItemType.MESSAGE -> Icons.AutoMirrored.Filled.Chat
+                    ArchivedItemType.CONNECTION -> Icons.Default.Person
+                    ArchivedItemType.FILE -> Icons.Default.Description
+                    ArchivedItemType.AUTH_REQUEST -> Icons.Default.VerifiedUser
+                    ArchivedItemType.EVENT -> Icons.Default.Event
+                },
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary
+            )
+        },
+        title = {
+            Text(
+                text = item.title,
+                style = MaterialTheme.typography.titleLarge
+            )
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                // Type badge
+                Surface(
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = MaterialTheme.shapes.small
+                ) {
+                    Text(
+                        text = item.type.displayName,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+
+                // Message / subtitle
+                if (!item.subtitle.isNullOrBlank()) {
+                    Text(
+                        text = item.subtitle,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                HorizontalDivider()
+
+                // Archived date
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Inventory2,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Archived: $formattedDate",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                // Expiry date if present
+                if (formattedExpiry != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Timer,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Expires: $formattedExpiry",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                }
+
+                // Metadata entries
+                if (item.metadata.isNotEmpty()) {
+                    HorizontalDivider()
+                    item.metadata.forEach { (key, value) ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = key.replaceFirstChar { it.uppercase() },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = value,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = onDismiss) {
+                    Text("Close")
+                }
+                OutlinedButton(onClick = onRestore) {
+                    Icon(
+                        Icons.Default.Restore,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Restore to Feed")
+                }
+                Button(
+                    onClick = onDelete,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error
+                    )
+                ) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Delete")
+                }
+            }
+        }
+    )
 }
 
 private fun formatArchivedDate(instant: java.time.Instant): String {

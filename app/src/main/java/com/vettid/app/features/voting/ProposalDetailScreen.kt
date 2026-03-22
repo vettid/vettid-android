@@ -44,6 +44,7 @@ fun ProposalDetailScreen(
     val isLoading by viewModel.isLoading.collectAsState()
     val error by viewModel.error.collectAsState()
     val votingState by viewModel.state.collectAsState()
+    val userVote by viewModel.userVote.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
     // Set proposal ID
@@ -91,6 +92,7 @@ fun ProposalDetailScreen(
                     when (val state = votingState) {
                         is VotingState.Idle -> ProposalContent(
                             proposal = proposal!!,
+                            userVote = userVote,
                             onSelectChoice = { choice ->
                                 viewModel.onEvent(VotingEvent.SelectChoice(choice))
                             }
@@ -130,6 +132,7 @@ fun ProposalDetailScreen(
 @Composable
 private fun ProposalContent(
     proposal: Proposal,
+    userVote: Vote? = null,
     onSelectChoice: (VoteChoice) -> Unit
 ) {
     var selectedChoice by remember { mutableStateOf<VoteChoice?>(null) }
@@ -139,71 +142,105 @@ private fun ProposalContent(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(scrollState)
-            .padding(16.dp)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Status and timing
+        // Header: status chip + metadata row
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             StatusChip(status = proposal.status)
-            Text(
-                text = formatVotingPeriod(proposal),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            proposal.proposalNumber?.let { num ->
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Text(
+                        text = num,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+            proposal.category?.let { cat ->
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    shape = RoundedCornerShape(4.dp)
+                ) {
+                    Text(
+                        text = cat.replaceFirstChar { c -> c.uppercase() },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
         }
-
-        Spacer(modifier = Modifier.height(16.dp))
 
         // Title
         Text(
             text = proposal.title,
             style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        // Voting period
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            ),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                modifier = Modifier.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Default.Schedule,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = formatVotingPeriod(proposal),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
 
         // Description
-        Text(
-            text = proposal.description,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Proposal metadata
-        if (proposal.proposalNumber != null || proposal.category != null) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(16.dp)
+        if (proposal.description.isNotBlank()) {
+            Card(
+                modifier = Modifier.fillMaxWidth()
             ) {
-                proposal.proposalNumber?.let {
+                Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        text = "Description",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
                     )
-                }
-                proposal.category?.let {
+                    Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = it.replaceFirstChar { c -> c.uppercase() },
-                        style = MaterialTheme.typography.bodySmall,
+                        text = proposal.description,
+                        style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(16.dp))
         }
 
         // Quorum requirements
         if (proposal.quorumType != null && proposal.quorumType != "none") {
             Card(
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer
                 ),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -215,7 +252,7 @@ private fun ProposalContent(
                         Icons.Default.Groups,
                         contentDescription = null,
                         modifier = Modifier.size(20.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     val quorumText = when (proposal.quorumType) {
@@ -227,29 +264,41 @@ private fun ProposalContent(
                     Text(
                         text = quorumText,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(16.dp))
         }
 
-        // Choices section
-        Text(
-            text = "Choices",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
+        // Divider before choices
+        HorizontalDivider()
 
         // Show results if finalized, otherwise show voting options
         val results = proposal.results
         if (proposal.status == ProposalStatus.FINALIZED && results != null) {
+            Text(
+                text = "Results",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
             ResultsContent(proposal = proposal, results = results)
         } else if (proposal.userHasVoted) {
-            AlreadyVotedContent()
+            Text(
+                text = "Your Vote",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            AlreadyVotedContent(proposal = proposal, userVote = userVote)
         } else if (proposal.status == ProposalStatus.ACTIVE) {
+            Text(
+                text = "Cast Your Vote",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
             // Voting choices
             proposal.choices.forEach { choice ->
                 ChoiceCard(
@@ -257,10 +306,9 @@ private fun ProposalContent(
                     isSelected = selectedChoice == choice,
                     onSelect = { selectedChoice = choice }
                 )
-                Spacer(modifier = Modifier.height(8.dp))
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             // Vote button
             Button(
@@ -276,6 +324,9 @@ private fun ProposalContent(
             // Voting not active
             VotingNotActiveContent(status = proposal.status)
         }
+
+        // Bottom spacer for scroll comfort
+        Spacer(modifier = Modifier.height(16.dp))
     }
 }
 
@@ -339,35 +390,36 @@ private fun PasswordEntryContent(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
         Icon(
             imageVector = Icons.Default.Lock,
             contentDescription = null,
-            modifier = Modifier.size(64.dp),
+            modifier = Modifier.size(56.dp),
             tint = MaterialTheme.colorScheme.primary
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
         Text(
             text = "Authorize Your Vote",
             style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface
         )
 
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "Enter your password to cast your vote for:",
+            text = "Enter your password to confirm your selection:",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(20.dp))
 
         // Selected choice preview
         Card(
@@ -383,19 +435,20 @@ private fun PasswordEntryContent(
                 Icon(
                     imageVector = Icons.Default.CheckCircle,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Column {
                     Text(
                         text = selectedChoice.label,
                         style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
                     Text(
                         text = proposal.title,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
                     )
                 }
             }
@@ -427,7 +480,7 @@ private fun PasswordEntryContent(
                 }
             },
             isError = error != null,
-            supportingText = error?.let { { Text(it) } },
+            supportingText = error?.let { { Text(it, color = MaterialTheme.colorScheme.error) } },
             keyboardOptions = KeyboardOptions(
                 keyboardType = KeyboardType.Password,
                 imeAction = ImeAction.Done
@@ -657,79 +710,157 @@ private fun ResultsContent(
     proposal: Proposal,
     results: VoteResults
 ) {
-    Column {
-        results.choiceCounts.forEach { (choiceId, count) ->
-            val choice = proposal.choices.find { it.id == choiceId }
-            val percentage = if (results.totalVotes > 0) {
-                (count.toFloat() / results.totalVotes * 100).toInt()
-            } else 0
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            results.choiceCounts.entries.sortedByDescending { it.value }.forEach { (choiceId, count) ->
+                val choice = proposal.choices.find { it.id == choiceId }
+                val percentage = if (results.totalVotes > 0) {
+                    (count.toFloat() / results.totalVotes * 100).toInt()
+                } else 0
 
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                // Determine if this is the winning choice
+                val isWinner = results.choiceCounts.maxByOrNull { it.value }?.key == choiceId
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 6.dp)
                 ) {
-                    Text(
-                        text = choice?.label ?: choiceId,
-                        style = MaterialTheme.typography.bodyLarge
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            if (isWinner) {
+                                Icon(
+                                    imageVector = Icons.Default.EmojiEvents,
+                                    contentDescription = "Winner",
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                            }
+                            Text(
+                                text = choice?.label ?: choiceId,
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = if (isWinner) FontWeight.SemiBold else FontWeight.Normal,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Text(
+                            text = "$count votes ($percentage%)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    LinearProgressIndicator(
+                        progress = { percentage / 100f },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp),
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant
                     )
+                }
+            }
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "Total votes: ${results.totalVotes}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (results.finalizedAt.isNotBlank()) {
                     Text(
-                        text = "$count votes ($percentage%)",
-                        style = MaterialTheme.typography.bodyMedium,
+                        text = "Finalized: ${formatTimestamp(results.finalizedAt)}",
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Spacer(modifier = Modifier.height(4.dp))
-                LinearProgressIndicator(
-                    progress = { percentage / 100f },
-                    modifier = Modifier.fillMaxWidth()
-                )
             }
         }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = "Total votes: ${results.totalVotes}",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
     }
 }
 
 @Composable
-private fun AlreadyVotedContent() {
+private fun AlreadyVotedContent(
+    proposal: Proposal,
+    userVote: Vote? = null
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.primaryContainer
         )
     ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.Default.CheckCircle,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column {
-                Text(
-                    text = "You've already voted",
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = FontWeight.SemiBold
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.CheckCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer
                 )
-                Text(
-                    text = "Your vote has been recorded for this proposal",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Column {
+                    Text(
+                        text = "You've already voted",
+                        style = MaterialTheme.typography.bodyLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                    Text(
+                        text = "Your vote has been recorded for this proposal",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                    )
+                }
+            }
+
+            // Show which choice was made if we have the vote record
+            if (userVote != null) {
+                Spacer(modifier = Modifier.height(12.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.2f))
+                Spacer(modifier = Modifier.height(12.dp))
+
+                val votedChoice = proposal.choices.find { it.id == userVote.choiceId }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.HowToVote,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Your choice: ",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+                    )
+                    Text(
+                        text = votedChoice?.label ?: userVote.choiceId,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
+                }
+
+                if (userVote.castAt.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Voted: ${formatTimestamp(userVote.castAt)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.5f)
+                    )
+                }
             }
         }
     }
@@ -758,37 +889,71 @@ private fun VotingNotActiveContent(status: ProposalStatus) {
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(modifier = Modifier.width(12.dp))
-            Text(
-                text = when (status) {
-                    ProposalStatus.UPCOMING -> "Voting has not started yet"
-                    ProposalStatus.ENDED -> "Voting has ended"
-                    ProposalStatus.CANCELLED -> "This proposal was cancelled"
-                    else -> "Voting is not available"
-                },
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Column {
+                Text(
+                    text = when (status) {
+                        ProposalStatus.UPCOMING -> "Voting has not started yet"
+                        ProposalStatus.ENDED -> "Voting has ended"
+                        ProposalStatus.CANCELLED -> "This proposal was cancelled"
+                        else -> "Voting is not available"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = when (status) {
+                        ProposalStatus.UPCOMING -> "Check back when the voting period opens"
+                        ProposalStatus.ENDED -> "Results will be available after finalization"
+                        ProposalStatus.CANCELLED -> "This proposal is no longer accepting votes"
+                        else -> ""
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun StatusChip(status: ProposalStatus) {
-    val (color, text) = when (status) {
-        ProposalStatus.UPCOMING -> MaterialTheme.colorScheme.secondaryContainer to "Upcoming"
-        ProposalStatus.ACTIVE -> MaterialTheme.colorScheme.primaryContainer to "Active"
-        ProposalStatus.ENDED -> MaterialTheme.colorScheme.surfaceVariant to "Ended"
-        ProposalStatus.FINALIZED -> MaterialTheme.colorScheme.tertiaryContainer to "Finalized"
-        ProposalStatus.CANCELLED -> MaterialTheme.colorScheme.errorContainer to "Cancelled"
+    val (containerColor, contentColor, text) = when (status) {
+        ProposalStatus.UPCOMING -> Triple(
+            MaterialTheme.colorScheme.secondaryContainer,
+            MaterialTheme.colorScheme.onSecondaryContainer,
+            "Upcoming"
+        )
+        ProposalStatus.ACTIVE -> Triple(
+            MaterialTheme.colorScheme.primaryContainer,
+            MaterialTheme.colorScheme.onPrimaryContainer,
+            "Active"
+        )
+        ProposalStatus.ENDED -> Triple(
+            MaterialTheme.colorScheme.surfaceVariant,
+            MaterialTheme.colorScheme.onSurfaceVariant,
+            "Ended"
+        )
+        ProposalStatus.FINALIZED -> Triple(
+            MaterialTheme.colorScheme.tertiaryContainer,
+            MaterialTheme.colorScheme.onTertiaryContainer,
+            "Finalized"
+        )
+        ProposalStatus.CANCELLED -> Triple(
+            MaterialTheme.colorScheme.errorContainer,
+            MaterialTheme.colorScheme.onErrorContainer,
+            "Cancelled"
+        )
     }
 
     Surface(
-        color = color,
+        color = containerColor,
         shape = RoundedCornerShape(4.dp)
     ) {
         Text(
             text = text,
             style = MaterialTheme.typography.labelSmall,
+            color = contentColor,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
         )
     }

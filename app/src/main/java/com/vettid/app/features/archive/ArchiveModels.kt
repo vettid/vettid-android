@@ -37,7 +37,8 @@ sealed class ArchiveState {
         val groupedByMonth: Map<YearMonth, List<ArchivedItem>>,
         val searchQuery: String = "",
         val selectedIds: Set<String> = emptySet(),
-        val isSelectionMode: Boolean = false
+        val isSelectionMode: Boolean = false,
+        val detailItem: ArchivedItem? = null
     ) : ArchiveState()
     data class Error(val message: String) : ArchiveState()
     object Empty : ArchiveState()
@@ -67,4 +68,7 @@ sealed class ArchiveEvent {
     object DeleteSelected : ArchiveEvent()
     object RestoreSelected : ArchiveEvent()
     object Refresh : ArchiveEvent()
+    data class DeleteItem(val itemId: String) : ArchiveEvent()
+    data class RestoreItem(val itemId: String) : ArchiveEvent()
+    object DismissDetail : ArchiveEvent()
 }

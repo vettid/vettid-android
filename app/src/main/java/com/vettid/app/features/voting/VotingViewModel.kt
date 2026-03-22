@@ -64,6 +64,9 @@ class VotingViewModel @Inject constructor(
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
+    private val _userVote = MutableStateFlow<Vote?>(null)
+    val userVote: StateFlow<Vote?> = _userVote.asStateFlow()
+
     init {
         if (proposalId.isNotBlank()) {
             loadProposal()
@@ -120,6 +123,9 @@ class VotingViewModel @Inject constructor(
             } else if (_proposal.value == null) {
                 _error.value = "Not authenticated"
             }
+
+            // Look up the user's stored vote for this proposal
+            _userVote.value = votingRepository.getVoteForProposal(id)
 
             _isLoading.value = false
         }
