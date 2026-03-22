@@ -29,6 +29,9 @@ class ArchiveViewModel @Inject constructor(
     private val _effects = MutableSharedFlow<ArchiveEffect>()
     val effects: SharedFlow<ArchiveEffect> = _effects.asSharedFlow()
 
+    private val _isRefreshing = MutableStateFlow(false)
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
     // In-memory archive store (would be persisted in production)
     private val archivedItems = mutableListOf<ArchivedItem>()
 
@@ -48,7 +51,13 @@ class ArchiveViewModel @Inject constructor(
             is ArchiveEvent.ExitSelectionMode -> exitSelectionMode()
             is ArchiveEvent.DeleteSelected -> deleteSelected()
             is ArchiveEvent.RestoreSelected -> restoreSelected()
-            is ArchiveEvent.Refresh -> loadArchive()
+            is ArchiveEvent.Refresh -> {
+                viewModelScope.launch {
+                    _isRefreshing.value = true
+                    loadArchive()
+                    _isRefreshing.value = false
+                }
+            }
         }
     }
 

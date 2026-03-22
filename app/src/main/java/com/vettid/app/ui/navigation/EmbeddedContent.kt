@@ -91,8 +91,13 @@ fun ConnectionsContentEmbedded(
             val fullName = listOfNotNull(profileData.firstName, profileData.lastName).joinToString(" ").trim()
             fullName.ifEmpty { review.peerAlias }
         } else review.peerAlias
-        val peerEmail: String? = profileData?.email ?: review.peerProfile?.get("_system_email")
+        val peerEmail: String? = profileData?.email
+            ?: review.peerProfile?.get("_system_email")
         val peerPhoto: String? = profileData?.photo
+            ?: review.peerPhoto
+            ?: review.peerProfile?.get("photo")
+        val peerFields: Map<String, Map<String, String>>? = review.peerReviewFields
+            ?: profileData?.fields
 
         androidx.compose.ui.window.Dialog(
             onDismissRequest = { /* Don't dismiss without action */ }
@@ -101,7 +106,8 @@ fun ConnectionsContentEmbedded(
                 profile = com.vettid.app.features.connections.components.PeerProfilePreview(
                     displayName = peerDisplayName,
                     email = peerEmail,
-                    photoBase64 = peerPhoto
+                    photoBase64 = peerPhoto,
+                    profileFields = peerFields
                 ),
                 onAccept = {
                     viewModel.respondToConnection(review.connectionId, true)

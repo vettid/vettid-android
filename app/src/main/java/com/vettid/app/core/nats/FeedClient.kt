@@ -45,7 +45,11 @@ class FeedClient @Inject constructor(
         offset: Int = 0
     ): Result<FeedListResponse> {
         val payload = JsonObject().apply {
-            status?.let { addProperty("status", it) }
+            status?.let {
+                val arr = com.google.gson.JsonArray()
+                arr.add(it)
+                add("status", arr)
+            }
             addProperty("limit", limit)
             addProperty("offset", offset)
         }

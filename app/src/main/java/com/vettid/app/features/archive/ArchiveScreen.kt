@@ -10,6 +10,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,6 +36,7 @@ fun ArchiveContent(
         viewModel.onEvent(ArchiveEvent.SearchQueryChanged(searchQuery))
     }
     val state by viewModel.state.collectAsState()
+    val isRefreshing by viewModel.isRefreshing.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
     // Handle effects
@@ -54,7 +56,12 @@ fun ArchiveContent(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    @OptIn(ExperimentalMaterial3Api::class)
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = { viewModel.onEvent(ArchiveEvent.Refresh) },
+        modifier = Modifier.fillMaxSize()
+    ) {
         Column(modifier = Modifier.fillMaxSize()) {
             // Selection mode header
             val currentState = state
@@ -106,7 +113,9 @@ fun ArchiveContent(
         // Snackbar host
         SnackbarHost(
             hostState = snackbarHostState,
-            modifier = Modifier.align(Alignment.BottomCenter)
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 16.dp)
         )
     }
 }
