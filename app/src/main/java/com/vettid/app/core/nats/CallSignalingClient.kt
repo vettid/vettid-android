@@ -148,11 +148,14 @@ class CallSignalingClient @Inject constructor(
      * @param callerGuid The caller's GUID (to route response back)
      * @param sdpAnswer WebRTC SDP answer
      */
+    /**
+     * Answer a call. Returns the E2EE shared secret (base64) if the vault derived one.
+     */
     suspend fun answerCall(
         callId: String,
         callerGuid: String,
         sdpAnswer: String? = null
-    ): Result<Unit> {
+    ): Result<String?> {
         val payload = JsonObject().apply {
             addProperty("call_id", callId)
             sdpAnswer?.let { addProperty("sdp_answer", it) }
@@ -160,9 +163,11 @@ class CallSignalingClient @Inject constructor(
 
         Log.i(TAG, "Answering call $callId to user $callerGuid")
 
-        // Send accept back to caller's vault
-        val result = ownerSpaceClient.sendToTargetVault(callerGuid, "call.accept", payload)
-        return result.map { Unit }
+        // Send accept to own vault — vault returns shared secret and relays to caller
+        return sendAndAwait("call.accept", payload) { result ->
+            // Extract shared_secret from vault's AcceptCallResponse
+            if (result.has("shared_secret")) result.get("shared_secret").asString else null
+        }
     }
 
     /**
@@ -624,7 +629,8 @@ class CallSignalingClient @Inject constructor(
             is CallSignalEvent.Accepted -> CallEvent.CallAnswered(
                 callId = event.callId,
                 answeredAt = System.currentTimeMillis(),
-                sdpAnswer = event.sdpAnswer
+                sdpAnswer = event.sdpAnswer,
+                sharedSecret = event.sharedSecret
             )
             is CallSignalEvent.Answer -> CallEvent.CallAnswered(
                 callId = event.callId,

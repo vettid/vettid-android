@@ -87,7 +87,13 @@ enum class MessageContentType {
     @SerializedName("image")
     IMAGE,
     @SerializedName("file")
-    FILE
+    FILE,
+    @SerializedName("btc_payment_request")
+    BTC_PAYMENT_REQUEST,
+    @SerializedName("btc_payment_receipt")
+    BTC_PAYMENT_RECEIPT,
+    @SerializedName("btc_address")
+    BTC_ADDRESS
 }
 
 /**

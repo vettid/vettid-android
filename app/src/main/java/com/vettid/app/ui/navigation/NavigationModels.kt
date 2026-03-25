@@ -21,7 +21,8 @@ enum class BottomTab(
 enum class VaultSegment(val title: String, val icon: ImageVector) {
     DATA("Data", Icons.Default.Person),
     SECRETS("Secrets", Icons.Default.Lock),
-    CONNECTIONS("Connections", Icons.Default.People)
+    CONNECTIONS("Connections", Icons.Default.People),
+    WALLETS("Wallets", Icons.Default.AccountBalance)
 }
 
 /**

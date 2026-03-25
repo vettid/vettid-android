@@ -1,7 +1,10 @@
 package com.vettid.app.features.connections
 
+import android.Manifest
 import android.graphics.BitmapFactory
 import android.util.Base64
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -13,6 +16,7 @@ import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -21,6 +25,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.vettid.app.features.calling.CallType
 import com.vettid.app.core.network.Connection
 import com.vettid.app.core.network.ConnectionStatus
 import com.vettid.app.core.network.Profile
@@ -35,6 +40,7 @@ import java.util.*
 fun ConnectionDetailScreen(
     viewModel: ConnectionDetailViewModel = hiltViewModel(),
     onMessageClick: () -> Unit = {},
+    onSendBtc: (String) -> Unit = {},
     onBack: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsState()
@@ -43,6 +49,28 @@ fun ConnectionDetailScreen(
     val peerEmail by viewModel.peerEmail.collectAsState()
     val peerFields by viewModel.peerFields.collectAsState()
     val peerPublicKey by viewModel.peerPublicKey.collectAsState()
+
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    var pendingCallType by remember { mutableStateOf<CallType?>(null) }
+
+    val callPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        if (grants.values.all { it }) {
+            pendingCallType?.let { callType ->
+                when (callType) {
+                    CallType.VOICE -> viewModel.onVoiceCallClick()
+                    CallType.VIDEO -> viewModel.onVideoCallClick()
+                }
+            }
+        } else {
+            scope.launch {
+                snackbarHostState.showSnackbar("Microphone permission is required for calls")
+            }
+        }
+        pendingCallType = null
+    }
 
     // Handle effects
     LaunchedEffect(Unit) {
@@ -126,8 +154,18 @@ fun ConnectionDetailScreen(
                     isLocationSharingEnabled = currentState.isLocationSharingEnabled,
                     isTogglingLocationSharing = currentState.isTogglingLocationSharing,
                     onMessageClick = { viewModel.onMessageClick() },
-                    onVoiceCallClick = { viewModel.onVoiceCallClick() },
-                    onVideoCallClick = { viewModel.onVideoCallClick() },
+                    onSendBtcClick = { onSendBtc(currentState.connection.connectionId) },
+                    onVoiceCallClick = {
+                        pendingCallType = CallType.VOICE
+                        callPermissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
+                    },
+                    onVideoCallClick = {
+                        pendingCallType = CallType.VIDEO
+                        callPermissionLauncher.launch(arrayOf(
+                            Manifest.permission.RECORD_AUDIO,
+                            Manifest.permission.CAMERA
+                        ))
+                    },
                     onRotateKeysClick = { viewModel.rotateKeys() },
                     onRevokeClick = { viewModel.onRevokeClick() },
                     onLocationSharingToggle = { viewModel.toggleLocationSharing(it) },
@@ -169,6 +207,7 @@ private fun LoadedContent(
     isLocationSharingEnabled: Boolean = false,
     isTogglingLocationSharing: Boolean = false,
     onMessageClick: () -> Unit,
+    onSendBtcClick: () -> Unit = {},
     onVoiceCallClick: () -> Unit,
     onVideoCallClick: () -> Unit,
     onRotateKeysClick: () -> Unit = {},
@@ -250,6 +289,68 @@ private fun LoadedContent(
                             Text(text = fieldData["value"] ?: "", style = MaterialTheme.typography.bodyMedium)
                         }
                     }
+                }
+            }
+        }
+
+        // === ACTION BUTTONS ===
+        if (connection.status == ConnectionStatus.ACTIVE) {
+            Spacer(modifier = Modifier.height(20.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    FilledTonalIconButton(
+                        onClick = onMessageClick,
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.Chat,
+                            contentDescription = "Message"
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Message", style = MaterialTheme.typography.labelSmall)
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    FilledTonalIconButton(
+                        onClick = onSendBtcClick,
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AccountBalance,
+                            contentDescription = "Send BTC"
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Send BTC", style = MaterialTheme.typography.labelSmall)
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    FilledTonalIconButton(
+                        onClick = onVoiceCallClick,
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Phone,
+                            contentDescription = "Call"
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Call", style = MaterialTheme.typography.labelSmall)
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    FilledTonalIconButton(
+                        onClick = onVideoCallClick,
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Videocam,
+                            contentDescription = "Video"
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text("Video", style = MaterialTheme.typography.labelSmall)
                 }
             }
         }

@@ -108,6 +108,7 @@ fun VaultScaffold(
     connectionsContent: @Composable (searchQuery: String) -> Unit,
     personalDataContent: @Composable (searchQuery: String) -> Unit,
     secretsContent: @Composable (searchQuery: String) -> Unit,
+    walletsContent: @Composable (searchQuery: String) -> Unit,
     // FAB
     onFabClick: () -> Unit = {},
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() }
@@ -126,6 +127,7 @@ fun VaultScaffold(
         VaultSegment.CONNECTIONS -> Icons.Default.PersonAdd
         VaultSegment.DATA -> Icons.Default.Add
         VaultSegment.SECRETS -> Icons.Default.Add
+        VaultSegment.WALLETS -> Icons.Default.AccountBalance
     }
 
     Scaffold(
@@ -172,6 +174,7 @@ fun VaultScaffold(
                     VaultSegment.CONNECTIONS -> connectionsContent(searchQuery)
                     VaultSegment.DATA -> personalDataContent(searchQuery)
                     VaultSegment.SECRETS -> secretsContent(searchQuery)
+                    VaultSegment.WALLETS -> walletsContent(searchQuery)
                 }
             }
         }

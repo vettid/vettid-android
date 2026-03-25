@@ -78,19 +78,20 @@ class WebRTCClient(
     /**
      * Create a peer connection with ICE servers.
      */
-    fun createPeerConnection(): Boolean {
+    fun createPeerConnection(iceServers: List<PeerConnection.IceServer> = emptyList()): Boolean {
         val factory = peerConnectionFactory ?: run {
             Log.e(TAG, "PeerConnectionFactory not initialized")
             return false
         }
 
-        val iceServers = listOf(
-            PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
-            PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer(),
-            PeerConnection.IceServer.builder("stun:stun2.l.google.com:19302").createIceServer()
-        )
+        val servers = if (iceServers.isNotEmpty()) {
+            iceServers
+        } else {
+            // Fallback: Cloudflare STUN only (no Google dependencies)
+            listOf(PeerConnection.IceServer.builder("stun:stun.cloudflare.com:3478").createIceServer())
+        }
 
-        val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
+        val rtcConfig = PeerConnection.RTCConfiguration(servers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
         }
@@ -396,6 +397,25 @@ class WebRTCClient(
      * Get EGL context for video rendering.
      */
     fun getEglContext(): EglBase.Context? = eglBase?.eglBaseContext
+
+    /**
+     * Get the PeerConnectionFactory for frame encryption setup.
+     */
+    fun getFactory(): PeerConnectionFactory? = peerConnectionFactory
+
+    /**
+     * Get all RTP senders (for attaching frame encryptors to outgoing media).
+     */
+    fun getSenders(): List<RtpSender> {
+        return peerConnection?.senders?.toList() ?: emptyList()
+    }
+
+    /**
+     * Get all RTP receivers (for attaching frame decryptors to incoming media).
+     */
+    fun getReceivers(): List<RtpReceiver> {
+        return peerConnection?.receivers?.toList() ?: emptyList()
+    }
 
     /**
      * Clean up all resources.

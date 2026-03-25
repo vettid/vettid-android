@@ -221,7 +221,7 @@ dependencies {
     implementation("io.nats:jnats:2.17.6")
 
     // WebRTC for voice/video calling
-    implementation("io.getstream:stream-webrtc-android:1.1.1")
+    implementation("io.getstream:stream-webrtc-android:1.3.10")
 
     // WorkManager for background tasks
     implementation("androidx.work:work-runtime-ktx:2.9.0")

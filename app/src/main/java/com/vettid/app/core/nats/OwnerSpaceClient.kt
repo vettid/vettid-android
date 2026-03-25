@@ -1850,7 +1850,8 @@ class OwnerSpaceClient @Inject constructor(
                 )
                 "accepted" -> CallSignalEvent.Accepted(
                     callId = payload.getString("call_id"),
-                    sdpAnswer = if (payload.has("sdp_answer")) payload.getString("sdp_answer") else null
+                    sdpAnswer = if (payload.has("sdp_answer")) payload.getString("sdp_answer") else null,
+                    sharedSecret = if (payload.has("shared_secret")) payload.getString("shared_secret") else null
                 )
                 "rejected" -> CallSignalEvent.Rejected(
                     callId = payload.getString("call_id"),
@@ -2449,7 +2450,8 @@ sealed class CallSignalEvent {
     /** Call was accepted by callee */
     data class Accepted(
         override val callId: String,
-        val sdpAnswer: String?
+        val sdpAnswer: String?,
+        val sharedSecret: String? = null // E2EE shared secret (base64) from vault
     ) : CallSignalEvent()
 
     /** Call was rejected by callee */

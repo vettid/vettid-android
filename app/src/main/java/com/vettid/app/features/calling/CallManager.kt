@@ -9,6 +9,8 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.util.Log
 import com.vettid.app.core.nats.CallSignalingClient
+import com.vettid.app.core.network.VaultServiceClient
+import com.vettid.app.core.storage.CredentialStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -29,7 +31,9 @@ import javax.inject.Singleton
 @Singleton
 class CallManager @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val callSignalingClient: CallSignalingClient
+    private val callSignalingClient: CallSignalingClient,
+    private val vaultServiceClient: VaultServiceClient,
+    private val credentialStore: CredentialStore
 ) : WebRTCListener {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -47,8 +51,13 @@ class CallManager @Inject constructor(
     val localVideoTrack: StateFlow<VideoTrack?> = _localVideoTrack.asStateFlow()
 
     private var webRTCClient: WebRTCClient? = null
+    private var frameCryptor: CallFrameCryptor? = null
     private var durationJob: Job? = null
     private var ringtoneJob: Job? = null
+
+    // TURN credential cache (23-hour TTL, server credentials expire at 24 hours)
+    private var cachedIceServers: List<PeerConnection.IceServer>? = null
+    private var iceServerCacheExpiry: Long = 0
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -87,8 +96,9 @@ class CallManager @Inject constructor(
         // Initialize WebRTC
         initializeWebRTC()
 
-        // Create peer connection and add tracks
-        if (!webRTCClient!!.createPeerConnection()) {
+        // Fetch TURN credentials and create peer connection
+        val iceServers = fetchIceServers()
+        if (!webRTCClient!!.createPeerConnection(iceServers)) {
             disposeWebRTC()
             return Result.failure(IllegalStateException("Failed to create peer connection"))
         }
@@ -154,11 +164,13 @@ class CallManager @Inject constructor(
         Log.i(TAG, "Answering call ${state.call.callId}")
 
         stopRingtone()
+        CallForegroundService.dismiss(context)
 
         // Initialize WebRTC if not already
         if (webRTCClient == null) {
             initializeWebRTC()
-            if (!webRTCClient!!.createPeerConnection()) {
+            val iceServers = fetchIceServers()
+            if (!webRTCClient!!.createPeerConnection(iceServers)) {
                 disposeWebRTC()
                 return Result.failure(IllegalStateException("Failed to create peer connection"))
             }
@@ -204,7 +216,10 @@ class CallManager @Inject constructor(
             sdpAnswer = sdpAnswer.description
         )
 
-        return result.map {
+        return result.map { sharedSecret ->
+            // Enable E2EE frame encryption with the vault-derived shared secret
+            enableFrameEncryption(sharedSecret)
+
             val answeredCall = state.call.copy(answeredAt = System.currentTimeMillis())
             _callState.value = CallState.Active(
                 call = answeredCall,
@@ -241,6 +256,7 @@ class CallManager @Inject constructor(
         Log.i(TAG, "Rejecting call ${state.call.callId}")
 
         stopRingtone()
+        CallForegroundService.dismiss(context)
         disposeWebRTC()
 
         val result = callSignalingClient.rejectCall(state.call.callId, state.call.peerGuid)
@@ -269,6 +285,7 @@ class CallManager @Inject constructor(
 
         stopDurationTimer()
         stopRingtone()
+        CallForegroundService.dismiss(context)
 
         val result = callSignalingClient.endCall(call.callId, call.peerGuid)
 
@@ -361,6 +378,7 @@ class CallManager @Inject constructor(
             }
 
             _callState.value = CallState.Ended(call, CallEndReason.FAILED)
+            CallForegroundService.dismiss(context)
             resetAudio()
             disposeWebRTC()
             delay(1500)
@@ -394,6 +412,67 @@ class CallManager @Inject constructor(
         }
     }
 
+    // MARK: - ICE Server Management
+
+    /**
+     * Fetch Cloudflare TURN/STUN credentials for WebRTC.
+     * Returns cached credentials if still valid, otherwise fetches fresh ones.
+     * Falls back to Cloudflare STUN only if the fetch fails.
+     */
+    private suspend fun fetchIceServers(): List<PeerConnection.IceServer> {
+        // Check cache
+        val now = System.currentTimeMillis()
+        cachedIceServers?.let { cached ->
+            if (now < iceServerCacheExpiry) {
+                Log.d(TAG, "Using cached TURN credentials (${(iceServerCacheExpiry - now) / 1000}s remaining)")
+                return cached
+            }
+        }
+
+        val fallback = listOf(
+            PeerConnection.IceServer.builder("stun:stun.cloudflare.com:3478").createIceServer()
+        )
+
+        val authToken = credentialStore.getAuthToken()
+        if (authToken == null) {
+            Log.w(TAG, "No auth token available, using STUN fallback")
+            return fallback
+        }
+
+        return try {
+            val result = vaultServiceClient.getTurnCredentials(authToken)
+            val response = result.getOrNull() ?: run {
+                Log.w(TAG, "TURN credential fetch returned null, using STUN fallback")
+                return fallback
+            }
+
+            val servers = response.iceServers.flatMap { config ->
+                config.urls.map { url ->
+                    val builder = PeerConnection.IceServer.builder(url)
+                    if (config.username != null && config.credential != null) {
+                        builder.setUsername(config.username)
+                        builder.setPassword(config.credential)
+                    }
+                    builder.createIceServer()
+                }
+            }
+
+            if (servers.isNotEmpty()) {
+                cachedIceServers = servers
+                // Cache for 23 hours (credentials expire at 24 hours)
+                iceServerCacheExpiry = now + (23 * 60 * 60 * 1000L)
+                Log.i(TAG, "Fetched ${servers.size} ICE servers (STUN + TURN)")
+                servers
+            } else {
+                Log.w(TAG, "TURN response had no servers, using STUN fallback")
+                fallback
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to fetch TURN credentials, using STUN fallback", e)
+            fallback
+        }
+    }
+
     // MARK: - Private Methods
 
     private fun handleCallEvent(event: CallEvent) {
@@ -421,7 +500,8 @@ class CallManager @Inject constructor(
 
         // Initialize WebRTC early to prepare for answering
         initializeWebRTC()
-        webRTCClient?.createPeerConnection()
+        val iceServers = fetchIceServers()
+        webRTCClient?.createPeerConnection(iceServers)
 
         val call = Call(
             callId = event.callId,
@@ -440,6 +520,14 @@ class CallManager @Inject constructor(
         )
         _showCallUI.emit(CallUIEvent.ShowIncoming(call))
         startRingtone()
+
+        // Show foreground service notification for incoming call
+        CallForegroundService.showIncomingCall(
+            context,
+            call.peerDisplayName,
+            call.callType.name,
+            call.callId
+        )
     }
 
     private suspend fun handleCallAnswered(event: CallEvent.CallAnswered) {
@@ -451,6 +539,7 @@ class CallManager @Inject constructor(
         Log.i(TAG, "Call answered by peer")
 
         stopRingtone()
+        CallForegroundService.dismiss(context)
 
         // Set remote SDP answer
         event.sdpAnswer?.let { answer ->
@@ -465,6 +554,9 @@ class CallManager @Inject constructor(
                 Log.e(TAG, "Failed to set remote SDP answer")
             }
         }
+
+        // Enable E2EE frame encryption if shared secret is available
+        enableFrameEncryption(event.sharedSecret)
 
         val answeredCall = state.call.copy(answeredAt = event.answeredAt)
         _callState.value = CallState.Active(
@@ -485,6 +577,7 @@ class CallManager @Inject constructor(
         Log.i(TAG, "Call rejected by peer")
 
         stopRingtone()
+        CallForegroundService.dismiss(context)
         disposeWebRTC()
 
         _callState.value = CallState.Ended(state.call, CallEndReason.REJECTED)
@@ -506,6 +599,7 @@ class CallManager @Inject constructor(
 
         stopDurationTimer()
         stopRingtone()
+        CallForegroundService.dismiss(context)
         resetAudio()
         disposeWebRTC()
 
@@ -527,6 +621,7 @@ class CallManager @Inject constructor(
 
         stopDurationTimer()
         stopRingtone()
+        CallForegroundService.dismiss(context)
         resetAudio()
         disposeWebRTC()
 
@@ -559,9 +654,50 @@ class CallManager @Inject constructor(
         }
     }
 
+    /**
+     * Enable E2EE frame encryption using the vault-derived shared secret.
+     * Encrypts all outgoing frames and decrypts all incoming frames with AES-GCM.
+     * The shared secret is derived via X25519 + HKDF in the vault, independently on both sides.
+     */
+    private fun enableFrameEncryption(sharedSecretBase64: String?) {
+        if (sharedSecretBase64 == null) {
+            Log.w(TAG, "No shared secret available — call will use DTLS-SRTP only (no E2EE frame encryption)")
+            return
+        }
+
+        val client = webRTCClient ?: return
+        val factory = client.getFactory() ?: return
+
+        try {
+            val sharedSecret = android.util.Base64.decode(sharedSecretBase64, android.util.Base64.DEFAULT)
+            if (sharedSecret.size != 32) {
+                Log.e(TAG, "Invalid shared secret size: ${sharedSecret.size} (expected 32)")
+                sharedSecret.fill(0)
+                return
+            }
+
+            frameCryptor = CallFrameCryptor(factory, sharedSecret, "local")
+            sharedSecret.fill(0) // Zeroize after passing to cryptor
+
+            // Encrypt outgoing media
+            frameCryptor?.enableForSenders(client.getSenders())
+
+            // Decrypt incoming media
+            frameCryptor?.enableForReceivers(client.getReceivers())
+
+            Log.i(TAG, "E2EE frame encryption ENABLED — media is end-to-end encrypted")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to enable E2EE frame encryption — falling back to DTLS-SRTP only", e)
+            frameCryptor?.dispose()
+            frameCryptor = null
+        }
+    }
+
     private fun disposeWebRTC() {
         _remoteVideoTrack.value = null
         _localVideoTrack.value = null
+        frameCryptor?.dispose()
+        frameCryptor = null
         webRTCClient?.dispose()
         webRTCClient = null
     }
@@ -607,6 +743,7 @@ class CallManager @Inject constructor(
             if (state is CallState.Outgoing) {
                 Log.i(TAG, "Call timed out")
                 callSignalingClient.endCall(state.call.callId, state.call.peerGuid)
+                CallForegroundService.dismiss(context)
                 disposeWebRTC()
                 _callState.value = CallState.Ended(state.call, CallEndReason.TIMEOUT)
                 delay(1500)

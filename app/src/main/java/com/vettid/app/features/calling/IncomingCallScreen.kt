@@ -1,5 +1,8 @@
 package com.vettid.app.features.calling
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -32,6 +35,15 @@ fun IncomingCallScreen(
 ) {
     val callState by viewModel.callState.collectAsState()
     val incomingState = callState as? CallState.Incoming
+
+    val answerPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        if (grants.values.all { it }) {
+            viewModel.answerCall()
+        }
+        // If denied, just don't answer -- user can still decline
+    }
 
     // Dismiss if no longer incoming
     LaunchedEffect(callState) {
@@ -159,7 +171,12 @@ fun IncomingCallScreen(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     FloatingActionButton(
                         onClick = {
-                            viewModel.answerCall()
+                            val permissions = if (call.callType == CallType.VIDEO) {
+                                arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+                            } else {
+                                arrayOf(Manifest.permission.RECORD_AUDIO)
+                            }
+                            answerPermissionLauncher.launch(permissions)
                         },
                         modifier = Modifier.size(72.dp),
                         containerColor = AnswerGreen,

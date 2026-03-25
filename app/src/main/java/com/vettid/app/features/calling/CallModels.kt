@@ -130,7 +130,8 @@ sealed class CallEvent {
     data class CallAnswered(
         val callId: String,
         val answeredAt: Long,
-        val sdpAnswer: String?          // WebRTC SDP answer
+        val sdpAnswer: String?,         // WebRTC SDP answer
+        val sharedSecret: String? = null // E2EE shared secret (base64) from vault
     ) : CallEvent()
 
     /**

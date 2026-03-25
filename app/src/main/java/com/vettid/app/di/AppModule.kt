@@ -222,9 +222,11 @@ object AppModule {
     @Singleton
     fun provideCallManager(
         @ApplicationContext context: Context,
-        signalingClient: CallSignalingClient
+        signalingClient: CallSignalingClient,
+        vaultServiceClient: VaultServiceClient,
+        credentialStore: CredentialStore
     ): CallManager {
-        return CallManager(context, signalingClient)
+        return CallManager(context, signalingClient, vaultServiceClient, credentialStore)
     }
 
     // Backup Dependencies

@@ -640,6 +640,17 @@ open class VaultServiceClient @Inject constructor() {
         }
     }
 
+    // MARK: - Calling
+
+    /**
+     * Fetch Cloudflare TURN credentials for WebRTC calls.
+     *
+     * @param authToken Member JWT for authorization
+     */
+    suspend fun getTurnCredentials(authToken: String): Result<TurnCredentialsResponse> {
+        return safeApiCall { api.getTurnCredentials("Bearer $authToken") }
+    }
+
     // MARK: - Helper
 
     private suspend fun <T> safeApiCall(call: suspend () -> Response<T>): Result<T> {
@@ -893,6 +904,16 @@ interface VaultServiceApi {
         @Query("page") page: Int = 1,
         @Query("per_page") perPage: Int = 100
     ): Response<BulletinBoardResponse>
+
+    // MARK: - Calling API
+
+    /**
+     * Get short-lived Cloudflare TURN credentials for WebRTC NAT traversal.
+     */
+    @GET("calls/turn-credentials")
+    suspend fun getTurnCredentials(
+        @Header("Authorization") authToken: String
+    ): Response<TurnCredentialsResponse>
 }
 
 // MARK: - Request Types
@@ -1626,6 +1647,19 @@ data class BulletinBoardEntry(
     val signature: String,
     val timestamp: String,
     @SerializedName("merkle_index") val merkleIndex: Int
+)
+
+// MARK: - Calling Models
+
+data class TurnCredentialsResponse(
+    @SerializedName("ice_servers") val iceServers: List<IceServerConfig>,
+    @SerializedName("expires_at") val expiresAt: String
+)
+
+data class IceServerConfig(
+    val urls: List<String>,
+    val username: String? = null,
+    val credential: String? = null
 )
 
 // MARK: - Exceptions

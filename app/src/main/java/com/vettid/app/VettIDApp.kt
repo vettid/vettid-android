@@ -42,6 +42,7 @@ import androidx.navigation.navDeepLink
 import com.vettid.app.features.applock.AppLockScreen
 import com.vettid.app.features.applock.PinSetupScreen
 import com.vettid.app.features.calling.ActiveCallScreen
+import com.vettid.app.features.calling.CallHistoryScreen
 import com.vettid.app.features.calling.CallManager
 import com.vettid.app.features.calling.CallUIEvent
 import com.vettid.app.features.calling.IncomingCallScreen
@@ -54,6 +55,10 @@ import com.vettid.app.features.archive.ArchiveScreenFull
 import com.vettid.app.features.archive.ArchiveContent
 import com.vettid.app.features.secrets.SecretsScreenFull
 import com.vettid.app.features.secrets.SecretsContent
+import com.vettid.app.features.wallet.WalletListContentEmbedded
+import com.vettid.app.features.wallet.WalletDetailScreen
+import com.vettid.app.features.wallet.SendBtcScreen
+import com.vettid.app.features.wallet.ReceiveBtcScreen
 import com.vettid.app.features.secrets.AddSecretScreen
 import com.vettid.app.features.setup.FirstTimeSetupScreen
 import com.vettid.app.features.vault.DeployVaultScreen
@@ -179,6 +184,7 @@ sealed class Screen(val route: String) {
     object IncomingCall : Screen("call/incoming")
     object OutgoingCall : Screen("call/outgoing")
     object ActiveCall : Screen("call/active")
+    object CallHistory : Screen("call/history")
     // Debug
     object CredentialDebug : Screen("debug/credentials")
     // Voting (Issue #50)
@@ -213,6 +219,16 @@ sealed class Screen(val route: String) {
         fun createRoute(requestId: String) = "agents/approval/$requestId"
     }
     object CreateAgentInvitation : Screen("agents/create-invitation")
+    // Wallet screens
+    object WalletDetail : Screen("wallet/{walletId}") {
+        fun createRoute(walletId: String) = "wallet/$walletId"
+    }
+    object SendBtc : Screen("wallet/send?walletId={walletId}&connectionId={connectionId}") {
+        fun createRoute(walletId: String, connectionId: String = "") = "wallet/send?walletId=$walletId&connectionId=$connectionId"
+    }
+    object ReceiveBtc : Screen("wallet/receive/{walletId}") {
+        fun createRoute(walletId: String) = "wallet/receive/$walletId"
+    }
     // Guide detail screen
     object Guide : Screen("guide/{guideId}?eventId={eventId}&userName={userName}") {
         fun createRoute(guideId: String, eventId: String = "", userName: String = ""): String {
@@ -678,6 +694,9 @@ fun VettIDApp(
                 onMessageClick = {
                     navController.navigate(Screen.Conversation.createRoute(connectionId))
                 },
+                onSendBtc = { connId ->
+                    navController.navigate(Screen.SendBtc.createRoute(walletId = "", connectionId = connId))
+                },
                 onBack = { navController.safePopBackStack() }
             )
         }
@@ -690,6 +709,9 @@ fun VettIDApp(
                 onBack = { navController.safePopBackStack() },
                 onConnectionDetail = {
                     navController.navigate(Screen.ConnectionDetail.createRoute(connectionId))
+                },
+                onPaymentRequest = { connId ->
+                    navController.navigate(Screen.SendBtc.createRoute(walletId = "", connectionId = connId))
                 }
             )
         }
@@ -879,6 +901,15 @@ fun VettIDApp(
                 onDismiss = { navController.safePopBackStack() }
             )
         }
+        composable(Screen.CallHistory.route) {
+            CallHistoryScreen(
+                onBack = { navController.safePopBackStack() },
+                onCallClick = { peerGuid ->
+                    // Navigate to connection detail if we have a connection for this peer
+                    navController.navigate(Screen.ConnectionDetail.createRoute(peerGuid))
+                }
+            )
+        }
         // Debug screens
         composable(Screen.CredentialDebug.route) {
             CredentialDebugScreen(
@@ -917,13 +948,53 @@ fun VettIDApp(
                         onNavigateToCriticalSecrets = { navController.navigate(Screen.CriticalSecrets.route) }
                     )
                 },
+                walletsContent = { query ->
+                    WalletListContentEmbedded(
+                        searchQuery = query,
+                        onWalletClick = { walletId ->
+                            navController.navigate(Screen.WalletDetail.createRoute(walletId))
+                        },
+                        onCreateWallet = { /* show CreateWalletSheet */ }
+                    )
+                },
                 onFabClick = {
                     when (vaultSegment) {
                         VaultSegment.CONNECTIONS -> navController.navigate(Screen.CreateInvitation.route)
                         VaultSegment.DATA -> { /* Navigate to add data field */ }
                         VaultSegment.SECRETS -> navController.navigate(Screen.AddSecret.createRoute(isCritical = false))
+                        VaultSegment.WALLETS -> { /* Navigate to create wallet */ }
                     }
                 }
+            )
+        }
+        // Wallet screens
+        composable(
+            route = Screen.WalletDetail.route,
+            arguments = listOf(navArgument("walletId") { type = NavType.StringType })
+        ) {
+            WalletDetailScreen(
+                onBack = { navController.safePopBackStack() },
+                onSend = { wId -> navController.navigate(Screen.SendBtc.createRoute(wId)) },
+                onReceive = { wId -> navController.navigate(Screen.ReceiveBtc.createRoute(wId)) }
+            )
+        }
+        composable(
+            route = Screen.SendBtc.route,
+            arguments = listOf(
+                navArgument("walletId") { type = NavType.StringType; defaultValue = "" },
+                navArgument("connectionId") { type = NavType.StringType; defaultValue = "" }
+            )
+        ) {
+            SendBtcScreen(
+                onBack = { navController.safePopBackStack() }
+            )
+        }
+        composable(
+            route = Screen.ReceiveBtc.route,
+            arguments = listOf(navArgument("walletId") { type = NavType.StringType })
+        ) {
+            ReceiveBtcScreen(
+                onBack = { navController.safePopBackStack() }
             )
         }
         // Voting screens (Issue #50)
@@ -2145,6 +2216,9 @@ private fun SecretsContentEmbedded(
 private fun ArchiveContentEmbedded(searchQuery: String = "") {
     ArchiveContent(searchQuery = searchQuery)
 }
+
+// Wallet screen composables are defined in features/wallet/ package:
+// WalletListContentEmbedded, WalletDetailScreen, SendBtcScreen, ReceiveBtcScreen
 
 @Composable
 private fun SettingsContent(
