@@ -40,6 +40,9 @@ object GuideContentProvider {
             "voting" -> votingGuide()
             "connections" -> connectionsGuide()
             "archive" -> archiveGuide()
+            "wallets" -> walletsGuide()
+            "calling" -> callingGuide()
+            "messaging" -> messagingGuide()
             else -> null
         }
     }
@@ -51,6 +54,16 @@ object GuideContentProvider {
             GuideSection.Paragraph(
                 "Your digital identity vault is set up and ready to use. Everything in VettID is encrypted and stored securely in your personal vault."
             ),
+            GuideSection.Heading("Your Home Screen"),
+            GuideSection.Paragraph(
+                "VettID is organized into two main areas:"
+            ),
+            GuideSection.BulletList(
+                listOf(
+                    "Activity \u2014 your feed, voting, and archive. This is where you are now.",
+                    "Vault \u2014 tap your profile avatar in the top-left corner to access your personal data, secrets, connections, and wallets."
+                )
+            ),
             GuideSection.Heading("Your Feed"),
             GuideSection.Paragraph(
                 "This is your feed. All your vault activity appears here \u2014 connections, messages, security alerts, and these guides."
@@ -60,7 +73,7 @@ object GuideContentProvider {
             ),
             GuideSection.Heading("What\u2019s Next"),
             GuideSection.Paragraph(
-                "Browse the other guides in your feed to learn about each feature. You can dismiss them as you go."
+                "Browse the other guides in your feed to learn about each feature \u2014 connections, messaging, voice and video calls, Bitcoin wallets, and more. You can dismiss them as you go."
             )
         )
     )
@@ -70,19 +83,34 @@ object GuideContentProvider {
         icon = Icons.Default.Explore,
         sections = listOf(
             GuideSection.Paragraph(
-                "VettID has several screens you can navigate between."
+                "VettID is organized into two main areas: Activity and your Vault."
             ),
-            GuideSection.Heading("Swipe Navigation"),
+            GuideSection.Heading("Activity"),
             GuideSection.Paragraph(
-                "Swipe left or right anywhere on the screen to move between sections: Feed, Connections, Personal Data, Secrets, Archive, and Voting."
+                "Your home screen shows three sections you can switch between using the tabs at the top:"
             ),
-            GuideSection.Heading("The Drawer"),
+            GuideSection.BulletList(
+                listOf(
+                    "Feed \u2014 your activity stream with events, alerts, and guides",
+                    "Voting \u2014 governance proposals you can participate in",
+                    "Archive \u2014 dismissed and completed items"
+                )
+            ),
+            GuideSection.Heading("Your Vault"),
             GuideSection.Paragraph(
-                "Tap your profile icon in the top-left corner to open the navigation drawer. From there you can jump directly to any section."
+                "Tap your profile avatar in the top-left corner to open your vault. Your vault has four sections:"
+            ),
+            GuideSection.BulletList(
+                listOf(
+                    "Data \u2014 your personal information and public profile",
+                    "Secrets \u2014 passwords, keys, and sensitive data",
+                    "Connections \u2014 people you\u2019re connected with",
+                    "Wallets \u2014 your Bitcoin wallets"
+                )
             ),
             GuideSection.Heading("Settings"),
             GuideSection.Paragraph(
-                "Tap the cloud/gear icon in the top-right corner to access your settings."
+                "Tap the status icon in the top-right corner to access your settings and connection status."
             ),
             GuideSection.NavigationLink("Open Settings", NavigationTarget.ScreenNav("settings"))
         )
@@ -214,7 +242,7 @@ object GuideContentProvider {
         icon = Icons.Default.People,
         sections = listOf(
             GuideSection.Paragraph(
-                "Connections let you link your vault with other VettID users for secure communication and data sharing."
+                "Connections let you link your vault with other VettID users for secure communication, calling, and payments."
             ),
             GuideSection.Heading("Adding Connections"),
             GuideSection.Paragraph(
@@ -223,6 +251,18 @@ object GuideContentProvider {
             GuideSection.Heading("Managing Connections"),
             GuideSection.Paragraph(
                 "View connection details, send messages, and manage access. You can revoke a connection at any time."
+            ),
+            GuideSection.Heading("Messaging"),
+            GuideSection.Paragraph(
+                "Send encrypted messages to your connections. Messages are encrypted in your vault before sending \u2014 only the recipient\u2019s vault can decrypt them."
+            ),
+            GuideSection.Heading("Voice & Video Calls"),
+            GuideSection.Paragraph(
+                "Make encrypted voice and video calls to your connections. Calls use end-to-end encryption with keys generated fresh for every call."
+            ),
+            GuideSection.Heading("Bitcoin Payments"),
+            GuideSection.Paragraph(
+                "Send and request Bitcoin payments directly through your connections. Transaction signing happens inside your vault\u2019s secure enclave."
             ),
             GuideSection.NavigationLink("Go to Connections", NavigationTarget.DrawerNav(DrawerItem.CONNECTIONS))
         )
@@ -248,6 +288,82 @@ object GuideContentProvider {
                 "Browse the archive and restore anything you need back to your active feed."
             ),
             GuideSection.NavigationLink("Go to Archive", NavigationTarget.DrawerNav(DrawerItem.ARCHIVE))
+        )
+    )
+
+    private fun walletsGuide() = GuideContent(
+        title = "Bitcoin Wallets",
+        icon = Icons.Default.AccountBalance,
+        sections = listOf(
+            GuideSection.Paragraph(
+                "VettID includes built-in Bitcoin wallet support. Your private keys are generated and stored inside the secure enclave \u2014 they never leave."
+            ),
+            GuideSection.Heading("Creating a Wallet"),
+            GuideSection.Paragraph(
+                "Create one or more wallets, each with its own address. Wallets use industry-standard BIP84 HD key derivation from your vault\u2019s master secret."
+            ),
+            GuideSection.Heading("Sending Bitcoin"),
+            GuideSection.Paragraph(
+                "Send BTC to a connection or any Bitcoin address. Choose your fee priority (fast, standard, or economy) and confirm. The transaction is signed inside the enclave and broadcast to the Bitcoin network."
+            ),
+            GuideSection.Heading("Receiving Bitcoin"),
+            GuideSection.Paragraph(
+                "Share your wallet address via QR code or copy it to receive payments."
+            ),
+            GuideSection.Heading("Privacy"),
+            GuideSection.Paragraph(
+                "Your wallet addresses are private by default. You can optionally make an address public on your profile if you choose."
+            ),
+            GuideSection.NavigationLink("Go to Wallets", NavigationTarget.DrawerNav(DrawerItem.CONNECTIONS)) // Wallets are in the vault tab
+        )
+    )
+
+    private fun callingGuide() = GuideContent(
+        title = "Voice & Video Calls",
+        icon = Icons.Default.VideoCall,
+        sections = listOf(
+            GuideSection.Paragraph(
+                "Make secure voice and video calls to anyone in your connections."
+            ),
+            GuideSection.Heading("Making a Call"),
+            GuideSection.Paragraph(
+                "Open a connection\u2019s detail page and tap the call or video call button. The app will request microphone (and camera for video) permission if needed."
+            ),
+            GuideSection.Heading("Receiving Calls"),
+            GuideSection.Paragraph(
+                "Incoming calls appear as full-screen notifications, even when the app is in the background. Tap Answer or Decline."
+            ),
+            GuideSection.Heading("End-to-End Encryption"),
+            GuideSection.Paragraph(
+                "Every call generates fresh encryption keys. Your audio and video are encrypted before leaving your device \u2014 not even the relay server can see or hear the content."
+            ),
+            GuideSection.Heading("Call History"),
+            GuideSection.Paragraph(
+                "View your past calls, including missed calls, from the call history screen."
+            )
+        )
+    )
+
+    private fun messagingGuide() = GuideContent(
+        title = "Encrypted Messaging",
+        icon = Icons.Default.Chat,
+        sections = listOf(
+            GuideSection.Paragraph(
+                "Send encrypted messages to your connections. Every message is encrypted inside your vault before it leaves."
+            ),
+            GuideSection.Heading("Sending Messages"),
+            GuideSection.Paragraph(
+                "Open a connection and tap the message icon to start a conversation. Type your message and hit send."
+            ),
+            GuideSection.Heading("Encryption"),
+            GuideSection.Paragraph(
+                "Messages are encrypted with keys unique to each connection. Your vault encrypts outgoing messages and decrypts incoming ones \u2014 the server only sees encrypted data."
+            ),
+            GuideSection.Heading("Payment Messages"),
+            GuideSection.Paragraph(
+                "You can send and receive Bitcoin payment requests directly in your conversations. Payment request cards appear inline with options to pay or view transaction details."
+            ),
+            GuideSection.NavigationLink("Go to Connections", NavigationTarget.DrawerNav(DrawerItem.CONNECTIONS))
         )
     )
 }
