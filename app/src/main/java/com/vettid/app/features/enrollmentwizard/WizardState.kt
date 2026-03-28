@@ -15,10 +15,11 @@ enum class WizardPhase(val stepIndex: Int, val label: String) {
     PASSWORD_SETUP(4, "Password"),
     VERIFY_CREDENTIAL(5, "Confirm"),
     CONFIRM_PROFILE(6, "Profile"),
-    COMPLETE(7, "Done");
+    PERMISSIONS(7, "Permissions"),
+    COMPLETE(8, "Done");
 
     companion object {
-        const val TOTAL_STEPS = 8
+        const val TOTAL_STEPS = 9
 
         fun fromIndex(index: Int): WizardPhase? = entries.find { it.stepIndex == index }
     }
@@ -183,7 +184,17 @@ sealed class WizardState {
         override val phase = WizardPhase.CONFIRM_PROFILE
     }
 
-    // ============== PHASE 8: COMPLETE ==============
+    // ============== PHASE 8: PERMISSIONS ==============
+
+    /** Request app permissions (notifications, etc.) */
+    data class RequestingPermissions(
+        val notificationsGranted: Boolean? = null,
+        val notificationsRequested: Boolean = false
+    ) : WizardState() {
+        override val phase = WizardPhase.PERMISSIONS
+    }
+
+    // ============== PHASE 9: COMPLETE ==============
 
     /** Enrollment complete */
     data class Complete(

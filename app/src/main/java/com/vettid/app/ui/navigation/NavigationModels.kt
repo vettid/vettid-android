@@ -63,5 +63,6 @@ enum class DrawerItem(
     SECRETS("Secrets", Icons.Default.Lock),
     ARCHIVE("Archive", Icons.Default.Archive),
     VOTING("Voting", Icons.Default.HowToVote),
+    WALLETS("Wallets", Icons.Default.AccountBalance),
     AUDIT_LOG("Audit Log", Icons.Default.Security)
 }

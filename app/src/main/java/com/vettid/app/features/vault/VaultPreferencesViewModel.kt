@@ -47,7 +47,7 @@ enum class VaultServerStatus {
  */
 data class VaultPreferencesState(
     val theme: AppTheme = AppTheme.AUTO,
-    val sessionTtlSeconds: Int = 900,
+    val sessionTtlSeconds: Int = 300,
     val archiveAfterDays: Int = 7,
     val deleteAfterDays: Int = 30,
     val isLoading: Boolean = false,

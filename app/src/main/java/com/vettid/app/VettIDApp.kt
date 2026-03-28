@@ -917,18 +917,37 @@ fun VettIDApp(
             )
         }
         // Vault Home screen (avatar tap)
-        composable(Screen.VaultHome.route) {
-            var vaultSegment by rememberSaveable { mutableStateOf(VaultSegment.DATA) }
-            // Explicit back handler — only pop when user intentionally presses back
+        composable(Screen.VaultHome.route) { backStackEntry ->
+            // Read initial vault segment from savedStateHandle (set by guide navigation)
+            val initialSegmentName = backStackEntry.savedStateHandle.get<String>("initialVaultSegment")
+            val initialSegment = initialSegmentName?.let {
+                try { VaultSegment.valueOf(it) } catch (_: Exception) { null }
+            }
+            var vaultSegment by rememberSaveable { mutableStateOf(initialSegment ?: VaultSegment.DATA) }
+            // Consume the initial segment so it doesn't re-apply on recomposition
+            LaunchedEffect(initialSegmentName) {
+                if (initialSegmentName != null) {
+                    vaultSegment = initialSegment ?: VaultSegment.DATA
+                    backStackEntry.savedStateHandle.remove<String>("initialVaultSegment")
+                }
+            }
+            var isSettingsOpen by rememberSaveable { mutableStateOf(false) }
+            // Explicit back handler — close settings or pop
             androidx.activity.compose.BackHandler {
-                navController.safePopBackStack()
+                if (isSettingsOpen) {
+                    isSettingsOpen = false
+                } else {
+                    navController.safePopBackStack()
+                }
             }
             VaultScaffold(
                 vaultSegment = vaultSegment,
                 onVaultSegmentChange = { vaultSegment = it },
                 profilePhotoBase64 = appViewModel.appState.collectAsState().value.profilePhoto,
                 natsConnectionState = appViewModel.appState.collectAsState().value.natsConnectionState,
-                onBack = { Log.w("VaultHome", "onBack CALLED - popping!"); navController.safePopBackStack() },
+                onBack = { if (isSettingsOpen) isSettingsOpen = false else navController.safePopBackStack() },
+                onSettingsToggle = { isSettingsOpen = !isSettingsOpen },
+                isSettingsOpen = isSettingsOpen,
                 connectionsContent = { query ->
                     ConnectionsContentEmbedded(
                         searchQuery = query,
@@ -955,6 +974,15 @@ fun VettIDApp(
                             navController.navigate(Screen.WalletDetail.createRoute(walletId))
                         },
                         onCreateWallet = { /* show CreateWalletSheet */ }
+                    )
+                },
+                settingsContent = {
+                    SettingsContent(
+                        onNavigateToAppDetails = { navController.navigate(Screen.AppDetails.route) },
+                        onNavigateToLocationSettings = { navController.navigate(Screen.LocationSettings.route) },
+                        onNavigateToAgents = { navController.navigate(Screen.AgentManagement.route) },
+                        onNavigateToVaultStatus = { navController.navigate(Screen.VaultStatus.route) },
+                        onNavigateToSecurityAuditLog = { navController.navigate(Screen.SecurityAuditLog.route) }
                     )
                 },
                 onFabClick = {
@@ -1192,6 +1220,12 @@ fun VettIDApp(
                 java.net.URLDecoder.decode(it, "UTF-8")
             } ?: ""
             val feedViewModel: com.vettid.app.features.feed.FeedViewModel = hiltViewModel()
+            // Auto-mark guide as read when opened
+            LaunchedEffect(eventId) {
+                if (eventId.isNotEmpty()) {
+                    feedViewModel.markAsRead(eventId)
+                }
+            }
             GuideDetailScreen(
                 guideId = guideId,
                 userName = userName,
@@ -1199,11 +1233,29 @@ fun VettIDApp(
                 onNavigate = { target ->
                     when (target) {
                         is NavigationTarget.DrawerNav -> {
-                            // Set the desired drawer item in saved state so MainScreen picks it up
-                            navController.previousBackStackEntry
-                                ?.savedStateHandle
-                                ?.set("drawerItem", target.item.name)
-                            navController.safePopBackStack()
+                            val vaultItems = mapOf(
+                                "PERSONAL_DATA" to VaultSegment.DATA.name,
+                                "SECRETS" to VaultSegment.SECRETS.name,
+                                "CONNECTIONS" to VaultSegment.CONNECTIONS.name,
+                                "WALLETS" to VaultSegment.WALLETS.name
+                            )
+                            val vaultSegment = vaultItems[target.item.name]
+                            if (vaultSegment != null) {
+                                // Navigate to vault with the correct tab
+                                navController.safePopBackStack()
+                                navController.navigate(Screen.VaultHome.route) {
+                                    launchSingleTop = true
+                                }
+                                navController.currentBackStackEntry
+                                    ?.savedStateHandle
+                                    ?.set("initialVaultSegment", vaultSegment)
+                            } else {
+                                // Activity drawer items (FEED, ARCHIVE, VOTING)
+                                navController.previousBackStackEntry
+                                    ?.savedStateHandle
+                                    ?.set("drawerItem", target.item.name)
+                                navController.safePopBackStack()
+                            }
                         }
                         is NavigationTarget.ScreenNav -> {
                             // For settings, toggle settings overlay via saved state
@@ -1226,7 +1278,10 @@ fun VettIDApp(
                 },
                 onArchive = {
                     if (eventId.isNotEmpty()) {
+                        Log.d("GuideDetail", "Archiving guide eventId=$eventId guideId=$guideId")
                         feedViewModel.archiveEvent(eventId)
+                    } else {
+                        Log.w("GuideDetail", "Cannot archive guide: empty eventId for guideId=$guideId")
                     }
                 }
             )

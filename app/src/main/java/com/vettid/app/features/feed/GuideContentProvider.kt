@@ -54,26 +54,11 @@ object GuideContentProvider {
             GuideSection.Paragraph(
                 "Your digital identity vault is set up and ready to use. Everything in VettID is encrypted and stored securely in your personal vault."
             ),
-            GuideSection.Heading("Your Home Screen"),
             GuideSection.Paragraph(
-                "VettID is organized into two main areas:"
-            ),
-            GuideSection.BulletList(
-                listOf(
-                    "Activity \u2014 your feed, voting, and archive. This is where you are now.",
-                    "Vault \u2014 tap your profile avatar in the top-left corner to access your personal data, secrets, connections, and wallets."
-                )
-            ),
-            GuideSection.Heading("Your Feed"),
-            GuideSection.Paragraph(
-                "This is your feed. All your vault activity appears here \u2014 connections, messages, security alerts, and these guides."
+                "Your activity feed is right here \u2014 connections, messages, security alerts, and these guides all appear in the feed. Tap your profile avatar to access your vault."
             ),
             GuideSection.Paragraph(
-                "Tap events to see details. Use the overflow menu on any event to archive or delete it."
-            ),
-            GuideSection.Heading("What\u2019s Next"),
-            GuideSection.Paragraph(
-                "Browse the other guides in your feed to learn about each feature \u2014 connections, messaging, voice and video calls, Bitcoin wallets, and more. You can dismiss them as you go."
+                "Browse the other guides in your feed to learn about each feature. You can archive them as you go."
             )
         )
     )
@@ -111,8 +96,7 @@ object GuideContentProvider {
             GuideSection.Heading("Settings"),
             GuideSection.Paragraph(
                 "Tap the status icon in the top-right corner to access your settings and connection status."
-            ),
-            GuideSection.NavigationLink("Open Settings", NavigationTarget.ScreenNav("settings"))
+            )
         )
     )
 
@@ -314,7 +298,7 @@ object GuideContentProvider {
             GuideSection.Paragraph(
                 "Your wallet addresses are private by default. You can optionally make an address public on your profile if you choose."
             ),
-            GuideSection.NavigationLink("Go to Wallets", NavigationTarget.DrawerNav(DrawerItem.CONNECTIONS)) // Wallets are in the vault tab
+            GuideSection.NavigationLink("Go to Wallets", NavigationTarget.DrawerNav(DrawerItem.WALLETS))
         )
     )
 

@@ -169,6 +169,18 @@ class EnrollmentWizardViewModel @Inject constructor(
                 is WizardEvent.ConfirmProfile -> confirmProfile()
                 is WizardEvent.DismissError -> dismissError()
 
+                // Permissions phase events
+                is WizardEvent.NotificationPermissionResult -> {
+                    val current = _state.value
+                    if (current is WizardState.RequestingPermissions) {
+                        _state.value = current.copy(
+                            notificationsGranted = event.granted,
+                            notificationsRequested = true
+                        )
+                    }
+                }
+                is WizardEvent.PermissionsComplete -> completeWizard()
+
                 // Complete phase events
                 is WizardEvent.NavigateToMain -> navigateToMain()
             }
@@ -181,6 +193,7 @@ class EnrollmentWizardViewModel @Inject constructor(
         when (val current = _state.value) {
             is WizardState.VerificationSuccess -> continueToConfirmProfile()
             is WizardState.ConfirmProfile -> confirmProfile()
+            is WizardState.RequestingPermissions -> completeWizard()
             is WizardState.Complete -> navigateToMain()
             else -> { /* No-op for states with specific submit actions */ }
         }
@@ -251,6 +264,7 @@ class EnrollmentWizardViewModel @Inject constructor(
                 WizardPhase.PASSWORD_SETUP -> _state.value = WizardState.SettingPassword(utks = nitroUtks)
                 WizardPhase.VERIFY_CREDENTIAL -> _state.value = WizardState.VerifyingPassword()
                 WizardPhase.CONFIRM_PROFILE -> continueToConfirmProfile()
+                WizardPhase.PERMISSIONS -> _state.value = WizardState.RequestingPermissions()
                 WizardPhase.COMPLETE -> completeWizard()
             }
         }
@@ -1253,7 +1267,7 @@ class EnrollmentWizardViewModel @Inject constructor(
             }
 
             _effects.emit(WizardEffect.ShowToast("Profile confirmed"))
-            completeWizard()
+            _state.value = WizardState.RequestingPermissions()
         } catch (e: Exception) {
             Log.e(TAG, "Error confirming profile", e)
             _state.value = current.copy(

@@ -258,6 +258,7 @@ fun PersonalDataContent(
         val isLoadingPublishedProfile by viewModel.isLoadingPublishedProfile.collectAsState()
         val publicSecrets by viewModel.publicSecrets.collectAsState()
         val publicPersonalData by viewModel.publicPersonalData.collectAsState()
+        val installedHandlers by viewModel.installedHandlers.collectAsState()
 
         androidx.compose.ui.window.Dialog(
             onDismissRequest = viewModel::hidePublicProfilePreview,
@@ -272,6 +273,7 @@ fun PersonalDataContent(
                 isLoading = isLoadingPublishedProfile,
                 publicSecrets = publicSecrets,
                 publicPersonalData = publicPersonalData,
+                handlers = installedHandlers,
                 onBack = viewModel::hidePublicProfilePreview
             )
         }
@@ -1395,6 +1397,7 @@ private fun PublicProfileFullScreen(
     isLoading: Boolean,
     publicSecrets: List<PublicMetadataItem> = emptyList(),
     publicPersonalData: List<PublicMetadataItem> = emptyList(),
+    handlers: List<com.vettid.app.core.nats.VaultHandler> = emptyList(),
     onBack: () -> Unit
 ) {
     var showSecretsDialog by remember { mutableStateOf(false) }
@@ -1570,7 +1573,13 @@ private fun PublicProfileFullScreen(
                             Spacer(modifier = Modifier.width(16.dp))
                             // Handlers
                             IconButton(onClick = { showHandlersDialog = true }) {
-                                Icon(Icons.Default.Extension, contentDescription = "Handlers")
+                                BadgedBox(badge = {
+                                    if (handlers.isNotEmpty()) {
+                                        Badge { Text("${handlers.size}") }
+                                    }
+                                }) {
+                                    Icon(Icons.Default.Extension, contentDescription = "Handlers")
+                                }
                             }
                         }
 
@@ -1639,13 +1648,41 @@ private fun PublicProfileFullScreen(
         AlertDialog(
             onDismissRequest = { showHandlersDialog = false },
             icon = { Icon(Icons.Default.Extension, contentDescription = null) },
-            title = { Text("Available Handlers") },
+            title = { Text("Available Handlers (${handlers.size})") },
             text = {
-                Text(
-                    "No handlers are currently available.\n\nHandlers allow services and agents to interact with your vault data.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                if (handlers.isEmpty()) {
+                    Text(
+                        "No handlers are currently installed.\n\nHandlers allow services and agents to interact with your vault data.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        handlers.forEach { handler ->
+                            Column {
+                                Text(
+                                    handler.name,
+                                    style = MaterialTheme.typography.titleSmall
+                                )
+                                Text(
+                                    handler.description,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                if (handler.operations.isNotEmpty()) {
+                                    Text(
+                                        handler.operations.joinToString(", "),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.outline
+                                    )
+                                }
+                            }
+                            if (handler != handlers.last()) {
+                                HorizontalDivider()
+                            }
+                        }
+                    }
+                }
             },
             confirmButton = {
                 TextButton(onClick = { showHandlersDialog = false }) { Text("Close") }

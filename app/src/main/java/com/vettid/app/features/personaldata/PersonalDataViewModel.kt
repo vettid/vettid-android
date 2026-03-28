@@ -87,6 +87,10 @@ class PersonalDataViewModel @Inject constructor(
     private val _publicSecrets = MutableStateFlow<List<PublicMetadataItem>>(emptyList())
     val publicSecrets: StateFlow<List<PublicMetadataItem>> = _publicSecrets.asStateFlow()
 
+    // Installed vault handlers
+    private val _installedHandlers = MutableStateFlow<List<com.vettid.app.core.nats.VaultHandler>>(emptyList())
+    val installedHandlers: StateFlow<List<com.vettid.app.core.nats.VaultHandler>> = _installedHandlers.asStateFlow()
+
     val publicPersonalData: StateFlow<List<PublicMetadataItem>> = _state.map { state ->
         when (state) {
             is PersonalDataState.Loaded -> state.items.map { item ->
@@ -1566,6 +1570,18 @@ class PersonalDataViewModel @Inject constructor(
         _isLoadingPublishedProfile.value = true
         _showPublicProfilePreview.value = true
         fetchPublishedProfile()
+        loadInstalledHandlers()
+    }
+
+    private fun loadInstalledHandlers() {
+        viewModelScope.launch {
+            try {
+                val handlers = ownerSpaceClient.listHandlers()
+                _installedHandlers.value = handlers
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to load handlers", e)
+            }
+        }
     }
 
     /**

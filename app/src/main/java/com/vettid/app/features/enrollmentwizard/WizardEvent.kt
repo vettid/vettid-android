@@ -94,6 +94,14 @@ sealed class WizardEvent {
     /** Dismiss error message */
     object DismissError : WizardEvent()
 
+    // ============== PERMISSIONS PHASE EVENTS ==============
+
+    /** Notification permission result */
+    data class NotificationPermissionResult(val granted: Boolean) : WizardEvent()
+
+    /** User completed permissions step */
+    object PermissionsComplete : WizardEvent()
+
     // ============== COMPLETE PHASE EVENTS ==============
 
     /** Navigate to main app */

@@ -118,6 +118,7 @@ fun EnrollmentWizardScreen(
                         is WizardState.Authenticating,
                         is WizardState.VerificationSuccess -> "verify"
                         is WizardState.ConfirmProfile -> "confirm_profile"
+                        is WizardState.RequestingPermissions -> "permissions"
                         is WizardState.Complete -> "complete"
                         is WizardState.Error -> "error_${targetState.previousPhase}"
                     }
@@ -298,6 +299,17 @@ fun EnrollmentWizardScreen(
                                 error = currentState.error,
                                 onDismissError = { viewModel.onEvent(WizardEvent.DismissError) },
                                 onConfirm = { viewModel.onEvent(WizardEvent.ConfirmProfile) }
+                            )
+                        }
+
+                        // Permissions Phase
+                        is WizardState.RequestingPermissions -> {
+                            PermissionsPhaseContent(
+                                notificationsGranted = currentState.notificationsGranted,
+                                onNotificationsResult = { granted ->
+                                    viewModel.onEvent(WizardEvent.NotificationPermissionResult(granted))
+                                },
+                                onContinue = { viewModel.onEvent(WizardEvent.PermissionsComplete) }
                             )
                         }
 

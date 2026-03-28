@@ -47,7 +47,7 @@ fun MainActivityScaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             HeaderView(
-                title = if (isSettingsOpen) "Settings" else activitySegment.title,
+                title = if (isSettingsOpen) "Settings" else "Activities",
                 onProfileClick = onAvatarClick,
                 natsConnectionState = natsConnectionState,
                 onNatsStatusClick = onSettingsToggle,
@@ -104,11 +104,14 @@ fun VaultScaffold(
     natsConnectionState: NatsConnectionState = NatsConnectionState.Idle,
     onBack: () -> Unit = {},
     onSettingsToggle: () -> Unit = {},
+    isSettingsOpen: Boolean = false,
     // Vault content slots
     connectionsContent: @Composable (searchQuery: String) -> Unit,
     personalDataContent: @Composable (searchQuery: String) -> Unit,
     secretsContent: @Composable (searchQuery: String) -> Unit,
     walletsContent: @Composable (searchQuery: String) -> Unit,
+    // Settings overlay
+    settingsContent: @Composable () -> Unit = {},
     // FAB
     onFabClick: () -> Unit = {},
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() }
@@ -117,7 +120,7 @@ fun VaultScaffold(
     var isSearchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
 
-    LaunchedEffect(vaultSegment) {
+    LaunchedEffect(vaultSegment, isSettingsOpen) {
         if (isSearchActive) { isSearchActive = false; searchQuery = "" }
     }
 
@@ -134,7 +137,7 @@ fun VaultScaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             HeaderView(
-                title = "Vault",
+                title = if (isSettingsOpen) "Settings" else "Vault",
                 onProfileClick = onBack,
                 natsConnectionState = natsConnectionState,
                 onNatsStatusClick = onSettingsToggle,
@@ -164,17 +167,21 @@ fun VaultScaffold(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            IconTabSelector(
-                segments = VaultSegment.entries,
-                selectedIndex = VaultSegment.entries.indexOf(vaultSegment),
-                onSegmentSelected = { onVaultSegmentChange(VaultSegment.entries[it]) }
-            )
-            Box(modifier = Modifier.fillMaxSize()) {
-                when (vaultSegment) {
-                    VaultSegment.CONNECTIONS -> connectionsContent(searchQuery)
-                    VaultSegment.DATA -> personalDataContent(searchQuery)
-                    VaultSegment.SECRETS -> secretsContent(searchQuery)
-                    VaultSegment.WALLETS -> walletsContent(searchQuery)
+            if (isSettingsOpen) {
+                settingsContent()
+            } else {
+                IconTabSelector(
+                    segments = VaultSegment.entries,
+                    selectedIndex = VaultSegment.entries.indexOf(vaultSegment),
+                    onSegmentSelected = { onVaultSegmentChange(VaultSegment.entries[it]) }
+                )
+                Box(modifier = Modifier.fillMaxSize()) {
+                    when (vaultSegment) {
+                        VaultSegment.CONNECTIONS -> connectionsContent(searchQuery)
+                        VaultSegment.DATA -> personalDataContent(searchQuery)
+                        VaultSegment.SECRETS -> secretsContent(searchQuery)
+                        VaultSegment.WALLETS -> walletsContent(searchQuery)
+                    }
                 }
             }
         }
@@ -182,7 +189,7 @@ fun VaultScaffold(
 }
 
 /**
- * Tab row with icons only for Vault segments.
+ * Tab row with icons and labels for Vault segments.
  */
 @Composable
 fun IconTabSelector(
@@ -199,14 +206,15 @@ fun IconTabSelector(
             Tab(
                 selected = index == selectedIndex,
                 onClick = { onSegmentSelected(index) },
-                icon = { Icon(segment.icon, contentDescription = segment.title) }
+                icon = { Icon(segment.icon, contentDescription = segment.title) },
+                text = { Text(segment.title, style = MaterialTheme.typography.labelSmall) }
             )
         }
     }
 }
 
 /**
- * Tab row with icons only for Activity segments.
+ * Tab row with icons and labels for Activity segments.
  */
 @Composable
 fun ActivityIconTabSelector(
@@ -223,7 +231,8 @@ fun ActivityIconTabSelector(
             Tab(
                 selected = index == selectedIndex,
                 onClick = { onSegmentSelected(index) },
-                icon = { Icon(segment.icon, contentDescription = segment.title) }
+                icon = { Icon(segment.icon, contentDescription = segment.title) },
+                text = { Text(segment.title, style = MaterialTheme.typography.labelSmall) }
             )
         }
     }

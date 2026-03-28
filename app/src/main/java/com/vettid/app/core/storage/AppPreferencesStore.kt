@@ -125,7 +125,7 @@ class AppPreferencesStore(context: Context) {
     // --- Credential Settings ---
 
     fun getSessionTtlSeconds(): Int =
-        prefs.getInt(KEY_SESSION_TTL, 900)
+        prefs.getInt(KEY_SESSION_TTL, 300)
 
     fun setSessionTtlSeconds(seconds: Int) {
         prefs.edit().putInt(KEY_SESSION_TTL, seconds).apply()

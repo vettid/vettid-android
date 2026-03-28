@@ -189,11 +189,11 @@ fun VaultPreferencesContent(
 
             HorizontalDivider()
 
-            // Privacy & Security
+            // Privacy, Data & Logging
             SettingsCategoryHeader(
                 icon = Icons.Default.Shield,
-                title = "Privacy & Security",
-                subtitle = "Location, notifications, data retention",
+                title = "Privacy, Data & Logging",
+                subtitle = "Location, data retention, audit logs",
                 expanded = expandedSection == "privacy",
                 onClick = { expandedSection = if (expandedSection == "privacy") null else "privacy" }
             )
@@ -218,6 +218,12 @@ fun VaultPreferencesContent(
                     options = listOf(30, 60, 90, 180, 365),
                     onValueChange = { viewModel.updateDeleteAfterDays(it) }
                 )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                PreferencesItem(
+                    icon = Icons.Default.List,
+                    title = "View Audit Logs",
+                    onClick = onNavigateToSecurityAuditLog
+                )
             }
 
             HorizontalDivider()
@@ -234,24 +240,6 @@ fun VaultPreferencesContent(
                 AppearanceSection(
                     currentTheme = state.theme,
                     onThemeChange = { viewModel.updateTheme(it) }
-                )
-            }
-
-            HorizontalDivider()
-
-            // Logging
-            SettingsCategoryHeader(
-                icon = Icons.Default.Security,
-                title = "Logging",
-                subtitle = "Audit logs and retention",
-                expanded = expandedSection == "logging",
-                onClick = { expandedSection = if (expandedSection == "logging") null else "logging" }
-            )
-            if (expandedSection == "logging") {
-                PreferencesItem(
-                    icon = Icons.Default.List,
-                    title = "View Audit Logs",
-                    onClick = onNavigateToSecurityAuditLog
                 )
             }
 
@@ -276,12 +264,6 @@ fun VaultPreferencesContent(
                     icon = Icons.Default.Dashboard,
                     title = "Vault Status",
                     onClick = onNavigateToVaultStatus
-                )
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
-                PreferencesItem(
-                    icon = Icons.Default.SmartToy,
-                    title = "Agent Connections",
-                    onClick = onNavigateToAgents
                 )
             }
 
