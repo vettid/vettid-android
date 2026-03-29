@@ -124,6 +124,15 @@ class FeedViewModel @Inject constructor(
                     (event.message?.contains(query, ignoreCase = true) == true)
             }
         }
+        // Group message events by connection — show only the latest per conversation
+        val messageTypes = setOf(EventTypes.MESSAGE_RECEIVED, EventTypes.MESSAGE_SENT)
+        val (messageEvents, otherEvents) = filtered.partition { it.eventType in messageTypes }
+        val latestPerConnection = messageEvents
+            .groupBy { it.metadata?.get("connection_id") ?: it.sourceId ?: it.eventId }
+            .mapValues { (_, events) -> events.maxByOrNull { it.createdAt } }
+            .values
+            .filterNotNull()
+        filtered = otherEvents + latestPerConnection
         // Sort: pinned (high priority) first, then by creation time descending
         filtered = filtered.sortedWith(
             compareByDescending<FeedEvent> { it.priority }

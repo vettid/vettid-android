@@ -105,19 +105,31 @@ object GuideContentProvider {
         icon = Icons.Default.Settings,
         sections = listOf(
             GuideSection.Paragraph(
-                "VettID lets you customize several aspects of your experience."
+                "VettID lets you customize several aspects of your experience. Tap the cloud icon in the top-right corner to open settings."
             ),
-            GuideSection.Heading("Available Settings"),
+            GuideSection.Heading("Account"),
             GuideSection.BulletList(
                 listOf(
                     "Change your PIN or password",
-                    "Session TTL and archive settings",
-                    "Location tracking preferences",
-                    "Theme and appearance",
-                    "Backup settings"
+                    "Session TTL \u2014 how long until you need to re-enter your PIN",
+                    "Credential backup toggle"
                 )
             ),
-            GuideSection.NavigationLink("Open Settings", NavigationTarget.ScreenNav("settings"))
+            GuideSection.Heading("Privacy, Data & Logging"),
+            GuideSection.BulletList(
+                listOf(
+                    "Location tracking preferences",
+                    "Auto-archive and auto-delete timers for feed events",
+                    "View audit logs of vault operations"
+                )
+            ),
+            GuideSection.Heading("Appearance & About"),
+            GuideSection.BulletList(
+                listOf(
+                    "Light, dark, or auto theme",
+                    "App details and vault status with enclave attestation"
+                )
+            )
         )
     )
 
@@ -230,7 +242,7 @@ object GuideContentProvider {
             ),
             GuideSection.Heading("Adding Connections"),
             GuideSection.Paragraph(
-                "Create an invitation and share it via QR code, or scan someone else\u2019s invitation to connect."
+                "Create an invitation and share it as a QR code for in-person scanning, or as a unique time-limited link you can send through any messaging app. Scan someone else\u2019s QR code or open their link to connect with them."
             ),
             GuideSection.Heading("Managing Connections"),
             GuideSection.Paragraph(
