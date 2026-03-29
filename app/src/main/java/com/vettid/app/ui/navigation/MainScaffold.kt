@@ -8,6 +8,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.sp
 import com.vettid.app.NatsConnectionState
 
 private const val TAG = "MainScaffold"
@@ -207,7 +209,7 @@ fun IconTabSelector(
                 selected = index == selectedIndex,
                 onClick = { onSegmentSelected(index) },
                 icon = { Icon(segment.icon, contentDescription = segment.title) },
-                text = { Text(segment.title, style = MaterialTheme.typography.labelSmall) }
+                text = { Text(segment.title, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
             )
         }
     }
@@ -232,7 +234,7 @@ fun ActivityIconTabSelector(
                 selected = index == selectedIndex,
                 onClick = { onSegmentSelected(index) },
                 icon = { Icon(segment.icon, contentDescription = segment.title) },
-                text = { Text(segment.title, style = MaterialTheme.typography.labelSmall) }
+                text = { Text(segment.title, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
             )
         }
     }

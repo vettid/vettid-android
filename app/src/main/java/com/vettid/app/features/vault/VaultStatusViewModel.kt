@@ -94,7 +94,9 @@ class VaultStatusViewModel @Inject constructor(
                             lastChecked = null
                         ),
                         lastBackup = null,
-                        lastSync = null
+                        lastSync = null,
+                        pcrVersion = credentialStore.getCurrentPcrVersion(),
+                        pcr0Hash = credentialStore.getEnrollmentPcr0Hash()
                     )
                     loadHandlers()
                 } else {

@@ -1043,7 +1043,7 @@ private fun ConnectionPickerDialog(
                                         }
                                     }
                                     ListItem(
-                                        headlineContent = { Text(conn.peerDisplayName) },
+                                        headlineContent = { Text(conn.peerDisplayName, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
                                         leadingContent = {
                                             if (photoBitmap != null) {
                                                 Image(
@@ -1097,7 +1097,10 @@ private fun ConnectionPickerDialog(
                     }
                 }
                 else -> {
-                    Text("Unable to load connections", color = MaterialTheme.colorScheme.error)
+                    Text(
+                        "No connections yet. Create a connection first to start messaging.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             }
         },

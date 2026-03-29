@@ -1643,12 +1643,29 @@ private fun PublicProfileFullScreen(
         )
     }
 
-    // Handlers Dialog
+    // Handlers Dialog — styled like Settings > Vault Status > Handlers
     if (showHandlersDialog) {
         AlertDialog(
             onDismissRequest = { showHandlersDialog = false },
-            icon = { Icon(Icons.Default.Extension, contentDescription = null) },
-            title = { Text("Available Handlers (${handlers.size})") },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Extension, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Available Handlers")
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Text(
+                            "${handlers.size}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            },
             text = {
                 if (handlers.isEmpty()) {
                     Text(
@@ -1657,29 +1674,11 @@ private fun PublicProfileFullScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(
+                        modifier = Modifier.verticalScroll(rememberScrollState())
+                    ) {
                         handlers.forEach { handler ->
-                            Column {
-                                Text(
-                                    handler.name,
-                                    style = MaterialTheme.typography.titleSmall
-                                )
-                                Text(
-                                    handler.description,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                if (handler.operations.isNotEmpty()) {
-                                    Text(
-                                        handler.operations.joinToString(", "),
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.outline
-                                    )
-                                }
-                            }
-                            if (handler != handlers.last()) {
-                                HorizontalDivider()
-                            }
+                            ProfileHandlerRow(handler = handler)
                         }
                     }
                 }
@@ -2876,5 +2875,108 @@ private fun PersonalDataTemplateFormDialog(
         ) {
             DatePicker(state = datePickerState)
         }
+    }
+}
+
+@Composable
+private fun ProfileHandlerRow(handler: com.vettid.app.core.nats.VaultHandler) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { expanded = !expanded }
+            .padding(vertical = 6.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = getProfileHandlerIcon(handler.id),
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                text = handler.name,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f)
+            )
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant
+            ) {
+                Text(
+                    text = "${handler.operations.size} ops",
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(4.dp))
+            Icon(
+                imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = if (expanded) "Collapse" else "Expand",
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        androidx.compose.animation.AnimatedVisibility(visible = expanded) {
+            Column(modifier = Modifier.padding(start = 30.dp, top = 6.dp)) {
+                Text(
+                    text = handler.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                @OptIn(ExperimentalLayoutApi::class)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    handler.operations.forEach { op ->
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.secondaryContainer
+                        ) {
+                            Text(
+                                text = op,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun getProfileHandlerIcon(handlerId: String): androidx.compose.ui.graphics.vector.ImageVector {
+    return when (handlerId) {
+        "profile" -> Icons.Default.Person
+        "personal-data" -> Icons.Default.Badge
+        "secrets" -> Icons.Default.Key
+        "credential" -> Icons.Default.VerifiedUser
+        "connection" -> Icons.Default.People
+        "message" -> Icons.Default.Email
+        "feed" -> Icons.Default.Notifications
+        "location" -> Icons.Default.LocationOn
+        "vote" -> Icons.Default.HowToVote
+        "audit" -> Icons.Default.Policy
+        "call" -> Icons.Default.Call
+        "invitation" -> Icons.Default.PersonAdd
+        "capability" -> Icons.Default.Handshake
+        "settings" -> Icons.Default.Settings
+        "notification" -> Icons.Default.NotificationsActive
+        "service" -> Icons.Default.Business
+        "datastore" -> Icons.Default.Storage
+        "pin" -> Icons.Default.Lock
+        "wallet" -> Icons.Default.AccountBalance
+        "agent-secrets" -> Icons.Default.SmartToy
+        else -> Icons.Default.Extension
     }
 }

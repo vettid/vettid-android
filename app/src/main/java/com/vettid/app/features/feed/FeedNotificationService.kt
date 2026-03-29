@@ -162,8 +162,8 @@ class FeedNotificationService @Inject constructor(
         // Emit feed update for real-time UI refresh
         _feedUpdates.emit(FeedUpdate.NewEvent(event.eventId, event.eventType))
 
-        // Show system notification (skip guide events to avoid flooding during enrollment)
-        if (event.eventType != "guide") {
+        // Show system notification (skip guide events and sender's own message events)
+        if (event.eventType != "guide" && event.eventType != "message.sent") {
             showSystemNotification(event)
         }
 

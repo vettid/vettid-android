@@ -51,7 +51,9 @@ sealed class VaultStatusState {
         val lastBackup: String?,
         val lastSync: String?,
         val handlers: List<com.vettid.app.core.nats.VaultHandler> = emptyList(),
-        val handlersLoading: Boolean = false
+        val handlersLoading: Boolean = false,
+        val pcrVersion: String? = null,
+        val pcr0Hash: String? = null
     ) : VaultStatusState()
 
     /**
