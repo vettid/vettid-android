@@ -72,12 +72,9 @@ class AppLifecycleObserver @Inject constructor(
             return
         }
 
-        if (natsAutoConnector.isConnected()) {
-            Log.d(TAG, "NATS already connected, no reconnect needed")
-            return
-        }
-
-        Log.i(TAG, "App foregrounded with NATS disconnected, attempting reconnect")
+        // Let autoConnect handle the isConnected check — it holds a mutex
+        // to prevent concurrent reconnect races
+        Log.i(TAG, "App foregrounded, ensuring NATS connection")
         scope.launch {
             val result = natsAutoConnector.autoConnect()
             when (result) {

@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -56,6 +58,9 @@ class NatsAutoConnector @Inject constructor(
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var rotationListenerJob: Job? = null
+
+    // Serialize autoConnect calls to prevent concurrent reconnect races
+    private val autoConnectMutex = Mutex()
 
     private val _connectionState = MutableStateFlow<AutoConnectState>(AutoConnectState.Idle)
     val connectionState: StateFlow<AutoConnectState> = _connectionState.asStateFlow()
@@ -106,9 +111,16 @@ class NatsAutoConnector @Inject constructor(
      * @param autoStartVault If true, attempt to start the vault if connection fails due to auth
      * @return [ConnectionResult] indicating success or the type of failure
      */
-    suspend fun autoConnect(autoStartVault: Boolean = true): ConnectionResult {
-        // Quick check: if already connected, just return success
-        // This prevents reconnection when called multiple times (e.g., from both PinUnlockViewModel and AppViewModel)
+    suspend fun autoConnect(autoStartVault: Boolean = true): ConnectionResult = autoConnectMutex.withLock {
+        autoConnectInternal(autoStartVault)
+    }
+
+    /**
+     * Internal implementation of autoConnect. Must only be called while holding autoConnectMutex.
+     * Separated so recursive calls (bootstrap re-connect, vault-start retry) don't deadlock.
+     */
+    private suspend fun autoConnectInternal(autoStartVault: Boolean = true): ConnectionResult {
+        // Check inside the mutex — race-free now
         if (natsClient.isConnected) {
             Log.i(TAG, "Already connected to NATS, skipping reconnect")
             _connectionState.value = AutoConnectState.Connected
@@ -202,7 +214,7 @@ class NatsAutoConnector @Inject constructor(
                 if (vaultStarted) {
                     Log.i(TAG, "Vault started - retrying connection")
                     // Retry connection without auto-start to avoid infinite loop
-                    return autoConnect(autoStartVault = false)
+                    return autoConnectInternal(autoStartVault = false)
                 }
             }
 
@@ -289,8 +301,8 @@ class NatsAutoConnector @Inject constructor(
                 // Disconnect and reconnect with full credentials
                 natsClient.disconnect()
 
-                // Recurse to reconnect with full credentials
-                return autoConnect()
+                // Recurse to reconnect with full credentials (already holding mutex)
+                return autoConnectInternal()
             }
         }
 
@@ -322,6 +334,15 @@ class NatsAutoConnector @Inject constructor(
 
         // Step 12: Re-schedule location worker if tracking was enabled
         ensureLocationWorkerScheduled()
+
+        // Step 13: Wire disconnect callback for automatic reconnect
+        natsClient.setOnDisconnect {
+            scope.launch {
+                Log.w(TAG, "NATS disconnected, attempting reconnect...")
+                delay(1000) // Brief delay before reconnect
+                autoConnect()
+            }
+        }
 
         _connectionState.value = AutoConnectState.Connected
         Log.i(TAG, "Auto-connect completed successfully")

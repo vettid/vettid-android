@@ -48,6 +48,9 @@ class NatsClient @Inject constructor() {
      */
     suspend fun connect(credentials: NatsCredentials): Result<Unit> = withContext(Dispatchers.IO) {
         try {
+            // Clear stale subscription tracking from previous connection
+            subscriptions.clear()
+
             Log.i(TAG, "Attempting NATS connection to: ${credentials.endpoint}")
             Log.d(TAG, "JWT length: ${credentials.jwt.length}, Seed length: ${credentials.seed.length}")
 
@@ -196,6 +199,14 @@ class NatsClient @Inject constructor() {
             androidClient.unsubscribe(sid)
             Log.d(TAG, "Unsubscribed from $subject")
         }
+    }
+
+    /**
+     * Set a callback to be invoked when the underlying connection is lost.
+     * Used by NatsAutoConnector to trigger reconnect.
+     */
+    fun setOnDisconnect(callback: () -> Unit) {
+        androidClient.onDisconnect = callback
     }
 
     /**

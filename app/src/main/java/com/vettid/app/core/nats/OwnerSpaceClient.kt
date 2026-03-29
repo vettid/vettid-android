@@ -110,6 +110,9 @@ class OwnerSpaceClient @Inject constructor(
      * Call this after connecting to NATS.
      */
     fun subscribeToVault(): Result<Unit> {
+        // Clean up any existing subscriptions first to prevent duplicates
+        unsubscribeFromVault()
+
         val ownerSpaceId = connectionManager.getOwnerSpaceId()
             ?: return Result.failure(NatsException("No OwnerSpace ID available"))
 

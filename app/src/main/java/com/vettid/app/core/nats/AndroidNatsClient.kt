@@ -35,6 +35,10 @@ import javax.net.ssl.SSLSocketFactory
  * I/O uses raw byte streams (not character readers/writers) so that NATS
  * protocol byte counts are honoured exactly — avoids desync when payloads
  * contain multi-byte UTF-8.
+ *
+ * This client is a dumb protocol client: it connects, reads, writes, and
+ * invokes a callback on disconnect. Reconnection logic lives in
+ * NatsAutoConnector which wires the onDisconnect callback.
  */
 class AndroidNatsClient {
 
@@ -43,8 +47,6 @@ class AndroidNatsClient {
         private const val DEFAULT_TIMEOUT_MS = 30000
         // Shorter ping interval to prevent NAT/firewall timeouts (mobile networks often timeout at 30-60s)
         private const val PING_INTERVAL_MS = 20000L
-        private const val RECONNECT_DELAY_MS = 1000L
-        private const val MAX_RECONNECT_ATTEMPTS = Int.MAX_VALUE
         private const val PONG_TIMEOUT_MS = 10000L
         private val CRLF = "\r\n".toByteArray(Charsets.US_ASCII)
     }
@@ -54,6 +56,7 @@ class AndroidNatsClient {
     private var outputStream: BufferedOutputStream? = null
 
     private val connected = AtomicBoolean(false)
+    private val connectionEpoch = AtomicLong(0)
     private val subscriptionIdCounter = AtomicLong(1)
     private val subscriptions = ConcurrentHashMap<String, SubscriptionHandler>()
     private val pendingRequests = ConcurrentHashMap<String, RequestHandler>()
@@ -68,7 +71,10 @@ class AndroidNatsClient {
 
     // Track last successful communication for connection health
     private val lastPongTime = AtomicLong(0)
-    private val reconnecting = AtomicBoolean(false)
+
+    // Callback invoked when connection is lost (reader EOF or pong timeout).
+    // Wired by NatsAutoConnector to trigger reconnect.
+    var onDisconnect: (() -> Unit)? = null
 
     // Serialize connect/reconnect to prevent concurrent connection races
     private val connectMutex = Mutex()
@@ -143,153 +149,158 @@ class AndroidNatsClient {
         seed: String,
         timeoutMs: Int = DEFAULT_TIMEOUT_MS
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        connectInternal(endpoint, jwt, seed, timeoutMs, isReconnect = false)
+        connectInternal(endpoint, jwt, seed, timeoutMs)
     }
 
     /**
-     * Internal connect method that handles both initial connect and reconnect.
+     * Internal connect method. Serialized by connectMutex to prevent races.
+     *
+     * On success: closes old connection, increments epoch, swaps in new
+     * socket/streams, starts fresh reader + ping coroutines, resubscribes
+     * existing subscriptions on the new connection.
+     *
+     * On failure: cleans up only the new socket — does not touch existing state.
      */
     private suspend fun connectInternal(
         endpoint: String,
         jwt: String,
         seed: String,
-        timeoutMs: Int,
-        isReconnect: Boolean
+        timeoutMs: Int
     ): Result<Unit> = withContext(Dispatchers.IO) {
-        // Serialize connection attempts to prevent races where two connects
-        // both succeed and the second closes the first's reader/writer
         connectMutex.withLock {
             // If already connected (e.g., a concurrent attempt succeeded while we waited),
             // skip this attempt
-            if (isReconnect && connected.get()) {
+            if (connected.get()) {
                 return@withContext Result.success(Unit)
             }
 
-        var newSocket: SSLSocket? = null
-        var newInput: BufferedInputStream? = null
-        var newOutput: BufferedOutputStream? = null
+            var newSocket: SSLSocket? = null
+            var newInput: BufferedInputStream? = null
+            var newOutput: BufferedOutputStream? = null
 
-        try {
-            // Store for reconnection (only on initial connect)
-            if (!isReconnect) {
+            try {
+                // Store credentials for potential future use
                 currentEndpoint = endpoint
                 currentJwt = jwt
                 currentSeed = seed
-            }
 
-            // Parse endpoint (tls://host:port or nats://host:port)
-            val (host, port) = parseEndpoint(endpoint)
+                // Parse endpoint (tls://host:port or nats://host:port)
+                val (host, port) = parseEndpoint(endpoint)
 
-            Log.i(TAG, "Connecting to $host:$port... (reconnect=$isReconnect)")
+                Log.i(TAG, "Connecting to $host:$port...")
 
-            // Create TLS socket using Android's default factory
-            val sslFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
-            newSocket = sslFactory.createSocket() as SSLSocket
-            newSocket.connect(InetSocketAddress(host, port), timeoutMs)
-            newSocket.soTimeout = timeoutMs
-            newSocket.startHandshake()
+                // Create TLS socket using Android's default factory
+                val sslFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
+                newSocket = sslFactory.createSocket() as SSLSocket
+                newSocket.connect(InetSocketAddress(host, port), timeoutMs)
+                newSocket.soTimeout = timeoutMs
+                newSocket.startHandshake()
 
-            newInput = BufferedInputStream(newSocket.inputStream)
-            newOutput = BufferedOutputStream(newSocket.outputStream)
+                newInput = BufferedInputStream(newSocket.inputStream)
+                newOutput = BufferedOutputStream(newSocket.outputStream)
 
-            Log.i(TAG, "TLS connected, reading INFO...")
+                Log.i(TAG, "TLS connected, reading INFO...")
 
-            // Read INFO message
-            val infoLine = readProtocolLine(newInput)
-                ?: throw IOException("Connection closed before INFO received")
+                // Read INFO message
+                val infoLine = readProtocolLine(newInput)
+                    ?: throw IOException("Connection closed before INFO received")
 
-            if (!infoLine.startsWith("INFO ")) {
-                throw IOException("Expected INFO, got: $infoLine")
-            }
-
-            val infoJson = JSONObject(infoLine.substring(5))
-            val nonce = infoJson.optString("nonce", "")
-            val authRequired = infoJson.optBoolean("auth_required", false)
-
-            Log.d(TAG, "Server nonce: $nonce, auth_required: $authRequired")
-
-            // Authenticate with JWT and signed nonce
-            if (authRequired && nonce.isNotEmpty()) {
-                val nkey = NKey.fromSeed(seed.toCharArray())
-                val signedBytes = nkey.sign(nonce.toByteArray())
-                val signature = Base64.getUrlEncoder().withoutPadding().encodeToString(signedBytes)
-
-                val connectJson = JSONObject().apply {
-                    put("verbose", false)
-                    put("pedantic", false)
-                    put("tls_required", true)
-                    put("name", "android-vettid")
-                    put("lang", "kotlin")
-                    put("version", "1.0.0")
-                    put("protocol", 1)
-                    put("headers", true)
-                    put("no_responders", true)
-                    put("jwt", jwt)
-                    put("nkey", String(nkey.publicKey))
-                    put("sig", signature)
+                if (!infoLine.startsWith("INFO ")) {
+                    throw IOException("Expected INFO, got: $infoLine")
                 }
 
-                newOutput.write("CONNECT $connectJson\r\n".toByteArray(Charsets.UTF_8))
+                val infoJson = JSONObject(infoLine.substring(5))
+                val nonce = infoJson.optString("nonce", "")
+                val authRequired = infoJson.optBoolean("auth_required", false)
+
+                Log.d(TAG, "Server nonce: $nonce, auth_required: $authRequired")
+
+                // Authenticate with JWT and signed nonce
+                if (authRequired && nonce.isNotEmpty()) {
+                    val nkey = NKey.fromSeed(seed.toCharArray())
+                    val signedBytes = nkey.sign(nonce.toByteArray())
+                    val signature = Base64.getUrlEncoder().withoutPadding().encodeToString(signedBytes)
+
+                    val connectJson = JSONObject().apply {
+                        put("verbose", false)
+                        put("pedantic", false)
+                        put("tls_required", true)
+                        put("name", "android-vettid")
+                        put("lang", "kotlin")
+                        put("version", "1.0.0")
+                        put("protocol", 1)
+                        put("headers", true)
+                        put("no_responders", true)
+                        put("jwt", jwt)
+                        put("nkey", String(nkey.publicKey))
+                        put("sig", signature)
+                    }
+
+                    newOutput.write("CONNECT $connectJson\r\n".toByteArray(Charsets.UTF_8))
+                    newOutput.flush()
+                }
+
+                // Send PING to verify connection
+                newOutput.write("PING\r\n".toByteArray(Charsets.US_ASCII))
                 newOutput.flush()
-            }
 
-            // Send PING to verify connection
-            newOutput.write("PING\r\n".toByteArray(Charsets.US_ASCII))
-            newOutput.flush()
+                val response = readProtocolLine(newInput)
+                if (response == "PONG") {
+                    // 1. Close old connection to stop old reader thread
+                    val oldSocket = socket
+                    val oldInput = inputStream
+                    val oldOutput = outputStream
+                    try { oldInput?.close() } catch (e: Exception) { }
+                    try { oldOutput?.close() } catch (e: Exception) { }
+                    try { oldSocket?.close() } catch (e: Exception) { }
 
-            val response = readProtocolLine(newInput)
-            if (response == "PONG") {
-                // Close old connection FIRST to stop old reader thread.
-                // Closing the input stream causes the blocking read() to throw,
-                // which exits the reader loop cleanly.
-                val oldSocket = socket
-                val oldInput = inputStream
-                val oldOutput = outputStream
+                    // 2. Cancel old scope entirely (kills old reader + ping)
+                    scope?.cancel()
+                    scope = null
 
-                // Close old streams to kill old reader before swapping
-                try { oldInput?.close() } catch (e: Exception) { }
-                try { oldOutput?.close() } catch (e: Exception) { }
-                try { oldSocket?.close() } catch (e: Exception) { }
+                    // 3. Increment epoch so any surviving old coroutines exit
+                    connectionEpoch.incrementAndGet()
 
-                // Cancel old reader job and wait for it to finish
-                readerJob?.cancel()
-                pingJob?.cancel()
+                    // 4. Swap in new socket/streams
+                    socket = newSocket
+                    inputStream = newInput
+                    outputStream = newOutput
 
-                // Now swap in the new connection
-                socket = newSocket
-                inputStream = newInput
-                outputStream = newOutput
+                    // 5. Mark connected
+                    connected.set(true)
 
-                connected.set(true)
-
-                // Only start background tasks on initial connect
-                // For reconnect, the existing reader loop will be restarted
-                if (!isReconnect) {
+                    // 6. Always start fresh background tasks (reader + ping)
                     startBackgroundTasks()
+
+                    // 7. Resubscribe existing subscriptions on the new connection
+                    subscriptions.forEach { (sid, handler) ->
+                        try {
+                            synchronized(this@AndroidNatsClient) {
+                                sendLine("SUB ${handler.subject} $sid")
+                            }
+                            Log.d(TAG, "Resubscribed to ${handler.subject} (sid=$sid)")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to resubscribe to ${handler.subject}: ${e.message}")
+                        }
+                    }
+
+                    Log.i(TAG, "Connected successfully!")
+                    Result.success(Unit)
+                } else if (response?.startsWith("-ERR") == true) {
+                    throw IOException("Authentication failed: $response")
+                } else {
+                    throw IOException("Unexpected response: $response")
                 }
+            } catch (e: Exception) {
+                Log.e(TAG, "Connection failed: ${e.message}", e)
 
-                Log.i(TAG, "Connected successfully!")
-                Result.success(Unit)
-            } else if (response?.startsWith("-ERR") == true) {
-                throw IOException("Authentication failed: $response")
-            } else {
-                throw IOException("Unexpected response: $response")
+                // Clean up the NEW socket only - don't touch existing state or scope
+                try { newOutput?.close() } catch (ex: Exception) { }
+                try { newInput?.close() } catch (ex: Exception) { }
+                try { newSocket?.close() } catch (ex: Exception) { }
+
+                Result.failure(e)
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Connection failed: ${e.message}", e)
-
-            // Clean up the NEW socket only - don't touch existing state or scope
-            try { newOutput?.close() } catch (ex: Exception) { }
-            try { newInput?.close() } catch (ex: Exception) { }
-            try { newSocket?.close() } catch (ex: Exception) { }
-
-            // Only do full disconnect on initial connect failure
-            if (!isReconnect) {
-                disconnect()
-            }
-
-            Result.failure(e)
-        }
         } // connectMutex.withLock
     }
 
@@ -299,13 +310,15 @@ class AndroidNatsClient {
     suspend fun disconnect() = withContext(Dispatchers.IO) {
         try {
             connected.set(false)
-            reconnecting.set(false)  // Stop any reconnection attempts
 
             // Cancel background tasks
             readerJob?.cancel()
             pingJob?.cancel()
             scope?.cancel()
             scope = null
+
+            // Increment epoch so any surviving coroutines exit
+            connectionEpoch.incrementAndGet()
 
             // Close streams and socket
             try { outputStream?.close() } catch (e: Exception) { }
@@ -316,8 +329,13 @@ class AndroidNatsClient {
             inputStream = null
             socket = null
 
-            subscriptions.clear()
+            // Fail all pending requests so callers don't hang
+            pendingRequests.forEach { (_, handler) ->
+                handler.complete(NatsMessage("", ByteArray(0), null))
+            }
             pendingRequests.clear()
+
+            subscriptions.clear()
 
             Log.i(TAG, "Disconnected")
         } catch (e: Exception) {
@@ -476,30 +494,41 @@ class AndroidNatsClient {
         return Pair(host, port)
     }
 
+    /**
+     * Start reader and ping coroutines in a fresh scope.
+     * Both coroutines capture the current epoch and exit if it changes
+     * (meaning a new connection was established and they are stale).
+     */
     private fun startBackgroundTasks() {
         scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        val myEpoch = connectionEpoch.get()
 
         // Initialize pong time
         lastPongTime.set(System.currentTimeMillis())
 
         // Start message reader
         readerJob = scope?.launch {
-            readMessages()
+            readMessages(myEpoch)
         }
 
         // Start ping task with health monitoring
         pingJob = scope?.launch {
-            while (isActive && connected.get()) {
+            while (isActive && connected.get() && connectionEpoch.get() == myEpoch) {
                 delay(PING_INTERVAL_MS)
 
-                if (!connected.get()) break
+                if (!connected.get() || connectionEpoch.get() != myEpoch) break
 
                 try {
                     // Check if we've received a pong recently
                     val timeSinceLastPong = System.currentTimeMillis() - lastPongTime.get()
                     if (timeSinceLastPong > PING_INTERVAL_MS + PONG_TIMEOUT_MS) {
                         Log.w(TAG, "No PONG received in ${timeSinceLastPong}ms, connection may be stale")
-                        handleDisconnect()
+                        // Mark disconnected, close socket, invoke callback
+                        if (connected.compareAndSet(true, false)) {
+                            try { socket?.close() } catch (e: Exception) { }
+                            Log.w(TAG, "Pong timeout — invoking onDisconnect")
+                            onDisconnect?.invoke()
+                        }
                         break
                     }
 
@@ -509,22 +538,29 @@ class AndroidNatsClient {
                     Log.d(TAG, "Sent PING")
                 } catch (e: Exception) {
                     Log.w(TAG, "Ping failed: ${e.message}")
-                    handleDisconnect()
+                    if (connectionEpoch.get() == myEpoch && connected.compareAndSet(true, false)) {
+                        try { socket?.close() } catch (ex: Exception) { }
+                        Log.w(TAG, "Ping error — invoking onDisconnect")
+                        onDisconnect?.invoke()
+                    }
                     break
                 }
             }
         }
     }
 
-    private suspend fun readMessages() {
-        // Capture the stream reference locally so this reader ONLY reads from
-        // the stream that was current when it started. During reconnect,
-        // inputStream is swapped to a new stream — if we used the class field,
-        // both old and new readers would read from the same stream, causing
-        // garbled data (bytes split between two concurrent readers).
+    /**
+     * Read messages from the NATS connection.
+     *
+     * Captures the stream and epoch at start. Exits if epoch changes
+     * (connection was replaced) or on EOF/exception. On disconnect that
+     * is still current (epoch matches), sets connected=false and invokes
+     * the onDisconnect callback once.
+     */
+    private suspend fun readMessages(myEpoch: Long) {
         val myStream = inputStream
         try {
-            while (connected.get()) {
+            while (connected.get() && connectionEpoch.get() == myEpoch) {
                 val line = readProtocolLine(myStream) ?: break
 
                 when {
@@ -568,23 +604,20 @@ class AndroidNatsClient {
                     }
                 }
             }
-            Log.w(TAG, "Reader loop exited (connected=${connected.get()})")
-            // EOF or null read — only trigger reconnect if OUR stream is still current.
-            // If inputStream was swapped (reconnect happened), another reader owns the
-            // new stream, so we just exit silently.
-            if (connected.get() && inputStream === myStream) {
-                handleDisconnect()
+            Log.w(TAG, "Reader loop exited (connected=${connected.get()}, epoch=${connectionEpoch.get()}, myEpoch=$myEpoch)")
+            // EOF or null read — only signal disconnect if our epoch is still current
+            if (connectionEpoch.get() == myEpoch && connected.compareAndSet(true, false)) {
+                Log.w(TAG, "Reader EOF — invoking onDisconnect")
+                onDisconnect?.invoke()
             }
         } catch (e: Exception) {
-            // Only trigger reconnect if our stream is still the active one.
-            // After reconnect, the old stream is closed (causing this exception),
-            // but the new connection is already live — calling handleDisconnect
-            // here would kill it.
-            if (connected.get() && inputStream === myStream) {
+            // Only signal disconnect if our epoch is still current
+            if (connectionEpoch.get() == myEpoch && connected.compareAndSet(true, false)) {
                 Log.e(TAG, "Read error: ${e.message}")
-                handleDisconnect()
+                Log.w(TAG, "Reader exception — invoking onDisconnect")
+                onDisconnect?.invoke()
             } else {
-                Log.d(TAG, "Reader exiting (stream replaced by reconnect)")
+                Log.d(TAG, "Reader exiting (epoch changed, connection replaced)")
             }
         }
     }
@@ -711,108 +744,6 @@ class AndroidNatsClient {
                 Log.e(TAG, "Subscription callback error (HMSG): ${e.message}")
             }
         }
-    }
-
-    private fun handleDisconnect() {
-        if (connected.compareAndSet(true, false)) {
-            // Only start reconnection if not already reconnecting
-            if (reconnecting.compareAndSet(false, true)) {
-                Log.w(TAG, "Connection lost, will attempt reconnect...")
-
-                scope?.launch {
-                    try {
-                        attemptReconnect()
-                    } finally {
-                        reconnecting.set(false)
-                    }
-                }
-            } else {
-                Log.d(TAG, "Reconnection already in progress")
-            }
-        }
-    }
-
-    private suspend fun attemptReconnect() {
-        var attempts = 0
-        var backoffMs = RECONNECT_DELAY_MS
-
-        while (attempts < MAX_RECONNECT_ATTEMPTS && !connected.get()) {
-            attempts++
-            delay(backoffMs)
-
-            if (attempts % 10 == 1 || attempts <= 3) {
-                Log.i(TAG, "Reconnect attempt $attempts (backoff: ${backoffMs}ms)")
-            }
-
-            val endpoint = currentEndpoint
-            val jwt = currentJwt
-            val seed = currentSeed
-
-            if (endpoint != null && jwt != null && seed != null) {
-                // Use connectInternal with isReconnect=true to avoid canceling scope on failure
-                val result = connectInternal(endpoint, jwt, seed, DEFAULT_TIMEOUT_MS, isReconnect = true)
-                if (result.isSuccess) {
-                    Log.i(TAG, "Reconnected successfully!")
-
-                    // Reset pong time for health monitoring
-                    lastPongTime.set(System.currentTimeMillis())
-
-                    // Resubscribe to all active subscriptions
-                    subscriptions.forEach { (sid, handler) ->
-                        try {
-                            synchronized(this@AndroidNatsClient) {
-                                sendLine("SUB ${handler.subject} $sid")
-                            }
-                            Log.d(TAG, "Resubscribed to ${handler.subject} (sid=$sid)")
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Failed to resubscribe to ${handler.subject}: ${e.message}")
-                        }
-                    }
-
-                    // Start a new reader job (old one was cancelled in connectInternal)
-                    readerJob = scope?.launch {
-                        readMessages()
-                    }
-
-                    // Start a new ping job
-                    pingJob = scope?.launch {
-                        while (isActive && connected.get()) {
-                            delay(PING_INTERVAL_MS)
-
-                            if (!connected.get()) break
-
-                            try {
-                                val timeSinceLastPong = System.currentTimeMillis() - lastPongTime.get()
-                                if (timeSinceLastPong > PING_INTERVAL_MS + PONG_TIMEOUT_MS) {
-                                    Log.w(TAG, "No PONG received in ${timeSinceLastPong}ms, connection may be stale")
-                                    handleDisconnect()
-                                    break
-                                }
-
-                                synchronized(this@AndroidNatsClient) {
-                                    sendLine("PING")
-                                }
-                                Log.d(TAG, "Sent PING")
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Ping failed: ${e.message}")
-                                handleDisconnect()
-                                break
-                            }
-                        }
-                    }
-
-                    return
-                }
-            } else {
-                Log.w(TAG, "Cannot reconnect: missing credentials")
-                break
-            }
-
-            // Exponential backoff with cap at 60 seconds
-            backoffMs = (backoffMs * 2).coerceAtMost(60000L)
-        }
-
-        Log.e(TAG, "Failed to reconnect after $attempts attempts")
     }
 
     // --- Helper classes ---
