@@ -13,6 +13,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.time.Instant
 import javax.inject.Inject
@@ -92,31 +93,42 @@ class VaultUpdateViewModel @Inject constructor(
 
     /**
      * User tapped "Update Now" — start the re-sealing process.
+     * Automatically retries on failure (NATS may route to either old or new instance).
      */
     fun startUpdate() {
         val config = currentConfig ?: return
+        val maxRetries = 5
+        val retryDelayMs = 1500L
 
         viewModelScope.launch {
             _state.value = VaultUpdateState.Updating(config)
 
-            migrationClient.startMigration()
-                .onSuccess { version ->
-                    // Mark this version as completed
+            for (attempt in 1..maxRetries) {
+                val result = migrationClient.startMigration()
+
+                if (result.isSuccess) {
+                    val version = result.getOrDefault("")
                     getPrefs().edit()
                         .putString(KEY_COMPLETED_VERSION, version.ifEmpty { config.version })
                         .putBoolean(KEY_DISMISSED, false)
                         .remove(KEY_REMINDED_AT)
                         .apply()
-
                     _state.value = VaultUpdateState.Updated
+                    return@launch
                 }
-                .onFailure { error ->
-                    Log.e(TAG, "Migration failed", error)
+
+                val error = result.exceptionOrNull()
+                if (attempt < maxRetries) {
+                    Log.w(TAG, "Migration attempt $attempt/$maxRetries failed, retrying: ${error?.message}")
+                    delay(retryDelayMs)
+                } else {
+                    Log.e(TAG, "Migration failed after $maxRetries attempts", error)
                     _state.value = VaultUpdateState.Error(
                         config = config,
-                        message = error.message ?: "Update failed. Please try again."
+                        message = error?.message ?: "Update failed. Please try again."
                     )
                 }
+            }
         }
     }
 
