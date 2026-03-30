@@ -537,7 +537,9 @@ class ConnectionsClient @Inject constructor(
                 lastName = profileObj.get("_system_last_name")?.asString,
                 email = profileObj.get("_system_email")?.asString,
                 photo = profileObj.get("photo")?.takeIf { !it.isJsonNull }?.asString,
-                fields = fields
+                fields = fields,
+                publicKey = profileObj.get("public_key")?.takeIf { !it.isJsonNull }?.asString,
+                userGuid = profileObj.get("user_guid")?.takeIf { !it.isJsonNull }?.asString
             )
         }
 
@@ -687,7 +689,9 @@ data class PeerProfileData(
     val lastName: String? = null,
     val email: String? = null,
     val photo: String? = null,
-    val fields: Map<String, Map<String, String>>? = null
+    val fields: Map<String, Map<String, String>>? = null,
+    val publicKey: String? = null,
+    val userGuid: String? = null
 )
 
 /**

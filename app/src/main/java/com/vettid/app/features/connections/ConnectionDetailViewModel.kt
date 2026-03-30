@@ -64,6 +64,12 @@ class ConnectionDetailViewModel @Inject constructor(
     private val _peerPublicKey = MutableStateFlow<String?>(null)
     val peerPublicKey: StateFlow<String?> = _peerPublicKey.asStateFlow()
 
+    private val _peerUserGuid = MutableStateFlow<String?>(null)
+    val peerUserGuid: StateFlow<String?> = _peerUserGuid.asStateFlow()
+
+    private val _peerIdentityKey = MutableStateFlow<String?>(null)
+    val peerIdentityKey: StateFlow<String?> = _peerIdentityKey.asStateFlow()
+
     // Dialog state for revoke confirmation
     private val _showRevokeDialog = MutableStateFlow(false)
     val showRevokeDialog: StateFlow<Boolean> = _showRevokeDialog.asStateFlow()
@@ -117,6 +123,8 @@ class ConnectionDetailViewModel @Inject constructor(
                         _peerEmail.value = record.peerProfile?.email
                         _peerFields.value = record.peerProfile?.fields
                         _peerPublicKey.value = record.e2ePublicKey
+                        _peerUserGuid.value = record.peerProfile?.userGuid ?: record.peerGuid
+                        _peerIdentityKey.value = record.peerProfile?.publicKey
                         _state.value = ConnectionDetailState.Loaded(
                             connection = connection,
                             profile = null

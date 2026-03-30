@@ -184,11 +184,21 @@ class FeedRepository @Inject constructor(
                                         deletedCount++
                                     }
                                     event.eventId in existingIds -> {
-                                        // Update existing event
+                                        // Update existing event — but don't overwrite
+                                        // locally-archived/deleted events with stale "active"
+                                        // status from the server (timing race on archive)
                                         val index = cachedEvents.indexOfFirst { it.eventId == event.eventId }
                                         if (index >= 0) {
-                                            cachedEvents[index] = event
-                                            updatedCount++
+                                            val cached = cachedEvents[index]
+                                            val locallyRemoved = cached.feedStatus in listOf("archived", "deleted")
+                                            val serverAlsoRemoved = event.feedStatus in listOf("archived", "deleted")
+                                            if (locallyRemoved && !serverAlsoRemoved) {
+                                                // Keep local archived status — server hasn't caught up yet
+                                                Log.d(TAG, "Keeping local ${cached.feedStatus} status for ${event.eventId}")
+                                            } else {
+                                                cachedEvents[index] = event
+                                                updatedCount++
+                                            }
                                         }
                                     }
                                     else -> {

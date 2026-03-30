@@ -1207,7 +1207,15 @@ fun VettIDApp(
             val userName = backStackEntry.arguments?.getString("userName")?.let {
                 java.net.URLDecoder.decode(it, "UTF-8")
             } ?: ""
-            val feedViewModel: com.vettid.app.features.feed.FeedViewModel = hiltViewModel()
+            // Get FeedViewModel from Main route's scope so markAsRead updates the same cache
+            val mainEntry = remember(navController) {
+                try { navController.getBackStackEntry(Screen.Main.route) } catch (_: Exception) { null }
+            }
+            val feedViewModel: com.vettid.app.features.feed.FeedViewModel = if (mainEntry != null) {
+                hiltViewModel(mainEntry)
+            } else {
+                hiltViewModel()
+            }
             // Auto-mark guide as read when opened
             LaunchedEffect(eventId) {
                 if (eventId.isNotEmpty()) {

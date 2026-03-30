@@ -823,12 +823,10 @@ class FeedViewModel @Inject constructor(
                         )
                     }
                     _effects.emit(FeedEffect.ShowActionSuccess("Event archived"))
-
-                    // Sync after short delay to pick up the new audit event
-                    viewModelScope.launch {
-                        delay(500)
-                        silentRefresh()
-                    }
+                    // No immediate silentRefresh — the local cache is already updated.
+                    // A premature sync can overwrite the local "archived" status with the
+                    // server's "active" status if the vault hasn't finished processing yet.
+                    // The periodic 30s refresh will pick up server-side changes.
                 }
                 .onFailure { error ->
                     // If vault says "event not found", the event was already deleted/cleaned up

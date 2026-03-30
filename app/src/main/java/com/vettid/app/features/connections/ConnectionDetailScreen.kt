@@ -49,6 +49,8 @@ fun ConnectionDetailScreen(
     val peerEmail by viewModel.peerEmail.collectAsState()
     val peerFields by viewModel.peerFields.collectAsState()
     val peerPublicKey by viewModel.peerPublicKey.collectAsState()
+    val peerUserGuid by viewModel.peerUserGuid.collectAsState()
+    val peerIdentityKey by viewModel.peerIdentityKey.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -149,6 +151,8 @@ fun ConnectionDetailScreen(
                     peerEmail = peerEmail,
                     peerFields = peerFields,
                     peerPublicKey = peerPublicKey,
+                    peerUserGuid = peerUserGuid,
+                    peerIdentityKey = peerIdentityKey,
                     isRevoking = currentState.isRevoking,
                     isRotating = currentState.isRotating,
                     isLocationSharingEnabled = currentState.isLocationSharingEnabled,
@@ -202,6 +206,8 @@ private fun LoadedContent(
     peerEmail: String? = null,
     peerFields: Map<String, Map<String, String>>? = null,
     peerPublicKey: String? = null,
+    peerUserGuid: String? = null,
+    peerIdentityKey: String? = null,
     isRevoking: Boolean,
     isRotating: Boolean = false,
     isLocationSharingEnabled: Boolean = false,
@@ -414,14 +420,42 @@ private fun LoadedContent(
                     Text("End-to-End Encrypted", style = MaterialTheme.typography.bodyMedium)
                 }
 
+                if (!peerIdentityKey.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text("Identity Key", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = peerIdentityKey!!.chunked(8).joinToString(" "),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
                 if (!peerPublicKey.isNullOrBlank()) {
                     Spacer(modifier = Modifier.height(12.dp))
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                     Spacer(modifier = Modifier.height(12.dp))
-                    Text("Public Key", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("E2E Session Key", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = peerPublicKey!!.chunked(8).joinToString(" "),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                if (!peerUserGuid.isNullOrBlank()) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text("User ID", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = peerUserGuid!!,
                         style = MaterialTheme.typography.bodySmall,
                         fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

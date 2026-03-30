@@ -5,11 +5,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.crypto.ConnectionCryptoManager
 import com.vettid.app.core.nats.ConnectionsClient
+import com.vettid.app.core.nats.FeedClient
 import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.nats.NatsMessagingClient
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.network.*
 import com.vettid.app.core.storage.CredentialStore
+import com.vettid.app.features.feed.FeedRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -34,6 +36,8 @@ class ConversationViewModel @Inject constructor(
     private val natsAutoConnector: NatsAutoConnector,
     private val connectionCryptoManager: ConnectionCryptoManager,
     private val credentialStore: CredentialStore,
+    private val feedClient: FeedClient,
+    private val feedRepository: FeedRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -76,6 +80,45 @@ class ConversationViewModel @Inject constructor(
         fetchTransportKey()
         loadMessages()
         observeIncomingMessages()
+        markConnectionEventsAsRead()
+    }
+
+    /**
+     * Mark all unread message/call feed events for this connection as read.
+     * Updates both the vault (via FeedClient) and the local cache (via FeedRepository)
+     * so the feed badge updates immediately when the user navigates back.
+     */
+    private fun markConnectionEventsAsRead() {
+        viewModelScope.launch {
+            val messageEventTypes = setOf(
+                "message.received", "message.sent",
+                "call.incoming", "call.completed", "call.missed",
+                "transfer.request", "connection.accepted"
+            )
+            val unreadEventIds = feedRepository.getCachedEvents()
+                .filter { event ->
+                    event.isUnread &&
+                        event.eventType in messageEventTypes &&
+                        (event.metadata?.get("connection_id") ?: event.sourceId) == connectionId
+                }
+                .map { it.eventId }
+
+            if (unreadEventIds.isEmpty()) return@launch
+
+            feedClient.markMultipleRead(unreadEventIds)
+                .onSuccess {
+                    val now = System.currentTimeMillis() / 1000
+                    unreadEventIds.forEach { id ->
+                        feedRepository.updateEventLocally(id) {
+                            it.copy(feedStatus = "read", readAt = now)
+                        }
+                    }
+                    android.util.Log.d("ConversationVM", "Marked ${unreadEventIds.size} events as read for $connectionId")
+                }
+                .onFailure { error ->
+                    android.util.Log.w("ConversationVM", "Failed to mark events as read: ${error.message}")
+                }
+        }
     }
 
     /**

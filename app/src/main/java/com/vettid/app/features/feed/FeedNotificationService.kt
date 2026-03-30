@@ -1,5 +1,6 @@
 package com.vettid.app.features.feed
 
+import android.Manifest
 import android.app.Activity
 import android.app.Application
 import android.app.NotificationChannel
@@ -7,11 +8,13 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import com.vettid.app.MainActivity
 import com.vettid.app.R
 import com.vettid.app.core.nats.FeedNotification
@@ -96,8 +99,50 @@ class FeedNotificationService @Inject constructor(
         // Create notification channels
         createNotificationChannels()
 
+        // Log notification permission status for diagnostics
+        logNotificationStatus()
+
         // Start listening to feed notifications
         startListening()
+    }
+
+    /**
+     * Log notification permission and channel status for debugging
+     * notification delivery issues across devices.
+     */
+    private fun logNotificationStatus() {
+        val notifManager = NotificationManagerCompat.from(context)
+        val enabled = notifManager.areNotificationsEnabled()
+        val permissionGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED
+        } else {
+            true // Pre-Android 13, notifications enabled by default
+        }
+
+        Log.i(TAG, "Notification status: enabled=$enabled, permission=$permissionGranted, " +
+            "sdk=${Build.VERSION.SDK_INT}, model=${Build.MODEL}")
+
+        if (!enabled) {
+            Log.w(TAG, "NOTIFICATIONS DISABLED in system settings — user won't receive any notifications")
+        }
+        if (!permissionGranted) {
+            Log.w(TAG, "POST_NOTIFICATIONS permission not granted — notifications will fail with SecurityException")
+        }
+
+        // Check individual channels
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val systemManager = context.getSystemService(NotificationManager::class.java)
+            for (channelId in listOf(CHANNEL_ID_URGENT, CHANNEL_ID_DEFAULT, CHANNEL_ID_SILENT)) {
+                val channel = systemManager.getNotificationChannel(channelId)
+                if (channel != null) {
+                    Log.d(TAG, "Channel $channelId: importance=${channel.importance}, " +
+                        "enabled=${channel.importance != NotificationManager.IMPORTANCE_NONE}")
+                } else {
+                    Log.w(TAG, "Channel $channelId: NOT FOUND")
+                }
+            }
+        }
     }
 
     private fun createNotificationChannels() {
@@ -257,12 +302,17 @@ class FeedNotificationService @Inject constructor(
             }
             .build()
 
+        val notifManager = NotificationManagerCompat.from(context)
+        if (!notifManager.areNotificationsEnabled()) {
+            Log.w(TAG, "Skipping notification for ${event.eventId} — notifications disabled in system settings")
+            return
+        }
         try {
-            NotificationManagerCompat.from(context)
-                .notify(event.eventId.hashCode(), notification)
-            Log.d(TAG, "Showed system notification for ${event.eventId}")
+            notifManager.notify(event.eventId.hashCode(), notification)
+            Log.d(TAG, "Showed notification: type=${event.eventType}, title=${event.title}, fg=$isInForeground")
         } catch (e: SecurityException) {
-            Log.w(TAG, "Notification permission not granted", e)
+            Log.w(TAG, "Notification permission not granted for ${event.eventId} — " +
+                "sdk=${Build.VERSION.SDK_INT}, model=${Build.MODEL}", e)
         }
     }
 
