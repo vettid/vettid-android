@@ -8,13 +8,40 @@ import com.vettid.app.core.nats.FeedEvent as ApiFeedEvent
 sealed class FeedState {
     object Loading : FeedState()
     data class Loaded(
-        val events: List<ApiFeedEvent>,
+        val items: List<FeedDisplayItem>,
         val hasMore: Boolean = false,
         val unreadCount: Int = 0,
         val isOffline: Boolean = false
     ) : FeedState()
     data class Error(val message: String) : FeedState()
     object Empty : FeedState()
+}
+
+/**
+ * Display items for the connection-centric feed.
+ * ConnectionItem groups all activity for a single connection.
+ * EventItem wraps standalone events (guides, security, etc.).
+ */
+sealed class FeedDisplayItem {
+    abstract val sortTimestamp: Long
+    abstract val isUnread: Boolean
+
+    data class ConnectionItem(
+        val connectionId: String,
+        val peerName: String,
+        val peerPhotoBase64: String?,
+        val lastActivityPreview: String,
+        val lastActivityType: String,
+        val unreadCount: Int,
+        override val sortTimestamp: Long,
+        override val isUnread: Boolean
+    ) : FeedDisplayItem()
+
+    data class EventItem(
+        val event: ApiFeedEvent,
+        override val sortTimestamp: Long,
+        override val isUnread: Boolean
+    ) : FeedDisplayItem()
 }
 
 /**

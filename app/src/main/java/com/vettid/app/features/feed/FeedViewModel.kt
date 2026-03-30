@@ -82,18 +82,18 @@ class FeedViewModel @Inject constructor(
     private fun showCachedFeed() {
         val cached = feedRepository.getCachedEvents()
         if (cached.isNotEmpty()) {
-            val filtered = filterForDisplay(cached)
-            _state.value = if (filtered.isEmpty()) {
+            val displayItems = filterForDisplay(cached)
+            _state.value = if (displayItems.isEmpty()) {
                 FeedState.Empty
             } else {
                 FeedState.Loaded(
-                    events = filtered,
+                    items = displayItems,
                     hasMore = false,
-                    unreadCount = filtered.count { it.isUnread },
+                    unreadCount = displayItems.count { it.isUnread },
                     isOffline = true
                 )
             }
-            Log.d(TAG, "Showing ${filtered.size} of ${cached.size} cached feed events")
+            Log.d(TAG, "Showing ${displayItems.size} of ${cached.size} cached feed items")
         }
     }
 
@@ -105,11 +105,21 @@ class FeedViewModel @Inject constructor(
         _searchQuery.value = query
     }
 
+    // Connection event types that get grouped under a single ConnectionItem
+    private val connectionEventTypes = setOf(
+        EventTypes.MESSAGE_RECEIVED, EventTypes.MESSAGE_SENT,
+        EventTypes.CALL_INCOMING, EventTypes.CALL_COMPLETED, EventTypes.CALL_MISSED,
+        EventTypes.TRANSFER_REQUEST,
+        EventTypes.CONNECTION_ACCEPTED
+    )
+
     /**
-     * Filter events for display based on status, audit toggle, and search query.
-     * Pinned (HIGH/URGENT priority) events sort to the top.
+     * Filter events for display and build FeedDisplayItems.
+     *
+     * Connection-related events are grouped into a single ConnectionItem per connection.
+     * Standalone events (guides, security, requests, etc.) remain as EventItems.
      */
-    private fun filterForDisplay(events: List<FeedEvent>): List<FeedEvent> {
+    private fun filterForDisplay(events: List<FeedEvent>): List<FeedDisplayItem> {
         var filtered = events
         // Always exclude archived and deleted events
         filtered = filtered.filter { it.feedStatus != FeedStatus.ARCHIVED && it.feedStatus != FeedStatus.DELETED }
@@ -124,21 +134,98 @@ class FeedViewModel @Inject constructor(
                     (event.message?.contains(query, ignoreCase = true) == true)
             }
         }
-        // Group message events by connection — show only the latest per conversation
-        val messageTypes = setOf(EventTypes.MESSAGE_RECEIVED, EventTypes.MESSAGE_SENT)
-        val (messageEvents, otherEvents) = filtered.partition { it.eventType in messageTypes }
-        val latestPerConnection = messageEvents
+
+        // Partition into connection-grouped vs standalone events
+        val (connectionEvents, standaloneEvents) = filtered.partition { event ->
+            event.eventType in connectionEventTypes &&
+                // connection.request stays standalone (needs Accept/Decline)
+                event.eventType != EventTypes.CONNECTION_REQUEST
+        }
+
+        // Build ConnectionItems: group by connection_id, one card per connection
+        val connectionItems = connectionEvents
             .groupBy { it.metadata?.get("connection_id") ?: it.sourceId ?: it.eventId }
-            .mapValues { (_, events) -> events.maxByOrNull { it.createdAt } }
-            .values
-            .filterNotNull()
-        filtered = otherEvents + latestPerConnection
-        // Sort: pinned (high priority) first, then by creation time descending
-        filtered = filtered.sortedWith(
-            compareByDescending<FeedEvent> { it.priority }
-                .thenByDescending { it.createdAt }
+            .mapNotNull { (connectionId, events) ->
+                val latest = events.maxByOrNull { it.createdAt } ?: return@mapNotNull null
+                val unreadCount = events.count { it.isUnread }
+                val peerName = extractPeerName(latest)
+                val preview = buildActivityPreview(latest)
+                val activityType = mapActivityType(latest.eventType)
+
+                FeedDisplayItem.ConnectionItem(
+                    connectionId = connectionId,
+                    peerName = peerName,
+                    peerPhotoBase64 = latest.metadata?.get("peer_photo"),
+                    lastActivityPreview = preview,
+                    lastActivityType = activityType,
+                    unreadCount = unreadCount,
+                    sortTimestamp = latest.createdAt,
+                    isUnread = unreadCount > 0
+                )
+            }
+
+        // Build EventItems for standalone events
+        val eventItems = standaloneEvents.map { event ->
+            FeedDisplayItem.EventItem(
+                event = event,
+                sortTimestamp = event.createdAt,
+                isUnread = event.isUnread
+            )
+        }
+
+        // Merge and sort: pinned first, then by timestamp descending
+        val allItems: List<FeedDisplayItem> = connectionItems + eventItems
+        return allItems.sortedWith(
+            compareByDescending<FeedDisplayItem> {
+                when (it) {
+                    is FeedDisplayItem.EventItem -> it.event.priority
+                    is FeedDisplayItem.ConnectionItem -> 0  // connections don't pin
+                }
+            }.thenByDescending { it.sortTimestamp }
         )
-        return filtered
+    }
+
+    /**
+     * Extract peer name from event title.
+     * Title format: "From Al Liebl" or "To Al Liebl" — strip the prefix.
+     */
+    private fun extractPeerName(event: FeedEvent): String {
+        val title = event.title
+        return when {
+            title.startsWith("From ", ignoreCase = true) -> title.removePrefix("From ").removePrefix("from ")
+            title.startsWith("To ", ignoreCase = true) -> title.removePrefix("To ").removePrefix("to ")
+            else -> event.metadata?.get("peer_name") ?: title
+        }
+    }
+
+    /**
+     * Build a short preview string for the latest activity in a connection.
+     */
+    private fun buildActivityPreview(event: FeedEvent): String {
+        return when (event.eventType) {
+            EventTypes.MESSAGE_RECEIVED, EventTypes.MESSAGE_SENT -> {
+                event.message ?: "New message"
+            }
+            EventTypes.CALL_INCOMING -> "Incoming call"
+            EventTypes.CALL_COMPLETED -> "Call ended"
+            EventTypes.CALL_MISSED -> "Missed call"
+            EventTypes.TRANSFER_REQUEST -> event.message ?: "Payment request"
+            EventTypes.CONNECTION_ACCEPTED -> "Connection established"
+            else -> event.message ?: event.title
+        }
+    }
+
+    /**
+     * Map event type to a general activity type for the connection card.
+     */
+    private fun mapActivityType(eventType: String): String {
+        return when (eventType) {
+            EventTypes.MESSAGE_RECEIVED, EventTypes.MESSAGE_SENT -> "message"
+            EventTypes.CALL_INCOMING, EventTypes.CALL_COMPLETED, EventTypes.CALL_MISSED -> "call"
+            EventTypes.TRANSFER_REQUEST -> "payment"
+            EventTypes.CONNECTION_ACCEPTED -> "connection"
+            else -> "other"
+        }
     }
 
     /**
@@ -150,14 +237,14 @@ class FeedViewModel @Inject constructor(
                 .collect {
                     val allCached = feedRepository.getCachedEvents()
                     if (allCached.isNotEmpty()) {
-                        val filtered = filterForDisplay(allCached)
-                        if (filtered.isEmpty()) {
+                        val displayItems = filterForDisplay(allCached)
+                        if (displayItems.isEmpty()) {
                             _state.value = FeedState.Empty
                         } else {
                             _state.value = FeedState.Loaded(
-                                events = filtered,
+                                items = displayItems,
                                 hasMore = false,
-                                unreadCount = filtered.count { it.isUnread },
+                                unreadCount = displayItems.count { it.isUnread },
                                 isOffline = !feedRepository.isOnline.value
                             )
                         }
@@ -224,14 +311,14 @@ class FeedViewModel @Inject constructor(
                     .onSuccess { result ->
                         Log.d(TAG, "Silent sync complete: +${result.newEvents} new, ${result.updatedEvents} updated")
                         val events = feedRepository.getCachedEvents()
-                        val filtered = filterForDisplay(events)
-                        if (filtered.isEmpty()) {
+                        val displayItems = filterForDisplay(events)
+                        if (displayItems.isEmpty()) {
                             _state.value = FeedState.Empty
                         } else {
                             _state.value = FeedState.Loaded(
-                                events = filtered,
+                                items = displayItems,
                                 hasMore = result.hasMore,
-                                unreadCount = filtered.count { it.isUnread },
+                                unreadCount = displayItems.count { it.isUnread },
                                 isOffline = false
                             )
                         }
@@ -294,26 +381,30 @@ class FeedViewModel @Inject constructor(
             "archived", "deleted" -> feedRepository.removeEventLocally(eventId)
         }
 
-        // Update UI state
+        // Re-build display items from cache to reflect the change
         val currentState = _state.value
         if (currentState is FeedState.Loaded) {
             when (newStatus) {
                 "archived", "deleted" -> {
-                    // Remove from list
-                    val updatedEvents = currentState.events.filter { it.eventId != eventId }
-                    _state.value = if (updatedEvents.isEmpty()) {
+                    // Re-filter from cache (the event is removed or marked)
+                    val allCached = feedRepository.getCachedEvents()
+                    val displayItems = filterForDisplay(allCached)
+                    _state.value = if (displayItems.isEmpty()) {
                         FeedState.Empty
                     } else {
                         currentState.copy(
-                            events = updatedEvents,
-                            unreadCount = updatedEvents.count { it.isUnread }
+                            items = displayItems,
+                            unreadCount = displayItems.count { it.isUnread }
                         )
                     }
                 }
                 "read" -> {
-                    // Update unread count
+                    // Re-filter from cache to recalculate connection unread counts
+                    val allCached = feedRepository.getCachedEvents()
+                    val displayItems = filterForDisplay(allCached)
                     _state.value = currentState.copy(
-                        unreadCount = currentState.events.count { it.isUnread && it.eventId != eventId }
+                        items = displayItems,
+                        unreadCount = displayItems.count { it.isUnread }
                     )
                 }
             }
@@ -338,18 +429,18 @@ class FeedViewModel @Inject constructor(
                 val result = feedRepository.getFeed(forceRefresh = attempt > 0)
                 if (result.isSuccess) {
                     val events = result.getOrThrow()
-                    val filtered = filterForDisplay(events)
-                    _state.value = if (filtered.isEmpty()) {
+                    val displayItems = filterForDisplay(events)
+                    _state.value = if (displayItems.isEmpty()) {
                         FeedState.Empty
                     } else {
                         FeedState.Loaded(
-                            events = filtered,
+                            items = displayItems,
                             hasMore = false,
-                            unreadCount = filtered.count { it.isUnread },
+                            unreadCount = displayItems.count { it.isUnread },
                             isOffline = !feedRepository.isOnline.value
                         )
                     }
-                    Log.d(TAG, "loadFeedAndWait: loaded ${filtered.size} events on attempt ${attempt + 1}")
+                    Log.d(TAG, "loadFeedAndWait: loaded ${displayItems.size} items on attempt ${attempt + 1}")
                     return
                 }
                 val error = result.exceptionOrNull()
@@ -366,13 +457,13 @@ class FeedViewModel @Inject constructor(
 
         // All attempts failed — show cached data or error
         val cached = feedRepository.getCachedEvents()
-        val filtered = filterForDisplay(cached)
-        _state.value = if (filtered.isNotEmpty()) {
-            Log.d(TAG, "loadFeedAndWait: showing ${filtered.size} cached events after retries exhausted")
+        val displayItems = filterForDisplay(cached)
+        _state.value = if (displayItems.isNotEmpty()) {
+            Log.d(TAG, "loadFeedAndWait: showing ${displayItems.size} cached items after retries exhausted")
             FeedState.Loaded(
-                events = filtered,
+                items = displayItems,
                 hasMore = false,
-                unreadCount = filtered.count { it.isUnread },
+                unreadCount = displayItems.count { it.isUnread },
                 isOffline = true
             )
         } else {
@@ -391,14 +482,14 @@ class FeedViewModel @Inject constructor(
                 // Use repository which provides offline caching
                 feedRepository.getFeed(forceRefresh = false)
                     .onSuccess { events ->
-                        val filtered = filterForDisplay(events)
-                        if (filtered.isEmpty()) {
+                        val displayItems = filterForDisplay(events)
+                        if (displayItems.isEmpty()) {
                             _state.value = FeedState.Empty
                         } else {
                             _state.value = FeedState.Loaded(
-                                events = filtered,
+                                items = displayItems,
                                 hasMore = false, // Repository handles pagination
-                                unreadCount = filtered.count { it.isUnread },
+                                unreadCount = displayItems.count { it.isUnread },
                                 isOffline = !feedRepository.isOnline.value
                             )
                         }
@@ -410,12 +501,12 @@ class FeedViewModel @Inject constructor(
                         Log.e(TAG, "Failed to load feed", error)
                         // Try to show cached data even on error
                         val cached = feedRepository.getCachedEvents()
-                        val filtered = filterForDisplay(cached)
-                        if (filtered.isNotEmpty()) {
+                        val displayItems = filterForDisplay(cached)
+                        if (displayItems.isNotEmpty()) {
                             _state.value = FeedState.Loaded(
-                                events = filtered,
+                                items = displayItems,
                                 hasMore = false,
-                                unreadCount = filtered.count { it.isUnread },
+                                unreadCount = displayItems.count { it.isUnread },
                                 isOffline = true
                             )
                         } else {
@@ -445,14 +536,14 @@ class FeedViewModel @Inject constructor(
                     .onSuccess { result ->
                         Log.d(TAG, "Sync complete: +${result.newEvents} new, ${result.updatedEvents} updated")
                         val events = feedRepository.getCachedEvents()
-                        val filtered = filterForDisplay(events)
-                        if (filtered.isEmpty()) {
+                        val displayItems = filterForDisplay(events)
+                        if (displayItems.isEmpty()) {
                             _state.value = FeedState.Empty
                         } else {
                             _state.value = FeedState.Loaded(
-                                events = filtered,
+                                items = displayItems,
                                 hasMore = result.hasMore,
-                                unreadCount = filtered.count { it.isUnread },
+                                unreadCount = displayItems.count { it.isUnread },
                                 isOffline = false
                             )
                         }
@@ -485,11 +576,36 @@ class FeedViewModel @Inject constructor(
         viewModelScope.launch {
             val currentState = _state.value
             if (currentState is FeedState.Loaded) {
-                val event = currentState.events.find { it.eventId == eventId }
-                if (event != null) {
-                    onEventClick(event)
+                // Search through items for the event
+                val eventItem = currentState.items.filterIsInstance<FeedDisplayItem.EventItem>()
+                    .find { it.event.eventId == eventId }
+                if (eventItem != null) {
+                    onEventClick(eventItem.event)
                 } else {
-                    _effects.emit(FeedEffect.ShowError("Event not found"))
+                    // Could be a connection event — look up in cache
+                    val cachedEvent = feedRepository.getCachedEvents().find { it.eventId == eventId }
+                    if (cachedEvent != null) {
+                        onEventClick(cachedEvent)
+                    } else {
+                        _effects.emit(FeedEffect.ShowError("Event not found"))
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Handle click on a FeedDisplayItem.
+     * ConnectionItem navigates to conversation; EventItem delegates to onEventClick.
+     */
+    fun onDisplayItemClick(item: FeedDisplayItem) {
+        viewModelScope.launch {
+            when (item) {
+                is FeedDisplayItem.ConnectionItem -> {
+                    _effects.emit(FeedEffect.NavigateToConversation(item.connectionId))
+                }
+                is FeedDisplayItem.EventItem -> {
+                    onEventClick(item.event)
                 }
             }
         }
@@ -578,23 +694,19 @@ class FeedViewModel @Inject constructor(
         viewModelScope.launch {
             feedClient.markRead(eventId)
                 .onSuccess {
-                    // Update local state with read status
+                    // Update the repository cache first
+                    val now = System.currentTimeMillis() / 1000
+                    feedRepository.updateEventLocally(eventId) { it.copy(feedStatus = FeedStatus.READ, readAt = now) }
+
+                    // Re-build display items from cache to reflect updated read status
                     val currentState = _state.value
                     if (currentState is FeedState.Loaded) {
-                        val now = System.currentTimeMillis() / 1000
-                        val updatedEvents = currentState.events.map { event ->
-                            if (event.eventId == eventId) {
-                                event.copy(feedStatus = FeedStatus.READ, readAt = now)
-                            } else {
-                                event
-                            }
-                        }
+                        val allCached = feedRepository.getCachedEvents()
+                        val displayItems = filterForDisplay(allCached)
                         _state.value = currentState.copy(
-                            events = updatedEvents,
-                            unreadCount = updatedEvents.count { it.isUnread }
+                            items = displayItems,
+                            unreadCount = displayItems.count { it.isUnread }
                         )
-                        // Also update the repository cache
-                        feedRepository.updateEventLocally(eventId) { it.copy(feedStatus = FeedStatus.READ, readAt = now) }
                     }
                 }
                 .onFailure {
@@ -607,11 +719,24 @@ class FeedViewModel @Inject constructor(
         viewModelScope.launch {
             val currentState = _state.value
             if (currentState is FeedState.Loaded) {
-                val unreadIds = currentState.events.filter { it.isUnread }.map { it.eventId }
+                // Get unread event IDs from the cache (items may be grouped)
+                val unreadIds = feedRepository.getCachedEvents()
+                    .filter { it.isUnread }
+                    .map { it.eventId }
                 if (unreadIds.isNotEmpty()) {
                     feedClient.markMultipleRead(unreadIds)
                         .onSuccess {
-                            _state.value = currentState.copy(unreadCount = 0)
+                            // Re-build display items
+                            val now = System.currentTimeMillis() / 1000
+                            unreadIds.forEach { id ->
+                                feedRepository.updateEventLocally(id) { it.copy(feedStatus = FeedStatus.READ, readAt = now) }
+                            }
+                            val allCached = feedRepository.getCachedEvents()
+                            val displayItems = filterForDisplay(allCached)
+                            _state.value = currentState.copy(
+                                items = displayItems,
+                                unreadCount = 0
+                            )
                         }
                         .onFailure {
                             Log.e(TAG, "Failed to mark all as read", it)
@@ -634,14 +759,14 @@ class FeedViewModel @Inject constructor(
 
                     // Update UI state - filterForDisplay excludes archived
                     val allCached = feedRepository.getCachedEvents()
-                    val filtered = filterForDisplay(allCached)
-                    _state.value = if (filtered.isEmpty()) {
+                    val displayItems = filterForDisplay(allCached)
+                    _state.value = if (displayItems.isEmpty()) {
                         FeedState.Empty
                     } else {
                         FeedState.Loaded(
-                            events = filtered,
+                            items = displayItems,
                             hasMore = false,
-                            unreadCount = filtered.count { it.isUnread },
+                            unreadCount = displayItems.count { it.isUnread },
                             isOffline = !feedRepository.isOnline.value
                         )
                     }
@@ -660,14 +785,14 @@ class FeedViewModel @Inject constructor(
                         Log.w(TAG, "Event $eventId not found in vault, removing locally")
                         feedRepository.removeEventLocally(eventId)
                         val allCached = feedRepository.getCachedEvents()
-                        val filtered = filterForDisplay(allCached)
-                        _state.value = if (filtered.isEmpty()) {
+                        val displayItems = filterForDisplay(allCached)
+                        _state.value = if (displayItems.isEmpty()) {
                             FeedState.Empty
                         } else {
                             FeedState.Loaded(
-                                events = filtered,
+                                items = displayItems,
                                 hasMore = false,
-                                unreadCount = filtered.count { it.isUnread },
+                                unreadCount = displayItems.count { it.isUnread },
                                 isOffline = !feedRepository.isOnline.value
                             )
                         }
@@ -689,14 +814,14 @@ class FeedViewModel @Inject constructor(
                 .onSuccess {
                     feedRepository.updateEventLocally(eventId) { it.copy(priority = newPriority) }
                     val allCached = feedRepository.getCachedEvents()
-                    val filtered = filterForDisplay(allCached)
-                    _state.value = if (filtered.isEmpty()) {
+                    val displayItems = filterForDisplay(allCached)
+                    _state.value = if (displayItems.isEmpty()) {
                         FeedState.Empty
                     } else {
                         FeedState.Loaded(
-                            events = filtered,
+                            items = displayItems,
                             hasMore = false,
-                            unreadCount = filtered.count { it.isUnread },
+                            unreadCount = displayItems.count { it.isUnread },
                             isOffline = !feedRepository.isOnline.value
                         )
                     }
@@ -723,14 +848,14 @@ class FeedViewModel @Inject constructor(
 
                     // Re-filter from cache to update UI
                     val allCached = feedRepository.getCachedEvents()
-                    val filtered = filterForDisplay(allCached)
-                    _state.value = if (filtered.isEmpty()) {
+                    val displayItems = filterForDisplay(allCached)
+                    _state.value = if (displayItems.isEmpty()) {
                         FeedState.Empty
                     } else {
                         FeedState.Loaded(
-                            events = filtered,
+                            items = displayItems,
                             hasMore = false,
-                            unreadCount = filtered.count { it.isUnread },
+                            unreadCount = displayItems.count { it.isUnread },
                             isOffline = !feedRepository.isOnline.value
                         )
                     }
@@ -747,14 +872,14 @@ class FeedViewModel @Inject constructor(
                         Log.w(TAG, "Event $eventId not found in vault, removing locally")
                         feedRepository.removeEventLocally(eventId)
                         val allCached = feedRepository.getCachedEvents()
-                        val filtered = filterForDisplay(allCached)
-                        _state.value = if (filtered.isEmpty()) {
+                        val displayItems = filterForDisplay(allCached)
+                        _state.value = if (displayItems.isEmpty()) {
                             FeedState.Empty
                         } else {
                             FeedState.Loaded(
-                                events = filtered,
+                                items = displayItems,
                                 hasMore = false,
-                                unreadCount = filtered.count { it.isUnread },
+                                unreadCount = displayItems.count { it.isUnread },
                                 isOffline = !feedRepository.isOnline.value
                             )
                         }

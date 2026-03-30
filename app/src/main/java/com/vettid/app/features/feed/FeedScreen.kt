@@ -4,7 +4,6 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -13,8 +12,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.Label
 import androidx.compose.material.icons.automirrored.filled.Message
@@ -24,7 +21,6 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -34,7 +30,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -43,7 +38,6 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.vettid.app.core.nats.FeedEvent
 import com.vettid.app.core.nats.EventPriority
-import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -56,7 +50,6 @@ import java.util.concurrent.TimeUnit
 @Composable
 fun FeedContent(
     viewModel: FeedViewModel = hiltViewModel(),
-    connectionsViewModel: com.vettid.app.features.connections.ConnectionsViewModel = hiltViewModel(),
     searchQuery: String = "",
     onNavigateToConversation: (String) -> Unit = {},
     onNavigateToConnectionRequest: (String) -> Unit = {},
@@ -65,9 +58,6 @@ fun FeedContent(
     onNavigateToGuide: (guideId: String, eventId: String, userName: String) -> Unit = { _, _, _ -> },
     onNavigateToAgentApproval: (requestId: String) -> Unit = {}
 ) {
-    var showFabMenu by remember { mutableStateOf(false) }
-    var showConnectionPicker by remember { mutableStateOf(false) }
-    val connectionsState by connectionsViewModel.state.collectAsState()
     // Route search query from top bar to ViewModel
     LaunchedEffect(searchQuery) {
         viewModel.updateSearchQuery(searchQuery)
@@ -159,9 +149,11 @@ fun FeedContent(
                     }
                 }
                 is FeedState.Loaded -> FeedList(
-                    events = currentState.events,
+                    items = currentState.items,
                     isRefreshing = isRefreshing,
                     onRefresh = { viewModel.refresh() },
+                    onDisplayItemClick = { viewModel.onDisplayItemClick(it) },
+                    onNavigateToConversation = onNavigateToConversation,
                     onEventClick = { viewModel.onEventClick(it) },
                     onArchive = { viewModel.archiveEvent(it.eventId) },
                     onDelete = { viewModel.deleteEvent(it.eventId) },
@@ -187,44 +179,15 @@ fun FeedContent(
             )
         }
 
-        // FAB with menu
-        Column(
+        // FAB — Create Invitation only (messaging is via connection cards)
+        FloatingActionButton(
+            onClick = { /* TODO: Create invitation flow */ },
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(16.dp),
-            horizontalAlignment = Alignment.End
+                .padding(16.dp)
         ) {
-            if (showFabMenu) {
-                FeedFabMenuItem(label = "New Message", icon = Icons.AutoMirrored.Filled.Chat) {
-                    showFabMenu = false
-                    showConnectionPicker = true
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-                FeedFabMenuItem(label = "New Request", icon = Icons.Default.RequestPage) {
-                    showFabMenu = false
-                    // TODO: New request flow
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-            }
-            FloatingActionButton(onClick = { showFabMenu = !showFabMenu }) {
-                Icon(
-                    if (showFabMenu) Icons.Default.Close else Icons.Default.Add,
-                    contentDescription = if (showFabMenu) "Close" else "New"
-                )
-            }
+            Icon(Icons.Default.PersonAdd, contentDescription = "Create Invitation")
         }
-    }
-
-    // Connection picker dialog
-    if (showConnectionPicker) {
-        ConnectionPickerDialog(
-            connectionsState = connectionsState,
-            onSelectConnection = { connectionId ->
-                showConnectionPicker = false
-                onNavigateToConversation(connectionId)
-            },
-            onDismiss = { showConnectionPicker = false }
-        )
     }
 }
 
@@ -267,9 +230,11 @@ private fun OfflineModeContent() {
 
 @Composable
 private fun FeedList(
-    events: List<FeedEvent>,
+    items: List<FeedDisplayItem>,
     isRefreshing: Boolean,
     onRefresh: () -> Unit,
+    onDisplayItemClick: (FeedDisplayItem) -> Unit,
+    onNavigateToConversation: (String) -> Unit,
     onEventClick: (FeedEvent) -> Unit,
     onArchive: (FeedEvent) -> Unit,
     onDelete: (FeedEvent) -> Unit,
@@ -289,18 +254,197 @@ private fun FeedList(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(vertical = 8.dp)
         ) {
-            items(events, key = { it.eventId }) { event ->
-                EventCard(
-                    event = event,
-                    onClick = { onEventClick(event) },
-                    onArchive = { onArchive(event) },
-                    onDelete = { onDelete(event) },
-                    onAction = { action -> onAction(event, action) },
-                    onTogglePriority = { onTogglePriority(event) }
+            items(
+                items = items,
+                key = { item ->
+                    when (item) {
+                        is FeedDisplayItem.ConnectionItem -> "conn-${item.connectionId}"
+                        is FeedDisplayItem.EventItem -> item.event.eventId
+                    }
+                }
+            ) { item ->
+                when (item) {
+                    is FeedDisplayItem.ConnectionItem -> ConnectionCard(
+                        item = item,
+                        onClick = { onNavigateToConversation(item.connectionId) },
+                        onMessageClick = { onNavigateToConversation(item.connectionId) },
+                        onCallClick = { /* TODO: voice call */ },
+                        onVideoCallClick = { /* TODO: video call */ },
+                        onBtcClick = { /* TODO: send BTC */ }
+                    )
+                    is FeedDisplayItem.EventItem -> EventCard(
+                        event = item.event,
+                        onClick = { onEventClick(item.event) },
+                        onArchive = { onArchive(item.event) },
+                        onDelete = { onDelete(item.event) },
+                        onAction = { action -> onAction(item.event, action) },
+                        onTogglePriority = { onTogglePriority(item.event) }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConnectionCard(
+    item: FeedDisplayItem.ConnectionItem,
+    onClick: () -> Unit,
+    onMessageClick: () -> Unit,
+    onCallClick: () -> Unit,
+    onVideoCallClick: () -> Unit,
+    onBtcClick: () -> Unit
+) {
+    val photoBitmap = remember(item.peerPhotoBase64) {
+        item.peerPhotoBase64?.let { base64 ->
+            try {
+                val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            } catch (_: Exception) { null }
+        }
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = if (item.isUnread) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
+            } else {
+                MaterialTheme.colorScheme.surface
+            }
+        )
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.Top) {
+                // Avatar
+                if (photoBitmap != null) {
+                    Image(
+                        bitmap = photoBitmap.asImageBitmap(),
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Surface(
+                        modifier = Modifier.size(44.dp),
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                text = item.peerName.take(2).uppercase(),
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(12.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = item.peerName,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = if (item.isUnread) FontWeight.Bold else FontWeight.Normal,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = formatTimestamp(item.sortTimestamp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = item.lastActivityPreview,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (item.unreadCount > 0) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Badge(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                contentColor = MaterialTheme.colorScheme.onPrimary
+                            ) {
+                                Text(
+                                    text = item.unreadCount.toString(),
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Quick action buttons
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                ConnectionActionButton(
+                    icon = Icons.AutoMirrored.Filled.Chat,
+                    label = "Message",
+                    onClick = onMessageClick
+                )
+                ConnectionActionButton(
+                    icon = Icons.Default.Call,
+                    label = "Call",
+                    onClick = onCallClick
+                )
+                ConnectionActionButton(
+                    icon = Icons.Default.Videocam,
+                    label = "Video",
+                    onClick = onVideoCallClick
+                )
+                ConnectionActionButton(
+                    icon = Icons.Default.CurrencyBitcoin,
+                    label = "BTC",
+                    onClick = onBtcClick
                 )
             }
         }
+    }
+}
 
+@Composable
+private fun ConnectionActionButton(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            modifier = Modifier.size(20.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
@@ -978,135 +1122,4 @@ private fun EventDetailDialog(
     )
 }
 
-@Composable
-private fun FeedFabMenuItem(
-    label: String,
-    icon: ImageVector,
-    onClick: () -> Unit
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.End
-    ) {
-        Surface(
-            color = MaterialTheme.colorScheme.inverseSurface,
-            shape = RoundedCornerShape(4.dp)
-        ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.inverseOnSurface,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-            )
-        }
-        Spacer(modifier = Modifier.width(12.dp))
-        SmallFloatingActionButton(
-            onClick = onClick,
-            containerColor = MaterialTheme.colorScheme.secondaryContainer
-        ) {
-            Icon(icon, contentDescription = label)
-        }
-    }
-}
-
-@Composable
-private fun ConnectionPickerDialog(
-    connectionsState: com.vettid.app.features.connections.ConnectionsState,
-    onSelectConnection: (String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Start Conversation") },
-        text = {
-            when (connectionsState) {
-                is com.vettid.app.features.connections.ConnectionsState.Loaded -> {
-                    if (connectionsState.connections.isEmpty()) {
-                        Text(
-                            "No active connections. Create a connection first.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    } else {
-                        Column(
-                            modifier = Modifier.verticalScroll(rememberScrollState())
-                        ) {
-                            connectionsState.connections
-                                .filter { it.connection.status == com.vettid.app.core.network.ConnectionStatus.ACTIVE }
-                                .forEach { connWithMsg ->
-                                    val conn = connWithMsg.connection
-                                    val photoBitmap = remember(connWithMsg.peerPhotoBase64) {
-                                        connWithMsg.peerPhotoBase64?.let { base64 ->
-                                            try {
-                                                val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
-                                                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                                            } catch (e: Exception) { null }
-                                        }
-                                    }
-                                    ListItem(
-                                        headlineContent = { Text(conn.peerDisplayName, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis) },
-                                        leadingContent = {
-                                            if (photoBitmap != null) {
-                                                Image(
-                                                    bitmap = photoBitmap.asImageBitmap(),
-                                                    contentDescription = null,
-                                                    modifier = Modifier
-                                                        .size(40.dp)
-                                                        .clip(CircleShape),
-                                                    contentScale = ContentScale.Crop
-                                                )
-                                            } else {
-                                                Surface(
-                                                    modifier = Modifier.size(40.dp),
-                                                    shape = CircleShape,
-                                                    color = MaterialTheme.colorScheme.primaryContainer
-                                                ) {
-                                                    Box(contentAlignment = Alignment.Center) {
-                                                        Text(
-                                                            conn.peerDisplayName.take(2).uppercase(),
-                                                            style = MaterialTheme.typography.titleSmall,
-                                                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        },
-                                        trailingContent = {
-                                            Row {
-                                                IconButton(onClick = { onSelectConnection(conn.connectionId) }) {
-                                                    Icon(Icons.AutoMirrored.Filled.Chat, "Text", modifier = Modifier.size(20.dp))
-                                                }
-                                                IconButton(onClick = { /* TODO: voice call */ }) {
-                                                    Icon(Icons.Default.Call, "Call", modifier = Modifier.size(20.dp))
-                                                }
-                                                IconButton(onClick = { /* TODO: video call */ }) {
-                                                    Icon(Icons.Default.Videocam, "Video", modifier = Modifier.size(20.dp))
-                                                }
-                                            }
-                                        }
-                                    )
-                                }
-                        }
-                    }
-                }
-                is com.vettid.app.features.connections.ConnectionsState.Loading -> {
-                    Box(
-                        modifier = Modifier.fillMaxWidth().padding(32.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator()
-                    }
-                }
-                else -> {
-                    Text(
-                        "No connections yet. Create a connection first to start messaging.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        }
-    )
-}
+// ConnectionPickerDialog and FeedFabMenuItem removed — messaging now via connection cards in feed
