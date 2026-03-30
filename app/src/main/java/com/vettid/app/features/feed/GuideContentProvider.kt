@@ -83,13 +83,12 @@ object GuideContentProvider {
             ),
             GuideSection.Heading("Your Vault"),
             GuideSection.Paragraph(
-                "Tap your profile avatar in the top-left corner to open your vault. Your vault has four sections:"
+                "Tap your profile avatar in the top-left corner to open your vault. Your vault has three sections:"
             ),
             GuideSection.BulletList(
                 listOf(
                     "Data \u2014 your personal information and public profile",
                     "Secrets \u2014 passwords, keys, and sensitive data",
-                    "Connections \u2014 people you\u2019re connected with",
                     "Wallets \u2014 your Bitcoin wallets"
                 )
             ),
@@ -260,7 +259,9 @@ object GuideContentProvider {
             GuideSection.Paragraph(
                 "Send and request Bitcoin payments directly through your connections. Transaction signing happens inside your vault\u2019s secure enclave."
             ),
-            GuideSection.NavigationLink("Go to Connections", NavigationTarget.DrawerNav(DrawerItem.CONNECTIONS))
+            GuideSection.Paragraph(
+                "Your connections appear as cards in your activity feed."
+            )
         )
     )
 
@@ -359,7 +360,9 @@ object GuideContentProvider {
             GuideSection.Paragraph(
                 "You can send and receive Bitcoin payment requests directly in your conversations. Payment request cards appear inline with options to pay or view transaction details."
             ),
-            GuideSection.NavigationLink("Go to Connections", NavigationTarget.DrawerNav(DrawerItem.CONNECTIONS))
+            GuideSection.Paragraph(
+                "Your connections appear as cards in your activity feed."
+            )
         )
     )
 }

@@ -94,7 +94,7 @@ fun MainActivityScaffold(
 
 /**
  * Vault scaffold — shown when user taps their avatar.
- * Shows Connections | Data | Secrets tabs at the top.
+ * Shows Data | Secrets | Wallets tabs at the top.
  * Back arrow returns to Activity screen.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -108,7 +108,6 @@ fun VaultScaffold(
     onSettingsToggle: () -> Unit = {},
     isSettingsOpen: Boolean = false,
     // Vault content slots
-    connectionsContent: @Composable (searchQuery: String) -> Unit,
     personalDataContent: @Composable (searchQuery: String) -> Unit,
     secretsContent: @Composable (searchQuery: String) -> Unit,
     walletsContent: @Composable (searchQuery: String) -> Unit,
@@ -129,7 +128,6 @@ fun VaultScaffold(
     // All tabs manage their own FABs internally
     val showFab = false
     val fabIcon = when (vaultSegment) {
-        VaultSegment.CONNECTIONS -> Icons.Default.PersonAdd
         VaultSegment.DATA -> Icons.Default.Add
         VaultSegment.SECRETS -> Icons.Default.Add
         VaultSegment.WALLETS -> Icons.Default.AccountBalance
@@ -179,7 +177,6 @@ fun VaultScaffold(
                 )
                 Box(modifier = Modifier.fillMaxSize()) {
                     when (vaultSegment) {
-                        VaultSegment.CONNECTIONS -> connectionsContent(searchQuery)
                         VaultSegment.DATA -> personalDataContent(searchQuery)
                         VaultSegment.SECRETS -> secretsContent(searchQuery)
                         VaultSegment.WALLETS -> walletsContent(searchQuery)

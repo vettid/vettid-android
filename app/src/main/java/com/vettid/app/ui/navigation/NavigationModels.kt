@@ -21,7 +21,6 @@ enum class BottomTab(
 enum class VaultSegment(val title: String, val icon: ImageVector) {
     DATA("Data", Icons.Default.Person),
     SECRETS("Secrets", Icons.Default.Lock),
-    CONNECTIONS("Connections", Icons.Default.People),
     WALLETS("Wallets", Icons.Default.AccountBalance)
 }
 
@@ -39,7 +38,7 @@ enum class ActivitySegment(val title: String, val icon: ImageVector) {
  */
 data class NavigationState(
     val bottomTab: BottomTab = BottomTab.ACTIVITY,
-    val vaultSegment: VaultSegment = VaultSegment.CONNECTIONS,
+    val vaultSegment: VaultSegment = VaultSegment.DATA,
     val activitySegment: ActivitySegment = ActivitySegment.FEED,
     val isSettingsOpen: Boolean = false
 ) {
@@ -58,7 +57,6 @@ enum class DrawerItem(
     val icon: ImageVector
 ) {
     FEED("Feed", Icons.Default.DynamicFeed),
-    CONNECTIONS("Connections", Icons.Default.People),
     PERSONAL_DATA("Personal Data", Icons.Default.Person),
     SECRETS("Secrets", Icons.Default.Lock),
     ARCHIVE("Archive", Icons.Default.Archive),

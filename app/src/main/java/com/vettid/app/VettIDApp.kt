@@ -948,17 +948,6 @@ fun VettIDApp(
                 onBack = { if (isSettingsOpen) isSettingsOpen = false else navController.safePopBackStack() },
                 onSettingsToggle = { isSettingsOpen = !isSettingsOpen },
                 isSettingsOpen = isSettingsOpen,
-                connectionsContent = { query ->
-                    ConnectionsContentEmbedded(
-                        searchQuery = query,
-                        onConnectionClick = { connectionId ->
-                            navController.navigate(Screen.ConnectionDetail.createRoute(connectionId))
-                        },
-                        onCreateInvitation = { navController.navigate(Screen.CreateInvitation.route) },
-                        onScanInvitation = { navController.navigate(Screen.ScanInvitation.route) },
-                        onCreateAgentInvitation = { navController.navigate(Screen.CreateAgentInvitation.route) }
-                    )
-                },
                 personalDataContent = { query -> PersonalDataContent(searchQuery = query) },
                 secretsContent = { query ->
                     SecretsContentEmbedded(
@@ -987,7 +976,6 @@ fun VettIDApp(
                 },
                 onFabClick = {
                     when (vaultSegment) {
-                        VaultSegment.CONNECTIONS -> navController.navigate(Screen.CreateInvitation.route)
                         VaultSegment.DATA -> { /* Navigate to add data field */ }
                         VaultSegment.SECRETS -> navController.navigate(Screen.AddSecret.createRoute(isCritical = false))
                         VaultSegment.WALLETS -> { /* Navigate to create wallet */ }
@@ -1236,7 +1224,6 @@ fun VettIDApp(
                             val vaultItems = mapOf(
                                 "PERSONAL_DATA" to VaultSegment.DATA.name,
                                 "SECRETS" to VaultSegment.SECRETS.name,
-                                "CONNECTIONS" to VaultSegment.CONNECTIONS.name,
                                 "WALLETS" to VaultSegment.WALLETS.name
                             )
                             val vaultSegment = vaultItems[target.item.name]
