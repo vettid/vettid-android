@@ -48,6 +48,9 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var appPreferencesStore: AppPreferencesStore
 
+    @Inject
+    lateinit var callManager: com.vettid.app.features.calling.CallManager
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -79,6 +82,7 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.background
                 ) {
                     VettIDApp(
+                        callManager = callManager,
                         deepLinkData = currentDeepLink,
                         onDeepLinkConsumed = { currentDeepLink = DeepLinkData(DeepLinkType.NONE) }
                     )

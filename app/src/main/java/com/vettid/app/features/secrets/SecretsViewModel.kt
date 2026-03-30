@@ -105,6 +105,8 @@ class SecretsViewModel @Inject constructor(
                 Log.e(TAG, "Failed to load secrets", e)
                 _state.value = SecretsState.Error(e.message ?: "Failed to load secrets")
             } finally {
+                // Brief delay ensures PullToRefreshBox indicator animates properly
+                kotlinx.coroutines.delay(300)
                 _isRefreshing.value = false
             }
         }
