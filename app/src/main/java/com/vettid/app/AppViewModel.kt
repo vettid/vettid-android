@@ -109,8 +109,12 @@ class AppViewModel @Inject constructor(
     private fun observeVaultLock() {
         viewModelScope.launch {
             ownerSpaceClient.vaultLocked.collect {
-                Log.i(TAG, "Vault locked — requiring PIN re-entry")
-                _appState.update { it.copy(isAuthenticated = false) }
+                // Only force re-auth if user is currently authenticated.
+                // If already on PIN screen, ignore to avoid re-entry loops.
+                if (_appState.value.isAuthenticated) {
+                    Log.i(TAG, "Vault locked — requiring PIN re-entry")
+                    _appState.update { it.copy(isAuthenticated = false) }
+                }
             }
         }
     }
