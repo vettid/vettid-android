@@ -259,7 +259,7 @@ class ConversationViewModel @Inject constructor(
             // Encrypt with transport key (XChaCha20-Poly1305) so content is not visible in NATS.
             // Vault decrypts with matching transport key, then re-encrypts for peer delivery.
             val key = transportKey
-            if (key != null) {
+            val sendResult = if (key != null) {
                 val encrypted = connectionCryptoManager.encryptXChaCha20(text, key)
                 messagingClient.sendMessage(
                     connectionId = connectionId,
@@ -275,7 +275,8 @@ class ConversationViewModel @Inject constructor(
                     content = text,
                     contentType = "text"
                 )
-            }.fold(
+            }
+            sendResult.fold(
                 onSuccess = { sentMessage ->
                     // Create message for display
                     val sentAtMillis = try {
