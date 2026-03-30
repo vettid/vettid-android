@@ -152,9 +152,9 @@ private fun NetworkOption(
         modifier = modifier,
         colors = CardDefaults.cardColors(
             containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer
-            else MaterialTheme.colorScheme.surfaceVariant
+            else MaterialTheme.colorScheme.surface
         ),
-        border = if (selected) CardDefaults.outlinedCardBorder() else null
+        border = CardDefaults.outlinedCardBorder()
     ) {
         Column(
             modifier = Modifier.padding(12.dp),

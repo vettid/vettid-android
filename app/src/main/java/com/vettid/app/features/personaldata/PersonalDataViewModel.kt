@@ -93,13 +93,15 @@ class PersonalDataViewModel @Inject constructor(
 
     val publicPersonalData: StateFlow<List<PublicMetadataItem>> = _state.map { state ->
         when (state) {
-            is PersonalDataState.Loaded -> state.items.map { item ->
-                PublicMetadataItem(
-                    name = item.name,
-                    type = item.type.name,
-                    category = item.category?.displayName ?: "Other"
-                )
-            }
+            is PersonalDataState.Loaded -> state.items
+                .filter { it.isInPublicProfile }
+                .map { item ->
+                    PublicMetadataItem(
+                        name = item.name,
+                        type = item.type.name,
+                        category = item.category?.displayName ?: "Other"
+                    )
+                }
             else -> emptyList()
         }
     }.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())

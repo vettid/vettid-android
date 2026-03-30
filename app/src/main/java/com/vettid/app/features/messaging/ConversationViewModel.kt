@@ -168,6 +168,7 @@ class ConversationViewModel @Inject constructor(
                                 }
                             )
                         }
+                        allMessages = messages.toMutableList()
                         _state.value = ConversationState.Loaded(messages = messages, hasMore = false)
                     }
                 },
