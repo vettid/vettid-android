@@ -57,7 +57,9 @@ fun FeedContent(
     onNavigateToHandler: (String) -> Unit = {},
     onNavigateToBackup: (String) -> Unit = {},
     onNavigateToGuide: (guideId: String, eventId: String, userName: String) -> Unit = { _, _, _ -> },
-    onNavigateToAgentApproval: (requestId: String) -> Unit = {}
+    onNavigateToAgentApproval: (requestId: String) -> Unit = {},
+    onNavigateToCreateInvitation: () -> Unit = {},
+    onNavigateToScanInvitation: () -> Unit = {}
 ) {
     // Route search query from top bar to ViewModel
     LaunchedEffect(searchQuery) {
@@ -181,14 +183,40 @@ fun FeedContent(
             )
         }
 
-        // FAB — Create Invitation only (messaging is via connection cards)
-        FloatingActionButton(
-            onClick = { /* TODO: Create invitation flow */ },
+        // FAB — Connection actions (create/scan invitation)
+        var showFabMenu by remember { mutableStateOf(false) }
+        Column(
             modifier = Modifier
                 .align(Alignment.BottomEnd)
-                .padding(16.dp)
+                .padding(16.dp),
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Icon(Icons.Default.PersonAdd, contentDescription = "Create Invitation")
+            androidx.compose.animation.AnimatedVisibility(visible = showFabMenu) {
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    SmallFloatingActionButton(
+                        onClick = { showFabMenu = false; onNavigateToScanInvitation() }
+                    ) {
+                        Icon(Icons.Default.QrCodeScanner, contentDescription = "Scan Invitation")
+                    }
+                    SmallFloatingActionButton(
+                        onClick = { showFabMenu = false; onNavigateToCreateInvitation() }
+                    ) {
+                        Icon(Icons.Default.PersonAdd, contentDescription = "Create Invitation")
+                    }
+                }
+            }
+            FloatingActionButton(
+                onClick = { showFabMenu = !showFabMenu }
+            ) {
+                Icon(
+                    if (showFabMenu) Icons.Default.Close else Icons.Default.Add,
+                    contentDescription = "Connections"
+                )
+            }
         }
     }
 }
@@ -272,6 +300,7 @@ private fun FeedList(
                         onClick = { onNavigateToConversation(item.connectionId) },
                         onLongClick = { onNavigateToConnectionDetail(item.connectionId) },
                         onMessageClick = { onNavigateToConversation(item.connectionId) },
+                        onProfileClick = { onNavigateToConnectionDetail(item.connectionId) },
                         onCallClick = { /* TODO: voice call */ },
                         onVideoCallClick = { /* TODO: video call */ },
                         onBtcClick = { /* TODO: send BTC */ }
@@ -297,6 +326,7 @@ private fun ConnectionCard(
     onClick: () -> Unit,
     onLongClick: () -> Unit = {},
     onMessageClick: () -> Unit,
+    onProfileClick: () -> Unit = {},
     onCallClick: () -> Unit,
     onVideoCallClick: () -> Unit,
     onBtcClick: () -> Unit
@@ -429,6 +459,11 @@ private fun ConnectionCard(
                     icon = Icons.Default.CurrencyBitcoin,
                     label = "BTC",
                     onClick = onBtcClick
+                )
+                ConnectionActionButton(
+                    icon = Icons.Default.Person,
+                    label = "Profile",
+                    onClick = onProfileClick
                 )
             }
         }

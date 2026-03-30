@@ -1724,7 +1724,9 @@ fun MainScreen(
                 onNavigateToHandler = onNavigateToHandlerDetail,
                 onNavigateToBackup = { onNavigateToBackups() },
                 onNavigateToGuide = onNavigateToGuide,
-                onNavigateToAgentApproval = onNavigateToAgentApproval
+                onNavigateToAgentApproval = onNavigateToAgentApproval,
+                onNavigateToCreateInvitation = onNavigateToCreateInvitation,
+                onNavigateToScanInvitation = onNavigateToScanInvitation
             )
         },
         votingContent = { _ ->
