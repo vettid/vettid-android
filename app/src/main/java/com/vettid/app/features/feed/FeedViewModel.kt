@@ -3,6 +3,7 @@ package com.vettid.app.features.feed
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.app.core.nats.ConnectionsClient
 import com.vettid.app.core.nats.FeedClient
 import com.vettid.app.core.nats.FeedEvent
 import com.vettid.app.core.nats.NatsAutoConnector
@@ -28,7 +29,8 @@ class FeedViewModel @Inject constructor(
     private val natsAutoConnector: NatsAutoConnector,
     private val credentialStore: CredentialStore,
     private val ownerSpaceClient: OwnerSpaceClient,
-    private val personalDataStore: PersonalDataStore
+    private val personalDataStore: PersonalDataStore,
+    private val connectionsClient: ConnectionsClient
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<FeedState>(FeedState.Loading)
@@ -74,6 +76,9 @@ class FeedViewModel @Inject constructor(
         EventTypes.TRANSFER_REQUEST,
         EventTypes.CONNECTION_ACCEPTED
     )
+
+    // Cache of connection photos loaded from ConnectionsClient
+    private val connectionPhotoCache = mutableMapOf<String, String?>()
 
     init {
         // Show cached data immediately while waiting for connection
@@ -158,7 +163,7 @@ class FeedViewModel @Inject constructor(
                 FeedDisplayItem.ConnectionItem(
                     connectionId = connectionId,
                     peerName = peerName,
-                    peerPhotoBase64 = latest.metadata?.get("peer_photo"),
+                    peerPhotoBase64 = connectionPhotoCache[connectionId],
                     lastActivityPreview = preview,
                     lastActivityType = activityType,
                     unreadCount = unreadCount,
@@ -273,10 +278,54 @@ class FeedViewModel @Inject constructor(
                     delay(200)
                     // Sync guides in parallel — don't block feed loading
                     launch { syncGuides() }
+                    // Load connection photos in parallel — used for connection card avatars
+                    launch { loadConnectionPhotos() }
                     loadFeedAndWait()
                     isInitialLoadComplete = true
                 }
             }
+        }
+    }
+
+    /**
+     * Load connection photos from the vault's connection list.
+     * Populates connectionPhotoCache so connection cards show peer avatars.
+     */
+    private fun loadConnectionPhotos() {
+        viewModelScope.launch {
+            try {
+                connectionsClient.list()
+                    .onSuccess { result ->
+                        result.items.forEach { record ->
+                            connectionPhotoCache[record.connectionId] = record.peerProfile?.photo
+                        }
+                        Log.d(TAG, "Loaded ${result.items.size} connection photos")
+                        // Rebuild display items with photos
+                        rebuildDisplayItems()
+                    }
+                    .onFailure { error ->
+                        Log.d(TAG, "Failed to load connection photos: ${error.message}")
+                    }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                Log.d(TAG, "Failed to load connection photos", e)
+            }
+        }
+    }
+
+    /**
+     * Rebuild display items from cache and update UI state.
+     * Used after loading connection photos or other cache updates.
+     */
+    private fun rebuildDisplayItems() {
+        val currentState = _state.value
+        if (currentState is FeedState.Loaded) {
+            val allCached = feedRepository.getCachedEvents()
+            val displayItems = filterForDisplay(allCached)
+            _state.value = currentState.copy(
+                items = displayItems,
+                unreadCount = displayItems.count { it.isUnread }
+            )
         }
     }
 

@@ -52,6 +52,7 @@ fun FeedContent(
     viewModel: FeedViewModel = hiltViewModel(),
     searchQuery: String = "",
     onNavigateToConversation: (String) -> Unit = {},
+    onNavigateToConnectionDetail: (String) -> Unit = {},
     onNavigateToConnectionRequest: (String) -> Unit = {},
     onNavigateToHandler: (String) -> Unit = {},
     onNavigateToBackup: (String) -> Unit = {},
@@ -154,6 +155,7 @@ fun FeedContent(
                     onRefresh = { viewModel.refresh() },
                     onDisplayItemClick = { viewModel.onDisplayItemClick(it) },
                     onNavigateToConversation = onNavigateToConversation,
+                    onNavigateToConnectionDetail = onNavigateToConnectionDetail,
                     onEventClick = { viewModel.onEventClick(it) },
                     onArchive = { viewModel.archiveEvent(it.eventId) },
                     onDelete = { viewModel.deleteEvent(it.eventId) },
@@ -235,6 +237,7 @@ private fun FeedList(
     onRefresh: () -> Unit,
     onDisplayItemClick: (FeedDisplayItem) -> Unit,
     onNavigateToConversation: (String) -> Unit,
+    onNavigateToConnectionDetail: (String) -> Unit = {},
     onEventClick: (FeedEvent) -> Unit,
     onArchive: (FeedEvent) -> Unit,
     onDelete: (FeedEvent) -> Unit,
@@ -267,6 +270,7 @@ private fun FeedList(
                     is FeedDisplayItem.ConnectionItem -> ConnectionCard(
                         item = item,
                         onClick = { onNavigateToConversation(item.connectionId) },
+                        onLongClick = { onNavigateToConnectionDetail(item.connectionId) },
                         onMessageClick = { onNavigateToConversation(item.connectionId) },
                         onCallClick = { /* TODO: voice call */ },
                         onVideoCallClick = { /* TODO: video call */ },
@@ -286,10 +290,12 @@ private fun FeedList(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ConnectionCard(
     item: FeedDisplayItem.ConnectionItem,
     onClick: () -> Unit,
+    onLongClick: () -> Unit = {},
     onMessageClick: () -> Unit,
     onCallClick: () -> Unit,
     onVideoCallClick: () -> Unit,
@@ -304,11 +310,19 @@ private fun ConnectionCard(
         }
     }
 
+    val haptic = LocalHapticFeedback.current
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp, vertical = 4.dp)
-            .clickable(onClick = onClick),
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onLongClick()
+                }
+            ),
         colors = CardDefaults.cardColors(
             containerColor = if (item.isUnread) {
                 MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)

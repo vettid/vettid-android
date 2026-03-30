@@ -1720,6 +1720,7 @@ fun MainScreen(
             FeedContent(
                 searchQuery = query,
                 onNavigateToConversation = onNavigateToConversation,
+                onNavigateToConnectionDetail = onNavigateToConnectionDetail,
                 onNavigateToHandler = onNavigateToHandlerDetail,
                 onNavigateToBackup = { onNavigateToBackups() },
                 onNavigateToGuide = onNavigateToGuide,
