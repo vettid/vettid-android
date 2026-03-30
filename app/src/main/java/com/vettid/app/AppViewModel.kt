@@ -86,6 +86,7 @@ class AppViewModel @Inject constructor(
         observeNatsConnectionState()
         observeProfilePhotoUpdates()
         observeSessionExpiry()
+        observeVaultLock()
         loadUserProfile()
     }
 
@@ -95,6 +96,21 @@ class AppViewModel @Inject constructor(
                 Log.i(TAG, "Session TTL expired, forcing re-authentication")
                 _appState.update { it.copy(isAuthenticated = false) }
                 natsAutoConnector.disconnect()
+            }
+        }
+    }
+
+    /**
+     * Observe vault-locked events from OwnerSpaceClient.
+     * When the vault reports "vault_locked" (e.g., after enclave instance refresh
+     * where the DEK is lost), force the user back to PIN entry so the DEK can
+     * be re-derived from PIN + sealed material.
+     */
+    private fun observeVaultLock() {
+        viewModelScope.launch {
+            ownerSpaceClient.vaultLocked.collect {
+                Log.i(TAG, "Vault locked — requiring PIN re-entry")
+                _appState.update { it.copy(isAuthenticated = false) }
             }
         }
     }

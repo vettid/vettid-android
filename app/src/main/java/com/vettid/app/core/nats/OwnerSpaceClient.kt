@@ -97,6 +97,13 @@ class OwnerSpaceClient @Inject constructor(
     /** Flow of agent approval requests (secret/action requests needing owner approval). */
     val agentApprovalRequests: SharedFlow<AgentApprovalRequest> = _agentApprovalRequests.asSharedFlow()
 
+    // Vault locked events — emitted when the vault returns "vault_locked" error
+    // (e.g., after enclave instance refresh where DEK is lost). Observers should
+    // trigger PIN re-entry to re-derive the DEK.
+    private val _vaultLocked = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    /** Flow of vault-locked events. Subscribe to trigger PIN re-entry. */
+    val vaultLocked: SharedFlow<Unit> = _vaultLocked.asSharedFlow()
+
     private var appSubscription: NatsSubscription? = null
     private var eventTypesSubscription: NatsSubscription? = null
 
@@ -321,6 +328,18 @@ class OwnerSpaceClient @Inject constructor(
             }
 
             val response = gson.fromJson(responseString, VaultResponseJson::class.java)
+
+            // Detect vault_locked error — vault has no DEK (e.g., after enclave refresh).
+            // Emit event so the app can prompt PIN re-entry to re-derive the DEK.
+            if (response.error?.startsWith("vault_locked") == true) {
+                android.util.Log.w(TAG, "Vault locked detected — emitting vaultLocked event")
+                _vaultLocked.tryEmit(Unit)
+                return VaultResponse.Error(
+                    requestId = response.getCorrelationId().ifEmpty { requestId },
+                    code = "VAULT_LOCKED",
+                    message = response.error ?: "Vault locked — PIN unlock required"
+                )
+            }
 
             // Extract and store any new UTKs
             extractAndStoreUtks(responseString)
