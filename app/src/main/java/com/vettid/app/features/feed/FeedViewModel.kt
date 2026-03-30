@@ -66,6 +66,15 @@ class FeedViewModel @Inject constructor(
     // Track if initial loadFeed() is still in progress
     private var isInitialLoadComplete = false
 
+    // Connection event types that get grouped under a single ConnectionItem
+    // IMPORTANT: must be declared before init{} since showCachedFeed() uses it
+    private val connectionEventTypes = setOf(
+        EventTypes.MESSAGE_RECEIVED, EventTypes.MESSAGE_SENT,
+        EventTypes.CALL_INCOMING, EventTypes.CALL_COMPLETED, EventTypes.CALL_MISSED,
+        EventTypes.TRANSFER_REQUEST,
+        EventTypes.CONNECTION_ACCEPTED
+    )
+
     init {
         // Show cached data immediately while waiting for connection
         showCachedFeed()
@@ -104,14 +113,6 @@ class FeedViewModel @Inject constructor(
     fun updateSearchQuery(query: String) {
         _searchQuery.value = query
     }
-
-    // Connection event types that get grouped under a single ConnectionItem
-    private val connectionEventTypes = setOf(
-        EventTypes.MESSAGE_RECEIVED, EventTypes.MESSAGE_SENT,
-        EventTypes.CALL_INCOMING, EventTypes.CALL_COMPLETED, EventTypes.CALL_MISSED,
-        EventTypes.TRANSFER_REQUEST,
-        EventTypes.CONNECTION_ACCEPTED
-    )
 
     /**
      * Filter events for display and build FeedDisplayItems.
