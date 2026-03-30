@@ -137,7 +137,9 @@ class FeedViewModel @Inject constructor(
 
         // Partition into connection-grouped vs standalone events
         val (connectionEvents, standaloneEvents) = filtered.partition { event ->
-            event.eventType in connectionEventTypes &&
+            @Suppress("SENSELESS_COMPARISON")
+            event.eventType != null &&
+                event.eventType in connectionEventTypes &&
                 // connection.request stays standalone (needs Accept/Decline)
                 event.eventType != EventTypes.CONNECTION_REQUEST
         }
