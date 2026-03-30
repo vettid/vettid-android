@@ -22,7 +22,11 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.Image
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -55,6 +59,7 @@ fun ConversationScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val connection by viewModel.connection.collectAsState()
+    val peerPhotoBase64 by viewModel.peerPhotoBase64.collectAsState()
     val messageText by viewModel.messageText.collectAsState()
     val isSending by viewModel.isSending.collectAsState()
 
@@ -96,18 +101,37 @@ fun ConversationScreen(
                         modifier = Modifier.clickable { viewModel.onConnectionDetailClick() },
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Avatar
-                        Surface(
-                            modifier = Modifier.size(36.dp),
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.primaryContainer
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = (connection?.peerDisplayName ?: "?").take(2).uppercase(),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
+                        // Avatar — show peer photo if available, else initials
+                        val photoBitmap = remember(peerPhotoBase64) {
+                            peerPhotoBase64?.let { base64 ->
+                                try {
+                                    val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
+                                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                } catch (_: Exception) { null }
+                            }
+                        }
+                        if (photoBitmap != null) {
+                            Image(
+                                bitmap = photoBitmap.asImageBitmap(),
+                                contentDescription = null,
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            Surface(
+                                modifier = Modifier.size(36.dp),
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.primaryContainer
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = (connection?.peerDisplayName ?: "?").take(2).uppercase(),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    )
+                                }
                             }
                         }
                         Spacer(modifier = Modifier.width(12.dp))
@@ -256,12 +280,12 @@ fun MessageBubble(
 ) {
     val alignment = if (isSent) Alignment.End else Alignment.Start
     val backgroundColor = if (isSent) {
-        MaterialTheme.colorScheme.primary
+        Color.Black
     } else {
         MaterialTheme.colorScheme.surfaceVariant
     }
     val textColor = if (isSent) {
-        MaterialTheme.colorScheme.onPrimary
+        Color(0xFFFFD700) // Gold for sent messages
     } else {
         MaterialTheme.colorScheme.onSurfaceVariant
     }

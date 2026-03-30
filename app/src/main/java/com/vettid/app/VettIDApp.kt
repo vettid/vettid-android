@@ -1713,7 +1713,8 @@ fun MainScreen(
                 onNavigateToGuide = onNavigateToGuide,
                 onNavigateToAgentApproval = onNavigateToAgentApproval,
                 onNavigateToCreateInvitation = onNavigateToCreateInvitation,
-                onNavigateToScanInvitation = onNavigateToScanInvitation
+                onNavigateToScanInvitation = onNavigateToScanInvitation,
+                onNavigateToCreateAgentInvitation = onNavigateToCreateAgentInvitation
             )
         },
         votingContent = { _ ->

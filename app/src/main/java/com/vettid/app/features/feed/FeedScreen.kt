@@ -59,7 +59,8 @@ fun FeedContent(
     onNavigateToGuide: (guideId: String, eventId: String, userName: String) -> Unit = { _, _, _ -> },
     onNavigateToAgentApproval: (requestId: String) -> Unit = {},
     onNavigateToCreateInvitation: () -> Unit = {},
-    onNavigateToScanInvitation: () -> Unit = {}
+    onNavigateToScanInvitation: () -> Unit = {},
+    onNavigateToCreateAgentInvitation: () -> Unit = {}
 ) {
     // Route search query from top bar to ViewModel
     LaunchedEffect(searchQuery) {
@@ -183,7 +184,7 @@ fun FeedContent(
             )
         }
 
-        // FAB — Connection actions (create/scan invitation)
+        // FAB — Connection actions (create/scan/agent invitation)
         var showFabMenu by remember { mutableStateOf(false) }
         Column(
             modifier = Modifier
@@ -197,16 +198,27 @@ fun FeedContent(
                     horizontalAlignment = Alignment.End,
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    SmallFloatingActionButton(
-                        onClick = { showFabMenu = false; onNavigateToScanInvitation() }
-                    ) {
-                        Icon(Icons.Default.QrCodeScanner, contentDescription = "Scan Invitation")
-                    }
-                    SmallFloatingActionButton(
-                        onClick = { showFabMenu = false; onNavigateToCreateInvitation() }
-                    ) {
-                        Icon(Icons.Default.PersonAdd, contentDescription = "Create Invitation")
-                    }
+                    ExtendedFloatingActionButton(
+                        onClick = { showFabMenu = false; onNavigateToCreateAgentInvitation() },
+                        icon = { Icon(Icons.Default.SmartToy, contentDescription = null) },
+                        text = { Text("Agent Invitation") },
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                    ExtendedFloatingActionButton(
+                        onClick = { showFabMenu = false; onNavigateToScanInvitation() },
+                        icon = { Icon(Icons.Default.QrCodeScanner, contentDescription = null) },
+                        text = { Text("Scan Invitation") },
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                    ExtendedFloatingActionButton(
+                        onClick = { showFabMenu = false; onNavigateToCreateInvitation() },
+                        icon = { Icon(Icons.Default.PersonAdd, contentDescription = null) },
+                        text = { Text("Create Invitation") },
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
                 }
             }
             FloatingActionButton(
@@ -303,7 +315,8 @@ private fun FeedList(
                         onProfileClick = { onNavigateToConnectionDetail(item.connectionId) },
                         onCallClick = { /* TODO: voice call */ },
                         onVideoCallClick = { /* TODO: video call */ },
-                        onBtcClick = { /* TODO: send BTC */ }
+                        onBtcClick = { /* TODO: send BTC */ },
+                        onHistoryClick = { /* TODO: view history/archive for connection */ }
                     )
                     is FeedDisplayItem.EventItem -> EventCard(
                         event = item.event,
@@ -329,7 +342,8 @@ private fun ConnectionCard(
     onProfileClick: () -> Unit = {},
     onCallClick: () -> Unit,
     onVideoCallClick: () -> Unit,
-    onBtcClick: () -> Unit
+    onBtcClick: () -> Unit,
+    onHistoryClick: () -> Unit = {}
 ) {
     val photoBitmap = remember(item.peerPhotoBase64) {
         item.peerPhotoBase64?.let { base64 ->
@@ -442,12 +456,12 @@ private fun ConnectionCard(
             ) {
                 ConnectionActionButton(
                     icon = Icons.AutoMirrored.Filled.Chat,
-                    label = "Message",
+                    label = "Text",
                     onClick = onMessageClick
                 )
                 ConnectionActionButton(
                     icon = Icons.Default.Call,
-                    label = "Call",
+                    label = "Voice",
                     onClick = onCallClick
                 )
                 ConnectionActionButton(
@@ -455,16 +469,50 @@ private fun ConnectionCard(
                     label = "Video",
                     onClick = onVideoCallClick
                 )
-                ConnectionActionButton(
-                    icon = Icons.Default.CurrencyBitcoin,
-                    label = "BTC",
-                    onClick = onBtcClick
-                )
-                ConnectionActionButton(
-                    icon = Icons.Default.Person,
-                    label = "Profile",
-                    onClick = onProfileClick
-                )
+                // More button with dropdown menu
+                Box {
+                    var showMoreMenu by remember { mutableStateOf(false) }
+                    ConnectionActionButton(
+                        icon = Icons.Default.MoreVert,
+                        label = "More",
+                        onClick = { showMoreMenu = true }
+                    )
+                    DropdownMenu(
+                        expanded = showMoreMenu,
+                        onDismissRequest = { showMoreMenu = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("View Profile") },
+                            onClick = {
+                                showMoreMenu = false
+                                onProfileClick()
+                            },
+                            leadingIcon = {
+                                Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(20.dp))
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("Send BTC") },
+                            onClick = {
+                                showMoreMenu = false
+                                onBtcClick()
+                            },
+                            leadingIcon = {
+                                Icon(Icons.Default.CurrencyBitcoin, contentDescription = null, modifier = Modifier.size(20.dp))
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("View History") },
+                            onClick = {
+                                showMoreMenu = false
+                                onHistoryClick()
+                            },
+                            leadingIcon = {
+                                Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(20.dp))
+                            }
+                        )
+                    }
+                }
             }
         }
     }

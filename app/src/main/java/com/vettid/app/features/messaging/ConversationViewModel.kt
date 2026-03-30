@@ -46,6 +46,9 @@ class ConversationViewModel @Inject constructor(
     private val _connection = MutableStateFlow<Connection?>(null)
     val connection: StateFlow<Connection?> = _connection.asStateFlow()
 
+    private val _peerPhotoBase64 = MutableStateFlow<String?>(null)
+    val peerPhotoBase64: StateFlow<String?> = _peerPhotoBase64.asStateFlow()
+
     private val _messageText = MutableStateFlow("")
     val messageText: StateFlow<String> = _messageText.asStateFlow()
 
@@ -107,6 +110,8 @@ class ConversationViewModel @Inject constructor(
                             lastMessageAt = null,
                             unreadCount = 0
                         )
+                        // Store peer photo for header avatar
+                        _peerPhotoBase64.value = record.peerProfile?.photo
                     }
                 },
                 onFailure = { /* Ignore, not critical */ }
