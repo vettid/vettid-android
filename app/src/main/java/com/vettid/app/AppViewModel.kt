@@ -229,15 +229,15 @@ class AppViewModel @Inject constructor(
                 }
 
                 is NatsAutoConnector.ConnectionResult.CredentialsExpired -> {
-                    Log.w(TAG, "NATS credentials expired - re-authentication required")
+                    // Credential reissue was already attempted in NatsAutoConnector.
+                    // If we still get CredentialsExpired, the REST reissue also failed.
+                    Log.w(TAG, "NATS credentials expired and reissue failed")
                     _appState.update {
                         it.copy(
                             natsConnectionState = NatsConnectionState.CredentialsExpired,
-                            natsError = "Session expired. Please authenticate again."
+                            natsError = "Unable to reconnect. Check your internet connection and try again."
                         )
                     }
-                    // In the future, this could trigger navigation to auth screen
-                    // For now, we log it and the user can still use the app
                 }
 
                 is NatsAutoConnector.ConnectionResult.MissingData -> {
@@ -288,7 +288,8 @@ class AppViewModel @Inject constructor(
                     is NatsAutoConnector.AutoConnectState.Bootstrapping,
                     is NatsAutoConnector.AutoConnectState.Subscribing,
                     is NatsAutoConnector.AutoConnectState.StartingVault,
-                    is NatsAutoConnector.AutoConnectState.WaitingForVault -> NatsConnectionState.Connecting
+                    is NatsAutoConnector.AutoConnectState.WaitingForVault,
+                    is NatsAutoConnector.AutoConnectState.ReissuingCredentials -> NatsConnectionState.Connecting
                     is NatsAutoConnector.AutoConnectState.Connected -> NatsConnectionState.Connected
                     is NatsAutoConnector.AutoConnectState.Failed -> {
                         when (autoConnectState.result) {

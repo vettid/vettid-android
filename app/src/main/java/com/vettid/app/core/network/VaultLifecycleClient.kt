@@ -93,6 +93,23 @@ class VaultLifecycleClient @Inject constructor(
     }
 
     /**
+     * Reissue expired NATS credentials via REST API.
+     * This is a public endpoint that doesn't require NATS or Cognito auth.
+     * Called when stored NATS credentials have expired (user offline > 7 days).
+     *
+     * @return NatsReissueResponse with fresh credentials on success
+     */
+    suspend fun reissueNatsCredentials(): Result<NatsReissueResponse> {
+        val userGuid = credentialStore.getUserGuid()
+            ?: return Result.failure(VaultLifecycleException("User not enrolled - no user GUID found"))
+
+        Log.i(TAG, "Requesting NATS credential reissue for userGuid=$userGuid")
+
+        val request = NatsReissueRequest(userGuid = userGuid)
+        return safeApiCall { api.reissueNatsCredentials(request) }
+    }
+
+    /**
      * Execute a vault lifecycle action using the action token flow.
      *
      * @param actionType The action type (vault_start, vault_stop, vault_status)
@@ -209,6 +226,15 @@ interface VaultLifecycleApi {
     suspend fun getVaultStatus(
         @Header("Authorization") actionToken: String
     ): Response<VaultLifecycleStatusResponse>
+
+    /**
+     * Reissue expired NATS credentials.
+     * Public endpoint — requires only user_guid. Rate limited.
+     */
+    @POST("vault/nats/reissue")
+    suspend fun reissueNatsCredentials(
+        @Body request: NatsReissueRequest
+    ): Response<NatsReissueResponse>
 }
 
 // MARK: - Request Types
@@ -258,6 +284,20 @@ data class VaultLifecycleStatusResponse(
     val isVaultStopped: Boolean get() = instanceStatus == "stopped"
     val isVaultPending: Boolean get() = instanceStatus == "pending"
 }
+
+data class NatsReissueRequest(
+    @SerializedName("user_guid") val userGuid: String
+)
+
+data class NatsReissueResponse(
+    @SerializedName("nats_endpoint") val natsEndpoint: String,
+    @SerializedName("nats_creds") val natsCreds: String,
+    @SerializedName("owner_space") val ownerSpace: String,
+    @SerializedName("message_space") val messageSpace: String,
+    @SerializedName("expires_at") val expiresAt: String,
+    @SerializedName("ttl_seconds") val ttlSeconds: Long,
+    @SerializedName("token_id") val tokenId: String? = null
+)
 
 data class ErrorResponse(
     val message: String? = null,

@@ -190,6 +190,23 @@ class PinUnlockViewModel @Inject constructor(
                     PinVerificationResult.Success -> {
                         Log.i(TAG, "PIN verification successful")
 
+                        // Reconnect with vault-issued credentials if available
+                        // The vault issues full credentials after PIN verification;
+                        // the initial connection may have used narrow bootstrap creds
+                        if (credentialStore.areNatsCredentialsValid()) {
+                            try {
+                                natsAutoConnector.disconnect()
+                                val reconnectResult = natsAutoConnector.autoConnect(autoStartVault = false)
+                                if (reconnectResult is com.vettid.app.core.nats.NatsAutoConnector.ConnectionResult.Success) {
+                                    Log.i(TAG, "Reconnected with vault-issued credentials")
+                                } else {
+                                    Log.w(TAG, "Reconnect with vault creds failed: $reconnectResult (non-fatal)")
+                                }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Reconnect error (non-fatal)", e)
+                            }
+                        }
+
                         // Get first name for welcome message
                         val firstName = personalDataStore.getSystemFields()?.firstName
 
@@ -425,6 +442,21 @@ class PinUnlockViewModel @Inject constructor(
                                     credentialStore.addUtks(newKeys)
                                     Log.i(TAG, "Added ${newKeys.size} new UTKs to pool. Total: ${credentialStore.getUtkCount()}")
                                 }
+                            }
+
+                            // Store vault-issued NATS credentials if provided
+                            // The vault is the sole authority for full OwnerSpace/MessageSpace access
+                            val vaultNatsCreds = responseJson.get("nats_credentials")?.asString
+                            if (vaultNatsCreds != null) {
+                                val credsTtl = responseJson.get("credentials_ttl_seconds")?.asLong ?: (7 * 24 * 3600L)
+                                credentialStore.storeFullNatsCredentials(
+                                    credentials = vaultNatsCreds,
+                                    ownerSpace = responseJson.get("owner_space")?.asString,
+                                    messageSpace = responseJson.get("message_space")?.asString,
+                                    credentialId = "vault-issued",
+                                    ttlSeconds = credsTtl
+                                )
+                                Log.i(TAG, "Stored vault-issued NATS credentials (TTL: ${credsTtl}s)")
                             }
 
                             return@withContext PinVerificationResult.Success

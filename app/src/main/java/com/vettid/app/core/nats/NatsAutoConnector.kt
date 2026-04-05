@@ -96,6 +96,8 @@ class NatsAutoConnector @Inject constructor(
         object StartingVault : AutoConnectState()
         /** Waiting for vault to become ready */
         object WaitingForVault : AutoConnectState()
+        /** Reissuing expired credentials via REST */
+        object ReissuingCredentials : AutoConnectState()
         /** Exchanging bootstrap credentials for full credentials */
         object Bootstrapping : AutoConnectState()
         object Subscribing : AutoConnectState()
@@ -139,10 +141,19 @@ class NatsAutoConnector @Inject constructor(
 
         // Step 2: Check if credentials are valid (not expired)
         if (!credentialStore.areNatsCredentialsValid()) {
-            Log.i(TAG, "NATS credentials expired - authentication required")
-            val result = ConnectionResult.CredentialsExpired
-            _connectionState.value = AutoConnectState.Failed(result)
-            return result
+            Log.i(TAG, "NATS credentials expired - attempting reissue via REST")
+            _connectionState.value = AutoConnectState.ReissuingCredentials
+
+            val reissued = attemptCredentialReissue()
+            if (!reissued) {
+                Log.e(TAG, "Credential reissue failed - cannot recover")
+                val result = ConnectionResult.CredentialsExpired
+                _connectionState.value = AutoConnectState.Failed(result)
+                return result
+            }
+
+            Log.i(TAG, "Credentials reissued successfully - continuing connection")
+            // Credentials are now fresh, fall through to normal connect flow
         }
 
         // Step 3: Get required connection data
@@ -519,15 +530,48 @@ class NatsAutoConnector @Inject constructor(
     }
 
     /**
-     * Calculate expiration time based on stored timestamp.
-     * Credentials are valid for 24 hours from storage time.
+     * Calculate expiration time based on stored timestamp or explicit expiry.
      */
     private fun calculateExpirationTime(): Instant {
-        // CredentialStore stores at KEY_NATS_STORED_AT
-        // Valid for 24 hours
-        val storedAtMs = System.currentTimeMillis() // Approximate - actual stored time not exposed
-        val expiresAtMs = storedAtMs + (24 * 60 * 60 * 1000L)
-        return Instant.ofEpochMilli(expiresAtMs)
+        val expiryMs = credentialStore.getNatsCredentialsExpiryTime()
+            ?: (System.currentTimeMillis() + 7 * 24 * 60 * 60 * 1000L)
+        return Instant.ofEpochMilli(expiryMs)
+    }
+
+    /**
+     * Attempt to reissue expired NATS credentials via REST API.
+     *
+     * This calls the public /vault/nats/reissue endpoint which generates
+     * fresh NATS credentials for enrolled users. No NATS connection required.
+     *
+     * @return true if credentials were reissued and stored successfully
+     */
+    private suspend fun attemptCredentialReissue(): Boolean {
+        try {
+            val reissueResult = vaultLifecycleClient.reissueNatsCredentials()
+            if (reissueResult.isFailure) {
+                val error = reissueResult.exceptionOrNull()
+                Log.e(TAG, "Credential reissue failed: ${error?.message}")
+                return false
+            }
+
+            val response = reissueResult.getOrThrow()
+            Log.i(TAG, "Credential reissue successful, TTL: ${response.ttlSeconds}s")
+
+            // Store the reissued credentials
+            credentialStore.storeFullNatsCredentials(
+                credentials = response.natsCreds,
+                ownerSpace = response.ownerSpace,
+                messageSpace = response.messageSpace,
+                credentialId = response.tokenId,
+                ttlSeconds = response.ttlSeconds
+            )
+
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Credential reissue error", e)
+            return false
+        }
     }
 
     /**

@@ -885,19 +885,17 @@ class CredentialStore @Inject constructor(
     }
 
     /**
-     * Check if NATS credentials are still valid (less than 24 hours old).
+     * Check if NATS credentials are still valid (not expired).
+     * Uses the stored expiry timestamp if available, otherwise falls back to 7 days from storage time.
      */
     fun areNatsCredentialsValid(): Boolean {
-        val storedAt = encryptedPrefs.getLong(KEY_NATS_STORED_AT, 0)
-        if (storedAt == 0L) return false
-
-        val twentyFourHoursMs = 24 * 60 * 60 * 1000L
-        return System.currentTimeMillis() - storedAt < twentyFourHoursMs
+        val expiryTime = getNatsCredentialsExpiryTime() ?: return false
+        return System.currentTimeMillis() < expiryTime
     }
 
     /**
      * Get NATS credentials expiry timestamp.
-     * Uses stored expiry time from TTL if available, otherwise defaults to 24 hours after stored.
+     * Uses stored expiry time from TTL if available, otherwise defaults to 7 days after stored.
      * Returns null if no credentials are stored.
      */
     fun getNatsCredentialsExpiryTime(): Long? {
@@ -905,12 +903,12 @@ class CredentialStore @Inject constructor(
         val explicitExpiry = encryptedPrefs.getLong(KEY_NATS_CREDENTIALS_EXPIRY, 0L)
         if (explicitExpiry > 0) return explicitExpiry
 
-        // Fall back to 24 hours after stored
+        // Fall back to 7 days after stored
         val storedAt = encryptedPrefs.getLong(KEY_NATS_STORED_AT, 0)
         if (storedAt == 0L) return null
 
-        val twentyFourHoursMs = 24 * 60 * 60 * 1000L
-        return storedAt + twentyFourHoursMs
+        val sevenDaysMs = 7 * 24 * 60 * 60 * 1000L
+        return storedAt + sevenDaysMs
     }
 
     /**
