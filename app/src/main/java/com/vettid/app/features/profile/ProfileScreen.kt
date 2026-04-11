@@ -322,19 +322,25 @@ private fun ViewProfileContent(
         ) {
             OutlinedButton(
                 onClick = onViewSecrets,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
             ) {
-                Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(16.dp))
+                Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(14.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("Secrets ($secretsCount)", style = MaterialTheme.typography.labelMedium)
+                Text("Secrets", style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                Spacer(modifier = Modifier.width(2.dp))
+                Badge { Text("$secretsCount") }
             }
             OutlinedButton(
                 onClick = onViewPersonalData,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
             ) {
-                Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(16.dp))
+                Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(14.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("Personal ($personalDataCount)", style = MaterialTheme.typography.labelMedium)
+                Text("Personal", style = MaterialTheme.typography.labelSmall, maxLines = 1)
+                Spacer(modifier = Modifier.width(2.dp))
+                Badge { Text("$personalDataCount") }
             }
         }
 
@@ -343,14 +349,14 @@ private fun ViewProfileContent(
         // Published profile preview button
         OutlinedButton(
             onClick = onViewPublishedProfile,
-            modifier = Modifier.fillMaxWidth()
+            modifier = Modifier.fillMaxWidth(),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
         ) {
             Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text("Published Profile", style = MaterialTheme.typography.labelMedium)
             Spacer(modifier = Modifier.width(4.dp))
-            Text(
-                "Published Profile ($publishedItemsCount items)",
-                style = MaterialTheme.typography.labelMedium
-            )
+            Badge { Text("$publishedItemsCount") }
         }
 
         Spacer(modifier = Modifier.height(16.dp))

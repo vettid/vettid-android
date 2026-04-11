@@ -88,6 +88,7 @@ fun PinUnlockScreen(
                     is PinUnlockState.Verifying -> "Verifying PIN..."
                     is PinUnlockState.Success -> "Unlocked!"
                     is PinUnlockState.Error -> "Error occurred"
+                    is PinUnlockState.EnclaveUpdateRequired -> "Vault Update Available"
                 },
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -144,6 +145,15 @@ fun PinUnlockScreen(
                     ErrorContent(
                         message = currentState.message,
                         onRetry = { viewModel.onEvent(PinUnlockEvent.Retry) }
+                    )
+                }
+
+                is PinUnlockState.EnclaveUpdateRequired -> {
+                    EnclaveUpdateContent(
+                        pcr0 = currentState.currentPcr0,
+                        summary = currentState.summary,
+                        detailsUrl = currentState.detailsUrl,
+                        onApprove = { viewModel.approveEnclaveUpdate() }
                     )
                 }
 
@@ -392,6 +402,114 @@ private fun ErrorContent(
             Icon(Icons.Default.Refresh, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
             Text("Try Again")
+        }
+    }
+}
+
+@Composable
+private fun EnclaveUpdateContent(
+    pcr0: String,
+    summary: String?,
+    detailsUrl: String?,
+    onApprove: () -> Unit
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+    ) {
+        Icon(
+            imageVector = Icons.Default.Security,
+            contentDescription = null,
+            modifier = Modifier.size(64.dp),
+            tint = MaterialTheme.colorScheme.primary
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text(
+            text = "Your vault software has been updated to a new version.",
+            style = MaterialTheme.typography.bodyLarge,
+            textAlign = TextAlign.Center
+        )
+
+        if (summary != null) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = summary,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Full PCR0 in a copyable card
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            shape = MaterialTheme.shapes.small
+        ) {
+            Column(modifier = Modifier.padding(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "New Enclave PCR0",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    IconButton(
+                        onClick = {
+                            clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(pcr0))
+                        },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.ContentCopy,
+                            contentDescription = "Copy PCR0",
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = pcr0,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        if (detailsUrl != null) {
+            Spacer(modifier = Modifier.height(12.dp))
+            TextButton(onClick = {
+                try {
+                    context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(detailsUrl)))
+                } catch (_: Exception) {}
+            }) {
+                Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(4.dp))
+                Text("View Changelog")
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Button(onClick = onApprove) {
+            Icon(Icons.Default.CheckCircle, contentDescription = null)
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Approve and Continue")
         }
     }
 }

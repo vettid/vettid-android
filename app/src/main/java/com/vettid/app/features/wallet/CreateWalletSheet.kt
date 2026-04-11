@@ -8,7 +8,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 
 /**
@@ -63,6 +65,7 @@ fun CreateWalletSheet(
                 label = { Text("Wallet Label") },
                 placeholder = { Text("e.g., Savings, Daily") },
                 singleLine = true,
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
                 modifier = Modifier.fillMaxWidth(),
                 leadingIcon = {
                     Icon(

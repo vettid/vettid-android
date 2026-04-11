@@ -48,6 +48,11 @@ sealed class PinUnlockState {
     data object Verifying : PinUnlockState()
     data class Success(val firstName: String? = null) : PinUnlockState()
     data class Error(val message: String) : PinUnlockState()
+    data class EnclaveUpdateRequired(
+        val currentPcr0: String,
+        val summary: String? = null,
+        val detailsUrl: String? = null
+    ) : PinUnlockState()
 }
 
 /**
@@ -101,6 +106,9 @@ class PinUnlockViewModel @Inject constructor(
 
     // Mutex to prevent concurrent PIN submission (e.g., double-tap)
     private val submitMutex = Mutex()
+
+    // PCR0 pending user approval (set when enclave version changed)
+    private var _pendingUntrustedPcr0: String? = null
 
     init {
         // Start in PIN entry mode
@@ -178,24 +186,24 @@ class PinUnlockViewModel @Inject constructor(
             // enclave version. Without this check, an operator could deploy a rogue
             // enclave and the app would blindly send the PIN to it.
             val trustedSet = pcrConfigManager.getTrustedPcr0Set()
-            if (trustedSet.isNotEmpty()) {
-                val currentPcr0 = pcrConfigManager.getCurrentPcrs().pcr0
-                if (!pcrConfigManager.isPcr0Trusted(currentPcr0)) {
-                    Log.w(TAG, "SECURITY: Current enclave PCR0 not in user's trusted set")
-                    _state.value = PinUnlockState.Error(
-                        "Vault software has been updated. Please review and approve the update before unlocking."
-                    )
-                    return
-                }
-            } else {
+            val currentPcr0 = pcrConfigManager.getCurrentPcrs().pcr0
+            val isValidPcr0 = currentPcr0 != "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+
+            if (trustedSet.isNotEmpty() && !pcrConfigManager.isPcr0Trusted(currentPcr0)) {
+                Log.w(TAG, "SECURITY: Current enclave PCR0 not in user's trusted set")
+                _pendingUntrustedPcr0 = currentPcr0
+                val pcrVersion = pcrConfigManager.getCurrentVersion()
+                _state.value = PinUnlockState.EnclaveUpdateRequired(
+                    currentPcr0 = currentPcr0,
+                    summary = "Enclave version: $pcrVersion"
+                )
+                return
+            } else if (trustedSet.isEmpty() && isValidPcr0) {
                 // No trusted set yet (user enrolled before this feature existed).
                 // Bootstrap: trust the current PCR0 on first use so existing users
                 // aren't locked out. Future enclave changes will require consent.
-                val currentPcr0 = pcrConfigManager.getCurrentPcrs().pcr0
-                if (currentPcr0 != "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000") {
-                    pcrConfigManager.addTrustedPcr0(currentPcr0)
-                    Log.i(TAG, "Bootstrapped trusted PCR0 set for existing user")
-                }
+                pcrConfigManager.addTrustedPcr0(currentPcr0)
+                Log.i(TAG, "Bootstrapped trusted PCR0 set for existing user")
             }
 
             // Connect to NATS if not connected
@@ -292,6 +300,20 @@ class PinUnlockViewModel @Inject constructor(
     }
 
     private fun retry() {
+        _state.value = PinUnlockState.EnteringPin()
+    }
+
+    /**
+     * User approves the new enclave version from the update-required screen.
+     * Adds the new PCR0 to the trusted set and returns to PIN entry.
+     */
+    fun approveEnclaveUpdate() {
+        val pcr0 = _pendingUntrustedPcr0
+        if (pcr0 != null) {
+            pcrConfigManager.addTrustedPcr0(pcr0)
+            Log.i(TAG, "User approved enclave update — PCR0 added to trusted set")
+            _pendingUntrustedPcr0 = null
+        }
         _state.value = PinUnlockState.EnteringPin()
     }
 
