@@ -42,6 +42,17 @@ sealed class FeedDisplayItem {
         override val sortTimestamp: Long,
         override val isUnread: Boolean
     ) : FeedDisplayItem()
+
+    data class AgentConnectionItem(
+        val connectionId: String,
+        val agentName: String,
+        val agentType: String,
+        val lastActivityPreview: String,
+        val lastActivityType: String,
+        val unreadCount: Int,
+        override val sortTimestamp: Long,
+        override val isUnread: Boolean
+    ) : FeedDisplayItem()
 }
 
 /**
@@ -57,6 +68,7 @@ sealed class FeedEffect {
     data class NavigateToTransfer(val transferId: String) : FeedEffect()
     data class NavigateToGuide(val guideId: String, val eventId: String, val userName: String) : FeedEffect()
     data class NavigateToAgentApproval(val requestId: String) : FeedEffect()
+    data class NavigateToAgentConversation(val connectionId: String) : FeedEffect()
     data class ShowEventDetail(val event: com.vettid.app.core.nats.FeedEvent) : FeedEffect()
     data class ShowError(val message: String) : FeedEffect()
     data class ShowActionSuccess(val message: String) : FeedEffect()
@@ -85,6 +97,9 @@ object EventTypes {
     const val AGENT_SECRET_REQUEST = "agent.secret.request"
     const val AGENT_ACTION_REQUEST = "agent.action.request"
     const val AGENT_CONNECTED = "agent.connection.approved"
+    const val AGENT_MESSAGE_RECEIVED = "agent.message.received"
+    const val AGENT_MESSAGE_SENT = "agent.message.sent"
+    const val AGENT_APPROVAL_REQUESTED = "agent.approval.requested"
 }
 
 /**

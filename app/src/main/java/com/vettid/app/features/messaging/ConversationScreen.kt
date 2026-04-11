@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Widgets
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -62,6 +63,8 @@ fun ConversationScreen(
     val peerPhotoBase64 by viewModel.peerPhotoBase64.collectAsState()
     val messageText by viewModel.messageText.collectAsState()
     val isSending by viewModel.isSending.collectAsState()
+    val isAgent by viewModel.isAgentConnection.collectAsState()
+    val agentType by viewModel.agentType.collectAsState()
 
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -110,7 +113,23 @@ fun ConversationScreen(
                                 } catch (_: Exception) { null }
                             }
                         }
-                        if (photoBitmap != null) {
+                        if (isAgent) {
+                            // Agent avatar
+                            Surface(
+                                modifier = Modifier.size(36.dp),
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.tertiaryContainer
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        Icons.Default.Widgets,
+                                        contentDescription = "Agent",
+                                        modifier = Modifier.size(20.dp),
+                                        tint = MaterialTheme.colorScheme.onTertiaryContainer
+                                    )
+                                }
+                            }
+                        } else if (photoBitmap != null) {
                             Image(
                                 bitmap = photoBitmap.asImageBitmap(),
                                 contentDescription = null,
@@ -135,10 +154,19 @@ fun ConversationScreen(
                             }
                         }
                         Spacer(modifier = Modifier.width(12.dp))
-                        Text(
-                            text = connection?.peerDisplayName ?: "Loading...",
-                            style = MaterialTheme.typography.titleMedium
-                        )
+                        Column {
+                            Text(
+                                text = connection?.peerDisplayName ?: "Loading...",
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            if (isAgent && agentType != null) {
+                                Text(
+                                    text = agentType!!,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     }
                 },
                 navigationIcon = {

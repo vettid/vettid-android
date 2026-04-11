@@ -74,7 +74,8 @@ class FeedViewModel @Inject constructor(
         EventTypes.MESSAGE_RECEIVED, EventTypes.MESSAGE_SENT,
         EventTypes.CALL_INCOMING, EventTypes.CALL_COMPLETED, EventTypes.CALL_MISSED,
         EventTypes.TRANSFER_REQUEST,
-        EventTypes.CONNECTION_ACCEPTED
+        EventTypes.CONNECTION_ACCEPTED,
+        EventTypes.AGENT_MESSAGE_RECEIVED, EventTypes.AGENT_MESSAGE_SENT
     )
 
     // Cache of connection photos loaded from ConnectionsClient
@@ -160,16 +161,34 @@ class FeedViewModel @Inject constructor(
                 val preview = buildActivityPreview(latest)
                 val activityType = mapActivityType(latest.eventType)
 
-                FeedDisplayItem.ConnectionItem(
-                    connectionId = connectionId,
-                    peerName = peerName,
-                    peerPhotoBase64 = connectionPhotoCache[connectionId],
-                    lastActivityPreview = preview,
-                    lastActivityType = activityType,
-                    unreadCount = unreadCount,
-                    sortTimestamp = latest.createdAt,
-                    isUnread = unreadCount > 0
-                )
+                // Check if this is an agent connection
+                val isAgent = events.any {
+                    it.sourceType == "agent" || it.metadata?.containsKey("agent_type") == true
+                }
+
+                if (isAgent) {
+                    FeedDisplayItem.AgentConnectionItem(
+                        connectionId = connectionId,
+                        agentName = latest.metadata?.get("agent_name") ?: peerName,
+                        agentType = latest.metadata?.get("agent_type") ?: "agent",
+                        lastActivityPreview = preview,
+                        lastActivityType = activityType,
+                        unreadCount = unreadCount,
+                        sortTimestamp = latest.createdAt,
+                        isUnread = unreadCount > 0
+                    )
+                } else {
+                    FeedDisplayItem.ConnectionItem(
+                        connectionId = connectionId,
+                        peerName = peerName,
+                        peerPhotoBase64 = connectionPhotoCache[connectionId],
+                        lastActivityPreview = preview,
+                        lastActivityType = activityType,
+                        unreadCount = unreadCount,
+                        sortTimestamp = latest.createdAt,
+                        isUnread = unreadCount > 0
+                    )
+                }
             }
 
         // Build EventItems for standalone events
@@ -187,7 +206,8 @@ class FeedViewModel @Inject constructor(
             compareByDescending<FeedDisplayItem> {
                 when (it) {
                     is FeedDisplayItem.EventItem -> it.event.priority
-                    is FeedDisplayItem.ConnectionItem -> 0  // connections don't pin
+                    is FeedDisplayItem.ConnectionItem -> 0
+                    is FeedDisplayItem.AgentConnectionItem -> 0
                 }
             }.thenByDescending { it.sortTimestamp }
         )
@@ -655,6 +675,9 @@ class FeedViewModel @Inject constructor(
             when (item) {
                 is FeedDisplayItem.ConnectionItem -> {
                     _effects.emit(FeedEffect.NavigateToConversation(item.connectionId))
+                }
+                is FeedDisplayItem.AgentConnectionItem -> {
+                    _effects.emit(FeedEffect.NavigateToAgentConversation(item.connectionId))
                 }
                 is FeedDisplayItem.EventItem -> {
                     onEventClick(item.event)

@@ -59,6 +59,15 @@ class ConversationViewModel @Inject constructor(
     private val _isSending = MutableStateFlow(false)
     val isSending: StateFlow<Boolean> = _isSending.asStateFlow()
 
+    private val _isAgentConnection = MutableStateFlow(false)
+    val isAgentConnection: StateFlow<Boolean> = _isAgentConnection.asStateFlow()
+
+    private val _agentName = MutableStateFlow<String?>(null)
+    val agentName: StateFlow<String?> = _agentName.asStateFlow()
+
+    private val _agentType = MutableStateFlow<String?>(null)
+    val agentType: StateFlow<String?> = _agentType.asStateFlow()
+
     private val _effects = MutableSharedFlow<ConversationEffect>()
     val effects: SharedFlow<ConversationEffect> = _effects.asSharedFlow()
 
@@ -155,6 +164,12 @@ class ConversationViewModel @Inject constructor(
                         )
                         // Store peer photo for header avatar
                         _peerPhotoBase64.value = record.peerProfile?.photo
+
+                        // Detect agent connections for reply routing
+                        if (record.connectionType == "agent") {
+                            _isAgentConnection.value = true
+                            _agentName.value = record.label
+                        }
                     }
                 },
                 onFailure = { /* Ignore, not critical */ }
@@ -304,67 +319,92 @@ class ConversationViewModel @Inject constructor(
 
             _isSending.value = true
 
-            // Encrypt with transport key (XChaCha20-Poly1305) so content is not visible in NATS.
-            // Vault decrypts with matching transport key, then re-encrypts for peer delivery.
-            val key = transportKey
-            val sendResult = if (key != null) {
-                val encrypted = connectionCryptoManager.encryptXChaCha20(text, key)
-                messagingClient.sendMessage(
-                    connectionId = connectionId,
-                    encryptedContent = android.util.Base64.encodeToString(encrypted.ciphertext, android.util.Base64.NO_WRAP),
-                    nonce = android.util.Base64.encodeToString(encrypted.nonce, android.util.Base64.NO_WRAP),
-                    contentType = "text"
-                )
+            // Build a Message for display regardless of send path
+            var sentMessageForDisplay: Message? = null
+
+            val success = if (_isAgentConnection.value) {
+                // Agent connection: route reply through agent message-reply path
+                val payload = com.google.gson.JsonObject().apply {
+                    addProperty("connection_id", connectionId)
+                    addProperty("content", text)
+                }
+                try {
+                    val agentResponse = ownerSpaceClient.sendAndAwaitResponse("agent.message-reply", payload, 15000L)
+                    if (agentResponse is com.vettid.app.core.nats.VaultResponse.HandlerResult && agentResponse.success) {
+                        val msgId = agentResponse.result?.get("message_id")?.asString ?: "msg-${System.currentTimeMillis()}"
+                        sentMessageForDisplay = Message(
+                            messageId = msgId,
+                            connectionId = connectionId,
+                            senderId = currentUserGuid ?: "",
+                            content = text,
+                            contentType = MessageContentType.TEXT,
+                            sentAt = System.currentTimeMillis(),
+                            receivedAt = null,
+                            readAt = null,
+                            status = MessageStatus.SENT
+                        )
+                        true
+                    } else false
+                } catch (e: Exception) {
+                    android.util.Log.e("ConversationVM", "Agent send failed", e)
+                    false
+                }
             } else {
-                // Fallback: send plaintext (session encryption still wraps the NATS payload)
-                android.util.Log.w("ConversationVM", "No transport key — sending plaintext to vault")
-                messagingClient.sendMessage(
-                    connectionId = connectionId,
-                    content = text,
-                    contentType = "text"
+                // Peer connection: encrypt with transport key (XChaCha20-Poly1305)
+                val key = transportKey
+                val result = if (key != null) {
+                    val encrypted = connectionCryptoManager.encryptXChaCha20(text, key)
+                    messagingClient.sendMessage(
+                        connectionId = connectionId,
+                        encryptedContent = android.util.Base64.encodeToString(encrypted.ciphertext, android.util.Base64.NO_WRAP),
+                        nonce = android.util.Base64.encodeToString(encrypted.nonce, android.util.Base64.NO_WRAP),
+                        contentType = "text"
+                    )
+                } else {
+                    android.util.Log.w("ConversationVM", "No transport key — sending plaintext to vault")
+                    messagingClient.sendMessage(
+                        connectionId = connectionId,
+                        content = text,
+                        contentType = "text"
+                    )
+                }
+                result.fold(
+                    onSuccess = { sent ->
+                        val sentAtMillis = try {
+                            java.time.Instant.parse(sent.timestamp).toEpochMilli()
+                        } catch (e: Exception) { System.currentTimeMillis() }
+                        sentMessageForDisplay = Message(
+                            messageId = sent.messageId,
+                            connectionId = connectionId,
+                            senderId = currentUserGuid ?: "",
+                            content = text,
+                            contentType = MessageContentType.TEXT,
+                            sentAt = sentAtMillis,
+                            receivedAt = null,
+                            readAt = null,
+                            status = MessageStatus.SENT
+                        )
+                        true
+                    },
+                    onFailure = { false }
                 )
             }
-            sendResult.fold(
-                onSuccess = { sentMessage ->
-                    // Create message for display
-                    val sentAtMillis = try {
-                        java.time.Instant.parse(sentMessage.timestamp).toEpochMilli()
-                    } catch (e: Exception) {
-                        System.currentTimeMillis()
-                    }
 
-                    val message = Message(
-                        messageId = sentMessage.messageId,
-                        connectionId = connectionId,
-                        senderId = currentUserGuid ?: "",
-                        content = text,
-                        contentType = MessageContentType.TEXT,
-                        sentAt = sentAtMillis,
-                        receivedAt = null,
-                        readAt = null,
-                        status = when (sentMessage.status) {
-                            "delivered" -> MessageStatus.DELIVERED
-                            "read" -> MessageStatus.READ
-                            else -> MessageStatus.SENT
-                        }
-                    )
+            if (success && sentMessageForDisplay != null) {
+                val message = sentMessageForDisplay!!
 
-                    // Add to list
-                    allMessages.add(0, message)
-                    _state.value = ConversationState.Loaded(
-                        messages = allMessages.toList(),
-                        hasMore = false
-                    )
+                // Add to list
+                allMessages.add(0, message)
+                _state.value = ConversationState.Loaded(
+                    messages = allMessages.toList(),
+                    hasMore = false
+                )
 
-                    // Clear input
-                    _messageText.value = ""
-                },
-                onFailure = { error ->
-                    _effects.emit(ConversationEffect.ShowError(
-                        error.message ?: "Failed to send message"
-                    ))
-                }
-            )
+                // Clear input
+                _messageText.value = ""
+            } else if (!success) {
+                _effects.emit(ConversationEffect.ShowError("Failed to send message"))
+            }
 
             _isSending.value = false
         }

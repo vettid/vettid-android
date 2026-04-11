@@ -561,6 +561,7 @@ class ConnectionsClient @Inject constructor(
             label = json.get("label")?.asString ?: json.get("peer_alias")?.asString ?: "",
             status = json.get("status")?.asString ?: "unknown",
             direction = json.get("direction")?.asString ?: json.get("credentials_type")?.asString ?: "unknown",
+            connectionType = json.get("connection_type")?.asString ?: "peer",
             createdAt = json.get("created_at")?.asString ?: "",
             expiresAt = json.get("expires_at")?.asString,
             lastRotatedAt = json.get("last_rotated_at")?.asString,
@@ -686,6 +687,7 @@ data class ConnectionRecord(
     val label: String,
     val status: String,        // "active", "pending", "revoked", "expired"
     val direction: String,     // "outbound" (we invited) or "inbound" (they invited us)
+    val connectionType: String = "peer", // "peer", "agent", "device"
     val createdAt: String,
     val expiresAt: String?,
     val lastRotatedAt: String?,

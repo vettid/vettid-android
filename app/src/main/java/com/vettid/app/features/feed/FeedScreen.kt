@@ -200,7 +200,7 @@ fun FeedContent(
                 ) {
                     ExtendedFloatingActionButton(
                         onClick = { showFabMenu = false; onNavigateToCreateAgentInvitation() },
-                        icon = { Icon(Icons.Default.SmartToy, contentDescription = null) },
+                        icon = { Icon(Icons.Default.Computer, contentDescription = null) },
                         text = { Text("Agent Invitation") },
                         containerColor = MaterialTheme.colorScheme.secondaryContainer,
                         contentColor = MaterialTheme.colorScheme.onSecondaryContainer
@@ -302,6 +302,7 @@ private fun FeedList(
                 key = { item ->
                     when (item) {
                         is FeedDisplayItem.ConnectionItem -> "conn-${item.connectionId}"
+                        is FeedDisplayItem.AgentConnectionItem -> "agent-${item.connectionId}"
                         is FeedDisplayItem.EventItem -> item.event.eventId
                     }
                 }
@@ -317,6 +318,10 @@ private fun FeedList(
                         onVideoCallClick = { /* TODO: video call */ },
                         onBtcClick = { /* TODO: send BTC */ },
                         onHistoryClick = { /* TODO: view history/archive for connection */ }
+                    )
+                    is FeedDisplayItem.AgentConnectionItem -> AgentConnectionCard(
+                        item = item,
+                        onClick = { onNavigateToConversation(item.connectionId) }
                     )
                     is FeedDisplayItem.EventItem -> EventCard(
                         event = item.event,
@@ -513,6 +518,85 @@ private fun ConnectionCard(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AgentConnectionCard(
+    item: FeedDisplayItem.AgentConnectionItem,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = if (item.isUnread) {
+                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
+            } else {
+                MaterialTheme.colorScheme.surface
+            }
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Agent icon avatar
+            Surface(
+                modifier = Modifier.size(44.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.tertiaryContainer
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Default.Computer,
+                        contentDescription = "Agent",
+                        modifier = Modifier.size(24.dp),
+                        tint = MaterialTheme.colorScheme.onTertiaryContainer
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = item.agentName,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = if (item.isUnread) FontWeight.Bold else FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Surface(
+                        shape = MaterialTheme.shapes.extraSmall,
+                        color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f)
+                    ) {
+                        Text(
+                            text = item.agentType,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = item.lastActivityPreview,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            if (item.unreadCount > 0) {
+                Badge { Text("${item.unreadCount}") }
             }
         }
     }
