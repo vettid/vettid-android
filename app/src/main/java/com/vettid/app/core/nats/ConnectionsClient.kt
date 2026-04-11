@@ -532,6 +532,17 @@ class ConnectionsClient @Inject constructor(
                 nestedFields
             }
 
+            // Parse wallets array if present
+            val wallets = profileObj.getAsJsonArray("wallets")?.mapNotNull { element ->
+                val walletObj = element?.asJsonObject ?: return@mapNotNull null
+                PeerWalletInfo(
+                    walletId = walletObj.get("wallet_id")?.asString ?: "",
+                    label = walletObj.get("label")?.asString ?: "Wallet",
+                    address = walletObj.get("address")?.asString ?: "",
+                    network = walletObj.get("network")?.asString ?: "mainnet"
+                )
+            }?.filter { it.address.isNotBlank() }
+
             PeerProfileData(
                 firstName = profileObj.get("_system_first_name")?.asString,
                 lastName = profileObj.get("_system_last_name")?.asString,
@@ -539,7 +550,8 @@ class ConnectionsClient @Inject constructor(
                 photo = profileObj.get("photo")?.takeIf { !it.isJsonNull }?.asString,
                 fields = fields,
                 publicKey = profileObj.get("public_key")?.takeIf { !it.isJsonNull }?.asString,
-                userGuid = profileObj.get("user_guid")?.takeIf { !it.isJsonNull }?.asString
+                userGuid = profileObj.get("user_guid")?.takeIf { !it.isJsonNull }?.asString,
+                wallets = wallets?.takeIf { it.isNotEmpty() }
             )
         }
 
@@ -691,7 +703,18 @@ data class PeerProfileData(
     val photo: String? = null,
     val fields: Map<String, Map<String, String>>? = null,
     val publicKey: String? = null,
-    val userGuid: String? = null
+    val userGuid: String? = null,
+    val wallets: List<PeerWalletInfo>? = null
+)
+
+/**
+ * Public wallet info from a peer's published profile.
+ */
+data class PeerWalletInfo(
+    val walletId: String,
+    val label: String,
+    val address: String,
+    val network: String
 )
 
 /**

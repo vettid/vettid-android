@@ -51,6 +51,7 @@ fun ConnectionDetailScreen(
     val peerPublicKey by viewModel.peerPublicKey.collectAsState()
     val peerUserGuid by viewModel.peerUserGuid.collectAsState()
     val peerIdentityKey by viewModel.peerIdentityKey.collectAsState()
+    val peerWallets by viewModel.peerWallets.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -153,6 +154,7 @@ fun ConnectionDetailScreen(
                     peerPublicKey = peerPublicKey,
                     peerUserGuid = peerUserGuid,
                     peerIdentityKey = peerIdentityKey,
+                    peerWallets = peerWallets,
                     isRevoking = currentState.isRevoking,
                     isRotating = currentState.isRotating,
                     isLocationSharingEnabled = currentState.isLocationSharingEnabled,
@@ -208,6 +210,7 @@ private fun LoadedContent(
     peerPublicKey: String? = null,
     peerUserGuid: String? = null,
     peerIdentityKey: String? = null,
+    peerWallets: List<com.vettid.app.core.nats.PeerWalletInfo> = emptyList(),
     isRevoking: Boolean,
     isRotating: Boolean = false,
     isLocationSharingEnabled: Boolean = false,
@@ -294,6 +297,45 @@ private fun LoadedContent(
                             Text(text = displayName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             Text(text = fieldData["value"] ?: "", style = MaterialTheme.typography.bodyMedium)
                         }
+                    }
+                }
+            }
+        }
+
+        // Public wallet addresses
+        if (peerWallets.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.AccountBalance,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Bitcoin Wallets", style = MaterialTheme.typography.titleSmall)
+                    }
+                    peerWallets.forEachIndexed { index, wallet ->
+                        if (index > 0) {
+                            HorizontalDivider(
+                                modifier = Modifier.padding(vertical = 8.dp),
+                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                            )
+                        } else {
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        Text(
+                            text = "${wallet.label} (${wallet.network})",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = wallet.address,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        )
                     }
                 }
             }

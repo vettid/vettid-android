@@ -19,6 +19,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.vettid.app.core.network.Profile
 import com.vettid.app.features.personaldata.PersonalDataViewModel
 import com.vettid.app.features.personaldata.PublicMetadataItem
+import androidx.compose.ui.text.font.FontFamily
 
 /**
  * Screen for viewing and editing own profile.
@@ -38,15 +39,18 @@ fun ProfileScreen(
     val editLocation by viewModel.editLocation.collectAsState()
     val publicSecrets by viewModel.publicSecrets.collectAsState()
     val publicPersonalData by personalDataViewModel.publicPersonalData.collectAsState()
+    val publishedProfileItems by viewModel.publishedProfileItems.collectAsState()
 
     var showSecretsDialog by remember { mutableStateOf(false) }
     var showPersonalDataDialog by remember { mutableStateOf(false) }
+    var showPublishedProfileDialog by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
 
     // Refresh public data counts when profile screen appears
     LaunchedEffect(Unit) {
         viewModel.loadPublicSecrets()
+        viewModel.loadPublishedProfile()
         personalDataViewModel.loadPersonalData()
     }
 
@@ -129,8 +133,10 @@ fun ProfileScreen(
                         onPublish = { viewModel.publishProfile() },
                         onViewSecrets = { showSecretsDialog = true },
                         onViewPersonalData = { showPersonalDataDialog = true },
+                        onViewPublishedProfile = { showPublishedProfileDialog = true },
                         secretsCount = publicSecrets.size,
                         personalDataCount = publicPersonalData.size,
+                        publishedItemsCount = publishedProfileItems.size,
                         modifier = Modifier.padding(padding)
                     )
                 }
@@ -165,6 +171,14 @@ fun ProfileScreen(
             items = publicPersonalData,
             emptyMessage = "No personal data is shared publicly",
             onDismiss = { showPersonalDataDialog = false }
+        )
+    }
+
+    // Published Profile Preview Dialog
+    if (showPublishedProfileDialog) {
+        PublishedProfileDialog(
+            items = publishedProfileItems,
+            onDismiss = { showPublishedProfileDialog = false }
         )
     }
 }
@@ -263,8 +277,10 @@ private fun ViewProfileContent(
     onPublish: () -> Unit,
     onViewSecrets: () -> Unit,
     onViewPersonalData: () -> Unit,
+    onViewPublishedProfile: () -> Unit,
     secretsCount: Int,
     personalDataCount: Int,
+    publishedItemsCount: Int,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -320,6 +336,21 @@ private fun ViewProfileContent(
                 Spacer(modifier = Modifier.width(4.dp))
                 Text("Personal ($personalDataCount)", style = MaterialTheme.typography.labelMedium)
             }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Published profile preview button
+        OutlinedButton(
+            onClick = onViewPublishedProfile,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                "Published Profile ($publishedItemsCount items)",
+                style = MaterialTheme.typography.labelMedium
+            )
         }
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -545,6 +576,90 @@ private fun EditProfileContent(
             Text(if (isSaving) "Saving..." else "Save Profile")
         }
     }
+}
+
+@Composable
+private fun PublishedProfileDialog(
+    items: List<PublishedProfileItem>,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Published Profile") },
+        text = {
+            Column {
+                Text(
+                    text = "What connections see when they view your profile",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                if (items.isEmpty()) {
+                    Text(
+                        text = "No items are published. Publish your profile to share data with connections.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else {
+                    LazyColumn(
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.heightIn(max = 400.dp)
+                    ) {
+                        items(items) { item ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = item.label,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Surface(
+                                            shape = MaterialTheme.shapes.extraSmall,
+                                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                        ) {
+                                            Text(
+                                                text = item.category,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = item.value,
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontFamily = if (item.category == "Bitcoin Wallet") FontFamily.Monospace else FontFamily.Default
+                                        ),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close")
+            }
+        }
+    )
 }
 
 @Composable

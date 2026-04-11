@@ -1,7 +1,11 @@
 package com.vettid.app.features.profile
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.gson.JsonObject
+import com.vettid.app.core.nats.OwnerSpaceClient
+import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.core.network.Profile
 import com.vettid.app.core.network.ProfileApiClient
 import com.vettid.app.core.storage.MinorSecretsStore
@@ -10,6 +14,8 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+
+private const val TAG = "ProfileViewModel"
 
 /**
  * ViewModel for profile viewing and editing.
@@ -22,7 +28,8 @@ import javax.inject.Inject
 @HiltViewModel
 class ProfileViewModel @Inject constructor(
     private val profileApiClient: ProfileApiClient,
-    private val minorSecretsStore: MinorSecretsStore
+    private val minorSecretsStore: MinorSecretsStore,
+    private val ownerSpaceClient: OwnerSpaceClient
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<ProfileState>(ProfileState.Loading)
@@ -51,9 +58,13 @@ class ProfileViewModel @Inject constructor(
     private val _publicSecrets = MutableStateFlow<List<PublicMetadataItem>>(emptyList())
     val publicSecrets: StateFlow<List<PublicMetadataItem>> = _publicSecrets.asStateFlow()
 
+    private val _publishedProfileItems = MutableStateFlow<List<PublishedProfileItem>>(emptyList())
+    val publishedProfileItems: StateFlow<List<PublishedProfileItem>> = _publishedProfileItems.asStateFlow()
+
     init {
         loadProfile()
         loadPublicSecrets()
+        loadPublishedProfile()
     }
 
     /**
@@ -214,6 +225,60 @@ class ProfileViewModel @Inject constructor(
     }
 
     /**
+     * Load the full published profile from the vault via profile.get-published.
+     * Returns all public items (fields, wallets, etc.) in one call.
+     */
+    fun loadPublishedProfile() {
+        viewModelScope.launch {
+            try {
+                val response = ownerSpaceClient.sendAndAwaitResponse(
+                    "profile.get-published", JsonObject(), 15000L
+                )
+                if (response is VaultResponse.HandlerResult && response.success && response.result != null) {
+                    val result = response.result!!
+                    val items = mutableListOf<PublishedProfileItem>()
+
+                    // Parse published fields
+                    result.getAsJsonObject("fields")?.entrySet()?.forEach { (key, value) ->
+                        val fieldObj = value?.asJsonObject ?: return@forEach
+                        val displayName = fieldObj.get("display_name")?.asString ?: key
+                        val fieldValue = fieldObj.get("value")?.asString ?: ""
+                        if (fieldValue.isNotBlank()) {
+                            items.add(PublishedProfileItem(
+                                category = "Personal Data",
+                                label = displayName,
+                                value = fieldValue
+                            ))
+                        }
+                    }
+
+                    // Parse published wallets
+                    result.getAsJsonArray("wallets")?.forEach { element ->
+                        val walletObj = element?.asJsonObject ?: return@forEach
+                        val label = walletObj.get("label")?.asString ?: "Wallet"
+                        val address = walletObj.get("address")?.asString ?: ""
+                        val network = walletObj.get("network")?.asString ?: "mainnet"
+                        if (address.isNotBlank()) {
+                            items.add(PublishedProfileItem(
+                                category = "Bitcoin Wallet",
+                                label = "$label ($network)",
+                                value = address
+                            ))
+                        }
+                    }
+
+                    _publishedProfileItems.value = items
+                } else {
+                    _publishedProfileItems.value = emptyList()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to load published profile", e)
+                _publishedProfileItems.value = emptyList()
+            }
+        }
+    }
+
+    /**
      * Check if form has changes.
      */
     fun hasChanges(): Boolean {
@@ -252,4 +317,13 @@ sealed class ProfileEffect {
     data class ShowSuccess(val message: String) : ProfileEffect()
     data class ShowError(val message: String) : ProfileEffect()
 }
+
+/**
+ * A single item from the published profile (field, wallet, etc.).
+ */
+data class PublishedProfileItem(
+    val category: String,
+    val label: String,
+    val value: String
+)
 

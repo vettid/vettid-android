@@ -1619,7 +1619,7 @@ class PersonalDataViewModel @Inject constructor(
                     }
 
                     Log.d(TAG, "Fetching published profile... (attempt ${attempt + 1})")
-                    val response = ownerSpaceClient.sendAndAwaitResponse("profile.get-published", JsonObject(), 10000L)
+                    val response = ownerSpaceClient.sendAndAwaitResponse("profile.get-published", JsonObject(), 30000L)
 
                     val success = handlePublishedProfileResponse(response, attempt, maxRetries)
                     if (success) {
@@ -1849,6 +1849,32 @@ class PersonalDataViewModel @Inject constructor(
                 } catch (e: Exception) {
                     Log.w(TAG, "Error parsing published field $name: ${e.message}")
                 }
+            }
+        }
+
+        // Parse public wallet addresses
+        result.getAsJsonArray("wallets")?.forEach { element ->
+            try {
+                val walletObj = element?.asJsonObject ?: return@forEach
+                val label = walletObj.get("label")?.asString ?: "Wallet"
+                val address = walletObj.get("address")?.asString ?: ""
+                val network = walletObj.get("network")?.asString ?: "mainnet"
+                if (address.isNotBlank()) {
+                    items.add(PersonalDataItem(
+                        id = "_published_wallet_${walletObj.get("wallet_id")?.asString ?: address.take(8)}",
+                        name = "$label ($network)",
+                        type = DataType.PUBLIC,
+                        value = address,
+                        category = DataCategory.FINANCIAL,
+                        isSystemField = false,
+                        isInPublicProfile = true,
+                        sortOrder = 50,
+                        createdAt = now,
+                        updatedAt = now
+                    ))
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Error parsing published wallet: ${e.message}")
             }
         }
 

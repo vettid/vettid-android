@@ -70,6 +70,9 @@ class ConnectionDetailViewModel @Inject constructor(
     private val _peerIdentityKey = MutableStateFlow<String?>(null)
     val peerIdentityKey: StateFlow<String?> = _peerIdentityKey.asStateFlow()
 
+    private val _peerWallets = MutableStateFlow<List<com.vettid.app.core.nats.PeerWalletInfo>>(emptyList())
+    val peerWallets: StateFlow<List<com.vettid.app.core.nats.PeerWalletInfo>> = _peerWallets.asStateFlow()
+
     // Dialog state for revoke confirmation
     private val _showRevokeDialog = MutableStateFlow(false)
     val showRevokeDialog: StateFlow<Boolean> = _showRevokeDialog.asStateFlow()
@@ -125,6 +128,7 @@ class ConnectionDetailViewModel @Inject constructor(
                         _peerPublicKey.value = record.e2ePublicKey
                         _peerUserGuid.value = record.peerProfile?.userGuid ?: record.peerGuid
                         _peerIdentityKey.value = record.peerProfile?.publicKey
+                        _peerWallets.value = record.peerProfile?.wallets ?: emptyList()
                         _state.value = ConnectionDetailState.Loaded(
                             connection = connection,
                             profile = null
