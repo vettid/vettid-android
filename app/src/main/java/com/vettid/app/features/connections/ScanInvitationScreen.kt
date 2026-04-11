@@ -18,6 +18,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.vettid.app.features.connections.components.ConnectionPreviewCard
+import com.vettid.app.features.connections.components.WalletPreview
 import com.vettid.app.features.connections.components.PeerProfilePreview
 import com.vettid.app.features.connections.components.CapabilityInfo
 import com.vettid.app.features.connections.components.SharedDataType
@@ -297,6 +298,7 @@ private fun EnhancedPreviewContent(
                 avatarUrl = state.creatorAvatarUrl,
                 photoBase64 = state.creatorPhoto,
                 publicKeyFingerprint = state.publicKeyFingerprint,
+                publicKey = state.publicKey,
                 isEmailVerified = state.isEmailVerified,
                 trustLevel = state.trustLevel,
                 capabilities = state.capabilities.map { capability ->
@@ -309,7 +311,14 @@ private fun EnhancedPreviewContent(
                 sharedDataTypes = state.sharedDataCategories.map { category ->
                     SharedDataType(category = category)
                 },
-                profileFields = state.profileFields
+                profileFields = state.profileFields,
+                wallets = state.wallets.map { w ->
+                    WalletPreview(
+                        label = w["label"] ?: "Wallet",
+                        address = w["address"] ?: "",
+                        network = w["network"] ?: "mainnet"
+                    )
+                }
             ),
             onAccept = onAccept,
             onDecline = onDecline,

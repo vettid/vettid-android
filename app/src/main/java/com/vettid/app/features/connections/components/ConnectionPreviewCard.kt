@@ -34,11 +34,22 @@ data class PeerProfilePreview(
     val avatarUrl: String? = null,
     val photoBase64: String? = null,
     val publicKeyFingerprint: String? = null,
+    val publicKey: String? = null,
     val isEmailVerified: Boolean = false,
     val trustLevel: String = "New",
     val capabilities: List<CapabilityInfo> = emptyList(),
     val sharedDataTypes: List<SharedDataType> = emptyList(),
-    val profileFields: Map<String, Map<String, String>>? = null
+    val profileFields: Map<String, Map<String, String>>? = null,
+    val wallets: List<WalletPreview> = emptyList()
+)
+
+/**
+ * Wallet address from the peer's published profile.
+ */
+data class WalletPreview(
+    val label: String,
+    val address: String,
+    val network: String
 )
 
 /**
@@ -197,6 +208,72 @@ fun ConnectionPreviewCard(
                                     style = MaterialTheme.typography.bodyMedium
                                 )
                             }
+                        }
+                    }
+                }
+            }
+
+            // Identity public key
+            if (profile.publicKey != null) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "IDENTITY KEY",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                        Text(
+                            text = profile.publicKey!!,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            // Wallet addresses
+            if (profile.wallets.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = "WALLET ADDRESSES",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(bottom = 12.dp)
+                        )
+                        profile.wallets.forEachIndexed { index, wallet ->
+                            if (index > 0) {
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(vertical = 6.dp),
+                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                                )
+                            }
+                            val walletType = if (wallet.network == "testnet") "BTC Testnet" else "BTC"
+                            Text(
+                                text = "${wallet.label} ($walletType)",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = wallet.address,
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                                ),
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
                         }
                     }
                 }

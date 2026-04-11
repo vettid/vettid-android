@@ -57,8 +57,24 @@ class ConnectionsClient @Inject constructor(
             // - "owner_space" or "owner_space_id" for owner space
             // - "message_space" or "message_space_id" or "message_space_topic" for message space
             val inviterProfile = mutableMapOf<String, String>()
-            result.getAsJsonObject("inviter_profile")?.entrySet()?.forEach { entry ->
-                entry.value?.asString?.let { inviterProfile[entry.key] = it }
+            val inviterWallets = mutableListOf<Map<String, String>>()
+            result.getAsJsonObject("inviter_profile")?.let { profileObj ->
+                profileObj.entrySet().forEach { entry ->
+                    if (entry.key == "wallets" && entry.value?.isJsonArray == true) {
+                        entry.value.asJsonArray.forEach { walletEl ->
+                            val w = walletEl?.asJsonObject ?: return@forEach
+                            inviterWallets.add(mapOf(
+                                "wallet_id" to (w.get("wallet_id")?.asString ?: ""),
+                                "label" to (w.get("label")?.asString ?: "Wallet"),
+                                "address" to (w.get("address")?.asString ?: ""),
+                                "network" to (w.get("network")?.asString ?: "mainnet")
+                            ))
+                        }
+                    } else {
+                        try { entry.value?.asString?.let { inviterProfile[entry.key] = it } }
+                        catch (_: Exception) { /* skip non-string values */ }
+                    }
+                }
             }
             // Use vault-returned label (which may be richer) or fallback to what we sent
             val vaultLabel = result.get("label")?.asString ?: label
@@ -75,7 +91,8 @@ class ConnectionsClient @Inject constructor(
                     ?: result.get("message_space_topic")?.asString ?: "",
                 expiresAt = result.get("expires_at")?.asString ?: "",
                 inviterProfile = inviterProfile,
-                inviteCode = result.get("invite_code")?.asString ?: ""
+                inviteCode = result.get("invite_code")?.asString ?: "",
+                inviterWallets = inviterWallets
             )
         }
     }
@@ -605,6 +622,7 @@ class ConnectionsClient @Inject constructor(
             // Extract inviter profile from broker payload
             val inviterProfile = mutableMapOf<String, String>()
             var inviterFields: Map<String, Map<String, String>>? = null
+            val inviterWallets = mutableListOf<Map<String, String>>()
             result.getAsJsonObject("inviter_profile")?.let { profileObj ->
                 profileObj.entrySet().forEach { (key, value) ->
                     when {
@@ -622,6 +640,17 @@ class ConnectionsClient @Inject constructor(
                             }
                             inviterFields = fieldsMap.ifEmpty { null }
                         }
+                        key == "wallets" && value.isJsonArray -> {
+                            value.asJsonArray.forEach { walletEl ->
+                                val w = walletEl?.asJsonObject ?: return@forEach
+                                inviterWallets.add(mapOf(
+                                    "wallet_id" to (w.get("wallet_id")?.asString ?: ""),
+                                    "label" to (w.get("label")?.asString ?: "Wallet"),
+                                    "address" to (w.get("address")?.asString ?: ""),
+                                    "network" to (w.get("network")?.asString ?: "mainnet")
+                                ))
+                            }
+                        }
                         !value.isJsonNull && value.isJsonPrimitive -> {
                             inviterProfile[key] = value.asString
                         }
@@ -637,7 +666,8 @@ class ConnectionsClient @Inject constructor(
                 expiresAt = result.get("expires_at")?.asString ?: "",
                 label = result.get("label")?.asString ?: "",
                 inviterProfile = inviterProfile.ifEmpty { null },
-                inviterFields = inviterFields
+                inviterFields = inviterFields,
+                inviterWallets = inviterWallets
             )
         }
     }
@@ -658,7 +688,8 @@ data class ResolvedInvitation(
     val expiresAt: String,
     val label: String,
     val inviterProfile: Map<String, String>? = null,
-    val inviterFields: Map<String, Map<String, String>>? = null
+    val inviterFields: Map<String, Map<String, String>>? = null,
+    val inviterWallets: List<Map<String, String>> = emptyList()
 )
 
 // MARK: - Data Models
@@ -675,7 +706,8 @@ data class ConnectionInvitation(
     val messageSpaceId: String,
     val expiresAt: String,
     val inviterProfile: Map<String, String> = emptyMap(),
-    val inviteCode: String = ""   // Short code for QR broker lookup
+    val inviteCode: String = "",  // Short code for QR broker lookup
+    val inviterWallets: List<Map<String, String>> = emptyList()
 )
 
 /**
