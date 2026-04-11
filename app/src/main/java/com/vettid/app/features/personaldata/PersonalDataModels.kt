@@ -66,6 +66,7 @@ enum class DataCategory(val displayName: String, val iconName: String) {
     EDUCATION("Education", "school"),
     VEHICLE("Vehicle", "directions_car"),
     LEGAL("Legal", "gavel"),
+    WALLET("Wallet Addresses", "account_balance_wallet"),
     DIGITAL("Digital", "language"),
     TRAVEL("Travel", "flight_takeoff"),
     MEMBERSHIP("Membership", "card_membership"),

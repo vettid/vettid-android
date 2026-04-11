@@ -2449,6 +2449,7 @@ private fun getDataCategoryIcon(category: DataCategory): ImageVector {
         DataCategory.EDUCATION -> Icons.Default.School
         DataCategory.VEHICLE -> Icons.Default.DirectionsCar
         DataCategory.LEGAL -> Icons.Default.Gavel
+        DataCategory.WALLET -> Icons.Default.AccountBalanceWallet
         DataCategory.DIGITAL -> Icons.Default.Language
         DataCategory.TRAVEL -> Icons.Default.FlightTakeoff
         DataCategory.MEMBERSHIP -> Icons.Default.CardMembership

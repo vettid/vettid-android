@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.vettid.app.core.attestation.PcrConfigManager
 import com.vettid.app.core.nats.MigrationClient
 import com.vettid.app.core.nats.MigrationConfig
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -28,6 +29,7 @@ import javax.inject.Inject
 @HiltViewModel
 class VaultUpdateViewModel @Inject constructor(
     private val migrationClient: MigrationClient,
+    private val pcrConfigManager: PcrConfigManager,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -108,6 +110,15 @@ class VaultUpdateViewModel @Inject constructor(
 
                 if (result.isSuccess) {
                     val version = result.getOrDefault("")
+
+                    // SECURITY: Add new enclave PCR0 to user's trusted set.
+                    // This is the user's explicit consent to the new enclave version.
+                    // Without this, PIN unlock will be blocked on the new enclave.
+                    config.newPcr0?.let { newPcr0 ->
+                        pcrConfigManager.addTrustedPcr0(newPcr0)
+                        Log.i(TAG, "Added new enclave PCR0 to trusted set after migration consent")
+                    }
+
                     getPrefs().edit()
                         .putString(KEY_COMPLETED_VERSION, version.ifEmpty { config.version })
                         .putBoolean(KEY_DISMISSED, false)

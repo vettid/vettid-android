@@ -265,12 +265,16 @@ class MigrationClient @Inject constructor(
         val available = json.get("available")?.asBoolean ?: false
         if (!available) return null
 
+        // Extract new PCR0 from new_pcrs object
+        val newPcr0 = json.getAsJsonObject("new_pcrs")?.get("pcr0")?.asString
+
         return MigrationConfig(
             version = json.get("version")?.asString ?: "",
             summary = json.get("summary")?.asString ?: "",
             detailsUrl = json.get("details_url")?.asString,
             publishedAt = json.get("published_at")?.asString,
-            mandatoryAfter = json.get("mandatory_after")?.asString
+            mandatoryAfter = json.get("mandatory_after")?.asString,
+            newPcr0 = newPcr0
         )
     }
 
@@ -361,7 +365,8 @@ data class MigrationConfig(
     val summary: String,
     val detailsUrl: String?,
     val publishedAt: String?,
-    val mandatoryAfter: String?
+    val mandatoryAfter: String?,
+    val newPcr0: String? = null
 )
 
 /**

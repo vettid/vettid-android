@@ -5,10 +5,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import com.vettid.app.core.attestation.PcrConfigManager
 import com.vettid.app.core.crypto.CryptoManager
 import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.OwnerSpaceClient
+import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.core.storage.CredentialStore
 import com.vettid.app.core.network.TransactionKeyInfo
 import com.vettid.app.core.storage.PersonalDataStore
@@ -76,7 +78,8 @@ class PinUnlockViewModel @Inject constructor(
     private val ownerSpaceClient: OwnerSpaceClient,
     private val connectionManager: NatsConnectionManager,
     private val natsAutoConnector: NatsAutoConnector,
-    private val personalDataStore: PersonalDataStore
+    private val personalDataStore: PersonalDataStore,
+    private val pcrConfigManager: PcrConfigManager
 ) : ViewModel() {
 
     companion object {
@@ -169,6 +172,32 @@ class PinUnlockViewModel @Inject constructor(
             }
 
             val pin = current.pin
+
+            // SECURITY: Verify the current enclave PCR0 is in the user's trusted set
+            // before sending the PIN. This ensures the user has consented to this
+            // enclave version. Without this check, an operator could deploy a rogue
+            // enclave and the app would blindly send the PIN to it.
+            val trustedSet = pcrConfigManager.getTrustedPcr0Set()
+            if (trustedSet.isNotEmpty()) {
+                val currentPcr0 = pcrConfigManager.getCurrentPcrs().pcr0
+                if (!pcrConfigManager.isPcr0Trusted(currentPcr0)) {
+                    Log.w(TAG, "SECURITY: Current enclave PCR0 not in user's trusted set")
+                    _state.value = PinUnlockState.Error(
+                        "Vault software has been updated. Please review and approve the update before unlocking."
+                    )
+                    return
+                }
+            } else {
+                // No trusted set yet (user enrolled before this feature existed).
+                // Bootstrap: trust the current PCR0 on first use so existing users
+                // aren't locked out. Future enclave changes will require consent.
+                val currentPcr0 = pcrConfigManager.getCurrentPcrs().pcr0
+                if (currentPcr0 != "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000") {
+                    pcrConfigManager.addTrustedPcr0(currentPcr0)
+                    Log.i(TAG, "Bootstrapped trusted PCR0 set for existing user")
+                }
+            }
+
             // Connect to NATS if not connected
             _state.value = PinUnlockState.Connecting
 

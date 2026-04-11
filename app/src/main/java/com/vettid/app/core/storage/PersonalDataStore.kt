@@ -92,6 +92,10 @@ class PersonalDataStore @Inject constructor(
         // Field sort order
         private const val KEY_FIELD_SORT_ORDER = "field_sort_order"
 
+        // Published profile cache (instant load on cold start)
+        private const val KEY_PUBLISHED_PROFILE_CACHE = "published_profile_cache"
+        private const val KEY_PUBLISHED_PROFILE_CACHE_TIME = "published_profile_cache_time"
+
         // Predefined categories matching enclave
         val PREDEFINED_CATEGORIES = listOf(
             CategoryInfo("identity", "Identity", "person"),
@@ -820,6 +824,25 @@ class PersonalDataStore @Inject constructor(
      */
     fun getFieldSortOrderFor(namespace: String): Int {
         return getFieldSortOrder()[namespace] ?: Int.MAX_VALUE
+    }
+
+    // MARK: - Published Profile Cache
+
+    /**
+     * Cache the published profile JSON for instant loading on next app open.
+     */
+    fun cachePublishedProfile(json: String) {
+        encryptedPrefs.edit()
+            .putString(KEY_PUBLISHED_PROFILE_CACHE, json)
+            .putLong(KEY_PUBLISHED_PROFILE_CACHE_TIME, System.currentTimeMillis())
+            .apply()
+    }
+
+    /**
+     * Get the cached published profile JSON, or null if not cached.
+     */
+    fun getCachedPublishedProfile(): String? {
+        return encryptedPrefs.getString(KEY_PUBLISHED_PROFILE_CACHE, null)
     }
 
     /**

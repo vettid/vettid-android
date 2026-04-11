@@ -258,6 +258,11 @@ class NitroEnrollmentClient @Inject constructor(
 
                                     if (verified != null) {
                                         verifiedAttestation = verified
+                                        // Add verified PCR0 to user's trusted set (user consented by enrolling)
+                                        verified.pcrs[0]?.let { pcr0Bytes ->
+                                            val pcr0Hex = pcr0Bytes.joinToString("") { "%02x".format(it) }
+                                            pcrConfigManager.addTrustedPcr0(pcr0Hex)
+                                        }
                                         if (continuation.isActive) {
                                             continuation.resume(Result.success(verified))
                                         }

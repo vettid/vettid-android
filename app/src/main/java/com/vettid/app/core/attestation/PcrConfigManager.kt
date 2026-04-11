@@ -39,6 +39,7 @@ class PcrConfigManager @Inject constructor(
         private const val KEY_PREVIOUS_PCRS = "previous_pcrs"
         private const val KEY_LAST_UPDATE = "last_update_timestamp"
         private const val KEY_PCR_VERSION = "pcr_version"
+        private const val KEY_TRUSTED_PCR0_SET = "user_trusted_pcr0_set"
 
         // PCR manifest CloudFront URL (custom domain)
         private const val PCR_MANIFEST_URL = "https://pcr-manifest.vettid.dev/pcr-manifest.json"
@@ -467,6 +468,62 @@ class PcrConfigManager @Inject constructor(
                 (expected.pcr3 == null || actual.pcr3.equals(expected.pcr3, ignoreCase = true))
     }
 
+    // === User-Controlled Trusted PCR0 Set ===
+    // This set is ONLY modified by explicit user actions (enrollment or migration consent).
+    // It is never auto-updated from the API or PCR manifest.
+    // The app refuses to send the PIN to any enclave whose PCR0 is not in this set.
+
+    /**
+     * Get the set of PCR0 values the user has explicitly trusted.
+     * Empty set means no enrollment has completed yet.
+     */
+    fun getTrustedPcr0Set(): Set<String> {
+        val json = prefs.getString(KEY_TRUSTED_PCR0_SET, null) ?: return emptySet()
+        return try {
+            gson.fromJson(json, Array<String>::class.java).toSet()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse trusted PCR0 set", e)
+            emptySet()
+        }
+    }
+
+    /**
+     * Add a PCR0 value to the user's trusted set.
+     * Called only on enrollment (user consented by enrolling) or migration consent
+     * (user tapped "Update Now").
+     */
+    fun addTrustedPcr0(pcr0: String) {
+        val current = getTrustedPcr0Set().toMutableSet()
+        if (current.add(pcr0.lowercase())) {
+            prefs.edit()
+                .putString(KEY_TRUSTED_PCR0_SET, gson.toJson(current.toTypedArray()))
+                .apply()
+            Log.i(TAG, "Added PCR0 to trusted set: ${pcr0.take(16)}... (set size: ${current.size})")
+        } else {
+            Log.d(TAG, "PCR0 already in trusted set: ${pcr0.take(16)}...")
+        }
+    }
+
+    /**
+     * Check if a PCR0 value is in the user's trusted set.
+     */
+    fun isPcr0Trusted(pcr0: String): Boolean {
+        return getTrustedPcr0Set().any { it.equals(pcr0, ignoreCase = true) }
+    }
+
+    /**
+     * Remove a PCR0 value from the trusted set (e.g., after migration finalization).
+     */
+    fun removeTrustedPcr0(pcr0: String) {
+        val current = getTrustedPcr0Set().toMutableSet()
+        if (current.removeAll { it.equals(pcr0, ignoreCase = true) }) {
+            prefs.edit()
+                .putString(KEY_TRUSTED_PCR0_SET, gson.toJson(current.toTypedArray()))
+                .apply()
+            Log.i(TAG, "Removed PCR0 from trusted set: ${pcr0.take(16)}... (set size: ${current.size})")
+        }
+    }
+
     /**
      * Clear cached PCRs (for testing or recovery).
      */
@@ -476,8 +533,9 @@ class PcrConfigManager @Inject constructor(
             .remove(KEY_PREVIOUS_PCRS)
             .remove(KEY_PCR_VERSION)
             .remove(KEY_LAST_UPDATE)
+            .remove(KEY_TRUSTED_PCR0_SET)
             .apply()
-        Log.d(TAG, "PCR cache cleared")
+        Log.d(TAG, "PCR cache cleared (including trusted set)")
     }
 
     /**

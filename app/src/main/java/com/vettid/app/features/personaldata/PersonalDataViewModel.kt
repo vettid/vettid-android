@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.vettid.app.core.events.ProfilePhotoEvents
@@ -34,6 +35,8 @@ class PersonalDataViewModel @Inject constructor(
     private val connectionManager: NatsConnectionManager,
     private val profilePhotoEvents: ProfilePhotoEvents
 ) : ViewModel() {
+
+    private val gson = Gson()
 
     private val _state = MutableStateFlow<PersonalDataState>(PersonalDataState.Loading)
     val state: StateFlow<PersonalDataState> = _state.asStateFlow()
@@ -187,7 +190,10 @@ class PersonalDataViewModel @Inject constructor(
                 // Update system fields from local storage for profile header
                 _systemFields.value = personalDataStore.getSystemFields()
 
-                // Also fetch the published profile status (non-blocking)
+                // Load cached published profile immediately (no network wait)
+                loadCachedPublishedProfile()
+
+                // Also fetch the published profile status (non-blocking, updates cache)
                 if (connectionManager.isConnected()) {
                     fetchPublishedProfileStatus()
                     fetchProfilePhoto()
@@ -1208,6 +1214,7 @@ class PersonalDataViewModel @Inject constructor(
             DataCategory.EDUCATION -> "education.custom"
             DataCategory.VEHICLE -> "vehicle.custom"
             DataCategory.LEGAL -> "legal.custom"
+            DataCategory.WALLET -> "wallet.custom"
             DataCategory.DIGITAL -> "digital.custom"
             DataCategory.TRAVEL -> "travel.custom"
             DataCategory.MEMBERSHIP -> "membership.custom"
@@ -1705,6 +1712,21 @@ class PersonalDataViewModel @Inject constructor(
     }
 
     /**
+     * Load published profile from local cache for instant display.
+     * The cache is populated on every successful fetch from the vault.
+     */
+    private fun loadCachedPublishedProfile() {
+        val cachedJson = personalDataStore.getCachedPublishedProfile() ?: return
+        try {
+            val result = gson.fromJson(cachedJson, JsonObject::class.java)
+            parsePublishedProfile(result, fromCache = true)
+            Log.d(TAG, "Loaded published profile from cache")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to load cached published profile", e)
+        }
+    }
+
+    /**
      * Fetch published profile status (non-blocking, for showing publish status in UI).
      * Unlike fetchPublishedProfile(), this doesn't set loading state for preview dialog.
      */
@@ -1754,7 +1776,16 @@ class PersonalDataViewModel @Inject constructor(
     /**
      * Parse the published profile from vault response.
      */
-    private fun parsePublishedProfile(result: JsonObject) {
+    private fun parsePublishedProfile(result: JsonObject, fromCache: Boolean = false) {
+        // Cache the raw JSON for instant loading next time
+        if (!fromCache) {
+            try {
+                personalDataStore.cachePublishedProfile(gson.toJson(result))
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to cache published profile", e)
+            }
+        }
+
         val items = mutableListOf<PersonalDataItem>()
         val now = Instant.now()
 
@@ -1852,20 +1883,21 @@ class PersonalDataViewModel @Inject constructor(
             }
         }
 
-        // Parse public wallet addresses
+        // Parse public wallet addresses — displayed like public keys (clickable, QR, copy)
         result.getAsJsonArray("wallets")?.forEach { element ->
             try {
                 val walletObj = element?.asJsonObject ?: return@forEach
                 val label = walletObj.get("label")?.asString ?: "Wallet"
                 val address = walletObj.get("address")?.asString ?: ""
                 val network = walletObj.get("network")?.asString ?: "mainnet"
+                val walletType = if (network == "testnet") "BTC Testnet" else "BTC"
                 if (address.isNotBlank()) {
                     items.add(PersonalDataItem(
                         id = "_published_wallet_${walletObj.get("wallet_id")?.asString ?: address.take(8)}",
-                        name = "$label ($network)",
-                        type = DataType.PUBLIC,
+                        name = "$label ($walletType)",
+                        type = DataType.KEY,
                         value = address,
-                        category = DataCategory.FINANCIAL,
+                        category = DataCategory.WALLET,
                         isSystemField = false,
                         isInPublicProfile = true,
                         sortOrder = 50,
