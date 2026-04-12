@@ -138,11 +138,16 @@ class PcrConfigManager @Inject constructor(
             Log.w(TAG, "No manifest available for signature verification - skipping")
         }
 
-        // Check if PCRs actually changed (compare PCR0 hash, not just version)
+        // Check if PCRs actually changed (compare PCR0 hash and metadata)
         val currentPcrs = getCurrentPcrs()
-        if (signedResponse.pcrs.pcr0 == currentPcrs.pcr0) {
-            Log.d(TAG, "PCRs already up to date (PCR0 matches)")
+        val metadataChanged = signedResponse.pcrs.detailsUrl != currentPcrs.detailsUrl ||
+            signedResponse.pcrs.description != currentPcrs.description
+        if (signedResponse.pcrs.pcr0 == currentPcrs.pcr0 && !metadataChanged) {
+            Log.d(TAG, "PCRs already up to date (PCR0 and metadata match)")
             return false
+        }
+        if (signedResponse.pcrs.pcr0 == currentPcrs.pcr0 && metadataChanged) {
+            Log.i(TAG, "PCR0 unchanged but metadata updated — refreshing cache")
         }
 
         Log.i(TAG, "PCR0 changed - updating from ${currentPcrs.version} to ${signedResponse.pcrs.version}")
