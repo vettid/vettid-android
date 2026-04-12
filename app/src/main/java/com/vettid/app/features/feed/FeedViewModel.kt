@@ -370,6 +370,9 @@ class FeedViewModel @Inject constructor(
     private fun silentRefresh() {
         viewModelScope.launch {
             try {
+                // Refresh connections alongside events
+                refreshConnections()
+
                 feedRepository.sync()
                     .onSuccess { result ->
                         Log.d(TAG, "Silent sync complete: +${result.newEvents} new, ${result.updatedEvents} updated")
@@ -434,6 +437,24 @@ class FeedViewModel @Inject constructor(
         viewModelScope.launch {
             feedNotificationService.inAppNotifications.collect { notification ->
                 _inAppNotification.emit(notification)
+            }
+        }
+
+        // Connection acceptance notifications — refresh connections immediately
+        viewModelScope.launch {
+            ownerSpaceClient.connectionAcceptances.collect { acceptance ->
+                Log.d(TAG, "Peer accepted connection: ${acceptance.connectionId}")
+                refreshConnections()
+                rebuildDisplayItems()
+            }
+        }
+
+        // Connection status updates (activated, key-exchanged, rejected)
+        viewModelScope.launch {
+            ownerSpaceClient.connectionStatusUpdates.collect { update ->
+                Log.d(TAG, "Connection status update: ${update.connectionId} -> ${update.type}")
+                refreshConnections()
+                rebuildDisplayItems()
             }
         }
     }
