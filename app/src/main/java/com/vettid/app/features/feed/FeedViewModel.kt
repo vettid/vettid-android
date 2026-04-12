@@ -370,29 +370,29 @@ class FeedViewModel @Inject constructor(
     private fun silentRefresh() {
         viewModelScope.launch {
             try {
-                // Refresh connections alongside events
+                // Refresh connections FIRST, then sync events, then rebuild display
+                // This prevents the race where events appear as standalone items
+                // before connections are loaded to group them
                 refreshConnections()
 
-                feedRepository.sync()
-                    .onSuccess { result ->
-                        Log.d(TAG, "Silent sync complete: +${result.newEvents} new, ${result.updatedEvents} updated")
-                        val events = feedRepository.getCachedEvents()
-                        val displayItems = filterForDisplay(events)
-                        if (displayItems.isEmpty()) {
-                            _state.value = FeedState.Empty
-                        } else {
-                            _state.value = FeedState.Loaded(
-                                items = displayItems,
-                                hasMore = result.hasMore,
-                                unreadCount = displayItems.count { it.isUnread },
-                                isOffline = false
-                            )
-                        }
-                    }
-                    .onFailure { error ->
-                        if (error is CancellationException) throw error
-                        Log.e(TAG, "Silent sync failed", error)
-                    }
+                val syncResult = feedRepository.sync()
+                syncResult.onSuccess { result ->
+                    Log.d(TAG, "Silent sync complete: +${result.newEvents} new, ${result.updatedEvents} updated")
+                }
+
+                // Always rebuild display from current state (connections + cached events)
+                val events = feedRepository.getCachedEvents()
+                val displayItems = filterForDisplay(events)
+                if (displayItems.isEmpty()) {
+                    _state.value = FeedState.Empty
+                } else {
+                    _state.value = FeedState.Loaded(
+                        items = displayItems,
+                        hasMore = false,
+                        unreadCount = displayItems.count { it.isUnread },
+                        isOffline = false
+                    )
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) { }
