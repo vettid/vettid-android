@@ -193,7 +193,7 @@ class VaultProtectionService : Service() {
         return NotificationCompat.Builder(this, PROTECTION_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("VettID")
-            .setContentText("Vault protection active")
+            .setContentText("Connected to vault")
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .setContentIntent(pendingIntent)
