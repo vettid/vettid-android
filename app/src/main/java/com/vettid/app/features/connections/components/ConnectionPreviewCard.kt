@@ -4,6 +4,7 @@ import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -213,7 +214,7 @@ fun ConnectionPreviewCard(
                 }
             }
 
-            // Identity public key
+            // Identity public key (clickable for QR/copy)
             if (profile.publicKey != null) {
                 Spacer(modifier = Modifier.height(16.dp))
                 Surface(
@@ -228,18 +229,15 @@ fun ConnectionPreviewCard(
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(bottom = 8.dp)
                         )
-                        Text(
-                            text = profile.publicKey!!,
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                            ),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        CopyableKeyField(
+                            value = profile.publicKey!!,
+                            label = "Identity Public Key"
                         )
                     }
                 }
             }
 
-            // Wallet addresses
+            // Wallet addresses (clickable for QR/copy)
             if (profile.wallets.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(16.dp))
                 Surface(
@@ -267,12 +265,9 @@ fun ConnectionPreviewCard(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            Text(
-                                text = wallet.address,
-                                style = MaterialTheme.typography.bodySmall.copy(
-                                    fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                                ),
-                                color = MaterialTheme.colorScheme.onSurface
+                            CopyableKeyField(
+                                value = wallet.address,
+                                label = wallet.label
                             )
                         }
                     }
@@ -700,5 +695,105 @@ fun CompactConnectionPreview(
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+    }
+}
+
+/**
+ * Clickable key/address field with copy and QR code options.
+ */
+@Composable
+private fun CopyableKeyField(
+    value: String,
+    label: String
+) {
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+    var showQrDialog by remember { mutableStateOf(false) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { showQrDialog = true },
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall.copy(
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+            ),
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.weight(1f)
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Icon(
+            Icons.Default.ContentCopy,
+            contentDescription = "Copy",
+            modifier = Modifier
+                .size(18.dp)
+                .clickable {
+                    clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(value))
+                },
+            tint = MaterialTheme.colorScheme.primary
+        )
+        Spacer(modifier = Modifier.width(4.dp))
+        Icon(
+            Icons.Default.QrCode,
+            contentDescription = "QR Code",
+            modifier = Modifier
+                .size(18.dp)
+                .clickable { showQrDialog = true },
+            tint = MaterialTheme.colorScheme.primary
+        )
+    }
+
+    if (showQrDialog) {
+        val qrBitmap = remember(value) {
+            try {
+                val writer = com.google.zxing.qrcode.QRCodeWriter()
+                val bitMatrix = writer.encode(value, com.google.zxing.BarcodeFormat.QR_CODE, 300, 300)
+                val bitmap = android.graphics.Bitmap.createBitmap(300, 300, android.graphics.Bitmap.Config.RGB_565)
+                for (x in 0 until 300) {
+                    for (y in 0 until 300) {
+                        bitmap.setPixel(x, y, if (bitMatrix[x, y]) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
+                    }
+                }
+                bitmap
+            } catch (_: Exception) { null }
+        }
+
+        AlertDialog(
+            onDismissRequest = { showQrDialog = false },
+            title = { Text(label) },
+            text = {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                    qrBitmap?.let { bitmap ->
+                        Card(modifier = Modifier.size(250.dp)) {
+                            Box(modifier = Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
+                                Image(
+                                    bitmap = bitmap.asImageBitmap(),
+                                    contentDescription = "QR Code",
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = value,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                Row {
+                    TextButton(onClick = {
+                        clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(value))
+                    }) { Text("Copy") }
+                    TextButton(onClick = { showQrDialog = false }) { Text("Close") }
+                }
+            }
+        )
     }
 }
