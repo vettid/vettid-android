@@ -1406,7 +1406,8 @@ class OwnerSpaceClient @Inject constructor(
                 subject.contains(".forApp.new-message") -> {
                     handleNewMessage(message); return
                 }
-                subject.contains(".forApp.read-receipt") -> {
+                // Read receipt PUSH from peer (not our own request-response which is .message.read-receipt)
+                subject.contains(".forApp.read-receipt") && !subject.contains(".forApp.message.read-receipt") -> {
                     handleReadReceipt(message); return
                 }
 
