@@ -1,7 +1,11 @@
 package com.vettid.app.features.enrollmentwizard.phases
 
 import android.Manifest
+import android.content.Intent
+import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
@@ -107,6 +111,36 @@ fun PermissionsPhaseContent(
                     }
                 )
                 Spacer(modifier = Modifier.height(12.dp))
+            }
+
+            // Battery optimization exemption (for reliable background notifications)
+            val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
+            var isBatteryOptimized by remember {
+                mutableStateOf(!powerManager.isIgnoringBatteryOptimizations(context.packageName))
+            }
+
+            PermissionCard(
+                icon = Icons.Default.BatteryChargingFull,
+                title = "Background Activity",
+                description = "Keep VettID running in the background to receive notifications reliably, even when the app is closed.",
+                isGranted = !isBatteryOptimized,
+                onRequest = {
+                    try {
+                        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                            data = Uri.parse("package:${context.packageName}")
+                        }
+                        context.startActivity(intent)
+                        // Recheck after returning (LaunchedEffect will handle)
+                    } catch (_: Exception) { }
+                }
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Recheck battery optimization when returning to this screen
+            LaunchedEffect(Unit) {
+                kotlinx.coroutines.delay(1000)
+                isBatteryOptimized = !powerManager.isIgnoringBatteryOptimizations(context.packageName)
             }
 
             // Info card about other permissions

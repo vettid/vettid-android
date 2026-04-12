@@ -98,6 +98,7 @@ class VaultProtectionService : Service() {
     @Inject lateinit var ownerSpaceClient: OwnerSpaceClient
     @Inject lateinit var credentialStore: CredentialStore
     @Inject lateinit var credentialManager: ProteanCredentialManager
+    @Inject lateinit var feedNotificationService: com.vettid.app.features.feed.FeedNotificationService
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val notificationManager by lazy {
@@ -207,7 +208,7 @@ class VaultProtectionService : Service() {
             // Subscribe to vault events
             ownerSpaceClient.subscribeToVault()
 
-            // Listen for recovery events
+            // Listen for recovery/security events
             ownerSpaceClient.vaultEvents
                 .collect { event ->
                     try {
@@ -218,7 +219,10 @@ class VaultProtectionService : Service() {
                 }
         }
 
-        Log.d(TAG, "Started listening for security events")
+        // Start feed notification listener (handles all feed event notifications)
+        feedNotificationService.startListening()
+
+        Log.d(TAG, "Started listening for security events and feed notifications")
     }
 
     /**

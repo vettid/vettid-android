@@ -505,6 +505,10 @@ fun VettIDApp(
                     appViewModel.setOfflineMode(offlineMode)
                     appViewModel.refreshUserProfile()
                     appViewModel.setAuthenticated(true)
+                    // Start background service for reliable notifications
+                    com.vettid.app.core.notifications.VaultProtectionService.start(navController.context)
+                    // Schedule WorkManager fallback for when service is killed
+                    com.vettid.app.core.notifications.FeedPollWorker.schedule(navController.context)
                 }
             )
         }

@@ -186,7 +186,15 @@ class FeedNotificationService @Inject constructor(
         }
     }
 
-    private fun startListening() {
+    private var isListening = false
+
+    /**
+     * Start listening for feed notifications via NATS.
+     * Safe to call multiple times — only starts once.
+     */
+    fun startListening() {
+        if (isListening) return
+        isListening = true
         scope.launch {
             ownerSpaceClient.feedNotifications.collect { notification ->
                 handleNotification(notification)
