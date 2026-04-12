@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -294,6 +295,23 @@ private fun FeedList(
     onNavigateToConnectionReview: (String, String) -> Unit = { _, _ -> }
 ) {
     val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
+
+    // Auto-scroll to top when new items appear at the top of the feed
+    var previousFirstItemId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(items) {
+        val currentFirstId = items.firstOrNull()?.let {
+            when (it) {
+                is FeedDisplayItem.ConnectionCard -> "conn-${it.connectionId}"
+                is FeedDisplayItem.EventItem -> it.event.eventId
+            }
+        }
+        if (previousFirstItemId != null && currentFirstId != previousFirstItemId) {
+            // New item at the top — scroll to it
+            coroutineScope.launch { listState.animateScrollToItem(0) }
+        }
+        previousFirstItemId = currentFirstId
+    }
 
     @OptIn(ExperimentalMaterial3Api::class)
     PullToRefreshBox(

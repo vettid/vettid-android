@@ -1550,36 +1550,27 @@ private fun PublicProfileFullScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             // Data
-                            IconButton(onClick = { showPersonalDataDialog = true }) {
-                                BadgedBox(badge = {
-                                    if (publicPersonalData.isNotEmpty()) {
-                                        Badge { Text("${publicPersonalData.size}") }
-                                    }
-                                }) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                IconButton(onClick = { showPersonalDataDialog = true }) {
                                     Icon(Icons.Default.Person, contentDescription = "Personal Data")
                                 }
+                                Text("Data (${publicPersonalData.size})", style = MaterialTheme.typography.labelSmall)
                             }
-                            Spacer(modifier = Modifier.width(16.dp))
+                            Spacer(modifier = Modifier.width(24.dp))
                             // Secrets
-                            IconButton(onClick = { showSecretsDialog = true }) {
-                                BadgedBox(badge = {
-                                    if (publicSecrets.isNotEmpty()) {
-                                        Badge { Text("${publicSecrets.size}") }
-                                    }
-                                }) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                IconButton(onClick = { showSecretsDialog = true }) {
                                     Icon(Icons.Default.Key, contentDescription = "Secrets")
                                 }
+                                Text("Secrets (${publicSecrets.size})", style = MaterialTheme.typography.labelSmall)
                             }
-                            Spacer(modifier = Modifier.width(16.dp))
+                            Spacer(modifier = Modifier.width(24.dp))
                             // Handlers
-                            IconButton(onClick = { showHandlersDialog = true }) {
-                                BadgedBox(badge = {
-                                    if (handlers.isNotEmpty()) {
-                                        Badge { Text("${handlers.size}") }
-                                    }
-                                }) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                IconButton(onClick = { showHandlersDialog = true }) {
                                     Icon(Icons.Default.Extension, contentDescription = "Handlers")
                                 }
+                                Text("Handlers (${handlers.size})", style = MaterialTheme.typography.labelSmall)
                             }
                         }
 
