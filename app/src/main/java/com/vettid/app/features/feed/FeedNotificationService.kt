@@ -203,35 +203,111 @@ class FeedNotificationService @Inject constructor(
         }
     }
 
+    /**
+     * Notification policy per event type.
+     */
+    private enum class NotifyPolicy {
+        SILENT,           // No notification, just feed refresh + badge update
+        FOREGROUND_ONLY,  // In-app snackbar only, never OS notification
+        DEFAULT,          // Foreground = snackbar, Background = OS notification
+        ALWAYS            // Both in-app AND OS notification (urgent: calls, security)
+    }
+
+    /**
+     * Per-event-type notification rules.
+     * Events not listed here default to NotifyPolicy.DEFAULT.
+     */
+    private val notificationPolicy = mapOf(
+        // Silent — no notification, just update feed
+        "guide" to NotifyPolicy.SILENT,
+        "message.sent" to NotifyPolicy.SILENT,
+        "message.read" to NotifyPolicy.SILENT,
+        "connection.created" to NotifyPolicy.SILENT,
+        "connection.accepted" to NotifyPolicy.SILENT,
+        "connection.initiated" to NotifyPolicy.SILENT,
+        "call.completed" to NotifyPolicy.SILENT,
+        "call.ended" to NotifyPolicy.SILENT,
+        "call.answered" to NotifyPolicy.SILENT,
+        "call.rejected" to NotifyPolicy.SILENT,
+        "backup.complete" to NotifyPolicy.SILENT,
+        "handler.complete" to NotifyPolicy.SILENT,
+        "vault.status" to NotifyPolicy.SILENT,
+        "agent.secret.approved" to NotifyPolicy.SILENT,
+        "agent.secret.auto_approved" to NotifyPolicy.SILENT,
+        "agent.secret.denied" to NotifyPolicy.SILENT,
+        "agent.action.completed" to NotifyPolicy.SILENT,
+        "agent.action.denied" to NotifyPolicy.SILENT,
+        "agent.message.sent" to NotifyPolicy.SILENT,
+        "agent.approval.responded" to NotifyPolicy.SILENT,
+        "agent.connection.approved" to NotifyPolicy.SILENT,
+        "agent.connection.denied" to NotifyPolicy.SILENT,
+        "connection.rotated" to NotifyPolicy.SILENT,
+
+        // Foreground only — snackbar but no OS notification
+        "connection.revoked" to NotifyPolicy.FOREGROUND_ONLY,
+
+        // Always notify — even in foreground (urgent events)
+        "call.incoming" to NotifyPolicy.ALWAYS,
+        "security.alert" to NotifyPolicy.ALWAYS,
+    )
+
+    /**
+     * Notification group for grouping related notifications.
+     */
+    private fun getNotificationGroup(eventType: String): String? = when {
+        eventType.startsWith("connection.") -> "vettid_connections"
+        eventType.startsWith("message.") -> "vettid_messages"
+        eventType.startsWith("agent.") -> "vettid_agents"
+        eventType.startsWith("call.") -> "vettid_calls"
+        eventType.startsWith("wallet.") || eventType.startsWith("payment.") -> "vettid_payments"
+        else -> null
+    }
+
     private suspend fun handleNewEvent(event: FeedNotification.NewEvent) {
-        // Emit feed update for real-time UI refresh
+        // Always emit feed update for real-time UI refresh
         _feedUpdates.emit(FeedUpdate.NewEvent(event.eventId, event.eventType))
 
-        // Skip guide events and sender's own message events entirely
-        if (event.eventType == "guide" || event.eventType == "message.sent") {
-            updateBadgeCount()
-            return
+        val policy = notificationPolicy[event.eventType] ?: NotifyPolicy.DEFAULT
+
+        when (policy) {
+            NotifyPolicy.SILENT -> {
+                // No notification — just badge update
+            }
+            NotifyPolicy.FOREGROUND_ONLY -> {
+                if (isInForeground) {
+                    emitInAppNotification(event)
+                }
+            }
+            NotifyPolicy.DEFAULT -> {
+                if (isInForeground) {
+                    emitInAppNotification(event)
+                } else {
+                    showSystemNotification(event)
+                }
+            }
+            NotifyPolicy.ALWAYS -> {
+                // Always show OS notification (calls, security alerts)
+                showSystemNotification(event)
+                if (isInForeground) {
+                    emitInAppNotification(event)
+                }
+            }
         }
 
-        if (isInForeground) {
-            // App is visible — show in-app snackbar only (no OS notification)
-            _inAppNotifications.emit(
-                InAppFeedNotification(
-                    eventId = event.eventId,
-                    title = event.title,
-                    message = event.message,
-                    eventType = event.eventType,
-                    priority = event.priority,
-                    hasAction = event.actionType != null
-                )
-            )
-        } else {
-            // App is in background — show OS system notification
-            showSystemNotification(event)
-        }
-
-        // Update badge count
         updateBadgeCount()
+    }
+
+    private suspend fun emitInAppNotification(event: FeedNotification.NewEvent) {
+        _inAppNotifications.emit(
+            InAppFeedNotification(
+                eventId = event.eventId,
+                title = event.title,
+                message = event.message,
+                eventType = event.eventType,
+                priority = event.priority,
+                hasAction = event.actionType != null
+            )
+        )
     }
 
     private suspend fun handleEventUpdated(event: FeedNotification.EventUpdated) {
@@ -283,7 +359,7 @@ class FeedNotificationService @Inject constructor(
             .setPriority(priority)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
-            .setGroup(NOTIFICATION_GROUP)
+            .setGroup(getNotificationGroup(event.eventType) ?: NOTIFICATION_GROUP)
             .setCategory(getNotificationCategory(event.eventType))
             .apply {
                 // Add action buttons for actionable events
