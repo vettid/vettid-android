@@ -69,6 +69,7 @@ sealed class FeedEffect {
     data class NavigateToGuide(val guideId: String, val eventId: String, val userName: String) : FeedEffect()
     data class NavigateToAgentApproval(val requestId: String) : FeedEffect()
     data class NavigateToAgentConversation(val connectionId: String) : FeedEffect()
+    data class NavigateToConnectionReview(val connectionId: String, val eventId: String) : FeedEffect()
     data class ShowEventDetail(val event: com.vettid.app.core.nats.FeedEvent) : FeedEffect()
     data class ShowError(val message: String) : FeedEffect()
     data class ShowActionSuccess(val message: String) : FeedEffect()

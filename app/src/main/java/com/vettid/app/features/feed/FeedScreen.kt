@@ -87,6 +87,8 @@ fun FeedContent(
                 is FeedEffect.NavigateToBackup -> onNavigateToBackup(effect.backupId)
                 is FeedEffect.NavigateToGuide -> onNavigateToGuide(effect.guideId, effect.eventId, effect.userName)
                 is FeedEffect.NavigateToAgentApproval -> onNavigateToAgentApproval(effect.requestId)
+                is FeedEffect.NavigateToConnectionReview -> onNavigateToConnectionDetail(effect.connectionId)
+                is FeedEffect.NavigateToAgentConversation -> onNavigateToConversation(effect.connectionId)
                 is FeedEffect.ShowEventDetail -> selectedEvent = effect.event
                 is FeedEffect.ShowError -> snackbarHostState.showSnackbar(effect.message)
                 is FeedEffect.ShowActionSuccess -> snackbarHostState.showSnackbar(effect.message)

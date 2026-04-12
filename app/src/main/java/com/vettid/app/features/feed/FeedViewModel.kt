@@ -74,7 +74,6 @@ class FeedViewModel @Inject constructor(
         EventTypes.MESSAGE_RECEIVED, EventTypes.MESSAGE_SENT,
         EventTypes.CALL_INCOMING, EventTypes.CALL_COMPLETED, EventTypes.CALL_MISSED,
         EventTypes.TRANSFER_REQUEST,
-        EventTypes.CONNECTION_ACCEPTED,
         EventTypes.AGENT_MESSAGE_RECEIVED, EventTypes.AGENT_MESSAGE_SENT
     )
 
@@ -698,6 +697,14 @@ class FeedViewModel @Inject constructor(
                     val connectionId = event.metadata?.get("connection_id") ?: sourceId
                     if (connectionId != null) {
                         _effects.emit(FeedEffect.NavigateToConversation(connectionId))
+                    } else {
+                        _effects.emit(FeedEffect.ShowEventDetail(event))
+                    }
+                }
+                EventTypes.CONNECTION_ACCEPTED -> {
+                    val connectionId = event.metadata?.get("connection_id") ?: sourceId
+                    if (connectionId != null) {
+                        _effects.emit(FeedEffect.NavigateToConnectionReview(connectionId, event.eventId))
                     } else {
                         _effects.emit(FeedEffect.ShowEventDetail(event))
                     }
