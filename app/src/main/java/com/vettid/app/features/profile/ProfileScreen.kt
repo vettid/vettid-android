@@ -322,25 +322,19 @@ private fun ViewProfileContent(
         ) {
             OutlinedButton(
                 onClick = onViewSecrets,
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                modifier = Modifier.weight(1f)
             ) {
                 Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(14.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("Secrets", style = MaterialTheme.typography.labelSmall, maxLines = 1)
-                Spacer(modifier = Modifier.width(2.dp))
-                Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.primary) { Text("$secretsCount", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)) }
+                Text("Secrets ($secretsCount)", style = MaterialTheme.typography.labelSmall, maxLines = 1)
             }
             OutlinedButton(
                 onClick = onViewPersonalData,
-                modifier = Modifier.weight(1f),
-                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp)
+                modifier = Modifier.weight(1f)
             ) {
                 Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(14.dp))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text("Personal", style = MaterialTheme.typography.labelSmall, maxLines = 1)
-                Spacer(modifier = Modifier.width(2.dp))
-                Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.primary) { Text("$personalDataCount", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)) }
+                Text("Personal ($personalDataCount)", style = MaterialTheme.typography.labelSmall, maxLines = 1)
             }
         }
 
@@ -354,9 +348,7 @@ private fun ViewProfileContent(
         ) {
             Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(16.dp))
             Spacer(modifier = Modifier.width(6.dp))
-            Text("Published Profile", style = MaterialTheme.typography.labelMedium)
-            Spacer(modifier = Modifier.width(4.dp))
-            Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.primary) { Text("$publishedItemsCount", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)) }
+            Text("Published Profile ($publishedItemsCount)", style = MaterialTheme.typography.labelMedium)
         }
 
         Spacer(modifier = Modifier.height(16.dp))

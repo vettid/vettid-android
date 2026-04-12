@@ -16,6 +16,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -115,33 +116,35 @@ fun PermissionsPhaseContent(
 
             // Battery optimization exemption (for reliable background notifications)
             val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
-            var isBatteryOptimized by remember {
-                mutableStateOf(!powerManager.isIgnoringBatteryOptimizations(context.packageName))
+            var batteryCheckTrigger by remember { mutableIntStateOf(0) }
+            val isBatteryExempt = remember(batteryCheckTrigger) {
+                powerManager.isIgnoringBatteryOptimizations(context.packageName)
+            }
+
+            // Recheck periodically while on this screen (catches when user returns from system dialog)
+            LaunchedEffect(Unit) {
+                while (true) {
+                    kotlinx.coroutines.delay(1000)
+                    batteryCheckTrigger++
+                }
             }
 
             PermissionCard(
                 icon = Icons.Default.BatteryChargingFull,
                 title = "Background Activity",
                 description = "Keep VettID running in the background to receive notifications reliably, even when the app is closed.",
-                isGranted = !isBatteryOptimized,
+                isGranted = isBatteryExempt,
                 onRequest = {
                     try {
                         val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
                             data = Uri.parse("package:${context.packageName}")
                         }
                         context.startActivity(intent)
-                        // Recheck after returning (LaunchedEffect will handle)
                     } catch (_: Exception) { }
                 }
             )
 
             Spacer(modifier = Modifier.height(12.dp))
-
-            // Recheck battery optimization when returning to this screen
-            LaunchedEffect(Unit) {
-                kotlinx.coroutines.delay(1000)
-                isBatteryOptimized = !powerManager.isIgnoringBatteryOptimizations(context.packageName)
-            }
 
             // Info card about other permissions
             Card(
