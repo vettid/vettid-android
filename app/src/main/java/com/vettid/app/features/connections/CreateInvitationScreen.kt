@@ -179,12 +179,12 @@ private fun IdleContent(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Valid for 5 minutes",
+                text = "Valid for 15 minutes",
                 style = MaterialTheme.typography.titleMedium
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = "The invitation must be used within 5 minutes",
+                text = "The invitation must be used within 15 minutes",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center

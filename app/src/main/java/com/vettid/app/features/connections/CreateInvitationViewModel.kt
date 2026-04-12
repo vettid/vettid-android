@@ -47,8 +47,8 @@ class CreateInvitationViewModel @Inject constructor(
     private val _effects = MutableSharedFlow<CreateInvitationEffect>()
     val effects: SharedFlow<CreateInvitationEffect> = _effects.asSharedFlow()
 
-    // Selected expiration time in minutes (default: 5 minutes)
-    private val _expirationMinutes = MutableStateFlow(5)
+    // Selected expiration time in minutes (default: 15 minutes)
+    private val _expirationMinutes = MutableStateFlow(15)
     val expirationMinutes: StateFlow<Int> = _expirationMinutes.asStateFlow()
 
     // Store key pair temporarily until invitation is accepted
