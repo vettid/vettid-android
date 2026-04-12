@@ -583,6 +583,8 @@ class ConnectionsClient @Inject constructor(
             expiresAt = json.get("expires_at")?.asString,
             lastRotatedAt = json.get("last_rotated_at")?.asString,
             e2ePublicKey = json.get("e2e_public_key")?.asString,
+            e2eReady = json.get("e2e_ready")?.asBoolean ?: false,
+            needsAttention = json.get("needs_attention")?.asBoolean ?: false,
             peerProfile = peerProfile
         )
     }
@@ -717,13 +719,15 @@ data class ConnectionRecord(
     val connectionId: String,
     val peerGuid: String,
     val label: String,
-    val status: String,        // "active", "pending", "revoked", "expired"
+    val status: String,        // "active", "pending", "revoked", "expired", "rejected"
     val direction: String,     // "outbound" (we invited) or "inbound" (they invited us)
     val connectionType: String = "peer", // "peer", "agent", "device"
     val createdAt: String,
     val expiresAt: String?,
     val lastRotatedAt: String?,
     val e2ePublicKey: String? = null,
+    val e2eReady: Boolean = false,
+    val needsAttention: Boolean = false,
     val peerProfile: PeerProfileData? = null
 )
 

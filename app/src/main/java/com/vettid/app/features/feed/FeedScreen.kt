@@ -89,7 +89,7 @@ fun FeedContent(
                 is FeedEffect.NavigateToGuide -> onNavigateToGuide(effect.guideId, effect.eventId, effect.userName)
                 is FeedEffect.NavigateToAgentApproval -> onNavigateToAgentApproval(effect.requestId)
                 is FeedEffect.NavigateToConnectionReview -> onNavigateToConnectionReview(effect.connectionId, effect.eventId)
-                is FeedEffect.NavigateToAgentConversation -> onNavigateToConversation(effect.connectionId)
+                is FeedEffect.NavigateToConnectionDetail -> onNavigateToConnectionDetail(effect.connectionId)
                 is FeedEffect.ShowEventDetail -> selectedEvent = effect.event
                 is FeedEffect.ShowError -> snackbarHostState.showSnackbar(effect.message)
                 is FeedEffect.ShowActionSuccess -> snackbarHostState.showSnackbar(effect.message)
@@ -166,7 +166,10 @@ fun FeedContent(
                     onArchive = { viewModel.archiveEvent(it.eventId) },
                     onDelete = { viewModel.deleteEvent(it.eventId) },
                     onAction = { event, action -> viewModel.executeAction(event.eventId, action) },
-                    onTogglePriority = { viewModel.togglePriority(it.eventId) }
+                    onTogglePriority = { viewModel.togglePriority(it.eventId) },
+                    onConnectionAccept = { connectionId -> viewModel.acceptConnection(connectionId) },
+                    onConnectionDecline = { connectionId -> viewModel.declineConnection(connectionId) },
+                    onNavigateToConnectionReview = onNavigateToConnectionReview
                 )
                 is FeedState.Error -> {
                     // If in offline mode, show friendly offline content instead of error
@@ -285,7 +288,10 @@ private fun FeedList(
     onArchive: (FeedEvent) -> Unit,
     onDelete: (FeedEvent) -> Unit,
     onAction: (FeedEvent, String) -> Unit,
-    onTogglePriority: (FeedEvent) -> Unit = {}
+    onTogglePriority: (FeedEvent) -> Unit = {},
+    onConnectionAccept: (String) -> Unit = {},
+    onConnectionDecline: (String) -> Unit = {},
+    onNavigateToConnectionReview: (String, String) -> Unit = { _, _ -> }
 ) {
     val listState = rememberLazyListState()
 
@@ -304,27 +310,28 @@ private fun FeedList(
                 items = items,
                 key = { item ->
                     when (item) {
-                        is FeedDisplayItem.ConnectionItem -> "conn-${item.connectionId}"
-                        is FeedDisplayItem.AgentConnectionItem -> "agent-${item.connectionId}"
+                        is FeedDisplayItem.ConnectionCard -> "conn-${item.connectionId}"
                         is FeedDisplayItem.EventItem -> item.event.eventId
                     }
                 }
             ) { item ->
                 when (item) {
-                    is FeedDisplayItem.ConnectionItem -> ConnectionCard(
+                    is FeedDisplayItem.ConnectionCard -> StatusAwareConnectionCard(
                         item = item,
-                        onClick = { onNavigateToConversation(item.connectionId) },
+                        onClick = {
+                            when {
+                                item.needsReview -> onNavigateToConnectionReview(item.connectionId, "")
+                                item.connectionStatus == "active" -> onNavigateToConversation(item.connectionId)
+                                else -> onNavigateToConnectionDetail(item.connectionId)
+                            }
+                        },
                         onLongClick = { onNavigateToConnectionDetail(item.connectionId) },
+                        onAccept = { onConnectionAccept(item.connectionId) },
+                        onDecline = { onConnectionDecline(item.connectionId) },
                         onMessageClick = { onNavigateToConversation(item.connectionId) },
-                        onProfileClick = { onNavigateToConnectionDetail(item.connectionId) },
-                        onCallClick = { /* TODO: voice call */ },
-                        onVideoCallClick = { /* TODO: video call */ },
-                        onBtcClick = { /* TODO: send BTC */ },
-                        onHistoryClick = { /* TODO: view history/archive for connection */ }
-                    )
-                    is FeedDisplayItem.AgentConnectionItem -> AgentConnectionCard(
-                        item = item,
-                        onClick = { onNavigateToConversation(item.connectionId) }
+                        onCallClick = { /* TODO */ },
+                        onVideoCallClick = { /* TODO */ },
+                        onBtcClick = { /* TODO */ }
                     )
                     is FeedDisplayItem.EventItem -> EventCard(
                         event = item.event,
@@ -342,16 +349,183 @@ private fun FeedList(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ConnectionCard(
-    item: FeedDisplayItem.ConnectionItem,
+private fun StatusAwareConnectionCard(
+    item: FeedDisplayItem.ConnectionCard,
     onClick: () -> Unit,
     onLongClick: () -> Unit = {},
-    onMessageClick: () -> Unit,
-    onProfileClick: () -> Unit = {},
-    onCallClick: () -> Unit,
-    onVideoCallClick: () -> Unit,
-    onBtcClick: () -> Unit,
-    onHistoryClick: () -> Unit = {}
+    onAccept: () -> Unit = {},
+    onDecline: () -> Unit = {},
+    onMessageClick: () -> Unit = {},
+    onCallClick: () -> Unit = {},
+    onVideoCallClick: () -> Unit = {},
+    onBtcClick: () -> Unit = {}
+) {
+    // Render different card variants based on connection status
+    when {
+        item.needsReview -> PendingReviewConnectionCard(item, onClick, onAccept, onDecline)
+        item.hasAccepted -> WaitingConnectionCard(item, onClick)
+        item.connectionStatus == "active" -> ActiveConnectionCard(item, onClick, onLongClick, onMessageClick, onCallClick, onVideoCallClick, onBtcClick)
+        item.connectionStatus == "revoked" || item.connectionStatus == "rejected" -> InactiveConnectionCard(item, onClick)
+        else -> ActiveConnectionCard(item, onClick, onLongClick, onMessageClick, onCallClick, onVideoCallClick, onBtcClick)
+    }
+}
+
+@Composable
+private fun PendingReviewConnectionCard(
+    item: FeedDisplayItem.ConnectionCard,
+    onClick: () -> Unit,
+    onAccept: () -> Unit,
+    onDecline: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
+        )
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ConnectionAvatar(item.peerPhotoBase64, item.peerName, item.connectionType)
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = item.peerName,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    item.peerEmail?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1
+                        )
+                    }
+                    Text(
+                        text = "Wants to connect",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                OutlinedButton(
+                    onClick = onDecline,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    )
+                ) { Text("Decline") }
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(onClick = onAccept) { Text("Accept") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WaitingConnectionCard(
+    item: FeedDisplayItem.ConnectionCard,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            ConnectionAvatar(item.peerPhotoBase64, item.peerName, item.connectionType)
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = item.peerName,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = "Waiting for response",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Surface(
+                shape = MaterialTheme.shapes.small,
+                color = MaterialTheme.colorScheme.secondaryContainer
+            ) {
+                Text(
+                    text = "Pending",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun InactiveConnectionCard(
+    item: FeedDisplayItem.ConnectionCard,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp).alpha(0.6f),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            ConnectionAvatar(item.peerPhotoBase64, item.peerName, item.connectionType)
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = item.peerName,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = if (item.connectionStatus == "rejected") "Declined" else "Connection revoked",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+    }
+}
+
+@Composable
+@OptIn(ExperimentalFoundationApi::class)
+private fun ActiveConnectionCard(
+    item: FeedDisplayItem.ConnectionCard,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit = {},
+    onMessageClick: () -> Unit = {},
+    onCallClick: () -> Unit = {},
+    onVideoCallClick: () -> Unit = {},
+    onBtcClick: () -> Unit = {}
 ) {
     val photoBitmap = remember(item.peerPhotoBase64) {
         item.peerPhotoBase64?.let { base64 ->
@@ -493,7 +667,7 @@ private fun ConnectionCard(
                             text = { Text("View Profile") },
                             onClick = {
                                 showMoreMenu = false
-                                onProfileClick()
+                                onLongClick()
                             },
                             leadingIcon = {
                                 Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(20.dp))
@@ -513,7 +687,7 @@ private fun ConnectionCard(
                             text = { Text("View History") },
                             onClick = {
                                 showMoreMenu = false
-                                onHistoryClick()
+                                onLongClick()
                             },
                             leadingIcon = {
                                 Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(20.dp))
@@ -526,80 +700,61 @@ private fun ConnectionCard(
     }
 }
 
+/**
+ * Reusable connection avatar — shows photo, initials, or agent icon based on type.
+ */
 @Composable
-private fun AgentConnectionCard(
-    item: FeedDisplayItem.AgentConnectionItem,
-    onClick: () -> Unit
+private fun ConnectionAvatar(
+    photoBase64: String?,
+    name: String,
+    connectionType: String
 ) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp)
-            .clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(
-            containerColor = if (item.isUnread) {
-                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
-            } else {
-                MaterialTheme.colorScheme.surface
-            }
-        )
-    ) {
-        Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
+    if (connectionType == "agent") {
+        Surface(
+            modifier = Modifier.size(44.dp),
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.tertiaryContainer
         ) {
-            // Agent icon avatar
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Default.Computer,
+                    contentDescription = "Agent",
+                    modifier = Modifier.size(24.dp),
+                    tint = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
+        }
+    } else {
+        val photoBitmap = remember(photoBase64) {
+            photoBase64?.let { base64 ->
+                try {
+                    val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
+                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                } catch (_: Exception) { null }
+            }
+        }
+        if (photoBitmap != null) {
+            Image(
+                bitmap = photoBitmap.asImageBitmap(),
+                contentDescription = null,
+                modifier = Modifier
+                    .size(44.dp)
+                    .clip(CircleShape),
+                contentScale = ContentScale.Crop
+            )
+        } else {
             Surface(
                 modifier = Modifier.size(44.dp),
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.tertiaryContainer
+                color = MaterialTheme.colorScheme.primaryContainer
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        Icons.Default.Computer,
-                        contentDescription = "Agent",
-                        modifier = Modifier.size(24.dp),
-                        tint = MaterialTheme.colorScheme.onTertiaryContainer
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = item.agentName,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = if (item.isUnread) FontWeight.Bold else FontWeight.Medium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        text = name.take(2).uppercase(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Surface(
-                        shape = MaterialTheme.shapes.extraSmall,
-                        color = MaterialTheme.colorScheme.tertiary.copy(alpha = 0.12f)
-                    ) {
-                        Text(
-                            text = item.agentType,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.tertiary,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
-                        )
-                    }
                 }
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = item.lastActivityPreview,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-
-            if (item.unreadCount > 0) {
-                Badge { Text("${item.unreadCount}") }
             }
         }
     }

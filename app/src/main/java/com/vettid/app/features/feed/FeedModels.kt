@@ -19,37 +19,44 @@ sealed class FeedState {
 
 /**
  * Display items for the connection-centric feed.
- * ConnectionItem groups all activity for a single connection.
- * EventItem wraps standalone events (guides, security, etc.).
+ *
+ * ConnectionCard is the primary UI element for connections at ALL lifecycle stages.
+ * Driven by connection.list data, enriched with feed events for activity previews.
+ *
+ * EventItem wraps standalone events (guides, security, agent approvals, etc.)
+ * that are not tied to a specific connection.
  */
 sealed class FeedDisplayItem {
     abstract val sortTimestamp: Long
     abstract val isUnread: Boolean
 
-    data class ConnectionItem(
+    /**
+     * Connection card shown at all lifecycle stages.
+     * Status drives the UI variant: pending review, waiting, active, revoked, declined.
+     */
+    data class ConnectionCard(
         val connectionId: String,
         val peerName: String,
         val peerPhotoBase64: String?,
-        val lastActivityPreview: String,
-        val lastActivityType: String,
+        val peerEmail: String?,
+        val connectionStatus: String,      // "pending", "active", "revoked", "rejected"
+        val direction: String,             // "inbound" or "outbound"
+        val needsReview: Boolean,          // show accept/decline (pending + needs_attention)
+        val hasAccepted: Boolean,          // we accepted, waiting for peer
+        val connectionType: String,        // "peer", "agent", "device"
+        val e2eReady: Boolean,             // can message (key exchange complete)
+        val lastActivityPreview: String,   // latest message text or status description
+        val lastActivityType: String,      // "message", "call", "connection", etc.
         val unreadCount: Int,
         override val sortTimestamp: Long,
         override val isUnread: Boolean
     ) : FeedDisplayItem()
 
+    /**
+     * Standalone event not tied to a connection (guides, security alerts, etc.).
+     */
     data class EventItem(
         val event: ApiFeedEvent,
-        override val sortTimestamp: Long,
-        override val isUnread: Boolean
-    ) : FeedDisplayItem()
-
-    data class AgentConnectionItem(
-        val connectionId: String,
-        val agentName: String,
-        val agentType: String,
-        val lastActivityPreview: String,
-        val lastActivityType: String,
-        val unreadCount: Int,
         override val sortTimestamp: Long,
         override val isUnread: Boolean
     ) : FeedDisplayItem()
@@ -60,6 +67,8 @@ sealed class FeedDisplayItem {
  */
 sealed class FeedEffect {
     data class NavigateToConversation(val connectionId: String) : FeedEffect()
+    data class NavigateToConnectionReview(val connectionId: String, val eventId: String = "") : FeedEffect()
+    data class NavigateToConnectionDetail(val connectionId: String) : FeedEffect()
     data class NavigateToConnectionRequest(val requestId: String) : FeedEffect()
     data class NavigateToAuthRequest(val requestId: String) : FeedEffect()
     data class NavigateToHandler(val handlerId: String) : FeedEffect()
@@ -68,8 +77,6 @@ sealed class FeedEffect {
     data class NavigateToTransfer(val transferId: String) : FeedEffect()
     data class NavigateToGuide(val guideId: String, val eventId: String, val userName: String) : FeedEffect()
     data class NavigateToAgentApproval(val requestId: String) : FeedEffect()
-    data class NavigateToAgentConversation(val connectionId: String) : FeedEffect()
-    data class NavigateToConnectionReview(val connectionId: String, val eventId: String) : FeedEffect()
     data class ShowEventDetail(val event: com.vettid.app.core.nats.FeedEvent) : FeedEffect()
     data class ShowError(val message: String) : FeedEffect()
     data class ShowActionSuccess(val message: String) : FeedEffect()
@@ -80,21 +87,29 @@ sealed class FeedEffect {
  * Maps to backend event_type values.
  */
 object EventTypes {
+    // Connection events (used for filtering, not for creating cards)
+    const val CONNECTION_REQUEST = "connection.request"
+    const val CONNECTION_ACCEPTED = "connection.accepted"
+    const val CONNECTION_CREATED = "connection.created"
+    const val CONNECTION_REVOKED = "connection.revoked"
+
+    // Activity events (enrich connection cards)
     const val CALL_INCOMING = "call.incoming"
     const val CALL_MISSED = "call.missed"
     const val CALL_COMPLETED = "call.completed"
-    const val CONNECTION_REQUEST = "connection.request"
-    const val CONNECTION_ACCEPTED = "connection.accepted"
-    const val CONNECTION_REVOKED = "connection.revoked"
     const val MESSAGE_RECEIVED = "message.received"
     const val MESSAGE_SENT = "message.sent"
+    const val TRANSFER_REQUEST = "transfer.request"
+
+    // Standalone events
     const val SECURITY_ALERT = "security.alert"
     const val SECURITY_MIGRATION = "security.migration"
-    const val TRANSFER_REQUEST = "transfer.request"
     const val BACKUP_COMPLETE = "backup.complete"
     const val VAULT_STATUS = "vault.status"
     const val HANDLER_COMPLETE = "handler.complete"
     const val GUIDE = "guide"
+
+    // Agent events
     const val AGENT_SECRET_REQUEST = "agent.secret.request"
     const val AGENT_ACTION_REQUEST = "agent.action.request"
     const val AGENT_CONNECTED = "agent.connection.approved"
@@ -102,6 +117,27 @@ object EventTypes {
     const val AGENT_MESSAGE_SENT = "agent.message.sent"
     const val AGENT_APPROVAL_REQUESTED = "agent.approval.requested"
 }
+
+/**
+ * Event types that are connection activity (used to enrich connection cards).
+ * These events are matched to connections by connection_id and provide
+ * the activity preview and unread count for connection cards.
+ */
+val CONNECTION_ACTIVITY_EVENT_TYPES = setOf(
+    EventTypes.MESSAGE_RECEIVED, EventTypes.MESSAGE_SENT,
+    EventTypes.CALL_INCOMING, EventTypes.CALL_COMPLETED, EventTypes.CALL_MISSED,
+    EventTypes.TRANSFER_REQUEST,
+    EventTypes.AGENT_MESSAGE_RECEIVED, EventTypes.AGENT_MESSAGE_SENT
+)
+
+/**
+ * Event types related to connection lifecycle (excluded from standalone events).
+ * These are handled by connection cards, not event items.
+ */
+val CONNECTION_LIFECYCLE_EVENT_TYPES = setOf(
+    EventTypes.CONNECTION_REQUEST, EventTypes.CONNECTION_ACCEPTED,
+    EventTypes.CONNECTION_CREATED, EventTypes.CONNECTION_REVOKED
+)
 
 /**
  * Action types that feed items can have.

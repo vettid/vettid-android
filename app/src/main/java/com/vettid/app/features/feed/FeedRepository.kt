@@ -31,7 +31,8 @@ import javax.inject.Singleton
 @Singleton
 class FeedRepository @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val feedClient: FeedClient
+    private val feedClient: FeedClient,
+    private val connectionsClient: com.vettid.app.core.nats.ConnectionsClient
 ) {
     private val gson = Gson()
     private val syncMutex = Mutex()
@@ -132,6 +133,14 @@ class FeedRepository @Inject constructor(
             Log.e(TAG, "Failed to parse cached events", e)
             emptyList()
         }
+    }
+
+    /**
+     * Fetch all connections from the vault.
+     * Returns connections at all lifecycle stages (pending, active, revoked).
+     */
+    suspend fun getConnections(): Result<List<com.vettid.app.core.nats.ConnectionRecord>> {
+        return connectionsClient.list().map { it.items }
     }
 
     /**

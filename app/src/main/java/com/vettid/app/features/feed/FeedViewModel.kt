@@ -70,15 +70,8 @@ class FeedViewModel @Inject constructor(
 
     // Connection event types that get grouped under a single ConnectionItem
     // IMPORTANT: must be declared before init{} since showCachedFeed() uses it
-    private val connectionEventTypes = setOf(
-        EventTypes.MESSAGE_RECEIVED, EventTypes.MESSAGE_SENT,
-        EventTypes.CALL_INCOMING, EventTypes.CALL_COMPLETED, EventTypes.CALL_MISSED,
-        EventTypes.TRANSFER_REQUEST,
-        EventTypes.AGENT_MESSAGE_RECEIVED, EventTypes.AGENT_MESSAGE_SENT
-    )
-
-    // Cache of connection photos loaded from ConnectionsClient
-    private val connectionPhotoCache = mutableMapOf<String, String?>()
+    // Cached connections from connection.list (primary data source for cards)
+    private var cachedConnections: List<com.vettid.app.core.nats.ConnectionRecord> = emptyList()
 
     init {
         // Show cached data immediately while waiting for connection
@@ -125,88 +118,112 @@ class FeedViewModel @Inject constructor(
      * Connection-related events are grouped into a single ConnectionItem per connection.
      * Standalone events (guides, security, requests, etc.) remain as EventItems.
      */
+    /**
+     * Build the feed display from connections (primary) and events (enrichment).
+     *
+     * Connection cards come from connection.list — they exist at ALL lifecycle stages.
+     * Events enrich active connection cards with message previews and unread counts.
+     * Non-connection events (guides, security, etc.) are standalone items.
+     */
     private fun filterForDisplay(events: List<FeedEvent>): List<FeedDisplayItem> {
-        var filtered = events
-        // Always exclude archived and deleted events
-        filtered = filtered.filter { it.feedStatus != FeedStatus.ARCHIVED && it.feedStatus != FeedStatus.DELETED }
-        // Exclude audit-only (hidden) events unless toggle is on
-        if (!_showAuditEvents.value) {
-            filtered = filtered.filter { it.feedStatus != FeedStatus.HIDDEN }
-        }
         val query = _searchQuery.value.trim()
-        if (query.isNotEmpty()) {
-            filtered = filtered.filter { event ->
-                event.title.contains(query, ignoreCase = true) ||
-                    (event.message?.contains(query, ignoreCase = true) == true)
-            }
-        }
 
-        // Partition into connection-grouped vs standalone events
-        val (connectionEvents, standaloneEvents) = filtered.partition { event ->
-            @Suppress("SENSELESS_COMPARISON")
-            event.eventType != null &&
-                event.eventType in connectionEventTypes &&
-                // connection.request stays standalone (needs Accept/Decline)
-                event.eventType != EventTypes.CONNECTION_REQUEST
-        }
+        // --- 1. Build connection cards from connection.list ---
+        val connectionIds = cachedConnections.map { it.connectionId }.toSet()
 
-        // Build ConnectionItems: group by connection_id, one card per connection
-        val connectionItems = connectionEvents
-            .groupBy { it.metadata?.get("connection_id") ?: it.sourceId ?: it.eventId }
-            .mapNotNull { (connectionId, events) ->
-                val latest = events.maxByOrNull { it.createdAt } ?: return@mapNotNull null
-                val unreadCount = events.count { it.isUnread }
-                val peerName = extractPeerName(latest)
-                val preview = buildActivityPreview(latest)
-                val activityType = mapActivityType(latest.eventType)
+        // Group activity events by connection_id for enrichment
+        val eventsByConnection = events
+            .filter { it.feedStatus != FeedStatus.ARCHIVED && it.feedStatus != FeedStatus.DELETED }
+            .filter { it.eventType in CONNECTION_ACTIVITY_EVENT_TYPES }
+            .groupBy { it.metadata?.get("connection_id") ?: it.sourceId ?: "" }
 
-                // Check if this is an agent connection
-                val isAgent = events.any {
-                    it.sourceType == "agent" || it.metadata?.containsKey("agent_type") == true
-                }
+        val connectionCards = cachedConnections.mapNotNull { conn ->
+            val peerName = listOfNotNull(
+                conn.peerProfile?.firstName, conn.peerProfile?.lastName
+            ).joinToString(" ").trim().ifEmpty { conn.label }
 
-                if (isAgent) {
-                    FeedDisplayItem.AgentConnectionItem(
-                        connectionId = connectionId,
-                        agentName = latest.metadata?.get("agent_name") ?: peerName,
-                        agentType = latest.metadata?.get("agent_type") ?: "agent",
-                        lastActivityPreview = preview,
-                        lastActivityType = activityType,
-                        unreadCount = unreadCount,
-                        sortTimestamp = latest.createdAt,
-                        isUnread = unreadCount > 0
-                    )
-                } else {
-                    FeedDisplayItem.ConnectionItem(
-                        connectionId = connectionId,
-                        peerName = peerName,
-                        peerPhotoBase64 = connectionPhotoCache[connectionId],
-                        lastActivityPreview = preview,
-                        lastActivityType = activityType,
-                        unreadCount = unreadCount,
-                        sortTimestamp = latest.createdAt,
-                        isUnread = unreadCount > 0
-                    )
-                }
+            // Search filter
+            if (query.isNotEmpty()) {
+                val matchesQuery = peerName.contains(query, ignoreCase = true) ||
+                    (conn.peerProfile?.email?.contains(query, ignoreCase = true) == true)
+                if (!matchesQuery) return@mapNotNull null
             }
 
-        // Build EventItems for standalone events
-        val eventItems = standaloneEvents.map { event ->
-            FeedDisplayItem.EventItem(
-                event = event,
-                sortTimestamp = event.createdAt,
-                isUnread = event.isUnread
+            // Get activity events for this connection
+            val connEvents = eventsByConnection[conn.connectionId] ?: emptyList()
+            val latestEvent = connEvents.maxByOrNull { it.createdAt }
+            val unreadCount = connEvents.count { it.isUnread }
+
+            // Determine status-based preview and type
+            val needsReview = conn.status == "pending" && conn.needsAttention
+            val hasAccepted = conn.status == "pending" && !conn.needsAttention
+            val (preview, activityType) = when {
+                needsReview -> "Wants to connect" to "connection"
+                hasAccepted -> "Waiting for response" to "connection"
+                conn.status == "active" && latestEvent != null -> buildActivityPreview(latestEvent) to mapActivityType(latestEvent.eventType)
+                conn.status == "active" -> "Connected" to "connection"
+                conn.status == "revoked" -> "Connection revoked" to "connection"
+                conn.status == "rejected" -> "Declined" to "connection"
+                else -> "" to "connection"
+            }
+
+            val sortTime = latestEvent?.createdAt
+                ?: try { java.time.Instant.parse(conn.createdAt).toEpochMilli() } catch (_: Exception) { System.currentTimeMillis() }
+
+            FeedDisplayItem.ConnectionCard(
+                connectionId = conn.connectionId,
+                peerName = peerName,
+                peerPhotoBase64 = conn.peerProfile?.photo,
+                peerEmail = conn.peerProfile?.email,
+                connectionStatus = conn.status,
+                direction = conn.direction,
+                needsReview = needsReview,
+                hasAccepted = hasAccepted,
+                connectionType = conn.connectionType,
+                e2eReady = conn.e2eReady,
+                lastActivityPreview = preview,
+                lastActivityType = activityType,
+                unreadCount = unreadCount,
+                sortTimestamp = sortTime,
+                isUnread = needsReview || unreadCount > 0
             )
         }
 
-        // Merge and sort: pinned first, then by timestamp descending
-        val allItems: List<FeedDisplayItem> = connectionItems + eventItems
+        // --- 2. Build standalone event items (not tied to connections) ---
+        val standaloneEvents = events
+            .filter { it.feedStatus != FeedStatus.ARCHIVED && it.feedStatus != FeedStatus.DELETED }
+            .filter { event ->
+                if (!_showAuditEvents.value && event.feedStatus == FeedStatus.HIDDEN) return@filter false
+                // Exclude connection lifecycle events (handled by cards)
+                if (event.eventType in CONNECTION_LIFECYCLE_EVENT_TYPES) return@filter false
+                // Exclude activity events that belong to a known connection
+                if (event.eventType in CONNECTION_ACTIVITY_EVENT_TYPES) {
+                    val connId = event.metadata?.get("connection_id") ?: event.sourceId
+                    if (connId != null && connId in connectionIds) return@filter false
+                }
+                // Search filter
+                if (query.isNotEmpty()) {
+                    return@filter event.title.contains(query, ignoreCase = true) ||
+                        (event.message?.contains(query, ignoreCase = true) == true)
+                }
+                true
+            }
+            .map { event ->
+                FeedDisplayItem.EventItem(
+                    event = event,
+                    sortTimestamp = event.createdAt,
+                    isUnread = event.isUnread
+                )
+            }
+
+        // --- 3. Merge and sort ---
+        val allItems: List<FeedDisplayItem> = connectionCards + standaloneEvents
         return allItems.sortedWith(
             compareByDescending<FeedDisplayItem> {
+                // Pending review connections sort first
                 when (it) {
+                    is FeedDisplayItem.ConnectionCard -> if (it.needsReview) 2 else 0
                     is FeedDisplayItem.EventItem -> it.event.priority
-                    is FeedDisplayItem.ConnectionItem -> 0
-                    is FeedDisplayItem.AgentConnectionItem -> 0
                 }
             }.thenByDescending { it.sortTimestamp }
         )
@@ -297,8 +314,7 @@ class FeedViewModel @Inject constructor(
                     delay(200)
                     // Sync guides in parallel — don't block feed loading
                     launch { syncGuides() }
-                    // Load connection photos in parallel — used for connection card avatars
-                    launch { loadConnectionPhotos() }
+                    // Connections are loaded in loadFeed() via refreshConnections()
                     loadFeedAndWait()
                     isInitialLoadComplete = true
                 }
@@ -306,31 +322,7 @@ class FeedViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Load connection photos from the vault's connection list.
-     * Populates connectionPhotoCache so connection cards show peer avatars.
-     */
-    private fun loadConnectionPhotos() {
-        viewModelScope.launch {
-            try {
-                connectionsClient.list()
-                    .onSuccess { result ->
-                        result.items.forEach { record ->
-                            connectionPhotoCache[record.connectionId] = record.peerProfile?.photo
-                        }
-                        Log.d(TAG, "Loaded ${result.items.size} connection photos")
-                        // Rebuild display items with photos
-                        rebuildDisplayItems()
-                    }
-                    .onFailure { error ->
-                        Log.d(TAG, "Failed to load connection photos: ${error.message}")
-                    }
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                Log.d(TAG, "Failed to load connection photos", e)
-            }
-        }
-    }
+    // Connection photos now come from cachedConnections (loaded in refreshConnections)
 
     /**
      * Rebuild display items from cache and update UI state.
@@ -542,6 +534,21 @@ class FeedViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Refresh the connection list cache from the vault.
+     */
+    private suspend fun refreshConnections() {
+        feedRepository.getConnections()
+            .onSuccess { connections ->
+                cachedConnections = connections
+                Log.d(TAG, "Loaded ${connections.size} connections")
+            }
+            .onFailure { error ->
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                Log.w(TAG, "Failed to load connections: ${error.message}")
+            }
+    }
+
     fun loadFeed() {
         viewModelScope.launch {
             // Only show loading if we don't have cached data
@@ -550,6 +557,9 @@ class FeedViewModel @Inject constructor(
                 _state.value = FeedState.Loading
             }
             try {
+                // Fetch connections first (primary data source for cards)
+                refreshConnections()
+
                 // Use repository which provides offline caching
                 feedRepository.getFeed(forceRefresh = false)
                     .onSuccess { events ->
@@ -672,11 +682,13 @@ class FeedViewModel @Inject constructor(
     fun onDisplayItemClick(item: FeedDisplayItem) {
         viewModelScope.launch {
             when (item) {
-                is FeedDisplayItem.ConnectionItem -> {
-                    _effects.emit(FeedEffect.NavigateToConversation(item.connectionId))
-                }
-                is FeedDisplayItem.AgentConnectionItem -> {
-                    _effects.emit(FeedEffect.NavigateToAgentConversation(item.connectionId))
+                is FeedDisplayItem.ConnectionCard -> {
+                    when {
+                        item.needsReview -> _effects.emit(FeedEffect.NavigateToConnectionReview(item.connectionId))
+                        item.connectionStatus == "active" -> _effects.emit(FeedEffect.NavigateToConversation(item.connectionId))
+                        item.hasAccepted -> _effects.emit(FeedEffect.NavigateToConnectionDetail(item.connectionId))
+                        else -> _effects.emit(FeedEffect.NavigateToConnectionDetail(item.connectionId))
+                    }
                 }
                 is FeedDisplayItem.EventItem -> {
                     onEventClick(item.event)
@@ -968,6 +980,42 @@ class FeedViewModel @Inject constructor(
                         Log.e(TAG, "Failed to delete event", error)
                         _effects.emit(FeedEffect.ShowError("Failed to delete event"))
                     }
+                }
+        }
+    }
+
+    /**
+     * Accept a pending connection directly via connection.respond.
+     */
+    fun acceptConnection(connectionId: String) {
+        viewModelScope.launch {
+            connectionsClient.respond(connectionId, "accept")
+                .onSuccess {
+                    refreshConnections()
+                    refresh()
+                    _effects.emit(FeedEffect.ShowActionSuccess("Connection accepted"))
+                }
+                .onFailure {
+                    Log.e(TAG, "Failed to accept connection", it)
+                    _effects.emit(FeedEffect.ShowError("Accept failed: ${it.message}"))
+                }
+        }
+    }
+
+    /**
+     * Decline a pending connection directly via connection.respond.
+     */
+    fun declineConnection(connectionId: String) {
+        viewModelScope.launch {
+            connectionsClient.respond(connectionId, "reject")
+                .onSuccess {
+                    refreshConnections()
+                    refresh()
+                    _effects.emit(FeedEffect.ShowActionSuccess("Connection declined"))
+                }
+                .onFailure {
+                    Log.e(TAG, "Failed to decline connection", it)
+                    _effects.emit(FeedEffect.ShowError("Decline failed: ${it.message}"))
                 }
         }
     }
