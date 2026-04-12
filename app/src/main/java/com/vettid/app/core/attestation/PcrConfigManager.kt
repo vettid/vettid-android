@@ -525,6 +525,20 @@ class PcrConfigManager @Inject constructor(
     }
 
     /**
+     * Get the description and details URL for the current PCR version.
+     * This information comes from the PCR manifest (public, no vault connection needed).
+     */
+    fun getCurrentPcrDetails(): Pair<String?, String?> {
+        val storedJson = prefs.getString(KEY_CURRENT_PCRS, null) ?: return Pair(null, null)
+        return try {
+            val stored = gson.fromJson(storedJson, ExpectedPcrs::class.java)
+            Pair(stored.description, stored.detailsUrl)
+        } catch (e: Exception) {
+            Pair(null, null)
+        }
+    }
+
+    /**
      * Clear cached PCRs (for testing or recovery).
      */
     fun clearCache() {
@@ -607,7 +621,9 @@ data class PcrManifestResponse(
                 pcr2 = currentSet.pcr2,
                 pcr3 = currentSet.pcr3,
                 version = currentSet.id,
-                publishedAt = currentSet.validFrom
+                publishedAt = currentSet.validFrom,
+                description = currentSet.description,
+                detailsUrl = currentSet.detailsUrl
             ),
             signature = signature,
             keyId = null,
@@ -650,7 +666,10 @@ data class PcrSetEntry(
     val isCurrent: Boolean = false,
 
     @SerializedName("description")
-    val description: String? = null
+    val description: String? = null,
+
+    @SerializedName("details_url")
+    val detailsUrl: String? = null
 )
 
 /**

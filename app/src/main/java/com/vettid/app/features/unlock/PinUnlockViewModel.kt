@@ -194,11 +194,15 @@ class PinUnlockViewModel @Inject constructor(
             if (!_skipPcr0Check && trustedSet.isNotEmpty() && !pcrConfigManager.isPcr0Trusted(currentPcr0)) {
                 Log.w(TAG, "SECURITY: Current enclave PCR0 not in user's trusted set")
                 _pendingUntrustedPcr0 = currentPcr0
-                val pcrVersion = pcrConfigManager.getCurrentVersion()
+
+                // Get description and changelog URL from PCR manifest (public, no vault needed)
+                val (description, detailsUrl) = pcrConfigManager.getCurrentPcrDetails()
+                val summary = description ?: "Enclave version: ${pcrConfigManager.getCurrentVersion()}"
+
                 _state.value = PinUnlockState.EnclaveUpdateRequired(
                     currentPcr0 = currentPcr0,
-                    summary = "Enclave version: $pcrVersion",
-                    detailsUrl = "https://github.com/vettid/vettid-dev/commits/main"
+                    summary = summary,
+                    detailsUrl = detailsUrl
                 )
                 return
             } else if (trustedSet.isEmpty() && isValidPcr0) {
