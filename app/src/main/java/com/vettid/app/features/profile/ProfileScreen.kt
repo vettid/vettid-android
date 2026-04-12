@@ -315,40 +315,17 @@ private fun ViewProfileContent(
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Public metadata buttons
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            OutlinedButton(
-                onClick = onViewSecrets,
-                modifier = Modifier.weight(1f)
-            ) {
-                Icon(Icons.Default.Key, contentDescription = null, modifier = Modifier.size(14.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Secrets ($secretsCount)", style = MaterialTheme.typography.labelSmall, maxLines = 1)
-            }
-            OutlinedButton(
-                onClick = onViewPersonalData,
-                modifier = Modifier.weight(1f)
-            ) {
-                Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(14.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Personal ($personalDataCount)", style = MaterialTheme.typography.labelSmall, maxLines = 1)
-            }
+        // Public metadata buttons — stacked for readability
+        OutlinedButton(onClick = onViewSecrets, modifier = Modifier.fillMaxWidth()) {
+            Text("Secrets ($secretsCount)")
         }
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        // Published profile preview button
-        OutlinedButton(
-            onClick = onViewPublishedProfile,
-            modifier = Modifier.fillMaxWidth(),
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-        ) {
-            Icon(Icons.Default.Visibility, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(modifier = Modifier.width(6.dp))
-            Text("Published Profile ($publishedItemsCount)", style = MaterialTheme.typography.labelMedium)
+        Spacer(modifier = Modifier.height(6.dp))
+        OutlinedButton(onClick = onViewPersonalData, modifier = Modifier.fillMaxWidth()) {
+            Text("Personal Data ($personalDataCount)")
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+        OutlinedButton(onClick = onViewPublishedProfile, modifier = Modifier.fillMaxWidth()) {
+            Text("Published Profile ($publishedItemsCount)")
         }
 
         Spacer(modifier = Modifier.height(16.dp))

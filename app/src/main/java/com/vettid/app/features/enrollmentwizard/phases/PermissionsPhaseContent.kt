@@ -116,33 +116,44 @@ fun PermissionsPhaseContent(
 
             // Battery optimization exemption (for reliable background notifications)
             val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
-            var batteryCheckTrigger by remember { mutableIntStateOf(0) }
-            val isBatteryExempt = remember(batteryCheckTrigger) {
-                powerManager.isIgnoringBatteryOptimizations(context.packageName)
+            var isBatteryExempt by remember {
+                mutableStateOf(powerManager.isIgnoringBatteryOptimizations(context.packageName))
             }
+            var batteryRequestMade by remember { mutableStateOf(false) }
 
-            // Recheck periodically while on this screen (catches when user returns from system dialog)
-            LaunchedEffect(Unit) {
-                while (true) {
-                    kotlinx.coroutines.delay(1000)
-                    batteryCheckTrigger++
-                }
-            }
-
-            PermissionCard(
-                icon = Icons.Default.BatteryChargingFull,
-                title = "Background Activity",
-                description = "Keep VettID running in the background to receive notifications reliably, even when the app is closed.",
-                isGranted = isBatteryExempt,
-                onRequest = {
-                    try {
-                        val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                            data = Uri.parse("package:${context.packageName}")
+            // Only poll after user taps Allow (to catch when they return from system dialog)
+            if (batteryRequestMade && !isBatteryExempt) {
+                LaunchedEffect(batteryRequestMade) {
+                    while (true) {
+                        kotlinx.coroutines.delay(500)
+                        val exempt = powerManager.isIgnoringBatteryOptimizations(context.packageName)
+                        if (exempt) {
+                            isBatteryExempt = true
+                            break
                         }
-                        context.startActivity(intent)
-                    } catch (_: Exception) { }
+                    }
                 }
-            )
+            }
+
+            // Only show if not already exempt
+            if (!isBatteryExempt) {
+                PermissionCard(
+                    icon = Icons.Default.BatteryChargingFull,
+                    title = "Background Activity",
+                    description = "Keep VettID running in the background to receive notifications reliably, even when the app is closed.",
+                    isGranted = false,
+                    onRequest = {
+                        batteryRequestMade = true
+                        try {
+                            val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                                data = Uri.parse("package:${context.packageName}")
+                            }
+                            context.startActivity(intent)
+                        } catch (_: Exception) { }
+                    }
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            }
 
             Spacer(modifier = Modifier.height(12.dp))
 
