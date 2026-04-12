@@ -89,7 +89,9 @@ class ConversationViewModel @Inject constructor(
         fetchTransportKey()
         loadMessages()
         observeIncomingMessages()
+        observeReadReceipts()
         markConnectionEventsAsRead()
+        sendPendingReadReceipts()
     }
 
     /**
@@ -239,6 +241,58 @@ class ConversationViewModel @Inject constructor(
                     _state.value = ConversationState.Empty
                 }
             )
+        }
+    }
+
+    /**
+     * Observe read receipts from the peer — update message status to READ (✓✓).
+     */
+    private fun observeReadReceipts() {
+        viewModelScope.launch {
+            ownerSpaceClient.readReceipts
+                .filter { it.connectionId == connectionId }
+                .collect { receipt ->
+                    android.util.Log.d("ConversationVM", "Read receipt: ${receipt.messageId}")
+                    // Update message in the list
+                    val updated = allMessages.map { msg ->
+                        if (msg.messageId == receipt.messageId) {
+                            msg.copy(status = MessageStatus.READ, readAt = System.currentTimeMillis())
+                        } else msg
+                    }
+                    if (updated != allMessages.toList()) {
+                        allMessages = updated.toMutableList()
+                        _state.value = ConversationState.Loaded(
+                            messages = allMessages.toList(),
+                            hasMore = false
+                        )
+                    }
+                }
+        }
+    }
+
+    /**
+     * Send read receipts for all unread incoming messages in this conversation.
+     * Called when conversation opens to catch messages that arrived while closed.
+     */
+    private fun sendPendingReadReceipts() {
+        viewModelScope.launch {
+            // Wait for messages to load first
+            kotlinx.coroutines.delay(1000)
+            val loaded = _state.value as? ConversationState.Loaded ?: return@launch
+            val unreadFromPeer = loaded.messages.filter { msg ->
+                msg.senderId != currentUserGuid &&
+                msg.status != MessageStatus.READ
+            }
+            if (unreadFromPeer.isEmpty()) return@launch
+
+            android.util.Log.d("ConversationVM", "Sending ${unreadFromPeer.size} pending read receipts")
+            unreadFromPeer.forEach { msg ->
+                try {
+                    messagingClient.sendReadReceipt(connectionId, msg.messageId)
+                } catch (e: Exception) {
+                    android.util.Log.w("ConversationVM", "Read receipt failed for ${msg.messageId}: ${e.message}")
+                }
+            }
         }
     }
 

@@ -370,26 +370,36 @@ class FeedViewModel @Inject constructor(
     private fun silentRefresh() {
         viewModelScope.launch {
             try {
-                // Refresh connections FIRST, then sync events, then rebuild display
-                // This prevents the race where events appear as standalone items
-                // before connections are loaded to group them
-                refreshConnections()
-
-                val syncResult = feedRepository.sync()
-                syncResult.onSuccess { result ->
-                    Log.d(TAG, "Silent sync complete: +${result.newEvents} new, ${result.updatedEvents} updated")
+                // Refresh connections FIRST — never rebuild display without connection context
+                val connectionsLoaded = refreshConnections()
+                if (!connectionsLoaded && cachedConnections.isEmpty()) {
+                    Log.w(TAG, "Skipping feed rebuild — no connections available")
+                    return@launch
                 }
 
-                // Always rebuild display from current state (connections + cached events)
+                // Sync events
+                feedRepository.sync()
+                    .onSuccess { result ->
+                        Log.d(TAG, "Silent sync complete: +${result.newEvents} new, ${result.updatedEvents} updated")
+                    }
+
+                // Rebuild display with guaranteed connection context
                 val events = feedRepository.getCachedEvents()
-                val displayItems = filterForDisplay(events)
-                if (displayItems.isEmpty()) {
+                val newDisplayItems = filterForDisplay(events)
+
+                // Diff check — only update UI if items actually changed
+                val currentItems = (_state.value as? FeedState.Loaded)?.items
+                if (currentItems != null && itemsEqual(currentItems, newDisplayItems)) {
+                    return@launch // No change, skip recomposition
+                }
+
+                if (newDisplayItems.isEmpty()) {
                     _state.value = FeedState.Empty
                 } else {
                     _state.value = FeedState.Loaded(
-                        items = displayItems,
+                        items = newDisplayItems,
                         hasMore = false,
-                        unreadCount = displayItems.count { it.isUnread },
+                        unreadCount = newDisplayItems.count { it.isUnread },
                         isOffline = false
                     )
                 }
@@ -556,10 +566,32 @@ class FeedViewModel @Inject constructor(
     }
 
     /**
-     * Refresh the connection list cache from the vault.
+     * Compare two display item lists by key to avoid unnecessary recomposition.
      */
-    private suspend fun refreshConnections() {
-        feedRepository.getConnections()
+    private fun itemsEqual(a: List<FeedDisplayItem>, b: List<FeedDisplayItem>): Boolean {
+        if (a.size != b.size) return false
+        return a.zip(b).all { (itemA, itemB) ->
+            when {
+                itemA is FeedDisplayItem.ConnectionCard && itemB is FeedDisplayItem.ConnectionCard ->
+                    itemA.connectionId == itemB.connectionId &&
+                    itemA.connectionStatus == itemB.connectionStatus &&
+                    itemA.needsReview == itemB.needsReview &&
+                    itemA.lastActivityPreview == itemB.lastActivityPreview &&
+                    itemA.unreadCount == itemB.unreadCount
+                itemA is FeedDisplayItem.EventItem && itemB is FeedDisplayItem.EventItem ->
+                    itemA.event.eventId == itemB.event.eventId &&
+                    itemA.event.feedStatus == itemB.event.feedStatus
+                else -> false
+            }
+        }
+    }
+
+    /**
+     * Refresh the connection list cache from the vault.
+     * Returns true if connections were successfully loaded.
+     */
+    private suspend fun refreshConnections(): Boolean {
+        return feedRepository.getConnections()
             .onSuccess { connections ->
                 cachedConnections = connections
                 Log.d(TAG, "Loaded ${connections.size} connections")
@@ -568,6 +600,7 @@ class FeedViewModel @Inject constructor(
                 if (error is kotlinx.coroutines.CancellationException) throw error
                 Log.w(TAG, "Failed to load connections: ${error.message}")
             }
+            .isSuccess
     }
 
     fun loadFeed() {

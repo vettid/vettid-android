@@ -297,7 +297,7 @@ private fun FeedList(
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
-    // Auto-scroll to top when new items appear at the top of the feed
+    // Auto-scroll to top when new items appear — only if user is near the top
     var previousFirstItemId by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(items) {
         val currentFirstId = items.firstOrNull()?.let {
@@ -307,8 +307,10 @@ private fun FeedList(
             }
         }
         if (previousFirstItemId != null && currentFirstId != previousFirstItemId) {
-            // New item at the top — scroll to it
-            coroutineScope.launch { listState.animateScrollToItem(0) }
+            // Only auto-scroll if user is at or near the top (within first 3 items)
+            if (listState.firstVisibleItemIndex <= 2) {
+                coroutineScope.launch { listState.animateScrollToItem(0) }
+            }
         }
         previousFirstItemId = currentFirstId
     }
@@ -333,6 +335,8 @@ private fun FeedList(
                     }
                 }
             ) { item ->
+                // Smooth reordering animation when items change position
+                val itemModifier = Modifier.animateItem()
                 when (item) {
                     is FeedDisplayItem.ConnectionCard -> StatusAwareConnectionCard(
                         item = item,
