@@ -191,7 +191,7 @@ class VaultProtectionService : Service() {
         )
 
         return NotificationCompat.Builder(this, PROTECTION_CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground) // TODO: Use shield icon
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("VettID")
             .setContentText("Vault protection active")
             .setPriority(NotificationCompat.PRIORITY_LOW)

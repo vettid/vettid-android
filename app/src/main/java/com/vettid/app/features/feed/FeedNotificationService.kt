@@ -420,8 +420,7 @@ class FeedNotificationService @Inject constructor(
 
     @Suppress("UNUSED_PARAMETER")
     private fun getNotificationIcon(eventType: String): Int {
-        // Use app icon for now - in production, use event-type specific icons
-        return R.drawable.ic_launcher_foreground
+        return R.drawable.ic_notification
     }
 
     private fun getDefaultMessage(eventType: String): String {
@@ -467,7 +466,7 @@ class FeedNotificationService @Inject constructor(
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val notification = NotificationCompat.Builder(context, CHANNEL_ID_DEFAULT)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle("Welcome to VettID")
             .setContentText("Your vault is set up. You'll receive notifications for important events here.")
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
