@@ -207,13 +207,14 @@ class FeedNotificationService @Inject constructor(
         // Emit feed update for real-time UI refresh
         _feedUpdates.emit(FeedUpdate.NewEvent(event.eventId, event.eventType))
 
-        // Show system notification (skip guide events and sender's own message events)
-        if (event.eventType != "guide" && event.eventType != "message.sent") {
-            showSystemNotification(event)
+        // Skip guide events and sender's own message events entirely
+        if (event.eventType == "guide" || event.eventType == "message.sent") {
+            updateBadgeCount()
+            return
         }
 
         if (isInForeground) {
-            // Also show in-app snackbar for immediate visibility
+            // App is visible — show in-app snackbar only (no OS notification)
             _inAppNotifications.emit(
                 InAppFeedNotification(
                     eventId = event.eventId,
@@ -224,6 +225,9 @@ class FeedNotificationService @Inject constructor(
                     hasAction = event.actionType != null
                 )
             )
+        } else {
+            // App is in background — show OS system notification
+            showSystemNotification(event)
         }
 
         // Update badge count
