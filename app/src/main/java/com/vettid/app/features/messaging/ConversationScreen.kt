@@ -306,16 +306,17 @@ fun MessageBubble(
     isSent: Boolean,
     onPaymentRequest: () -> Unit = {}
 ) {
+    val gold = Color(0xFFffc125) // VettID brand gold
     val alignment = if (isSent) Alignment.End else Alignment.Start
     val backgroundColor = if (isSent) {
         Color.Black
     } else {
-        MaterialTheme.colorScheme.surfaceVariant
+        gold
     }
     val textColor = if (isSent) {
-        Color(0xFFFFD700) // Gold for sent messages
+        gold
     } else {
-        MaterialTheme.colorScheme.onSurfaceVariant
+        Color.Black
     }
 
     Column(
@@ -659,19 +660,19 @@ private fun MessageStatusIcon(
 ) {
     val iconText = when (status) {
         MessageStatus.SENDING -> "..."
-        MessageStatus.SENT -> "✓"
-        MessageStatus.DELIVERED -> "✓✓"
-        MessageStatus.READ -> "✓✓"
+        MessageStatus.SENT -> "✓"       // Sent to vault
+        MessageStatus.DELIVERED -> "✓"   // Delivered to peer's vault
+        MessageStatus.READ -> "✓✓"      // Read by peer
         MessageStatus.FAILED -> "!"
     }
 
     Text(
         text = iconText,
         style = MaterialTheme.typography.labelSmall,
-        color = if (status == MessageStatus.READ) {
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.9f)
-        } else {
-            tint
+        color = when (status) {
+            MessageStatus.READ -> Color(0xFF4CAF50) // Green for read
+            MessageStatus.FAILED -> Color(0xFFFF5252) // Red for failed
+            else -> tint
         }
     )
 }
