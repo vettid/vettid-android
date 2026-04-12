@@ -329,7 +329,7 @@ private fun ViewProfileContent(
                 Spacer(modifier = Modifier.width(4.dp))
                 Text("Secrets", style = MaterialTheme.typography.labelSmall, maxLines = 1)
                 Spacer(modifier = Modifier.width(2.dp))
-                Badge { Text("$secretsCount") }
+                Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.primary) { Text("$secretsCount", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)) }
             }
             OutlinedButton(
                 onClick = onViewPersonalData,
@@ -340,7 +340,7 @@ private fun ViewProfileContent(
                 Spacer(modifier = Modifier.width(4.dp))
                 Text("Personal", style = MaterialTheme.typography.labelSmall, maxLines = 1)
                 Spacer(modifier = Modifier.width(2.dp))
-                Badge { Text("$personalDataCount") }
+                Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.primary) { Text("$personalDataCount", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)) }
             }
         }
 
@@ -356,7 +356,7 @@ private fun ViewProfileContent(
             Spacer(modifier = Modifier.width(6.dp))
             Text("Published Profile", style = MaterialTheme.typography.labelMedium)
             Spacer(modifier = Modifier.width(4.dp))
-            Badge { Text("$publishedItemsCount") }
+            Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.primary) { Text("$publishedItemsCount", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)) }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
