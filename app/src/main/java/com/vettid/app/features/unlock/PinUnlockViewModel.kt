@@ -197,7 +197,8 @@ class PinUnlockViewModel @Inject constructor(
                 val pcrVersion = pcrConfigManager.getCurrentVersion()
                 _state.value = PinUnlockState.EnclaveUpdateRequired(
                     currentPcr0 = currentPcr0,
-                    summary = "Enclave version: $pcrVersion"
+                    summary = "Enclave version: $pcrVersion",
+                    detailsUrl = "https://github.com/vettid/vettid-dev/commits/main"
                 )
                 return
             } else if (trustedSet.isEmpty() && isValidPcr0) {
