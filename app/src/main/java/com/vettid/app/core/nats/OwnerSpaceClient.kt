@@ -1383,83 +1383,111 @@ class OwnerSpaceClient @Inject constructor(
      * Any .response messages that arrive here are logged and discarded — they are
      * handled by JetStreamRequestHelper's ephemeral consumers instead.
      */
+    /**
+     * Route incoming NATS messages to the appropriate handler.
+     *
+     * The vault publishes ALL messages through JetStream, which may append
+     * `.response` to subjects. Push notifications and request-responses
+     * both arrive on the same `forApp.>` subscription.
+     *
+     * Routing order:
+     * 1. Push notifications — matched by `contains()` (works with or without .response suffix)
+     * 2. Request-responses — silently skipped (JetStream consumers handle these)
+     * 3. Unknown — logged for debugging
+     */
     private fun handleVaultResponse(message: NatsMessage) {
         try {
-            // Route push notifications based on subject suffix
+            val subject = message.subject
+
+            // --- PUSH NOTIFICATIONS ---
+            // Use contains() to match regardless of .response suffix from JetStream
             when {
-                message.subject.contains(".forApp.credentials.rotate") -> {
-                    handleCredentialRotation(message)
-                    return
+                // Messaging
+                subject.contains(".forApp.new-message") -> {
+                    handleNewMessage(message); return
                 }
-                message.subject.contains(".forApp.new-message") -> {
-                    handleNewMessage(message)
-                    return
+                subject.contains(".forApp.read-receipt") -> {
+                    handleReadReceipt(message); return
                 }
-                message.subject.contains(".forApp.read-receipt") -> {
-                    handleReadReceipt(message)
-                    return
+
+                // Connection lifecycle
+                subject.contains(".forApp.connection.peer-accepted") -> {
+                    handleConnectionPeerAccepted(message); return
                 }
-                message.subject.contains(".forApp.profile-update") -> {
-                    handleProfileUpdate(message)
-                    return
+                subject.contains(".forApp.connection.activated") ||
+                subject.contains(".forApp.connection.key-exchanged") ||
+                subject.contains(".forApp.connection.rejected") -> {
+                    handleConnectionStatusUpdate(message); return
                 }
-                message.subject.contains(".forApp.connection-revoked") -> {
-                    handleConnectionRevoked(message)
-                    return
+                subject.contains(".forApp.connection-revoked") -> {
+                    handleConnectionRevoked(message); return
                 }
-                message.subject.contains(".forApp.connection.peer-accepted") -> {
-                    handleConnectionPeerAccepted(message)
-                    return
+
+                // Profile
+                subject.contains(".forApp.profile-update") -> {
+                    handleProfileUpdate(message); return
                 }
-                message.subject.contains(".forApp.connection.activated") ||
-                message.subject.contains(".forApp.connection.key-exchanged") ||
-                message.subject.contains(".forApp.connection.rejected") -> {
-                    handleConnectionStatusUpdate(message)
-                    return
+
+                // Credentials
+                subject.contains(".forApp.credentials.rotate") -> {
+                    handleCredentialRotation(message); return
                 }
-                // Call events (vault-routed signaling)
-                message.subject.contains(".forApp.call.") -> {
-                    handleCallEvent(message)
-                    return
+
+                // Calls
+                subject.contains(".forApp.call.") -> {
+                    handleCallEvent(message); return
                 }
-                // Recovery events (Issue #32, #33)
-                message.subject.contains(".forApp.recovery.") -> {
-                    handleRecoveryEvent(message)
-                    return
+
+                // Security & recovery
+                subject.contains(".forApp.recovery.") -> {
+                    handleRecoveryEvent(message); return
                 }
-                // Transfer events (Issue #31)
-                message.subject.contains(".forApp.transfer.") -> {
-                    handleTransferEvent(message)
-                    return
+                subject.contains(".forApp.transfer.") -> {
+                    handleTransferEvent(message); return
                 }
-                // Security events (Issue #32: fraud detection)
-                message.subject.contains(".forApp.security.") -> {
-                    handleSecurityEvent(message)
-                    return
+                subject.contains(".forApp.security.") -> {
+                    handleSecurityEvent(message); return
                 }
-                // Agent approval request events (exclude .response)
-                message.subject.contains(".forApp.agent.") && !message.subject.endsWith(".response") -> {
-                    handleAgentEvent(message)
-                    return
+
+                // Agent events (push notifications, not request-responses)
+                subject.contains(".forApp.agent.") && !isRequestResponse(subject) -> {
+                    handleAgentEvent(message); return
                 }
-                // Location sharing events
-                message.subject.endsWith(".forApp.location-update") -> {
-                    handleLocationUpdate(message)
-                    return
+
+                // Location
+                subject.contains(".forApp.location-update") -> {
+                    handleLocationUpdate(message); return
                 }
-                // Feed notification events (exclude .response)
-                message.subject.contains(".forApp.feed.") && !message.subject.endsWith(".response") -> {
-                    handleFeedNotification(message)
-                    return
+
+                // Feed notifications
+                subject.contains(".forApp.feed.new") ||
+                subject.contains(".forApp.feed.updated") -> {
+                    handleFeedNotification(message); return
                 }
             }
 
-            // Anything that falls through is a response message handled by JetStream.
-            // Log and discard — the JetStreamRequestHelper consumer picks these up.
-            android.util.Log.d(TAG, "Discarding response on subscription (handled by JetStream): ${message.subject}")
+            // --- REQUEST-RESPONSES ---
+            // Everything else is a JetStream request-response message.
+            // The JetStreamRequestHelper consumer handles these — silently skip.
+            // (No log spam — this is normal for every request-response exchange)
+
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to handle vault message", e)
         }
+    }
+
+    /**
+     * Check if a subject looks like a JetStream request-response
+     * (contains a UUID event_id before .response suffix).
+     */
+    private fun isRequestResponse(subject: String): Boolean {
+        // Request-responses have pattern: ...{type}.{uuid}.response
+        // Push notifications have pattern: ...{type}.response (no UUID)
+        val parts = subject.split(".")
+        if (parts.size < 2) return false
+        val beforeResponse = parts[parts.size - 2]
+        // UUID pattern: 8-4-4-4-12 hex chars
+        return beforeResponse.length == 36 && beforeResponse.count { it == '-' } == 4
     }
 
     private fun parseTimestamp(timestamp: String?): Long {
