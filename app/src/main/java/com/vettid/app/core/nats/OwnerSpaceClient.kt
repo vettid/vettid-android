@@ -1387,23 +1387,23 @@ class OwnerSpaceClient @Inject constructor(
         try {
             // Route push notifications based on subject suffix
             when {
-                message.subject.endsWith(".forApp.credentials.rotate") -> {
+                message.subject.contains(".forApp.credentials.rotate") -> {
                     handleCredentialRotation(message)
                     return
                 }
-                message.subject.endsWith(".forApp.new-message") -> {
+                message.subject.contains(".forApp.new-message") -> {
                     handleNewMessage(message)
                     return
                 }
-                message.subject.endsWith(".forApp.read-receipt") -> {
+                message.subject.contains(".forApp.read-receipt") -> {
                     handleReadReceipt(message)
                     return
                 }
-                message.subject.endsWith(".forApp.profile-update") -> {
+                message.subject.contains(".forApp.profile-update") -> {
                     handleProfileUpdate(message)
                     return
                 }
-                message.subject.endsWith(".forApp.connection-revoked") -> {
+                message.subject.contains(".forApp.connection-revoked") -> {
                     handleConnectionRevoked(message)
                     return
                 }
