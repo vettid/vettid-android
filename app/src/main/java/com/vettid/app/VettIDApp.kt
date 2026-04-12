@@ -152,6 +152,10 @@ sealed class Screen(val route: String) {
             "connections/scan-invitation"
         }
     }
+    object ConnectionReview : Screen("connections/review/{connectionId}?eventId={eventId}") {
+        fun createRoute(connectionId: String, eventId: String? = null) =
+            "connections/review/$connectionId" + if (eventId != null) "?eventId=$eventId" else ""
+    }
     object ConnectionDetail : Screen("connections/{connectionId}") {
         fun createRoute(connectionId: String) = "connections/$connectionId"
     }
@@ -534,6 +538,9 @@ fun VettIDApp(
                 onNavigateToConnectionDetail = { connectionId ->
                     navController.navigate(Screen.ConnectionDetail.createRoute(connectionId))
                 },
+                onNavigateToConnectionReview = { connectionId, eventId ->
+                    navController.navigate(Screen.ConnectionReview.createRoute(connectionId, eventId))
+                },
                 onNavigateToCreateInvitation = {
                     navController.navigate(Screen.CreateInvitation.route)
                 },
@@ -682,6 +689,24 @@ fun VettIDApp(
                     // Navigate back to connections list after successful scan
                     navController.popBackStack(Screen.Connections.route, false)
                 },
+                onBack = { navController.safePopBackStack() }
+            )
+        }
+        composable(
+            route = Screen.ConnectionReview.route,
+            arguments = listOf(
+                navArgument("connectionId") { type = NavType.StringType },
+                navArgument("eventId") { type = NavType.StringType; nullable = true; defaultValue = null }
+            )
+        ) { backStackEntry ->
+            val connectionId = backStackEntry.arguments?.getString("connectionId") ?: return@composable
+            val eventId = backStackEntry.arguments?.getString("eventId")
+            com.vettid.app.features.connections.ConnectionReviewScreen(
+                onAccepted = {
+                    navController.safePopBackStack()
+                    navController.navigate(Screen.Conversation.createRoute(connectionId))
+                },
+                onDeclined = { navController.safePopBackStack() },
                 onBack = { navController.safePopBackStack() }
             )
         }
@@ -1565,6 +1590,7 @@ fun MainScreen(
     onNavigateToBackups: () -> Unit = {},
     onNavigateToProteanRecovery: () -> Unit = {},
     onNavigateToConnectionDetail: (String) -> Unit = {},
+    onNavigateToConnectionReview: (connectionId: String, eventId: String) -> Unit = { _, _ -> },
     onNavigateToCreateInvitation: () -> Unit = {},
     onNavigateToScanInvitation: () -> Unit = {},
     onNavigateToConversation: (String) -> Unit = {},
@@ -1720,6 +1746,7 @@ fun MainScreen(
                 onNavigateToBackup = { onNavigateToBackups() },
                 onNavigateToGuide = onNavigateToGuide,
                 onNavigateToAgentApproval = onNavigateToAgentApproval,
+                onNavigateToConnectionReview = onNavigateToConnectionReview,
                 onNavigateToCreateInvitation = onNavigateToCreateInvitation,
                 onNavigateToScanInvitation = onNavigateToScanInvitation,
                 onNavigateToCreateAgentInvitation = onNavigateToCreateAgentInvitation

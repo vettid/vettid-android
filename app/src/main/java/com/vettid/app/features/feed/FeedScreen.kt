@@ -58,6 +58,7 @@ fun FeedContent(
     onNavigateToBackup: (String) -> Unit = {},
     onNavigateToGuide: (guideId: String, eventId: String, userName: String) -> Unit = { _, _, _ -> },
     onNavigateToAgentApproval: (requestId: String) -> Unit = {},
+    onNavigateToConnectionReview: (connectionId: String, eventId: String) -> Unit = { _, _ -> },
     onNavigateToCreateInvitation: () -> Unit = {},
     onNavigateToScanInvitation: () -> Unit = {},
     onNavigateToCreateAgentInvitation: () -> Unit = {}
@@ -87,7 +88,7 @@ fun FeedContent(
                 is FeedEffect.NavigateToBackup -> onNavigateToBackup(effect.backupId)
                 is FeedEffect.NavigateToGuide -> onNavigateToGuide(effect.guideId, effect.eventId, effect.userName)
                 is FeedEffect.NavigateToAgentApproval -> onNavigateToAgentApproval(effect.requestId)
-                is FeedEffect.NavigateToConnectionReview -> onNavigateToConnectionDetail(effect.connectionId)
+                is FeedEffect.NavigateToConnectionReview -> onNavigateToConnectionReview(effect.connectionId, effect.eventId)
                 is FeedEffect.NavigateToAgentConversation -> onNavigateToConversation(effect.connectionId)
                 is FeedEffect.ShowEventDetail -> selectedEvent = effect.event
                 is FeedEffect.ShowError -> snackbarHostState.showSnackbar(effect.message)
