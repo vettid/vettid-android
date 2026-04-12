@@ -326,19 +326,15 @@ private fun FeedList(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(vertical = 8.dp)
         ) {
+            // --- Section: Connections ---
+            val connectionCards = items.filterIsInstance<FeedDisplayItem.ConnectionCard>()
+            val activityItems = items.filterIsInstance<FeedDisplayItem.EventItem>()
+
             items(
-                items = items,
-                key = { item ->
-                    when (item) {
-                        is FeedDisplayItem.ConnectionCard -> "conn-${item.connectionId}"
-                        is FeedDisplayItem.EventItem -> item.event.eventId
-                    }
-                }
+                items = connectionCards,
+                key = { "conn-${it.connectionId}" }
             ) { item ->
-                // Smooth reordering animation when items change position
-                val itemModifier = Modifier.animateItem()
-                when (item) {
-                    is FeedDisplayItem.ConnectionCard -> StatusAwareConnectionCard(
+                StatusAwareConnectionCard(
                         item = item,
                         onClick = {
                             when {
@@ -355,15 +351,33 @@ private fun FeedList(
                         onVideoCallClick = { /* TODO */ },
                         onBtcClick = { /* TODO */ }
                     )
-                    is FeedDisplayItem.EventItem -> EventCard(
-                        event = item.event,
-                        onClick = { onEventClick(item.event) },
-                        onArchive = { onArchive(item.event) },
-                        onDelete = { onDelete(item.event) },
-                        onAction = { action -> onAction(item.event, action) },
-                        onTogglePriority = { onTogglePriority(item.event) }
+            }
+
+            // --- Section divider ---
+            if (connectionCards.isNotEmpty() && activityItems.isNotEmpty()) {
+                item(key = "section-divider") {
+                    Text(
+                        text = "ACTIVITY",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
                     )
                 }
+            }
+
+            // --- Section: Activity ---
+            items(
+                items = activityItems,
+                key = { it.event.eventId }
+            ) { item ->
+                EventCard(
+                    event = item.event,
+                    onClick = { onEventClick(item.event) },
+                    onArchive = { onArchive(item.event) },
+                    onDelete = { onDelete(item.event) },
+                    onAction = { action -> onAction(item.event, action) },
+                    onTogglePriority = { onTogglePriority(item.event) }
+                )
             }
         }
     }

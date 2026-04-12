@@ -64,6 +64,7 @@ class FeedRepository @Inject constructor(
         private const val KEY_LAST_SEQUENCE = "last_sync_sequence"
         private const val KEY_LAST_SYNC_TIME = "last_sync_time"
         private const val KEY_UNREAD_COUNT = "unread_count"
+        private const val KEY_CONNECTIONS_CACHE = "connections_cache"
 
         // Sync thresholds
         private const val SYNC_STALE_THRESHOLD_MS = 5 * 60 * 1000L  // 5 minutes
@@ -141,6 +142,28 @@ class FeedRepository @Inject constructor(
      */
     suspend fun getConnections(): Result<List<com.vettid.app.core.nats.ConnectionRecord>> {
         return connectionsClient.list().map { it.items }
+    }
+
+    /**
+     * Cache connection list for instant display on next app open.
+     */
+    fun cacheConnections(connections: List<com.vettid.app.core.nats.ConnectionRecord>) {
+        val json = gson.toJson(connections)
+        prefs.edit().putString(KEY_CONNECTIONS_CACHE, json).apply()
+    }
+
+    /**
+     * Get cached connections for instant display (before vault fetch completes).
+     */
+    fun getCachedConnections(): List<com.vettid.app.core.nats.ConnectionRecord> {
+        val json = prefs.getString(KEY_CONNECTIONS_CACHE, null) ?: return emptyList()
+        return try {
+            val type = object : com.google.gson.reflect.TypeToken<List<com.vettid.app.core.nats.ConnectionRecord>>() {}.type
+            gson.fromJson<List<com.vettid.app.core.nats.ConnectionRecord>>(json, type) ?: emptyList()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse cached connections", e)
+            emptyList()
+        }
     }
 
     /**

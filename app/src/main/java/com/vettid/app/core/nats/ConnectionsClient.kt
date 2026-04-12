@@ -585,6 +585,9 @@ class ConnectionsClient @Inject constructor(
             e2ePublicKey = json.get("e2e_public_key")?.asString,
             e2eReady = json.get("e2e_ready")?.asBoolean ?: false,
             needsAttention = json.get("needs_attention")?.asBoolean ?: false,
+            lastMessagePreview = json.get("last_message_preview")?.takeIf { !it.isJsonNull }?.asString,
+            lastMessageAt = json.get("last_message_at")?.takeIf { !it.isJsonNull }?.asString,
+            unreadMessageCount = json.get("unread_count")?.asInt ?: 0,
             peerProfile = peerProfile
         )
     }
@@ -728,6 +731,9 @@ data class ConnectionRecord(
     val e2ePublicKey: String? = null,
     val e2eReady: Boolean = false,
     val needsAttention: Boolean = false,
+    val lastMessagePreview: String? = null,
+    val lastMessageAt: String? = null,
+    val unreadMessageCount: Int = 0,
     val peerProfile: PeerProfileData? = null
 )
 
