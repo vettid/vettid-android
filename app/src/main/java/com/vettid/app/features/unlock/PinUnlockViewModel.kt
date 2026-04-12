@@ -109,6 +109,8 @@ class PinUnlockViewModel @Inject constructor(
 
     // PCR0 pending user approval (set when enclave version changed)
     private var _pendingUntrustedPcr0: String? = null
+    // Skip PCR0 check for this session (user chose "Not Now")
+    private var _skipPcr0Check = false
 
     init {
         // Start in PIN entry mode
@@ -189,7 +191,7 @@ class PinUnlockViewModel @Inject constructor(
             val currentPcr0 = pcrConfigManager.getCurrentPcrs().pcr0
             val isValidPcr0 = currentPcr0 != "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 
-            if (trustedSet.isNotEmpty() && !pcrConfigManager.isPcr0Trusted(currentPcr0)) {
+            if (!_skipPcr0Check && trustedSet.isNotEmpty() && !pcrConfigManager.isPcr0Trusted(currentPcr0)) {
                 Log.w(TAG, "SECURITY: Current enclave PCR0 not in user's trusted set")
                 _pendingUntrustedPcr0 = currentPcr0
                 val pcrVersion = pcrConfigManager.getCurrentVersion()
@@ -314,6 +316,18 @@ class PinUnlockViewModel @Inject constructor(
             Log.i(TAG, "User approved enclave update — PCR0 added to trusted set")
             _pendingUntrustedPcr0 = null
         }
+        _state.value = PinUnlockState.EnteringPin()
+    }
+
+    /**
+     * User chooses to skip the update for now.
+     * Returns to PIN entry without adding the new PCR0.
+     * The old enclave (with their existing trusted PCR0) will handle the request.
+     */
+    fun skipEnclaveUpdate() {
+        Log.i(TAG, "User deferred enclave update — will be prompted again next session")
+        _pendingUntrustedPcr0 = null
+        _skipPcr0Check = true
         _state.value = PinUnlockState.EnteringPin()
     }
 

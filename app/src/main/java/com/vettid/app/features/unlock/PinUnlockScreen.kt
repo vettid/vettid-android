@@ -155,7 +155,8 @@ fun PinUnlockScreen(
                         pcr0 = currentState.currentPcr0,
                         summary = currentState.summary,
                         detailsUrl = currentState.detailsUrl,
-                        onApprove = { viewModel.approveEnclaveUpdate() }
+                        onApprove = { viewModel.approveEnclaveUpdate() },
+                        onSkip = { viewModel.skipEnclaveUpdate() }
                     )
                 }
 
@@ -413,130 +414,147 @@ private fun EnclaveUpdateContent(
     pcr0: String,
     summary: String?,
     detailsUrl: String?,
-    onApprove: () -> Unit
+    onApprove: () -> Unit,
+    onSkip: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
 
-    Card(
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp)
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier
-                .padding(24.dp)
-                .verticalScroll(rememberScrollState())
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surface
+            ),
+            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
         ) {
-            Icon(
-                imageVector = Icons.Default.Security,
-                contentDescription = null,
-                modifier = Modifier.size(48.dp),
-                tint = MaterialTheme.colorScheme.primary
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Text(
-                text = "Vault Update Available",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Text(
-                text = "Your vault software has been updated. Review and approve to continue.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
-            )
-
-            if (summary != null) {
-                Spacer(modifier = Modifier.height(8.dp))
-                Surface(
-                    shape = MaterialTheme.shapes.small,
-                    color = MaterialTheme.colorScheme.primaryContainer
-                ) {
-                    Text(
-                        text = summary,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // PCR0 in a clearly readable card
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                shape = MaterialTheme.shapes.small
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.padding(20.dp)
             ) {
-                Column(modifier = Modifier.padding(12.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                Icon(
+                    imageVector = Icons.Default.Security,
+                    contentDescription = null,
+                    modifier = Modifier.size(40.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Text(
+                    text = "Vault Update Available",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Text(
+                    text = "A new version of your vault software is available. Review the changes before approving.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center
+                )
+
+                if (summary != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Surface(
+                        shape = MaterialTheme.shapes.small,
+                        color = MaterialTheme.colorScheme.primaryContainer
                     ) {
                         Text(
-                            text = "New Enclave PCR0",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurface
+                            text = summary,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                         )
-                        IconButton(
-                            onClick = {
-                                clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(pcr0))
-                            },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.ContentCopy,
-                                contentDescription = "Copy PCR0",
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.primary
-                            )
-                        }
                     }
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = pcr0,
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                        ),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
                 }
-            }
 
-            if (detailsUrl != null) {
+                // Changelog link
+                if (detailsUrl != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    TextButton(
+                        onClick = {
+                            try {
+                                context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(detailsUrl)))
+                            } catch (_: Exception) {}
+                        },
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(14.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("View Changelog", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+
                 Spacer(modifier = Modifier.height(12.dp))
-                TextButton(onClick = {
-                    try {
-                        context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(detailsUrl)))
-                    } catch (_: Exception) {}
-                }) {
-                    Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("View Changelog")
+
+                // PCR0
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    shape = MaterialTheme.shapes.small
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "New Enclave PCR0",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            IconButton(
+                                onClick = {
+                                    clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(pcr0))
+                                },
+                                modifier = Modifier.size(20.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.ContentCopy,
+                                    contentDescription = "Copy PCR0",
+                                    modifier = Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = pcr0,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                                lineHeight = MaterialTheme.typography.bodySmall.lineHeight
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                 }
             }
+        }
 
-            Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
-            Button(onClick = onApprove, modifier = Modifier.fillMaxWidth()) {
-                Icon(Icons.Default.CheckCircle, contentDescription = null)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Approve and Continue")
-            }
+        // Buttons outside the card for full width
+        Button(onClick = onApprove, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Approve Update")
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        OutlinedButton(onClick = onSkip, modifier = Modifier.fillMaxWidth()) {
+            Text("Not Now")
         }
     }
 }
