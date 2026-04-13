@@ -204,6 +204,10 @@ class ConversationViewModel @Inject constructor(
         viewModelScope.launch {
             messagingClient.listMessages(connectionId).fold(
                 onSuccess = { storedMessages ->
+                    android.util.Log.i("ConversationVM", "Loaded ${storedMessages.size} messages for $connectionId")
+                    storedMessages.forEachIndexed { i, msg ->
+                        android.util.Log.d("ConversationVM", "  msg[$i]: id=${msg.messageId}, dir=${msg.direction}, status=${msg.status}, content=${msg.content.take(50)}")
+                    }
                     if (storedMessages.isEmpty()) {
                         _state.value = ConversationState.Empty
                     } else {
@@ -233,11 +237,15 @@ class ConversationViewModel @Inject constructor(
                                 }
                             )
                         }
-                        allMessages = messages.toMutableList()
-                        _state.value = ConversationState.Loaded(messages = messages, hasMore = false)
+                        // Sort newest first — reverseLayout shows index 0 at the bottom
+                        val sorted = messages.sortedByDescending { it.sentAt }
+                        allMessages = sorted.toMutableList()
+                        _state.value = ConversationState.Loaded(messages = sorted, hasMore = false)
+                        android.util.Log.i("ConversationVM", "State set to Loaded with ${sorted.size} messages, newest: ${sorted.firstOrNull()?.content?.take(30)}")
                     }
                 },
-                onFailure = {
+                onFailure = { error ->
+                    android.util.Log.e("ConversationVM", "Failed to load messages for $connectionId: ${error.message}", error)
                     _state.value = ConversationState.Empty
                 }
             )
