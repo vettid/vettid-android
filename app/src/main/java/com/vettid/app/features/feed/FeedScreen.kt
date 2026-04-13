@@ -1,5 +1,6 @@
 package com.vettid.app.features.feed
 
+import android.content.pm.PackageManager
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -9,6 +10,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -65,6 +67,8 @@ fun FeedContent(
     onNavigateToScanInvitation: () -> Unit = {},
     onNavigateToCreateAgentInvitation: () -> Unit = {}
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+
     // Route search query from top bar to ViewModel
     LaunchedEffect(searchQuery) {
         viewModel.updateSearchQuery(searchQuery)
@@ -192,17 +196,28 @@ fun FeedContent(
                     onConnectionDecline = { connectionId -> viewModel.declineConnection(connectionId) },
                     onNavigateToConnectionReview = onNavigateToConnectionReview,
                     onVoiceCall = { connectionId ->
-                        pendingCallConnectionId = connectionId
-                        pendingCallIsVideo = false
-                        callPermissionLauncher.launch(arrayOf(android.Manifest.permission.RECORD_AUDIO))
+                        val hasAudio = ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                        if (hasAudio) {
+                            viewModel.startVoiceCall(connectionId)
+                        } else {
+                            pendingCallConnectionId = connectionId
+                            pendingCallIsVideo = false
+                            callPermissionLauncher.launch(arrayOf(android.Manifest.permission.RECORD_AUDIO))
+                        }
                     },
                     onVideoCall = { connectionId ->
-                        pendingCallConnectionId = connectionId
-                        pendingCallIsVideo = true
-                        callPermissionLauncher.launch(arrayOf(
-                            android.Manifest.permission.RECORD_AUDIO,
-                            android.Manifest.permission.CAMERA
-                        ))
+                        val hasAudio = ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+                        val hasCamera = ContextCompat.checkSelfPermission(context, android.Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+                        if (hasAudio && hasCamera) {
+                            viewModel.startVideoCall(connectionId)
+                        } else {
+                            pendingCallConnectionId = connectionId
+                            pendingCallIsVideo = true
+                            callPermissionLauncher.launch(arrayOf(
+                                android.Manifest.permission.RECORD_AUDIO,
+                                android.Manifest.permission.CAMERA
+                            ))
+                        }
                     }
                 )
                 is FeedState.Error -> {
