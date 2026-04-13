@@ -2109,6 +2109,8 @@ class OwnerSpaceClient @Inject constructor(
                 "new" -> FeedNotification.NewEvent(
                     eventId = payload.getString("event_id"),
                     eventType = payload.getString("event_type"),
+                    sourceId = payload.optString("source_id").takeIf { it.isNotEmpty() },
+                    sourceType = payload.optString("source_type").takeIf { it.isNotEmpty() },
                     title = payload.getString("title"),
                     message = payload.optString("message").takeIf { it.isNotEmpty() },
                     priority = payload.optInt("priority", 0),
@@ -2565,6 +2567,8 @@ sealed class FeedNotification {
     data class NewEvent(
         override val eventId: String,
         val eventType: String,
+        val sourceId: String?,
+        val sourceType: String?,
         val title: String,
         val message: String?,
         val priority: Int,

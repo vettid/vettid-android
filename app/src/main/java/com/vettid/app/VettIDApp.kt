@@ -284,6 +284,9 @@ fun VettIDApp(
     var pendingEnrollData by remember { mutableStateOf<String?>(null) }
     var pendingTransferApprovalId by remember { mutableStateOf<String?>(null) }
     var pendingVoteProposalId by remember { mutableStateOf<String?>(null) }
+    // Notification tap: navigate to specific screen after PIN unlock
+    var pendingNotificationEventType by remember { mutableStateOf<String?>(null) }
+    var pendingNotificationSourceId by remember { mutableStateOf<String?>(null) }
 
     // Handle deep links - store data for processing in appState effect
     LaunchedEffect(deepLinkData) {
@@ -314,12 +317,17 @@ fun VettIDApp(
                 pendingVoteProposalId = deepLinkData.code ?: ""
                 onDeepLinkConsumed()
             }
+            DeepLinkType.NOTIFICATION -> {
+                pendingNotificationEventType = deepLinkData.eventType
+                pendingNotificationSourceId = deepLinkData.sourceId
+                onDeepLinkConsumed()
+            }
             DeepLinkType.NONE -> { /* No deep link */ }
         }
     }
 
     // Handle navigation based on app state and pending deep links
-    LaunchedEffect(appState, pendingEnrollData, pendingConnectData, pendingTransferApprovalId, pendingVoteProposalId) {
+    LaunchedEffect(appState, pendingEnrollData, pendingConnectData, pendingTransferApprovalId, pendingVoteProposalId, pendingNotificationSourceId) {
         // Handle pending enrollment - takes priority
         if (pendingEnrollData != null) {
             val code = pendingEnrollData
@@ -379,6 +387,29 @@ fun VettIDApp(
                         navController.navigate(Screen.ProposalDetail.createRoute(proposalId))
                     } else {
                         navController.navigate(Screen.Proposals.route)
+                    }
+                }
+                // Check for pending notification navigation (tapped a notification)
+                else if (pendingNotificationSourceId != null) {
+                    val eventType = pendingNotificationEventType
+                    val sourceId = pendingNotificationSourceId!!
+                    pendingNotificationEventType = null
+                    pendingNotificationSourceId = null
+                    navController.navigate(Screen.Main.route) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                    // Navigate based on event type
+                    when {
+                        eventType?.startsWith("message.") == true ->
+                            navController.navigate(Screen.Conversation.createRoute(sourceId))
+                        eventType?.startsWith("agent.message") == true ->
+                            navController.navigate(Screen.Conversation.createRoute(sourceId))
+                        eventType?.startsWith("connection.") == true ->
+                            navController.navigate(Screen.ConnectionDetail.createRoute(sourceId))
+                        eventType?.startsWith("call.") == true ->
+                            navController.navigate(Screen.Conversation.createRoute(sourceId))
+                        else ->
+                            navController.navigate(Screen.Conversation.createRoute(sourceId))
                     }
                 }
                 // Check for pending connect data before going to Main

@@ -6,6 +6,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.BluetoothAudio
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,6 +25,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 private val CallGradientStart = Color(0xFF1A1A2E)
 private val CallGradientEnd = Color(0xFF16213E)
 private val DeclineRed = Color(0xFFE53935)
+private val ControlActive = Color(0xFF4CAF50)
+private val ControlInactive = Color.White.copy(alpha = 0.3f)
 
 /**
  * Full-screen outgoing call UI (ringing state).
@@ -56,6 +63,8 @@ fun OutgoingCallScreen(
     }
 
     val call = outgoingState.call
+    var isMuted by remember { mutableStateOf(false) }
+    var isSpeakerOn by remember { mutableStateOf(false) }
 
     // Pulsing animation for avatar
     val infiniteTransition = rememberInfiniteTransition(label = "pulse")
@@ -147,6 +156,63 @@ fun OutgoingCallScreen(
             }
 
             Spacer(modifier = Modifier.weight(1f))
+
+            // Control buttons row (mute + speaker)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(48.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(bottom = 32.dp)
+            ) {
+                // Mute button
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    FloatingActionButton(
+                        onClick = {
+                            isMuted = !isMuted
+                            viewModel.toggleMute()
+                        },
+                        modifier = Modifier.size(56.dp),
+                        containerColor = if (isMuted) ControlActive else ControlInactive,
+                        contentColor = Color.White
+                    ) {
+                        Icon(
+                            imageVector = if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                            contentDescription = if (isMuted) "Unmute" else "Mute",
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = if (isMuted) "Unmute" else "Mute",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White.copy(alpha = 0.7f)
+                    )
+                }
+
+                // Speaker button
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    FloatingActionButton(
+                        onClick = {
+                            isSpeakerOn = !isSpeakerOn
+                            viewModel.toggleSpeaker()
+                        },
+                        modifier = Modifier.size(56.dp),
+                        containerColor = if (isSpeakerOn) ControlActive else ControlInactive,
+                        contentColor = Color.White
+                    ) {
+                        Icon(
+                            imageVector = if (isSpeakerOn) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
+                            contentDescription = if (isSpeakerOn) "Earpiece" else "Speaker",
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = if (isSpeakerOn) "Speaker" else "Earpiece",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White.copy(alpha = 0.7f)
+                    )
+                }
+            }
 
             // Cancel button
             Column(horizontalAlignment = Alignment.CenterHorizontally) {

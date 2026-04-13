@@ -1,8 +1,10 @@
 package com.vettid.app.features.calling
 
 import android.content.Context
+import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import android.media.ToneGenerator
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -54,6 +56,8 @@ class CallManager @Inject constructor(
     private var frameCryptor: CallFrameCryptor? = null
     private var durationJob: Job? = null
     private var ringtoneJob: Job? = null
+    private var ringBackTone: ToneGenerator? = null
+    private var ringBackJob: Job? = null
 
     // TURN credential cache (23-hour TTL, server credentials expire at 24 hours)
     private var cachedIceServers: List<PeerConnection.IceServer>? = null
@@ -135,6 +139,7 @@ class CallManager @Inject constructor(
                 sdpOffer = sdpOffer.description
             )
             _showCallUI.emit(CallUIEvent.ShowOutgoing(call))
+            startRingBackTone()
             startRingingTimer()
 
             // Collect ICE candidates and send to peer (vault-routed)
@@ -259,14 +264,18 @@ class CallManager @Inject constructor(
         CallForegroundService.dismiss(context)
         disposeWebRTC()
 
-        val result = callSignalingClient.rejectCall(state.call.callId, state.call.peerGuid)
-
-        return result.map {
-            _callState.value = CallState.Ended(state.call, CallEndReason.REJECTED)
-            delay(1500)
-            _callState.value = CallState.Idle
-            _showCallUI.emit(CallUIEvent.DismissCall)
+        // Best-effort signaling — cleanup must happen even if this fails
+        try {
+            callSignalingClient.rejectCall(state.call.callId, state.call.peerGuid)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to signal call rejection to peer (cleaning up locally)", e)
         }
+
+        _callState.value = CallState.Ended(state.call, CallEndReason.REJECTED)
+        delay(1500)
+        _callState.value = CallState.Idle
+        _showCallUI.emit(CallUIEvent.DismissCall)
+        return Result.success(Unit)
     }
 
     /**
@@ -278,7 +287,14 @@ class CallManager @Inject constructor(
             is CallState.Active -> state.call
             is CallState.Outgoing -> state.call
             is CallState.Incoming -> state.call
-            else -> return Result.failure(IllegalStateException("No active call"))
+            else -> {
+                // Force reset to Idle if somehow stuck in Ended state
+                if (state is CallState.Ended) {
+                    _callState.value = CallState.Idle
+                    _showCallUI.emit(CallUIEvent.DismissCall)
+                }
+                return Result.failure(IllegalStateException("No active call"))
+            }
         }
 
         Log.i(TAG, "Ending call ${call.callId}")
@@ -287,45 +303,89 @@ class CallManager @Inject constructor(
         stopRingtone()
         CallForegroundService.dismiss(context)
 
-        val result = callSignalingClient.endCall(call.callId, call.peerGuid)
-
-        return result.map {
-            val duration = when (state) {
-                is CallState.Active -> state.duration
-                else -> 0
-            }
-            _callState.value = CallState.Ended(call, CallEndReason.COMPLETED, duration)
-            resetAudio()
-            disposeWebRTC()
-            delay(1500)
-            _callState.value = CallState.Idle
-            _showCallUI.emit(CallUIEvent.DismissCall)
+        // Best-effort signaling — cleanup must happen even if this fails
+        try {
+            callSignalingClient.endCall(call.callId, call.peerGuid)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to signal call end to peer (cleaning up locally)", e)
         }
+
+        val duration = when (state) {
+            is CallState.Active -> state.duration
+            else -> 0
+        }
+        _callState.value = CallState.Ended(call, CallEndReason.COMPLETED, duration)
+        resetAudio()
+        disposeWebRTC()
+        delay(1500)
+        _callState.value = CallState.Idle
+        _showCallUI.emit(CallUIEvent.DismissCall)
+        return Result.success(Unit)
     }
 
     /**
-     * Toggle audio mute.
+     * Toggle audio mute. Works in both Outgoing (pre-connect) and Active states.
      */
     fun toggleMute() {
         val state = _callState.value
-        if (state is CallState.Active) {
-            val newMuted = !state.isMuted
-            _callState.value = state.copy(isMuted = newMuted)
-            webRTCClient?.setAudioEnabled(!newMuted)
-            Log.d(TAG, "Mute toggled: $newMuted")
+        when (state) {
+            is CallState.Active -> {
+                val newMuted = !state.isMuted
+                _callState.value = state.copy(isMuted = newMuted)
+                webRTCClient?.setAudioEnabled(!newMuted)
+                Log.d(TAG, "Mute toggled: $newMuted")
+            }
+            is CallState.Outgoing -> {
+                // Mute mic before call connects
+                val isMuted = audioManager.isMicrophoneMute
+                audioManager.isMicrophoneMute = !isMuted
+                webRTCClient?.setAudioEnabled(isMuted)
+                Log.d(TAG, "Pre-connect mute toggled: ${!isMuted}")
+            }
+            else -> {}
         }
     }
 
     /**
-     * Toggle speaker.
+     * Toggle speaker. Works in both Outgoing and Active states.
      */
     fun toggleSpeaker() {
         val state = _callState.value
-        if (state is CallState.Active) {
-            val newSpeaker = !state.isSpeakerOn
-            _callState.value = state.copy(isSpeakerOn = newSpeaker)
-            setSpeakerphone(newSpeaker)
-            Log.d(TAG, "Speaker toggled: $newSpeaker")
+        when (state) {
+            is CallState.Active -> {
+                val newSpeaker = !state.isSpeakerOn
+                _callState.value = state.copy(isSpeakerOn = newSpeaker)
+                setSpeakerphone(newSpeaker)
+                Log.d(TAG, "Speaker toggled: $newSpeaker")
+            }
+            is CallState.Outgoing -> {
+                // Toggle speaker during ring-back
+                val currentSpeaker = audioManager.isSpeakerphoneOn
+                setSpeakerphone(!currentSpeaker)
+                Log.d(TAG, "Pre-connect speaker toggled: ${!currentSpeaker}")
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Get list of available audio output devices.
+     */
+    fun getAudioOutputDevices(): List<AudioDeviceInfo> {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            audioManager.availableCommunicationDevices
+        } else {
+            audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).toList()
+        }
+    }
+
+    /**
+     * Set active audio output device.
+     */
+    fun setAudioOutputDevice(device: AudioDeviceInfo) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            audioManager.setCommunicationDevice(device)
+            Log.d(TAG, "Audio routed to: ${device.type}")
         }
     }
 
@@ -768,10 +828,45 @@ class CallManager @Inject constructor(
         }
     }
 
+    /**
+     * Play ring-back tone (what the caller hears while waiting for answer).
+     * Uses standard telephony ring-back cadence: 2s on, 4s off.
+     */
+    private fun startRingBackTone() {
+        stopRingBackTone()
+        try {
+            ringBackTone = ToneGenerator(AudioManager.STREAM_VOICE_CALL, 80)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to create ring-back tone generator", e)
+            return
+        }
+        ringBackJob = scope.launch {
+            while (isActive) {
+                try {
+                    ringBackTone?.startTone(ToneGenerator.TONE_SUP_RINGTONE, 2000)
+                    delay(6000) // 2s tone + 4s silence
+                } catch (e: Exception) {
+                    break
+                }
+            }
+        }
+    }
+
+    private fun stopRingBackTone() {
+        ringBackJob?.cancel()
+        ringBackJob = null
+        try {
+            ringBackTone?.stopTone()
+            ringBackTone?.release()
+        } catch (_: Exception) {}
+        ringBackTone = null
+    }
+
     private fun stopRingtone() {
         ringtoneJob?.cancel()
         ringtoneJob = null
         vibrator?.cancel()
+        stopRingBackTone()
     }
 
     private fun setupAudioForCall() {

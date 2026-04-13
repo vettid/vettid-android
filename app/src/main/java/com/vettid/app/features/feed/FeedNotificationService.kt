@@ -67,6 +67,8 @@ class FeedNotificationService @Inject constructor(
 
         // Intent extras for notification tap handling
         const val EXTRA_EVENT_ID = "feed_event_id"
+        const val EXTRA_EVENT_TYPE = "feed_event_type"
+        const val EXTRA_SOURCE_ID = "feed_source_id"
         const val EXTRA_OPEN_FEED = "open_feed"
     }
 
@@ -346,11 +348,13 @@ class FeedNotificationService @Inject constructor(
             NotificationImportance.LOW -> NotificationCompat.PRIORITY_MIN
         }
 
-        // Create intent to open Feed screen
+        // Create intent that deep-links to the relevant screen after PIN unlock
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra(EXTRA_OPEN_FEED, true)
             putExtra(EXTRA_EVENT_ID, event.eventId)
+            putExtra(EXTRA_EVENT_TYPE, event.eventType)
+            event.sourceId?.let { putExtra(EXTRA_SOURCE_ID, it) }
         }
 
         val pendingIntent = PendingIntent.getActivity(

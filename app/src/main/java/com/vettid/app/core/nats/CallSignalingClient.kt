@@ -95,9 +95,9 @@ class CallSignalingClient @Inject constructor(
         return result.map {
             Call(
                 callId = callId,
-                connectionId = "", // Not used in vault-routed calls
+                connectionId = "",
                 peerGuid = targetUserGuid,
-                peerDisplayName = "Unknown", // Will be updated when call is answered
+                peerDisplayName = displayName,
                 peerAvatarUrl = null,
                 callType = callType,
                 direction = CallDirection.OUTGOING,

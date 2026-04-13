@@ -10,11 +10,14 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.runtime.*
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import com.vettid.app.core.security.RuntimeProtection
 import com.vettid.app.core.security.SecureClipboard
 import com.vettid.app.core.storage.AppPreferencesStore
+import com.vettid.app.features.feed.FeedNotificationService
 import com.vettid.app.features.settings.AppTheme
 import com.vettid.app.ui.theme.VettIDTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -25,7 +28,9 @@ import javax.inject.Inject
  */
 data class DeepLinkData(
     val type: DeepLinkType,
-    val code: String? = null
+    val code: String? = null,
+    val eventType: String? = null,
+    val sourceId: String? = null
 )
 
 enum class DeepLinkType {
@@ -33,6 +38,7 @@ enum class DeepLinkType {
     CONNECT,
     TRANSFER_APPROVE,
     VOTE,
+    NOTIFICATION,
     NONE
 }
 
@@ -51,6 +57,9 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var callManager: com.vettid.app.features.calling.CallManager
 
+    // Mutable state accessible from onNewIntent to trigger recomposition
+    private var deepLinkState = mutableStateOf(DeepLinkData(DeepLinkType.NONE))
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -63,11 +72,11 @@ class MainActivity : ComponentActivity() {
         // Perform runtime security check
         performSecurityCheck()
 
-        // Extract deep link data
-        val deepLinkData = extractDeepLinkData(intent)
+        // Extract deep link data from launch intent
+        deepLinkState.value = extractDeepLinkData(intent)
 
         setContent {
-            var currentDeepLink by remember { mutableStateOf(deepLinkData) }
+            val currentDeepLink by deepLinkState
             val themePreference by appPreferencesStore.themeFlow.collectAsState()
             val systemDark = isSystemInDarkTheme()
             val darkTheme = when (themePreference) {
@@ -84,7 +93,7 @@ class MainActivity : ComponentActivity() {
                     VettIDApp(
                         callManager = callManager,
                         deepLinkData = currentDeepLink,
-                        onDeepLinkConsumed = { currentDeepLink = DeepLinkData(DeepLinkType.NONE) }
+                        onDeepLinkConsumed = { deepLinkState.value = DeepLinkData(DeepLinkType.NONE) }
                     )
                 }
             }
@@ -94,7 +103,8 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        // Deep link will be re-processed on next composition
+        // Re-extract deep link data — triggers recomposition via deepLinkState
+        deepLinkState.value = extractDeepLinkData(intent)
     }
 
     /**
@@ -113,6 +123,24 @@ class MainActivity : ComponentActivity() {
      * - https://vettid.dev/votes?id=xxx
      */
     private fun extractDeepLinkData(intent: Intent?): DeepLinkData {
+        // Check for notification tap extras (from FeedNotificationService)
+        if (intent?.getBooleanExtra(FeedNotificationService.EXTRA_OPEN_FEED, false) == true) {
+            val eventType = intent.getStringExtra(FeedNotificationService.EXTRA_EVENT_TYPE)
+            val sourceId = intent.getStringExtra(FeedNotificationService.EXTRA_SOURCE_ID)
+            val eventId = intent.getStringExtra(FeedNotificationService.EXTRA_EVENT_ID)
+            // Clear the extras so we don't re-process on config change
+            intent.removeExtra(FeedNotificationService.EXTRA_OPEN_FEED)
+            if (BuildConfig.DEBUG) {
+                android.util.Log.d("VettID-DeepLink", "Notification tap: eventType=$eventType, sourceId=$sourceId")
+            }
+            return DeepLinkData(
+                type = DeepLinkType.NOTIFICATION,
+                code = eventId,
+                eventType = eventType,
+                sourceId = sourceId
+            )
+        }
+
         val uri = intent?.data ?: return DeepLinkData(DeepLinkType.NONE)
 
         // SECURITY: Only log deep link type, not parameters (may contain tokens/codes)

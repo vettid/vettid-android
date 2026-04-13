@@ -1,5 +1,7 @@
 package com.vettid.app.features.messaging
 
+import android.content.Intent
+import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -31,9 +33,14 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.google.gson.Gson
@@ -363,10 +370,11 @@ fun MessageBubble(
                         )
                     }
                     else -> {
-                        Text(
+                        LinkifiedText(
                             text = message.content,
                             style = MaterialTheme.typography.bodyMedium,
-                            color = textColor
+                            textColor = textColor,
+                            linkColor = if (isSent) Color(0xFF90CAF9) else Color(0xFF1565C0)
                         )
                     }
                 }
@@ -808,6 +816,79 @@ private fun ErrorContent(
                 Text("Retry")
             }
         }
+    }
+}
+
+/**
+ * Text composable that detects URLs and makes them clickable.
+ * Tapping a link opens it in the default browser or app handler.
+ */
+@Composable
+private fun LinkifiedText(
+    text: String,
+    style: androidx.compose.ui.text.TextStyle,
+    textColor: Color,
+    linkColor: Color
+) {
+    val context = LocalContext.current
+
+    // Regex to match URLs (http, https, or www)
+    val urlPattern = remember {
+        Regex("""(https?://[^\s<>"{}|\\^`\[\]]+|www\.[^\s<>"{}|\\^`\[\]]+)""")
+    }
+
+    val annotatedString = remember(text, textColor, linkColor) {
+        buildAnnotatedString {
+            var lastIndex = 0
+            val matches = urlPattern.findAll(text)
+
+            for (match in matches) {
+                // Append text before the URL
+                if (match.range.first > lastIndex) {
+                    withStyle(SpanStyle(color = textColor)) {
+                        append(text.substring(lastIndex, match.range.first))
+                    }
+                }
+
+                // Append the URL as a clickable annotation
+                val url = match.value
+                val fullUrl = if (url.startsWith("www.")) "https://$url" else url
+                pushStringAnnotation(tag = "URL", annotation = fullUrl)
+                withStyle(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)) {
+                    append(url)
+                }
+                pop()
+                lastIndex = match.range.last + 1
+            }
+
+            // Append remaining text
+            if (lastIndex < text.length) {
+                withStyle(SpanStyle(color = textColor)) {
+                    append(text.substring(lastIndex))
+                }
+            }
+        }
+    }
+
+    if (annotatedString.getStringAnnotations("URL", 0, annotatedString.length).isEmpty()) {
+        // No links — use plain Text for performance
+        Text(text = text, style = style, color = textColor)
+    } else {
+        ClickableText(
+            text = annotatedString,
+            style = style,
+            onClick = { offset ->
+                annotatedString.getStringAnnotations("URL", offset, offset)
+                    .firstOrNull()?.let { annotation ->
+                        try {
+                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(annotation.item))
+                            context.startActivity(intent)
+                        } catch (e: Exception) {
+                            // URL couldn't be opened
+                        }
+                    }
+            }
+        )
     }
 }
 
