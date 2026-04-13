@@ -18,6 +18,7 @@ import androidx.core.content.ContextCompat
 import com.vettid.app.MainActivity
 import com.vettid.app.R
 import com.vettid.app.core.nats.FeedNotification
+import com.vettid.app.core.nats.IncomingMessage
 import com.vettid.app.core.nats.NotificationImportance
 import com.vettid.app.core.nats.OwnerSpaceClient
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -200,6 +201,14 @@ class FeedNotificationService @Inject constructor(
         scope.launch {
             ownerSpaceClient.feedNotifications.collect { notification ->
                 handleNotification(notification)
+            }
+        }
+        // Listen for incoming messages directly — these have connectionId for deep-linking
+        scope.launch {
+            ownerSpaceClient.incomingMessages.collect { message ->
+                if (!isInForeground) {
+                    showMessageNotification(message)
+                }
             }
         }
     }
@@ -405,6 +414,48 @@ class FeedNotificationService @Inject constructor(
         } catch (e: SecurityException) {
             Log.w(TAG, "Notification permission not granted for ${event.eventId} — " +
                 "sdk=${Build.VERSION.SDK_INT}, model=${Build.MODEL}", e)
+        }
+    }
+
+    /**
+     * Show a notification for an incoming message with deep-link to the conversation.
+     * This is triggered directly by the new-message push (not feed.new), so it always
+     * has the connectionId for navigation.
+     */
+    private fun showMessageNotification(message: IncomingMessage) {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            putExtra(EXTRA_OPEN_FEED, true)
+            putExtra(EXTRA_EVENT_TYPE, "message.received")
+            putExtra(EXTRA_SOURCE_ID, message.connectionId)
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            message.messageId.hashCode(),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val preview = message.content?.take(100) ?: "New message"
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID_DEFAULT)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("New Message")
+            .setContentText(preview)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .setGroup("vettid_messages")
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .build()
+
+        val notifManager = NotificationManagerCompat.from(context)
+        if (!notifManager.areNotificationsEnabled()) return
+        try {
+            notifManager.notify(message.messageId.hashCode(), notification)
+            Log.d(TAG, "Showed message notification for connection ${message.connectionId}")
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Notification permission not granted for message", e)
         }
     }
 

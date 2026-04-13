@@ -382,6 +382,7 @@ private fun FeedList(
                         onAccept = { onConnectionAccept(item.connectionId) },
                         onDecline = { onConnectionDecline(item.connectionId) },
                         onMessageClick = { onNavigateToConversation(item.connectionId) },
+                        onHistoryClick = { onNavigateToConversation(item.connectionId) },
                         onCallClick = { onVoiceCall(item.connectionId) },
                         onVideoCallClick = { onVideoCall(item.connectionId) },
                         onBtcClick = { /* TODO */ }
@@ -427,6 +428,7 @@ private fun StatusAwareConnectionCard(
     onAccept: () -> Unit = {},
     onDecline: () -> Unit = {},
     onMessageClick: () -> Unit = {},
+    onHistoryClick: () -> Unit = {},
     onCallClick: () -> Unit = {},
     onVideoCallClick: () -> Unit = {},
     onBtcClick: () -> Unit = {}
@@ -435,9 +437,9 @@ private fun StatusAwareConnectionCard(
     when {
         item.needsReview -> PendingReviewConnectionCard(item, onClick, onAccept, onDecline)
         item.hasAccepted -> WaitingConnectionCard(item, onClick)
-        item.connectionStatus == "active" -> ActiveConnectionCard(item, onClick, onLongClick, onMessageClick, onCallClick, onVideoCallClick, onBtcClick)
+        item.connectionStatus == "active" -> ActiveConnectionCard(item, onClick, onLongClick, onMessageClick, onHistoryClick, onCallClick, onVideoCallClick, onBtcClick)
         item.connectionStatus == "revoked" || item.connectionStatus == "rejected" -> InactiveConnectionCard(item, onClick)
-        else -> ActiveConnectionCard(item, onClick, onLongClick, onMessageClick, onCallClick, onVideoCallClick, onBtcClick)
+        else -> ActiveConnectionCard(item, onClick, onLongClick, onMessageClick, onHistoryClick, onCallClick, onVideoCallClick, onBtcClick)
     }
 }
 
@@ -594,6 +596,7 @@ private fun ActiveConnectionCard(
     onClick: () -> Unit,
     onLongClick: () -> Unit = {},
     onMessageClick: () -> Unit = {},
+    onHistoryClick: () -> Unit = {},
     onCallClick: () -> Unit = {},
     onVideoCallClick: () -> Unit = {},
     onBtcClick: () -> Unit = {}
@@ -758,7 +761,7 @@ private fun ActiveConnectionCard(
                             text = { Text("View History") },
                             onClick = {
                                 showMoreMenu = false
-                                onLongClick()
+                                onHistoryClick()
                             },
                             leadingIcon = {
                                 Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(20.dp))

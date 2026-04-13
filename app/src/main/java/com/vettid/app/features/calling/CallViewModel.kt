@@ -1,5 +1,6 @@
 package com.vettid.app.features.calling
 
+import android.media.AudioDeviceInfo
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -108,6 +109,16 @@ class CallViewModel @Inject constructor(
      * Get EGL context for video rendering.
      */
     fun getEglContext(): EglBase.Context? = callManager.getEglContext()
+
+    /**
+     * Get available audio output devices.
+     */
+    fun getAudioOutputDevices(): List<AudioDeviceInfo> = callManager.getAudioOutputDevices()
+
+    /**
+     * Set active audio output device.
+     */
+    fun setAudioOutputDevice(device: AudioDeviceInfo) = callManager.setAudioOutputDevice(device)
 
     /**
      * Format duration as MM:SS.

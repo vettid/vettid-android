@@ -9,8 +9,11 @@ import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.VolumeUp
-import androidx.compose.material.icons.filled.VolumeOff
+import androidx.compose.material.icons.filled.Headset
+import androidx.compose.material.icons.filled.Speaker
+import androidx.compose.material.icons.filled.PhoneInTalk
 import androidx.compose.material.icons.filled.BluetoothAudio
+import android.media.AudioDeviceInfo
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -188,26 +191,53 @@ fun OutgoingCallScreen(
                     )
                 }
 
-                // Speaker button
+                // Audio output picker
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    FloatingActionButton(
-                        onClick = {
-                            isSpeakerOn = !isSpeakerOn
-                            viewModel.toggleSpeaker()
-                        },
-                        modifier = Modifier.size(56.dp),
-                        containerColor = if (isSpeakerOn) ControlActive else ControlInactive,
-                        contentColor = Color.White
-                    ) {
-                        Icon(
-                            imageVector = if (isSpeakerOn) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
-                            contentDescription = if (isSpeakerOn) "Earpiece" else "Speaker",
-                            modifier = Modifier.size(24.dp)
-                        )
+                    var showAudioMenu by remember { mutableStateOf(false) }
+                    Box {
+                        FloatingActionButton(
+                            onClick = { showAudioMenu = true },
+                            modifier = Modifier.size(56.dp),
+                            containerColor = ControlInactive,
+                            contentColor = Color.White
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.VolumeUp,
+                                contentDescription = "Audio output",
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showAudioMenu,
+                            onDismissRequest = { showAudioMenu = false }
+                        ) {
+                            val devices = remember { viewModel.getAudioOutputDevices() }
+                            if (devices.isEmpty()) {
+                                DropdownMenuItem(
+                                    text = { Text("Phone") },
+                                    onClick = {
+                                        showAudioMenu = false
+                                        viewModel.toggleSpeaker()
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.PhoneInTalk, null) }
+                                )
+                            }
+                            devices.forEach { device ->
+                                val (icon, label) = audioDeviceInfo(device)
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    onClick = {
+                                        showAudioMenu = false
+                                        viewModel.setAudioOutputDevice(device)
+                                    },
+                                    leadingIcon = { Icon(icon, null) }
+                                )
+                            }
+                        }
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        text = if (isSpeakerOn) "Speaker" else "Earpiece",
+                        text = "Audio",
                         style = MaterialTheme.typography.labelSmall,
                         color = Color.White.copy(alpha = 0.7f)
                     )
@@ -242,5 +272,19 @@ fun OutgoingCallScreen(
 
             Spacer(modifier = Modifier.height(48.dp))
         }
+    }
+}
+
+private fun audioDeviceInfo(device: AudioDeviceInfo): Pair<androidx.compose.ui.graphics.vector.ImageVector, String> {
+    return when (device.type) {
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> Icons.Default.Speaker to "Speaker"
+        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> Icons.Default.PhoneInTalk to "Phone"
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> Icons.Default.BluetoothAudio to (device.productName?.toString() ?: "Bluetooth")
+        AudioDeviceInfo.TYPE_WIRED_HEADSET,
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> Icons.Default.Headset to "Wired headset"
+        AudioDeviceInfo.TYPE_USB_HEADSET,
+        AudioDeviceInfo.TYPE_USB_DEVICE -> Icons.Default.Headset to "USB audio"
+        else -> Icons.Default.VolumeUp to (device.productName?.toString() ?: "Audio device")
     }
 }
