@@ -77,6 +77,8 @@ sealed class FeedEffect {
     data class NavigateToTransfer(val transferId: String) : FeedEffect()
     data class NavigateToGuide(val guideId: String, val eventId: String, val userName: String) : FeedEffect()
     data class NavigateToAgentApproval(val requestId: String) : FeedEffect()
+    data class StartVoiceCall(val peerGuid: String, val peerName: String) : FeedEffect()
+    data class StartVideoCall(val peerGuid: String, val peerName: String) : FeedEffect()
     data class ShowEventDetail(val event: com.vettid.app.core.nats.FeedEvent) : FeedEffect()
     data class ShowError(val message: String) : FeedEffect()
     data class ShowActionSuccess(val message: String) : FeedEffect()

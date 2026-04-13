@@ -30,7 +30,8 @@ class FeedViewModel @Inject constructor(
     private val credentialStore: CredentialStore,
     private val ownerSpaceClient: OwnerSpaceClient,
     private val personalDataStore: PersonalDataStore,
-    private val connectionsClient: ConnectionsClient
+    private val connectionsClient: ConnectionsClient,
+    private val callManager: com.vettid.app.features.calling.CallManager
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<FeedState>(FeedState.Loading)
@@ -1063,6 +1064,46 @@ class FeedViewModel @Inject constructor(
     /**
      * Accept a pending connection directly via connection.respond.
      */
+    /**
+     * Start a voice call with a connection.
+     * Called after permission is granted by the UI.
+     */
+    fun startVoiceCall(connectionId: String) {
+        viewModelScope.launch {
+            val conn = cachedConnections.find { it.connectionId == connectionId }
+            if (conn == null || conn.status != "active") {
+                _effects.emit(FeedEffect.ShowError("Connection not available for calls"))
+                return@launch
+            }
+            callManager.startCall(conn.peerGuid, conn.label, com.vettid.app.features.calling.CallType.VOICE).fold(
+                onSuccess = { },
+                onFailure = { error ->
+                    _effects.emit(FeedEffect.ShowError(error.message ?: "Failed to start call"))
+                }
+            )
+        }
+    }
+
+    /**
+     * Start a video call with a connection.
+     * Called after permission is granted by the UI.
+     */
+    fun startVideoCall(connectionId: String) {
+        viewModelScope.launch {
+            val conn = cachedConnections.find { it.connectionId == connectionId }
+            if (conn == null || conn.status != "active") {
+                _effects.emit(FeedEffect.ShowError("Connection not available for calls"))
+                return@launch
+            }
+            callManager.startCall(conn.peerGuid, conn.label, com.vettid.app.features.calling.CallType.VIDEO).fold(
+                onSuccess = { },
+                onFailure = { error ->
+                    _effects.emit(FeedEffect.ShowError(error.message ?: "Failed to start video call"))
+                }
+            )
+        }
+    }
+
     fun acceptConnection(connectionId: String) {
         viewModelScope.launch {
             connectionsClient.respond(connectionId, "accept")

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.activity.compose.rememberLauncherForActivityResult
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -78,6 +79,25 @@ fun FeedContent(
 
     // Event detail dialog state
     var selectedEvent by remember { mutableStateOf<FeedEvent?>(null) }
+
+    // Call permission handling
+    var pendingCallConnectionId by remember { mutableStateOf<String?>(null) }
+    var pendingCallIsVideo by remember { mutableStateOf(false) }
+
+    val callPermissionLauncher = rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+    ) { grants ->
+        if (grants.values.all { it }) {
+            pendingCallConnectionId?.let { connId ->
+                if (pendingCallIsVideo) {
+                    viewModel.startVideoCall(connId)
+                } else {
+                    viewModel.startVoiceCall(connId)
+                }
+            }
+        }
+        pendingCallConnectionId = null
+    }
 
     // Handle effects
     LaunchedEffect(Unit) {
@@ -170,7 +190,20 @@ fun FeedContent(
                     onTogglePriority = { viewModel.togglePriority(it.eventId) },
                     onConnectionAccept = { connectionId -> viewModel.acceptConnection(connectionId) },
                     onConnectionDecline = { connectionId -> viewModel.declineConnection(connectionId) },
-                    onNavigateToConnectionReview = onNavigateToConnectionReview
+                    onNavigateToConnectionReview = onNavigateToConnectionReview,
+                    onVoiceCall = { connectionId ->
+                        pendingCallConnectionId = connectionId
+                        pendingCallIsVideo = false
+                        callPermissionLauncher.launch(arrayOf(android.Manifest.permission.RECORD_AUDIO))
+                    },
+                    onVideoCall = { connectionId ->
+                        pendingCallConnectionId = connectionId
+                        pendingCallIsVideo = true
+                        callPermissionLauncher.launch(arrayOf(
+                            android.Manifest.permission.RECORD_AUDIO,
+                            android.Manifest.permission.CAMERA
+                        ))
+                    }
                 )
                 is FeedState.Error -> {
                     // If in offline mode, show friendly offline content instead of error
@@ -292,7 +325,9 @@ private fun FeedList(
     onTogglePriority: (FeedEvent) -> Unit = {},
     onConnectionAccept: (String) -> Unit = {},
     onConnectionDecline: (String) -> Unit = {},
-    onNavigateToConnectionReview: (String, String) -> Unit = { _, _ -> }
+    onNavigateToConnectionReview: (String, String) -> Unit = { _, _ -> },
+    onVoiceCall: (String) -> Unit = {},
+    onVideoCall: (String) -> Unit = {}
 ) {
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
@@ -347,8 +382,8 @@ private fun FeedList(
                         onAccept = { onConnectionAccept(item.connectionId) },
                         onDecline = { onConnectionDecline(item.connectionId) },
                         onMessageClick = { onNavigateToConversation(item.connectionId) },
-                        onCallClick = { /* TODO */ },
-                        onVideoCallClick = { /* TODO */ },
+                        onCallClick = { onVoiceCall(item.connectionId) },
+                        onVideoCallClick = { onVideoCall(item.connectionId) },
                         onBtcClick = { /* TODO */ }
                     )
             }
