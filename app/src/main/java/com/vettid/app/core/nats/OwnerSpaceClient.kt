@@ -1650,17 +1650,28 @@ class OwnerSpaceClient @Inject constructor(
      */
     private fun handleReadReceipt(message: NatsMessage) {
         try {
-            val json = JSONObject(String(message.data, Charsets.UTF_8))
-            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+            val rawString = String(message.data, Charsets.UTF_8).trim()
+            if (rawString.isEmpty() || !rawString.startsWith("{")) {
+                return // Skip empty or non-JSON data (JetStream duplicate)
+            }
+
+            val json = JSONObject(rawString)
+            val payload = if (json.has("payload") && json.get("payload") is JSONObject) {
+                json.getJSONObject("payload")
+            } else json
+
+            // message_id is required, other fields are optional
+            val messageId = payload.optString("message_id", "")
+            if (messageId.isEmpty()) return
 
             val readReceipt = ReadReceipt(
-                messageId = payload.getString("message_id"),
-                connectionId = payload.getString("connection_id"),
-                readerGuid = payload.getString("reader_guid"),
+                messageId = messageId,
+                connectionId = payload.optString("connection_id", ""),
+                readerGuid = payload.optString("reader_guid", ""),
                 readAt = payload.optString("read_at", "")
             )
 
-            android.util.Log.d(TAG, "Received read receipt: ${readReceipt.messageId}")
+            android.util.Log.i(TAG, "Received read receipt for message: ${readReceipt.messageId}")
             _readReceipts.tryEmit(readReceipt)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to parse read-receipt event", e)
