@@ -470,6 +470,24 @@ class FeedViewModel @Inject constructor(
                 rebuildDisplayItems()
             }
         }
+
+        // Incoming messages — update connection card immediately (no wait for sync)
+        viewModelScope.launch {
+            ownerSpaceClient.incomingMessages.collect { message ->
+                Log.d(TAG, "Incoming message for ${message.connectionId} — updating card")
+                // Update cached connection's unread count and preview in memory
+                cachedConnections = cachedConnections.map { conn ->
+                    if (conn.connectionId == message.connectionId) {
+                        conn.copy(
+                            unreadMessageCount = conn.unreadMessageCount + 1,
+                            lastMessagePreview = message.content?.take(100) ?: "New message",
+                            lastMessageAt = message.sentAt
+                        )
+                    } else conn
+                }
+                rebuildDisplayItems()
+            }
+        }
     }
 
     private fun handleStatusChange(eventId: String, newStatus: String) {
