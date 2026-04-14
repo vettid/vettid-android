@@ -284,45 +284,9 @@ class CallSignalingClient @Inject constructor(
             add("payload", signalPayload)
         }
 
-        // Fire and forget via vault — don't wait for response
-        val sendResult = ownerSpaceClient.sendToVault("call.signal", payload)
-        return if (sendResult.isSuccess) Result.success(Unit)
-        else Result.failure(sendResult.exceptionOrNull() ?: NatsException("Failed to send ICE candidate"))
+        return sendAndAwait("call.signal", payload, 5_000) { Unit }
     }
 
-    /**
-     * Legacy ICE candidate method.
-     */
-    @Deprecated("Use sendIceCandidate with peerGuid for vault-routed calls")
-    suspend fun sendIceCandidate(
-        callId: String,
-        candidate: String,
-        sdpMid: String?,
-        sdpMLineIndex: Int?
-    ): Result<Unit> {
-        val payload = JsonObject().apply {
-            addProperty("call_id", callId)
-            addProperty("candidate", candidate)
-            sdpMid?.let { addProperty("sdp_mid", it) }
-            sdpMLineIndex?.let { addProperty("sdp_m_line_index", it) }
-        }
-
-        // Fire and forget - ICE candidates are best-effort
-        val sendResult = ownerSpaceClient.sendToVault("call.ice-candidate", payload)
-        return if (sendResult.isSuccess) {
-            Result.success(Unit)
-        } else {
-            Result.failure(sendResult.exceptionOrNull() ?: NatsException("Failed to send ICE candidate"))
-        }
-    }
-
-    /**
-     * Notify peer of video state change.
-     *
-     * @param callId The active call
-     * @param peerGuid The peer's GUID
-     * @param enabled Whether local video is enabled
-     */
     suspend fun sendVideoState(callId: String, peerGuid: String, enabled: Boolean): Result<Unit> {
         val payload = JsonObject().apply {
             addProperty("call_id", callId)
@@ -332,9 +296,7 @@ class CallSignalingClient @Inject constructor(
             add("payload", signalPayload)
         }
 
-        val sendResult = ownerSpaceClient.sendToVault("call.signal", payload)
-        return if (sendResult.isSuccess) Result.success(Unit)
-        else Result.failure(sendResult.exceptionOrNull() ?: NatsException("Failed to send video state"))
+        return sendAndAwait("call.signal", payload, 5_000) { Unit }
     }
 
     /**
@@ -417,18 +379,7 @@ class CallSignalingClient @Inject constructor(
         timeoutMs: Long = 30_000,
         transform: (JsonObject) -> T
     ): Result<T> {
-        val sendResult = ownerSpaceClient.sendToVault(messageType, payload)
-        if (sendResult.isFailure) {
-            return Result.failure(sendResult.exceptionOrNull() ?: NatsException("Send failed"))
-        }
-
-        val requestId = sendResult.getOrThrow()
-
-        val response = withTimeoutOrNull(timeoutMs) {
-            ownerSpaceClient.vaultResponses
-                .filter { it.requestId == requestId }
-                .first()
-        }
+        val response = ownerSpaceClient.sendAndAwaitResponse(messageType, payload, timeoutMs)
 
         return when (response) {
             null -> Result.failure(NatsException("Request timed out"))
