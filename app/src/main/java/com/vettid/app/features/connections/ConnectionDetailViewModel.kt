@@ -251,7 +251,7 @@ class ConnectionDetailViewModel @Inject constructor(
                 _effects.emit(ConnectionDetailEffect.ShowError("Connection not loaded"))
                 return@launch
             }
-            callManager.startCall(connection.peerGuid, connection.peerDisplayName, CallType.VOICE).fold(
+            callManager.startCall(connectionId, connection.peerGuid, connection.peerDisplayName, CallType.VOICE).fold(
                 onSuccess = {
                     // CallManager will emit showCallUI event which navigates to call screen
                 },
@@ -274,7 +274,7 @@ class ConnectionDetailViewModel @Inject constructor(
                 _effects.emit(ConnectionDetailEffect.ShowError("Connection not loaded"))
                 return@launch
             }
-            callManager.startCall(connection.peerGuid, connection.peerDisplayName, CallType.VIDEO).fold(
+            callManager.startCall(connectionId, connection.peerGuid, connection.peerDisplayName, CallType.VIDEO).fold(
                 onSuccess = {
                     // CallManager will emit showCallUI event which navigates to call screen
                 },

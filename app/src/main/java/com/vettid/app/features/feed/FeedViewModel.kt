@@ -1075,7 +1075,7 @@ class FeedViewModel @Inject constructor(
                 _effects.emit(FeedEffect.ShowError("Connection not available for calls"))
                 return@launch
             }
-            callManager.startCall(conn.peerGuid, conn.label, com.vettid.app.features.calling.CallType.VOICE).fold(
+            callManager.startCall(connectionId, conn.peerGuid, conn.label, com.vettid.app.features.calling.CallType.VOICE).fold(
                 onSuccess = { },
                 onFailure = { error ->
                     _effects.emit(FeedEffect.ShowError(error.message ?: "Failed to start call"))
@@ -1095,7 +1095,7 @@ class FeedViewModel @Inject constructor(
                 _effects.emit(FeedEffect.ShowError("Connection not available for calls"))
                 return@launch
             }
-            callManager.startCall(conn.peerGuid, conn.label, com.vettid.app.features.calling.CallType.VIDEO).fold(
+            callManager.startCall(connectionId, conn.peerGuid, conn.label, com.vettid.app.features.calling.CallType.VIDEO).fold(
                 onSuccess = { },
                 onFailure = { error ->
                     _effects.emit(FeedEffect.ShowError(error.message ?: "Failed to start video call"))

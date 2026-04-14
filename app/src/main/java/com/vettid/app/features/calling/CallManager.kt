@@ -84,65 +84,49 @@ class CallManager @Inject constructor(
     // MARK: - Public API
 
     /**
-     * Initiate an outgoing call.
+     * Initiate an outgoing call via the user's vault.
      *
-     * @param targetUserGuid GUID of the user to call
-     * @param displayName Caller's display name to show
+     * @param connectionId Connection ID (vault uses this to find the peer)
+     * @param peerGuid Peer's GUID (for local state tracking)
+     * @param displayName Peer's display name (for local UI)
      * @param callType Voice or video
      */
-    suspend fun startCall(targetUserGuid: String, displayName: String, callType: CallType): Result<Unit> {
+    suspend fun startCall(connectionId: String, peerGuid: String, displayName: String, callType: CallType): Result<Unit> {
         if (_callState.value !is CallState.Idle) {
             return Result.failure(IllegalStateException("Already in a call"))
         }
 
-        Log.i(TAG, "Starting $callType call to $targetUserGuid")
+        Log.i(TAG, "Starting $callType call to $displayName (connection=$connectionId)")
 
-        // Initialize WebRTC
-        initializeWebRTC()
-
-        // Fetch TURN credentials and create peer connection
-        val iceServers = fetchIceServers()
-        if (!webRTCClient!!.createPeerConnection(iceServers)) {
-            disposeWebRTC()
-            return Result.failure(IllegalStateException("Failed to create peer connection"))
-        }
-
-        webRTCClient!!.addAudioTrack()
-        if (callType == CallType.VIDEO) {
-            val videoTrack = webRTCClient!!.addVideoTrack(null)
-            _localVideoTrack.value = videoTrack
-        }
-
-        // Create SDP offer
-        val sdpDeferred = CompletableDeferred<SessionDescription?>()
-        webRTCClient!!.createOffer { sdp ->
-            sdpDeferred.complete(sdp)
-        }
-
-        val sdpOffer = sdpDeferred.await()
-        if (sdpOffer == null) {
-            disposeWebRTC()
-            return Result.failure(IllegalStateException("Failed to create SDP offer"))
-        }
-
-        // Send call initiation via signaling (vault-routed)
+        // Send call initiation to own vault — vault handles forwarding to peer
         val result = callSignalingClient.initiateCall(
-            targetUserGuid = targetUserGuid,
+            connectionId = connectionId,
             displayName = displayName,
             callType = callType,
-            sdpOffer = sdpOffer.description
+            peerGuid = peerGuid
         )
 
         return result.map { call ->
-            _callState.value = CallState.Outgoing(
-                call = call,
-                sdpOffer = sdpOffer.description
-            )
+            // Initialize WebRTC after vault confirms call initiation
+            initializeWebRTC()
+            val iceServers = fetchIceServers()
+            if (!webRTCClient!!.createPeerConnection(iceServers)) {
+                disposeWebRTC()
+                return Result.failure(IllegalStateException("Failed to create peer connection"))
+            }
+
+            webRTCClient!!.addAudioTrack()
+            if (callType == CallType.VIDEO) {
+                val videoTrack = webRTCClient!!.addVideoTrack(null)
+                _localVideoTrack.value = videoTrack
+            }
+
+            _callState.value = CallState.Outgoing(call = call)
             _showCallUI.emit(CallUIEvent.ShowOutgoing(call))
             startRingBackTone()
             startRingingTimer()
 
-            // Collect ICE candidates and send to peer (vault-routed)
+            // Collect ICE candidates and send to peer via vault
             scope.launch {
                 webRTCClient?.iceCandidates?.collect { candidate ->
                     callSignalingClient.sendIceCandidate(

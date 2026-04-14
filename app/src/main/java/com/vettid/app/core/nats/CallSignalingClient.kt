@@ -18,23 +18,13 @@ import javax.inject.Singleton
 /**
  * Client for vault-routed call signaling via NATS.
  *
- * All call events are routed through the user's vault for:
- * - Security verification of caller identity
- * - Block list enforcement
- * - Audit logging
+ * All call events are routed through the user's OWN vault:
+ * - App sends to own vault (call.start, call.accept, call.reject, call.end, call.signal)
+ * - Own vault verifies, logs, and forwards to peer's vault via backend NATS account
+ * - Peer's vault receives, verifies (block list), logs, and relays to peer's app
  *
- * Call flow:
- * 1. Caller publishes to target's vault: OwnerSpace.{targetGuid}.forVault.call.initiate
- * 2. Target's vault verifies, logs, relays: OwnerSpace.{targetGuid}.forApp.call.incoming
- * 3. Callee accepts/rejects via their vault, which relays back to caller
- *
- * Handles WebRTC signaling for voice/video calls:
- * - call.initiate: Start outgoing call with SDP offer
- * - call.offer/answer: WebRTC SDP exchange
- * - call.accept/reject: Accept or decline incoming call
- * - call.end: Terminate active call
- * - call.candidate: Exchange ICE candidates
- * - call.history: Retrieve call history
+ * The app NEVER publishes directly to another user's NATS subjects.
+ * Vault-to-vault communication uses the backend NATS account which has cross-space access.
  */
 @Singleton
 class CallSignalingClient @Inject constructor(
@@ -57,46 +47,40 @@ class CallSignalingClient @Inject constructor(
     }
 
     /**
-     * Initiate a call to a peer (vault-routed).
+     * Initiate a call to a peer via own vault.
      *
-     * The call is routed through the target user's vault, which:
-     * - Verifies caller identity
-     * - Checks block list
-     * - Logs the call attempt
-     * - Relays to the target app
+     * Sends call.start to own vault with the connection_id. The vault:
+     * - Looks up the connection and peer info
+     * - Generates X25519 keypair for E2EE
+     * - Forwards call.initiate to the peer's vault (via backend NATS account)
+     * - Returns call_id and local public key
      *
-     * @param targetUserGuid Target user's GUID
-     * @param displayName Caller's display name to show
+     * @param connectionId Connection ID (used by vault to find the peer)
+     * @param displayName Peer's display name (for local UI)
      * @param callType Voice or video
-     * @param sdpOffer WebRTC SDP offer
-     * @return Call object with generated callId
+     * @return Call object with vault-generated callId
      */
     suspend fun initiateCall(
-        targetUserGuid: String,
+        connectionId: String,
         displayName: String,
         callType: CallType,
-        sdpOffer: String? = null
+        peerGuid: String
     ): Result<Call> {
-        val callId = "call-${UUID.randomUUID()}"
-
         val payload = JsonObject().apply {
-            addProperty("call_id", callId)
-            addProperty("caller_display_name", displayName)
-            addProperty("call_type", callType.name.lowercase())
-            addProperty("timestamp", System.currentTimeMillis())
-            sdpOffer?.let { addProperty("sdp_offer", it) }
+            addProperty("connection_id", connectionId)
+            val metadata = JsonObject()
+            metadata.addProperty("call_type", callType.name.lowercase())
+            add("metadata", metadata)
         }
 
-        Log.i(TAG, "Initiating ${callType.name} call to user $targetUserGuid")
+        Log.i(TAG, "Initiating ${callType.name} call via vault for connection $connectionId")
 
-        // Send to TARGET user's vault
-        val result = ownerSpaceClient.sendToTargetVault(targetUserGuid, "call.initiate", payload)
-
-        return result.map {
+        return sendAndAwait("call.start", payload) { result ->
+            val callId = result.get("call_id")?.asString ?: "call-${UUID.randomUUID()}"
             Call(
                 callId = callId,
-                connectionId = "",
-                peerGuid = targetUserGuid,
+                connectionId = connectionId,
+                peerGuid = peerGuid,
                 peerDisplayName = displayName,
                 peerAvatarUrl = null,
                 callType = callType,
@@ -202,11 +186,9 @@ class CallSignalingClient @Inject constructor(
             reason?.let { addProperty("reason", it) }
         }
 
-        Log.i(TAG, "Rejecting call $callId to user $callerGuid")
+        Log.i(TAG, "Rejecting call $callId via own vault")
 
-        // Send reject back to caller's vault
-        val result = ownerSpaceClient.sendToTargetVault(callerGuid, "call.reject", payload)
-        return result.map { Unit }
+        return sendAndAwait("call.reject", payload) { Unit }
     }
 
     /**
@@ -235,11 +217,9 @@ class CallSignalingClient @Inject constructor(
             addProperty("call_id", callId)
         }
 
-        Log.i(TAG, "Ending call $callId with user $peerGuid")
+        Log.i(TAG, "Ending call $callId via own vault")
 
-        // Send end to peer's vault
-        val result = ownerSpaceClient.sendToTargetVault(peerGuid, "call.end", payload)
-        return result.map { Unit }
+        return sendAndAwait("call.end", payload) { Unit }
     }
 
     /**
@@ -266,39 +246,27 @@ class CallSignalingClient @Inject constructor(
     suspend fun sendOffer(callId: String, peerGuid: String, sdpOffer: String): Result<Unit> {
         val payload = JsonObject().apply {
             addProperty("call_id", callId)
-            addProperty("sdp_offer", sdpOffer)
+            addProperty("signal_type", "offer")
+            val signalPayload = JsonObject()
+            signalPayload.addProperty("sdp_offer", sdpOffer)
+            add("payload", signalPayload)
         }
 
-        val result = ownerSpaceClient.sendToTargetVault(peerGuid, "call.offer", payload)
-        return result.map { Unit }
+        return sendAndAwait("call.signal", payload) { Unit }
     }
 
-    /**
-     * Send SDP answer to peer (vault-routed).
-     *
-     * @param callId The call ID
-     * @param peerGuid The peer's GUID
-     * @param sdpAnswer WebRTC SDP answer
-     */
     suspend fun sendAnswer(callId: String, peerGuid: String, sdpAnswer: String): Result<Unit> {
         val payload = JsonObject().apply {
             addProperty("call_id", callId)
-            addProperty("sdp_answer", sdpAnswer)
+            addProperty("signal_type", "answer")
+            val signalPayload = JsonObject()
+            signalPayload.addProperty("sdp_answer", sdpAnswer)
+            add("payload", signalPayload)
         }
 
-        val result = ownerSpaceClient.sendToTargetVault(peerGuid, "call.answer", payload)
-        return result.map { Unit }
+        return sendAndAwait("call.signal", payload) { Unit }
     }
 
-    /**
-     * Send ICE candidate to peer (vault-routed).
-     *
-     * @param callId The active call
-     * @param peerGuid The peer's GUID
-     * @param candidate ICE candidate string
-     * @param sdpMid SDP mid
-     * @param sdpMLineIndex SDP m-line index
-     */
     suspend fun sendIceCandidate(
         callId: String,
         peerGuid: String,
@@ -308,14 +276,18 @@ class CallSignalingClient @Inject constructor(
     ): Result<Unit> {
         val payload = JsonObject().apply {
             addProperty("call_id", callId)
-            addProperty("candidate", candidate)
-            sdpMid?.let { addProperty("sdp_mid", it) }
-            sdpMLineIndex?.let { addProperty("sdp_m_line_index", it) }
+            addProperty("signal_type", "candidate")
+            val signalPayload = JsonObject()
+            signalPayload.addProperty("candidate", candidate)
+            sdpMid?.let { signalPayload.addProperty("sdp_mid", it) }
+            sdpMLineIndex?.let { signalPayload.addProperty("sdp_m_line_index", it) }
+            add("payload", signalPayload)
         }
 
-        // Send to peer's vault
-        val result = ownerSpaceClient.sendToTargetVault(peerGuid, "call.candidate", payload)
-        return result.map { Unit }
+        // Fire and forget via vault — don't wait for response
+        val sendResult = ownerSpaceClient.sendToVault("call.signal", payload)
+        return if (sendResult.isSuccess) Result.success(Unit)
+        else Result.failure(sendResult.exceptionOrNull() ?: NatsException("Failed to send ICE candidate"))
     }
 
     /**
@@ -354,11 +326,15 @@ class CallSignalingClient @Inject constructor(
     suspend fun sendVideoState(callId: String, peerGuid: String, enabled: Boolean): Result<Unit> {
         val payload = JsonObject().apply {
             addProperty("call_id", callId)
-            addProperty("video_enabled", enabled)
+            addProperty("signal_type", "video-state")
+            val signalPayload = JsonObject()
+            signalPayload.addProperty("video_enabled", enabled)
+            add("payload", signalPayload)
         }
 
-        val result = ownerSpaceClient.sendToTargetVault(peerGuid, "call.video-state", payload)
-        return result.map { Unit }
+        val sendResult = ownerSpaceClient.sendToVault("call.signal", payload)
+        return if (sendResult.isSuccess) Result.success(Unit)
+        else Result.failure(sendResult.exceptionOrNull() ?: NatsException("Failed to send video state"))
     }
 
     /**
