@@ -1887,55 +1887,64 @@ class OwnerSpaceClient @Inject constructor(
             val payload = if (json.has("payload")) json.getJSONObject("payload") else json
 
             val callEvent = when (eventType) {
-                "incoming" -> CallSignalEvent.Incoming(
-                    callId = payload.getString("call_id"),
-                    callerGuid = payload.getString("caller_id"),
-                    callerDisplayName = payload.optString("caller_display_name", "Unknown"),
-                    callType = payload.optString("call_type", "voice"),
-                    sdpOffer = if (payload.has("sdp_offer")) payload.getString("sdp_offer") else null,
-                    timestamp = payload.optLong("timestamp", System.currentTimeMillis())
-                )
+                "incoming" -> {
+                    val callId = payload.optString("call_id", "")
+                    val callerGuid = payload.optString("caller_id", "")
+                    if (callId.isEmpty() && callerGuid.isEmpty()) {
+                        android.util.Log.w(TAG, "Incoming call missing call_id and caller_id, raw: ${String(message.data, Charsets.UTF_8).take(200)}")
+                        null
+                    } else {
+                        CallSignalEvent.Incoming(
+                            callId = callId,
+                            callerGuid = callerGuid,
+                            callerDisplayName = payload.optString("caller_display_name", "Unknown"),
+                            callType = payload.optString("call_type", "voice"),
+                            sdpOffer = payload.optString("sdp_offer", "").takeIf { it.isNotEmpty() },
+                            timestamp = payload.optLong("timestamp", System.currentTimeMillis())
+                        )
+                    }
+                }
                 "offer" -> CallSignalEvent.Offer(
-                    callId = payload.getString("call_id"),
-                    callerGuid = payload.getString("caller_id"),
-                    sdpOffer = payload.getString("sdp_offer")
+                    callId = payload.optString("call_id", ""),
+                    callerGuid = payload.optString("caller_id", ""),
+                    sdpOffer = payload.optString("sdp_offer", "")
                 )
                 "answer" -> CallSignalEvent.Answer(
-                    callId = payload.getString("call_id"),
-                    sdpAnswer = payload.getString("sdp_answer")
+                    callId = payload.optString("call_id", ""),
+                    sdpAnswer = payload.optString("sdp_answer", "")
                 )
                 "candidate" -> CallSignalEvent.IceCandidate(
-                    callId = payload.getString("call_id"),
-                    candidate = payload.getString("candidate"),
-                    sdpMid = if (payload.has("sdp_mid")) payload.getString("sdp_mid") else null,
+                    callId = payload.optString("call_id", ""),
+                    candidate = payload.optString("candidate", ""),
+                    sdpMid = payload.optString("sdp_mid", "").takeIf { it.isNotEmpty() },
                     sdpMLineIndex = if (payload.has("sdp_m_line_index")) payload.getInt("sdp_m_line_index") else null
                 )
                 "accepted" -> CallSignalEvent.Accepted(
-                    callId = payload.getString("call_id"),
-                    sdpAnswer = if (payload.has("sdp_answer")) payload.getString("sdp_answer") else null,
-                    sharedSecret = if (payload.has("shared_secret")) payload.getString("shared_secret") else null
+                    callId = payload.optString("call_id", ""),
+                    sdpAnswer = payload.optString("sdp_answer", "").takeIf { it.isNotEmpty() },
+                    sharedSecret = payload.optString("shared_secret", "").takeIf { it.isNotEmpty() }
                 )
                 "rejected" -> CallSignalEvent.Rejected(
-                    callId = payload.getString("call_id"),
-                    reason = if (payload.has("reason")) payload.getString("reason") else null
+                    callId = payload.optString("call_id", ""),
+                    reason = payload.optString("reason", "").takeIf { it.isNotEmpty() }
                 )
                 "ended" -> CallSignalEvent.Ended(
-                    callId = payload.getString("call_id"),
+                    callId = payload.optString("call_id", ""),
                     reason = payload.optString("reason", "completed"),
                     duration = payload.optLong("duration", 0)
                 )
                 "missed" -> CallSignalEvent.Missed(
-                    callId = payload.getString("call_id"),
+                    callId = payload.optString("call_id", ""),
                     callerGuid = payload.optString("caller_id", ""),
                     callerDisplayName = payload.optString("caller_display_name", "Unknown"),
                     timestamp = payload.optLong("timestamp", System.currentTimeMillis())
                 )
                 "blocked" -> CallSignalEvent.Blocked(
-                    callId = payload.getString("call_id"),
+                    callId = payload.optString("call_id", ""),
                     targetGuid = payload.optString("target_id", "")
                 )
                 "busy" -> CallSignalEvent.Busy(
-                    callId = payload.getString("call_id")
+                    callId = payload.optString("call_id", "")
                 )
                 else -> {
                     android.util.Log.w(TAG, "Unknown call event type: $eventType")
