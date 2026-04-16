@@ -371,6 +371,31 @@ class CallSignalingClient @Inject constructor(
         }
     }
 
+    /**
+     * Fetch short-lived Cloudflare TURN credentials via the user's vault.
+     * Routed through NATS so we don't need a fresh Cognito JWT — the vault's
+     * existing authenticated session is the only auth surface.
+     */
+    suspend fun getTurnCredentials(): Result<com.vettid.app.core.network.TurnCredentialsResponse> {
+        return sendAndAwait("call.turn-credentials", JsonObject(), 10_000) { result ->
+            val expires = result.get("expires_at")?.asString ?: ""
+            val servers = result.getAsJsonArray("ice_servers")?.mapNotNull { item ->
+                val obj = item.asJsonObject
+                val urls = obj.getAsJsonArray("urls")?.mapNotNull { it.asString } ?: emptyList()
+                if (urls.isEmpty()) return@mapNotNull null
+                com.vettid.app.core.network.IceServerConfig(
+                    urls = urls,
+                    username = obj.get("username")?.asString,
+                    credential = obj.get("credential")?.asString,
+                )
+            } ?: emptyList()
+            com.vettid.app.core.network.TurnCredentialsResponse(
+                iceServers = servers,
+                expiresAt = expires,
+            )
+        }
+    }
+
     // MARK: - Private Helpers
 
     private suspend fun <T> sendAndAwait(
@@ -593,11 +618,10 @@ class CallSignalingClient @Inject constructor(
                 reason = CallEndReason.BUSY,
                 duration = 0
             )
-            is CallSignalEvent.Offer -> {
-                // SDP offer is typically handled during call setup, not as a separate event
-                Log.d(TAG, "Received SDP offer for call ${event.callId}")
-                null
-            }
+            is CallSignalEvent.Offer -> CallEvent.RemoteOffer(
+                callId = event.callId,
+                sdpOffer = event.sdpOffer
+            )
         }
 
         callEvent?.let {

@@ -224,9 +224,10 @@ object AppModule {
         @ApplicationContext context: Context,
         signalingClient: CallSignalingClient,
         vaultServiceClient: VaultServiceClient,
-        credentialStore: CredentialStore
+        credentialStore: CredentialStore,
+        feedRepository: com.vettid.app.features.feed.FeedRepository
     ): CallManager {
-        return CallManager(context, signalingClient, vaultServiceClient, credentialStore)
+        return CallManager(context, signalingClient, vaultServiceClient, credentialStore, feedRepository)
     }
 
     // Backup Dependencies

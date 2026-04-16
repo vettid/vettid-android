@@ -35,8 +35,18 @@ class CallManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val callSignalingClient: CallSignalingClient,
     private val vaultServiceClient: VaultServiceClient,
-    private val credentialStore: CredentialStore
+    private val credentialStore: CredentialStore,
+    private val feedRepository: com.vettid.app.features.feed.FeedRepository
 ) : WebRTCListener {
+
+    /** Look up a peer's cached profile photo (base64 JPEG) by their GUID. */
+    private fun peerPhotoFor(peerGuid: String): String? {
+        if (peerGuid.isEmpty()) return null
+        return feedRepository.getCachedConnections()
+            .firstOrNull { it.peerGuid == peerGuid }
+            ?.peerProfile
+            ?.photo
+    }
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
@@ -92,8 +102,23 @@ class CallManager @Inject constructor(
      * @param callType Voice or video
      */
     suspend fun startCall(connectionId: String, peerGuid: String, displayName: String, callType: CallType): Result<Unit> {
-        if (_callState.value !is CallState.Idle) {
-            return Result.failure(IllegalStateException("Already in a call"))
+        // Only reject if there's a *live* call (Active). Outgoing/Incoming/Ended
+        // can happen to be stuck when the peer crashed, the user backed out of the
+        // call screen, or the previous attempt never got a call.rejected/ended signal.
+        // Force-clean transient states so a fresh call attempt always works.
+        when (val state = _callState.value) {
+            is CallState.Active -> {
+                return Result.failure(IllegalStateException("Already in a call"))
+            }
+            is CallState.Outgoing, is CallState.Incoming -> {
+                Log.w(TAG, "startCall: clearing stale $state before new call")
+                forceResetCallState()
+            }
+            is CallState.Ended -> {
+                _callState.value = CallState.Idle
+                _showCallUI.emit(CallUIEvent.DismissCall)
+            }
+            is CallState.Idle -> { /* proceed */ }
         }
 
         Log.i(TAG, "Starting $callType call to $displayName (connection=$connectionId)")
@@ -106,7 +131,10 @@ class CallManager @Inject constructor(
             peerGuid = peerGuid
         )
 
-        return result.map { call ->
+        return result.map { rawCall ->
+            // Enrich with the locally-cached peer photo so the outgoing call
+            // screen matches what the user sees elsewhere in the app.
+            val call = rawCall.copy(peerPhotoBase64 = peerPhotoFor(rawCall.peerGuid))
             // Initialize WebRTC after vault confirms call initiation
             initializeWebRTC()
             val iceServers = fetchIceServers()
@@ -125,6 +153,20 @@ class CallManager @Inject constructor(
             _showCallUI.emit(CallUIEvent.ShowOutgoing(call))
             startRingBackTone()
             startRingingTimer()
+
+            // Create SDP offer and send to peer via vault so the callee can set remote
+            // description before its createAnswer runs.
+            scope.launch {
+                val offerDeferred = CompletableDeferred<SessionDescription?>()
+                webRTCClient?.createOffer { sdp -> offerDeferred.complete(sdp) }
+                val offer = offerDeferred.await()
+                if (offer == null) {
+                    Log.e(TAG, "Failed to create SDP offer for call ${call.callId}")
+                    return@launch
+                }
+                callSignalingClient.sendOffer(call.callId, call.peerGuid, offer.description)
+                    .onFailure { Log.e(TAG, "Failed to send SDP offer", it) }
+            }
 
             // Collect ICE candidates and send to peer via vault
             scope.launch {
@@ -171,19 +213,31 @@ class CallManager @Inject constructor(
             }
         }
 
-        // Set remote SDP offer
-        state.sdpOffer?.let { offer ->
-            val setRemoteDeferred = CompletableDeferred<Boolean>()
-            webRTCClient!!.setRemoteDescription(
-                SessionDescription(SessionDescription.Type.OFFER, offer)
-            ) { success ->
-                setRemoteDeferred.complete(success)
+        // Wait for the remote SDP offer if it hasn't arrived yet. The caller sends
+        // it on call.signal right after call.initiate, but the user may hit Answer
+        // faster than the network round-trip.
+        var resolvedOffer = (_callState.value as? CallState.Incoming)?.sdpOffer
+        if (resolvedOffer == null) {
+            Log.d(TAG, "Waiting for remote SDP offer...")
+            val waitStart = System.currentTimeMillis()
+            while (resolvedOffer == null && System.currentTimeMillis() - waitStart < 5000) {
+                delay(100)
+                resolvedOffer = (_callState.value as? CallState.Incoming)?.sdpOffer
             }
+        }
+        if (resolvedOffer == null) {
+            // Don't dispose WebRTC — let the user retry once the offer arrives.
+            return Result.failure(IllegalStateException("Remote offer not received yet"))
+        }
 
-            if (!setRemoteDeferred.await()) {
-                disposeWebRTC()
-                return Result.failure(IllegalStateException("Failed to set remote SDP"))
-            }
+        val setRemoteDeferred = CompletableDeferred<Boolean>()
+        webRTCClient!!.setRemoteDescription(
+            SessionDescription(SessionDescription.Type.OFFER, resolvedOffer)
+        ) { success -> setRemoteDeferred.complete(success) }
+
+        if (!setRemoteDeferred.await()) {
+            // setRemoteDescription can fail if already set — that's fine; try to answer anyway.
+            Log.w(TAG, "setRemoteDescription returned false (may already be set); continuing")
         }
 
         // Create SDP answer
@@ -194,7 +248,7 @@ class CallManager @Inject constructor(
 
         val sdpAnswer = answerDeferred.await()
         if (sdpAnswer == null) {
-            disposeWebRTC()
+            // Leave WebRTC alive; a late offer or retry may recover.
             return Result.failure(IllegalStateException("Failed to create SDP answer"))
         }
 
@@ -218,18 +272,9 @@ class CallManager @Inject constructor(
             startDurationTimer(answeredCall)
             setupAudioForCall()
 
-            // Collect ICE candidates (vault-routed to caller)
-            scope.launch {
-                webRTCClient?.iceCandidates?.collect { candidate ->
-                    callSignalingClient.sendIceCandidate(
-                        callId = answeredCall.callId,
-                        peerGuid = answeredCall.peerGuid,
-                        candidate = candidate.sdp,
-                        sdpMid = candidate.sdpMid,
-                        sdpMLineIndex = candidate.sdpMLineIndex
-                    )
-                }
-            }
+            // Note: the iceCandidates collector was started in
+            // handleIncomingCall so candidates gathered while ringing aren't
+            // dropped. No second collector here.
         }
     }
 
@@ -256,10 +301,25 @@ class CallManager @Inject constructor(
         }
 
         _callState.value = CallState.Ended(state.call, CallEndReason.REJECTED)
-        delay(1500)
+        delay(500)
         _callState.value = CallState.Idle
         _showCallUI.emit(CallUIEvent.DismissCall)
         return Result.success(Unit)
+    }
+
+    /**
+     * Force all call resources back to Idle without sending signaling.
+     * Used when starting a new call finds the previous one stuck (peer crash,
+     * dropped network, user bypassed the End button, etc.).
+     */
+    private suspend fun forceResetCallState() {
+        stopDurationTimer()
+        stopRingtone()
+        CallForegroundService.dismiss(context)
+        resetAudio()
+        disposeWebRTC()
+        _callState.value = CallState.Idle
+        _showCallUI.emit(CallUIEvent.DismissCall)
     }
 
     /**
@@ -287,13 +347,7 @@ class CallManager @Inject constructor(
         stopRingtone()
         CallForegroundService.dismiss(context)
 
-        // Best-effort signaling — cleanup must happen even if this fails
-        try {
-            callSignalingClient.endCall(call.callId, call.peerGuid)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to signal call end to peer (cleaning up locally)", e)
-        }
-
+        // Flip to Ended immediately so the UI dismisses without waiting on signaling.
         val duration = when (state) {
             is CallState.Active -> state.duration
             else -> 0
@@ -301,7 +355,18 @@ class CallManager @Inject constructor(
         _callState.value = CallState.Ended(call, CallEndReason.COMPLETED, duration)
         resetAudio()
         disposeWebRTC()
-        delay(1500)
+
+        // Signal end to peer in the background — we don't want the user waiting on it.
+        scope.launch {
+            try {
+                callSignalingClient.endCall(call.callId, call.peerGuid)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to signal call end to peer", e)
+            }
+        }
+
+        // Brief pause so the "Call ended" state is visible, then Idle.
+        delay(500)
         _callState.value = CallState.Idle
         _showCallUI.emit(CallUIEvent.DismissCall)
         return Result.success(Unit)
@@ -402,10 +467,7 @@ class CallManager @Inject constructor(
     fun getEglContext(): EglBase.Context? = webRTCClient?.getEglContext()
 
     // MARK: - WebRTCListener
-
-    override fun onConnectionEstablished() {
-        Log.d(TAG, "WebRTC connection established")
-    }
+    // Note: onConnectionEstablished is defined further down with media-state handling.
 
     override fun onConnectionDisconnected() {
         Log.d(TAG, "WebRTC connection disconnected")
@@ -418,7 +480,18 @@ class CallManager @Inject constructor(
             val call = when (state) {
                 is CallState.Active -> state.call
                 is CallState.Outgoing -> state.call
+                is CallState.Incoming -> state.call
                 else -> return@launch
+            }
+
+            // Tell the peer the call is over so they don't sit in "Calling…"
+            // or a false "Connected" state. Best-effort, fire-and-forget.
+            scope.launch {
+                try {
+                    callSignalingClient.endCall(call.callId, call.peerGuid)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to signal end after ICE failure", e)
+                }
             }
 
             _callState.value = CallState.Ended(call, CallEndReason.FAILED)
@@ -428,6 +501,16 @@ class CallManager @Inject constructor(
             delay(1500)
             _callState.value = CallState.Idle
             _showCallUI.emit(CallUIEvent.DismissCall)
+        }
+    }
+
+    override fun onConnectionEstablished() {
+        Log.d(TAG, "WebRTC connection established — media flowing")
+        scope.launch {
+            val state = _callState.value
+            if (state is CallState.Active && !state.isMediaConnected) {
+                _callState.value = state.copy(isMediaConnected = true)
+            }
         }
     }
 
@@ -477,16 +560,12 @@ class CallManager @Inject constructor(
             PeerConnection.IceServer.builder("stun:stun.cloudflare.com:3478").createIceServer()
         )
 
-        val authToken = credentialStore.getAuthToken()
-        if (authToken == null) {
-            Log.w(TAG, "No auth token available, using STUN fallback")
-            return fallback
-        }
-
+        // Fetch via the vault over NATS (uses the existing authenticated
+        // vault session — no Cognito JWT required).
         return try {
-            val result = vaultServiceClient.getTurnCredentials(authToken)
+            val result = callSignalingClient.getTurnCredentials()
             val response = result.getOrNull() ?: run {
-                Log.w(TAG, "TURN credential fetch returned null, using STUN fallback")
+                Log.w(TAG, "TURN credential fetch via vault returned null, using STUN fallback", result.exceptionOrNull())
                 return fallback
             }
 
@@ -523,6 +602,7 @@ class CallManager @Inject constructor(
         scope.launch {
             when (event) {
                 is CallEvent.IncomingCall -> handleIncomingCall(event)
+                is CallEvent.RemoteOffer -> handleRemoteOffer(event)
                 is CallEvent.CallAnswered -> handleCallAnswered(event)
                 is CallEvent.CallRejected -> handleCallRejected(event)
                 is CallEvent.CallEnded -> handleCallEnded(event)
@@ -533,11 +613,69 @@ class CallManager @Inject constructor(
         }
     }
 
-    private suspend fun handleIncomingCall(event: CallEvent.IncomingCall) {
-        if (_callState.value !is CallState.Idle) {
-            // Already in a call - auto-reject (vault-routed to caller)
-            callSignalingClient.rejectCall(event.callId, event.peerGuid, "busy")
+    private suspend fun handleRemoteOffer(event: CallEvent.RemoteOffer) {
+        val state = _callState.value
+        if (state !is CallState.Incoming || state.call.callId != event.callId) {
+            Log.d(TAG, "Ignoring RemoteOffer for ${event.callId} (state=$state)")
             return
+        }
+        if (event.sdpOffer.isEmpty()) {
+            Log.w(TAG, "RemoteOffer for ${event.callId} has empty SDP; ignoring")
+            return
+        }
+        // Always stash the offer so a later answerCall can apply it even if WebRTC
+        // isn't up yet (e.g. a premature Answer tap disposed it).
+        _callState.value = state.copy(sdpOffer = event.sdpOffer)
+
+        val pc = webRTCClient
+        if (pc == null) {
+            Log.d(TAG, "RemoteOffer stashed for ${event.callId}; WebRTC not ready")
+            return
+        }
+        val setDeferred = CompletableDeferred<Boolean>()
+        pc.setRemoteDescription(
+            SessionDescription(SessionDescription.Type.OFFER, event.sdpOffer)
+        ) { success -> setDeferred.complete(success) }
+        if (setDeferred.await()) {
+            Log.d(TAG, "Remote SDP offer set for ${event.callId}")
+        } else {
+            Log.e(TAG, "Failed to set remote SDP offer for ${event.callId}")
+        }
+    }
+
+    private suspend fun handleIncomingCall(event: CallEvent.IncomingCall) {
+        when (val cur = _callState.value) {
+            is CallState.Incoming -> {
+                if (cur.call.callId == event.callId) {
+                    Log.d(TAG, "Ignoring duplicate incoming for ${event.callId}")
+                    return
+                }
+                if (cur.call.peerGuid == event.peerGuid) {
+                    // Same peer dialed twice in quick succession (UI double-tap,
+                    // app retry). Stick with the FIRST callId so the offer +
+                    // ICE candidates that arrive for it actually match state.
+                    Log.d(TAG, "Ignoring repeat incoming from same peer ${event.peerGuid} (have ${cur.call.callId}, got ${event.callId})")
+                    return
+                }
+                // Different peer trying to call while we're ringing — reject as busy
+                callSignalingClient.rejectCall(event.callId, event.peerGuid, "busy")
+                return
+            }
+            is CallState.Outgoing -> {
+                if (cur.call.callId == event.callId) return
+                callSignalingClient.rejectCall(event.callId, event.peerGuid, "busy")
+                return
+            }
+            is CallState.Active -> {
+                if (cur.call.callId == event.callId) return
+                callSignalingClient.rejectCall(event.callId, event.peerGuid, "busy")
+                return
+            }
+            is CallState.Ended -> {
+                Log.w(TAG, "handleIncomingCall: clearing stale Ended state before ringing")
+                forceResetCallState()
+            }
+            is CallState.Idle -> {}
         }
 
         Log.i(TAG, "Incoming ${event.callType} call from ${event.peerDisplayName}")
@@ -553,6 +691,7 @@ class CallManager @Inject constructor(
             peerGuid = event.peerGuid,
             peerDisplayName = event.peerDisplayName,
             peerAvatarUrl = event.peerAvatarUrl,
+            peerPhotoBase64 = peerPhotoFor(event.peerGuid),
             callType = event.callType,
             direction = CallDirection.INCOMING,
             initiatedAt = System.currentTimeMillis()
@@ -564,6 +703,26 @@ class CallManager @Inject constructor(
         )
         _showCallUI.emit(CallUIEvent.ShowIncoming(call))
         startRingtone()
+
+        // Start streaming local ICE candidates to the caller IMMEDIATELY.
+        // ICE gathering kicks off as soon as createPeerConnection runs above,
+        // and MutableSharedFlow has no replay — candidates emitted before any
+        // collector subscribes are dropped on the floor. Previously the
+        // collect was inside answerCall(), which only ran after the user
+        // tapped Accept and the answer round-tripped through the vault, so
+        // every host/srflx/relay candidate gathered in those first seconds
+        // never reached the caller. ICE then never had enough to pair.
+        scope.launch {
+            webRTCClient?.iceCandidates?.collect { candidate ->
+                callSignalingClient.sendIceCandidate(
+                    callId = call.callId,
+                    peerGuid = call.peerGuid,
+                    candidate = candidate.sdp,
+                    sdpMid = candidate.sdpMid,
+                    sdpMLineIndex = candidate.sdpMLineIndex,
+                )
+            }
+        }
 
         // Show foreground service notification for incoming call
         CallForegroundService.showIncomingCall(
@@ -681,7 +840,8 @@ class CallManager @Inject constructor(
             event.sdpMLineIndex ?: 0,
             event.candidate
         )
-        webRTCClient?.addIceCandidate(candidate)
+        val added = webRTCClient?.addIceCandidate(candidate) ?: false
+        Log.d(TAG, "addRemoteIceCandidate: added=$added sdpMid=${event.sdpMid} sdpMLineIndex=${event.sdpMLineIndex} candidate=${event.candidate.take(80)}")
     }
 
     private fun handleRemoteVideoChanged(event: CallEvent.RemoteVideoChanged) {
@@ -752,12 +912,17 @@ class CallManager @Inject constructor(
             var duration = 0L
             while (isActive) {
                 delay(1000)
-                duration++
                 val state = _callState.value
-                if (state is CallState.Active) {
-                    _callState.value = state.copy(duration = duration)
-                } else {
-                    break
+                // Only count once media is actually connected — the UI shows
+                // "Connecting…" until then, and we don't want a 30s "duration"
+                // when ICE checks dragged on. Exit when we leave Active.
+                when {
+                    state !is CallState.Active -> break
+                    !state.isMediaConnected -> continue
+                    else -> {
+                        duration++
+                        _callState.value = state.copy(duration = duration)
+                    }
                 }
             }
         }

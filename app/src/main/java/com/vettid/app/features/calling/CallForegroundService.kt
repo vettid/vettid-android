@@ -151,7 +151,10 @@ class CallForegroundService : Service() {
         val callTypeText = if (callType == "VIDEO") "Video Call" else "Voice Call"
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            // ic_notification is the monochrome white-on-transparent tower —
+            // status-bar icons must use alpha-only assets or Android renders
+            // them as a white square.
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(callerName)
             .setContentText("Incoming $callTypeText")
             .setPriority(NotificationCompat.PRIORITY_MAX)

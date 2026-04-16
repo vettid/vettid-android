@@ -101,20 +101,12 @@ fun IncomingCallScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Avatar
-                Surface(
-                    modifier = Modifier.size(120.dp),
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primaryContainer
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text(
-                            text = call.peerDisplayName.take(2).uppercase(),
-                            style = MaterialTheme.typography.displayMedium,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                    }
-                }
+                // Avatar — photo if available, otherwise initials
+                CallAvatar(
+                    photoBase64 = call.peerPhotoBase64,
+                    displayName = call.peerDisplayName,
+                    size = 120.dp,
+                )
 
                 Spacer(modifier = Modifier.height(24.dp))
 

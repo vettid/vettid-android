@@ -1883,13 +1883,23 @@ class OwnerSpaceClient @Inject constructor(
             // Extract event type from subject (e.g., "OwnerSpace.guid.forApp.call.incoming" -> "incoming")
             val eventType = message.subject.substringAfterLast(".forApp.call.")
 
+            // Skip request/response echoes — forApp.call.*.response is the vault's
+            // ack for forVault.call.*, not a signaling event. Also skip empty bodies
+            // (e.g., 0-byte `call.initiate.response` the parent emits for vault→vault
+            // messages). Both are routed here by the ".forApp.call." prefix match.
+            if (eventType.endsWith(".response") || message.data.isEmpty()) {
+                return
+            }
+
+            // CallEvent fields (call_id, caller_id, sdp_offer, etc.) are top-level.
+            // The optional nested "payload" object carries the X25519 key-exchange
+            // blob (local_key_pub) for initiate; don't mistake it for an envelope.
             val json = JSONObject(String(message.data, Charsets.UTF_8))
-            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
 
             val callEvent = when (eventType) {
                 "incoming" -> {
-                    val callId = payload.optString("call_id", "")
-                    val callerGuid = payload.optString("caller_id", "")
+                    val callId = json.optString("call_id", "")
+                    val callerGuid = json.optString("caller_id", "")
                     if (callId.isEmpty() && callerGuid.isEmpty()) {
                         android.util.Log.w(TAG, "Incoming call missing call_id and caller_id, raw: ${String(message.data, Charsets.UTF_8).take(200)}")
                         null
@@ -1897,54 +1907,65 @@ class OwnerSpaceClient @Inject constructor(
                         CallSignalEvent.Incoming(
                             callId = callId,
                             callerGuid = callerGuid,
-                            callerDisplayName = payload.optString("caller_display_name", "Unknown"),
-                            callType = payload.optString("call_type", "voice"),
-                            sdpOffer = payload.optString("sdp_offer", "").takeIf { it.isNotEmpty() },
-                            timestamp = payload.optLong("timestamp", System.currentTimeMillis())
+                            callerDisplayName = json.optString("caller_display_name", "Unknown"),
+                            callType = json.optString("call_type", "voice"),
+                            sdpOffer = json.optString("sdp_offer", "").takeIf { it.isNotEmpty() },
+                            timestamp = json.optLong("timestamp", System.currentTimeMillis())
                         )
                     }
                 }
-                "offer" -> CallSignalEvent.Offer(
-                    callId = payload.optString("call_id", ""),
-                    callerGuid = payload.optString("caller_id", ""),
-                    sdpOffer = payload.optString("sdp_offer", "")
-                )
-                "answer" -> CallSignalEvent.Answer(
-                    callId = payload.optString("call_id", ""),
-                    sdpAnswer = payload.optString("sdp_answer", "")
-                )
-                "candidate" -> CallSignalEvent.IceCandidate(
-                    callId = payload.optString("call_id", ""),
-                    candidate = payload.optString("candidate", ""),
-                    sdpMid = payload.optString("sdp_mid", "").takeIf { it.isNotEmpty() },
-                    sdpMLineIndex = if (payload.has("sdp_m_line_index")) payload.getInt("sdp_m_line_index") else null
-                )
+                "offer" -> {
+                    // Backend forwards HandleSendSignaling payload as nested "payload" on CallEvent.
+                    val inner = json.optJSONObject("payload")
+                    CallSignalEvent.Offer(
+                        callId = json.optString("call_id", ""),
+                        callerGuid = json.optString("caller_id", ""),
+                        sdpOffer = inner?.optString("sdp_offer", "") ?: json.optString("sdp_offer", "")
+                    )
+                }
+                "answer" -> {
+                    val inner = json.optJSONObject("payload")
+                    CallSignalEvent.Answer(
+                        callId = json.optString("call_id", ""),
+                        sdpAnswer = inner?.optString("sdp_answer", "") ?: json.optString("sdp_answer", "")
+                    )
+                }
+                "candidate" -> {
+                    val inner = json.optJSONObject("payload")
+                    CallSignalEvent.IceCandidate(
+                        callId = json.optString("call_id", ""),
+                        candidate = inner?.optString("candidate", "") ?: json.optString("candidate", ""),
+                        sdpMid = (inner?.optString("sdp_mid", "") ?: json.optString("sdp_mid", "")).takeIf { it.isNotEmpty() },
+                        sdpMLineIndex = inner?.takeIf { it.has("sdp_m_line_index") }?.getInt("sdp_m_line_index")
+                            ?: json.takeIf { it.has("sdp_m_line_index") }?.getInt("sdp_m_line_index")
+                    )
+                }
                 "accepted" -> CallSignalEvent.Accepted(
-                    callId = payload.optString("call_id", ""),
-                    sdpAnswer = payload.optString("sdp_answer", "").takeIf { it.isNotEmpty() },
-                    sharedSecret = payload.optString("shared_secret", "").takeIf { it.isNotEmpty() }
+                    callId = json.optString("call_id", ""),
+                    sdpAnswer = json.optString("sdp_answer", "").takeIf { it.isNotEmpty() },
+                    sharedSecret = json.optString("shared_secret", "").takeIf { it.isNotEmpty() }
                 )
                 "rejected" -> CallSignalEvent.Rejected(
-                    callId = payload.optString("call_id", ""),
-                    reason = payload.optString("reason", "").takeIf { it.isNotEmpty() }
+                    callId = json.optString("call_id", ""),
+                    reason = json.optString("reason", "").takeIf { it.isNotEmpty() }
                 )
                 "ended" -> CallSignalEvent.Ended(
-                    callId = payload.optString("call_id", ""),
-                    reason = payload.optString("reason", "completed"),
-                    duration = payload.optLong("duration", 0)
+                    callId = json.optString("call_id", ""),
+                    reason = json.optString("reason", "completed"),
+                    duration = json.optLong("duration", 0)
                 )
                 "missed" -> CallSignalEvent.Missed(
-                    callId = payload.optString("call_id", ""),
-                    callerGuid = payload.optString("caller_id", ""),
-                    callerDisplayName = payload.optString("caller_display_name", "Unknown"),
-                    timestamp = payload.optLong("timestamp", System.currentTimeMillis())
+                    callId = json.optString("call_id", ""),
+                    callerGuid = json.optString("caller_id", ""),
+                    callerDisplayName = json.optString("caller_display_name", "Unknown"),
+                    timestamp = json.optLong("timestamp", System.currentTimeMillis())
                 )
                 "blocked" -> CallSignalEvent.Blocked(
-                    callId = payload.optString("call_id", ""),
-                    targetGuid = payload.optString("target_id", "")
+                    callId = json.optString("call_id", ""),
+                    targetGuid = json.optString("target_id", "")
                 )
                 "busy" -> CallSignalEvent.Busy(
-                    callId = payload.optString("call_id", "")
+                    callId = json.optString("call_id", "")
                 )
                 else -> {
                     android.util.Log.w(TAG, "Unknown call event type: $eventType")

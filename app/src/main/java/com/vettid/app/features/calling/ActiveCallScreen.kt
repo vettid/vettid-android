@@ -113,19 +113,11 @@ fun ActiveCallScreen(
             ) {
                 // Show avatar only when video is off
                 if (!showVideo || !activeState.isRemoteVideoEnabled) {
-                    Surface(
-                        modifier = Modifier.size(100.dp),
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.primaryContainer
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Text(
-                                text = call.peerDisplayName.take(2).uppercase(),
-                                style = MaterialTheme.typography.displaySmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        }
-                    }
+                    CallAvatar(
+                        photoBase64 = call.peerPhotoBase64,
+                        displayName = call.peerDisplayName,
+                        size = 100.dp,
+                    )
 
                     Spacer(modifier = Modifier.height(16.dp))
                 }
@@ -140,7 +132,10 @@ fun ActiveCallScreen(
                 Spacer(modifier = Modifier.height(4.dp))
 
                 Text(
-                    text = viewModel.formatDuration(activeState.duration),
+                    text = if (activeState.isMediaConnected)
+                        viewModel.formatDuration(activeState.duration)
+                    else
+                        "Connecting…",
                     style = MaterialTheme.typography.titleMedium,
                     color = Color.White.copy(alpha = 0.7f)
                 )

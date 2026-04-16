@@ -265,8 +265,12 @@ class FeedNotificationService @Inject constructor(
         // Foreground only — snackbar but no OS notification
         "connection.revoked" to NotifyPolicy.FOREGROUND_ONLY,
 
+        // CallForegroundService owns the incoming-call UI (full-screen + ringing
+        // notification). Don't double up with a feed toast/system notification —
+        // the feed entry itself is still written so the call appears in history.
+        "call.incoming" to NotifyPolicy.SILENT,
+
         // Always notify — even in foreground (urgent events)
-        "call.incoming" to NotifyPolicy.ALWAYS,
         "security.alert" to NotifyPolicy.ALWAYS,
     )
 

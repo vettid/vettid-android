@@ -112,22 +112,13 @@ fun OutgoingCallScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                // Avatar with pulsing animation
-                Surface(
-                    modifier = Modifier
-                        .size(120.dp)
-                        .scale(scale),
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primaryContainer
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text(
-                            text = call.peerDisplayName.take(2).uppercase(),
-                            style = MaterialTheme.typography.displayMedium,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                    }
-                }
+                // Avatar with pulsing animation — photo if cached, else initials
+                CallAvatar(
+                    photoBase64 = call.peerPhotoBase64,
+                    displayName = call.peerDisplayName,
+                    size = 120.dp,
+                    modifier = Modifier.scale(scale),
+                )
 
                 Spacer(modifier = Modifier.height(24.dp))
 

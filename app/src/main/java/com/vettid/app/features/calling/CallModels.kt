@@ -11,6 +11,9 @@ data class Call(
     @SerializedName("peer_guid") val peerGuid: String,
     @SerializedName("peer_display_name") val peerDisplayName: String,
     @SerializedName("peer_avatar_url") val peerAvatarUrl: String? = null,
+    // Peer profile photo as base64-encoded JPEG, pulled from the local
+    // connection cache so the call screen matches the rest of the app.
+    val peerPhotoBase64: String? = null,
     @SerializedName("call_type") val callType: CallType,
     @SerializedName("direction") val direction: CallDirection,
     @SerializedName("initiated_at") val initiatedAt: Long,
@@ -81,7 +84,10 @@ sealed class CallState {
         val isSpeakerOn: Boolean = false,
         val isLocalVideoEnabled: Boolean = false,
         val isRemoteVideoEnabled: Boolean = false,
-        val isFrontCamera: Boolean = true
+        val isFrontCamera: Boolean = true,
+        // false = signaling done but ICE not yet connected ("Connecting…");
+        // flips to true on WebRTC's onConnectionEstablished.
+        val isMediaConnected: Boolean = false
     ) : CallState()
 
     /**
@@ -157,6 +163,16 @@ sealed class CallEvent {
     data class CallFailed(
         val callId: String,
         val error: String
+    ) : CallEvent()
+
+    /**
+     * Remote SDP offer arrived separately from call.incoming.
+     * Sent by the caller after initiate succeeds so the callee can
+     * set remote description before createAnswer runs.
+     */
+    data class RemoteOffer(
+        val callId: String,
+        val sdpOffer: String
     ) : CallEvent()
 
     /**
