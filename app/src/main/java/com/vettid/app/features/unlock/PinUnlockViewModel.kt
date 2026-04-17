@@ -109,6 +109,11 @@ class PinUnlockViewModel @Inject constructor(
 
     // PCR0 pending user approval (set when enclave version changed)
     private var _pendingUntrustedPcr0: String? = null
+    // PIN the user had already entered when we interrupted to show the
+    // enclave-update prompt. On approval we reuse it so they don't re-type.
+    // Held in memory only between prompt display and approval/skip; cleared
+    // immediately after use or on skip.
+    private var _pendingPin: String? = null
     // Skip PCR0 check for this session (user chose "Not Now")
     private var _skipPcr0Check = false
 
@@ -194,6 +199,9 @@ class PinUnlockViewModel @Inject constructor(
             if (!_skipPcr0Check && trustedSet.isNotEmpty() && !pcrConfigManager.isPcr0Trusted(currentPcr0)) {
                 Log.w(TAG, "SECURITY: Current enclave PCR0 not in user's trusted set")
                 _pendingUntrustedPcr0 = currentPcr0
+                // Stash the PIN so approveEnclaveUpdate() can auto-resubmit
+                // instead of making the user re-type.
+                _pendingPin = pin
 
                 // Get description and changelog URL from PCR manifest (public, no vault needed)
                 val (description, detailsUrl) = pcrConfigManager.getCurrentPcrDetails()
@@ -312,7 +320,8 @@ class PinUnlockViewModel @Inject constructor(
 
     /**
      * User approves the new enclave version from the update-required screen.
-     * Adds the new PCR0 to the trusted set and returns to PIN entry.
+     * Adds the new PCR0 to the trusted set and auto-resubmits the PIN the
+     * user already typed so they don't have to re-enter it.
      */
     fun approveEnclaveUpdate() {
         val pcr0 = _pendingUntrustedPcr0
@@ -321,7 +330,17 @@ class PinUnlockViewModel @Inject constructor(
             Log.i(TAG, "User approved enclave update — PCR0 added to trusted set")
             _pendingUntrustedPcr0 = null
         }
-        _state.value = PinUnlockState.EnteringPin()
+        val pendingPin = _pendingPin
+        _pendingPin = null
+        if (!pendingPin.isNullOrEmpty()) {
+            // Restore the PIN into state and re-run submitPin() directly.
+            // Avoids a second keypad round-trip for what is effectively one
+            // approval action.
+            _state.value = PinUnlockState.EnteringPin(pin = pendingPin)
+            viewModelScope.launch { submitPin() }
+        } else {
+            _state.value = PinUnlockState.EnteringPin()
+        }
     }
 
     /**
@@ -332,6 +351,9 @@ class PinUnlockViewModel @Inject constructor(
     fun skipEnclaveUpdate() {
         Log.i(TAG, "User deferred enclave update — will be prompted again next session")
         _pendingUntrustedPcr0 = null
+        // Drop the stashed PIN — user declined, so make them re-consent by
+        // re-typing. Don't silently reuse it against the old enclave.
+        _pendingPin = null
         _skipPcr0Check = true
         _state.value = PinUnlockState.EnteringPin()
     }

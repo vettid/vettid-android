@@ -84,13 +84,14 @@ class VaultUpdateViewModel @Inject constructor(
                 // If the user already added the new enclave PCR0 to their
                 // trusted set (via the pre-PIN consent dialog), they've
                 // already approved this update. Skip the second prompt and
-                // apply migration automatically.
+                // apply migration automatically — go directly to Updating
+                // so the "Update Available" card never flashes onscreen.
                 val newPcr0 = config.newPcr0
                 val trusted = newPcr0?.let { pcrConfigManager.isPcr0Trusted(it) } ?: false
                 Log.d(TAG, "checkForUpdate: newPcr0=${newPcr0?.take(16)}..., trusted=$trusted, trustedSetSize=${pcrConfigManager.getTrustedPcr0Set().size}")
                 if (!newPcr0.isNullOrEmpty() && trusted) {
                     Log.i(TAG, "New PCR0 already trusted — auto-applying migration without second prompt")
-                    _state.value = VaultUpdateState.UpdateAvailable(config, isMandatory)
+                    _state.value = VaultUpdateState.Updating(config)
                     startUpdate()
                     return@launch
                 }
