@@ -62,6 +62,10 @@ class NatsAutoConnector @Inject constructor(
     // Serialize autoConnect calls to prevent concurrent reconnect races
     private val autoConnectMutex = Mutex()
 
+    // Active reconnect loop (if any). Cancelled when a new disconnect fires or
+    // when an explicit disconnect()/rotateCredentials() tears things down.
+    private var reconnectJob: Job? = null
+
     private val _connectionState = MutableStateFlow<AutoConnectState>(AutoConnectState.Idle)
     val connectionState: StateFlow<AutoConnectState> = _connectionState.asStateFlow()
 
@@ -346,13 +350,12 @@ class NatsAutoConnector @Inject constructor(
         // Step 12: Re-schedule location worker if tracking was enabled
         ensureLocationWorkerScheduled()
 
-        // Step 13: Wire disconnect callback for automatic reconnect
+        // Step 13: Wire disconnect callback for automatic reconnect with
+        // exponential backoff. Previously we did a single autoConnect() after
+        // 1s and gave up if it failed — so a brief WiFi blip left the app
+        // permanently showing a red cloud until the user resumed the app.
         natsClient.setOnDisconnect {
-            scope.launch {
-                Log.w(TAG, "NATS disconnected, attempting reconnect...")
-                delay(1000) // Brief delay before reconnect
-                autoConnect()
-            }
+            startReconnectLoop()
         }
 
         _connectionState.value = AutoConnectState.Connected
@@ -410,9 +413,48 @@ class NatsAutoConnector @Inject constructor(
     }
 
     /**
+     * Kick off a background retry loop that keeps trying to reconnect with
+     * exponential backoff (1s → 2s → 4s → … capped at 30s) until it
+     * succeeds OR the user needs to take action (e.g. re-enroll).
+     * Cancels any previous loop so we only ever have one in flight.
+     */
+    private fun startReconnectLoop() {
+        reconnectJob?.cancel()
+        reconnectJob = scope.launch {
+            Log.w(TAG, "NATS disconnected, starting reconnect loop...")
+            var delayMs = 1_000L
+            val maxDelayMs = 30_000L
+            var attempt = 0
+            while (true) {
+                delay(delayMs)
+                attempt++
+                val result = autoConnect()
+                when (result) {
+                    is ConnectionResult.Success -> {
+                        Log.i(TAG, "Reconnected on attempt #$attempt")
+                        return@launch
+                    }
+                    is ConnectionResult.NotEnrolled,
+                    is ConnectionResult.CredentialsExpired -> {
+                        // User action required — stop retrying silently.
+                        Log.w(TAG, "Reconnect stopped: $result (user action required)")
+                        return@launch
+                    }
+                    else -> {
+                        Log.d(TAG, "Reconnect attempt #$attempt failed ($result); retrying in ${delayMs}ms")
+                        delayMs = (delayMs * 2).coerceAtMost(maxDelayMs)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
      * Disconnect from NATS.
      */
     suspend fun disconnect() {
+        reconnectJob?.cancel()
+        reconnectJob = null
         stopRotationListener()
         ownerSpaceClient.unsubscribeFromVault()
         natsClient.disconnect()
