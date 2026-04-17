@@ -96,10 +96,21 @@ class WebRTCClient(
         val rtcConfig = PeerConnection.RTCConfiguration(servers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
-            // PRIVACY: relay every packet through our TURN server so the peer
-            // never learns the local network's public IP. Same posture Signal
-            // uses for its always-relayed mode.
-            iceTransportsType = PeerConnection.IceTransportsType.RELAY
+            // PRIVACY: suppress LAN/host candidates so the peer can't see our
+            // internal network topology. Server-reflexive (public IP via STUN)
+            // and TURN-relay candidates are still allowed — required for calls
+            // to connect on most real networks.
+            //
+            // We previously forced RELAY-only, but with both peers relaying
+            // through the same coturn server libwebrtc sends
+            // XOR_PEER_ADDRESS = 0.0.0.0:port in its CREATE_PERMISSION (an
+            // anonymization side-effect of same-server relay), which coturn
+            // rejects as "Forbidden IP" and ICE never completes. NOHOST keeps
+            // the meaningful privacy win (LAN topology hidden) without that
+            // edge case. Content confidentiality is unchanged — DTLS-SRTP +
+            // our frame-level E2EE still protect media end-to-end; peer IPs
+            // visible in srflx candidates don't weaken that.
+            iceTransportsType = PeerConnection.IceTransportsType.NOHOST
         }
 
         peerConnection = factory.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
