@@ -630,9 +630,12 @@ class CallManager @Inject constructor(
             Log.w(TAG, "RemoteOffer for ${event.callId} has empty SDP; ignoring")
             return
         }
+        // See rewriteRelayRaddr for the rationale. Apply to the full SDP so
+        // every relay a=candidate line is fixed before WebRTC parses it.
+        val patchedSdp = rewriteRelayRaddrInSdp(event.sdpOffer)
         // Always stash the offer so a later answerCall can apply it even if WebRTC
         // isn't up yet (e.g. a premature Answer tap disposed it).
-        _callState.value = state.copy(sdpOffer = event.sdpOffer)
+        _callState.value = state.copy(sdpOffer = patchedSdp)
 
         val pc = webRTCClient
         if (pc == null) {
@@ -641,7 +644,7 @@ class CallManager @Inject constructor(
         }
         val setDeferred = CompletableDeferred<Boolean>()
         pc.setRemoteDescription(
-            SessionDescription(SessionDescription.Type.OFFER, event.sdpOffer)
+            SessionDescription(SessionDescription.Type.OFFER, patchedSdp)
         ) { success -> setDeferred.complete(success) }
         if (setDeferred.await()) {
             Log.d(TAG, "Remote SDP offer set for ${event.callId}")
@@ -751,11 +754,13 @@ class CallManager @Inject constructor(
         stopRingtone()
         CallForegroundService.dismiss(context)
 
-        // Set remote SDP answer
+        // Set remote SDP answer — rewrite raddr for same-server relay (see
+        // rewriteRelayRaddr).
         event.sdpAnswer?.let { answer ->
+            val patched = rewriteRelayRaddrInSdp(answer)
             val setRemoteDeferred = CompletableDeferred<Boolean>()
             webRTCClient?.setRemoteDescription(
-                SessionDescription(SessionDescription.Type.ANSWER, answer)
+                SessionDescription(SessionDescription.Type.ANSWER, patched)
             ) { success ->
                 setRemoteDeferred.complete(success)
             }
@@ -842,13 +847,55 @@ class CallManager @Inject constructor(
     }
 
     private fun handleRemoteIceCandidate(event: CallEvent.IceCandidate) {
+        val rewritten = rewriteRelayRaddr(event.candidate)
         val candidate = IceCandidate(
             event.sdpMid ?: "",
             event.sdpMLineIndex ?: 0,
-            event.candidate
+            rewritten
         )
         val added = webRTCClient?.addIceCandidate(candidate) ?: false
-        Log.d(TAG, "addRemoteIceCandidate: added=$added sdpMid=${event.sdpMid} sdpMLineIndex=${event.sdpMLineIndex} candidate=${event.candidate.take(80)}")
+        Log.d(TAG, "addRemoteIceCandidate: added=$added sdpMid=${event.sdpMid} sdpMLineIndex=${event.sdpMLineIndex} candidate=${rewritten.take(120)}")
+    }
+
+    /**
+     * WebRTC redacts raddr to 0.0.0.0 in relay candidates for privacy. When two
+     * peers relay through the SAME coturn server, that redaction breaks the
+     * TURN CREATE_PERMISSION flow: libwebrtc uses the redacted raddr (0.0.0.0)
+     * as the XOR_PEER_ADDRESS IP with the candidate's port, so coturn rejects
+     * with "403 Forbidden IP" (its ioa_addr_is_zero check matches 0.0.0.0/8).
+     *
+     * Workaround: rewrite raddr to the relay candidate's main IP before we
+     * hand the candidate to WebRTC. This keeps ICE itself working without
+     * leaking any extra information (the main IP is already our TURN server
+     * address, known to both peers).
+     */
+    private fun rewriteRelayRaddr(sdpCandidate: String): String {
+        if (!sdpCandidate.contains("typ relay") || !sdpCandidate.contains("raddr 0.0.0.0")) {
+            return sdpCandidate
+        }
+        // candidate format: `candidate:<foundation> <comp> <proto> <prio> <ip> <port> typ relay raddr <ip> rport <port> ...`
+        val parts = sdpCandidate.trim().split(Regex("\\s+"))
+        val ipIdx = parts.indexOf("typ").let { if (it >= 2) it - 2 else -1 }
+        if (ipIdx < 0) return sdpCandidate
+        val mainIp = parts[ipIdx]
+        val result = sdpCandidate.replace("raddr 0.0.0.0", "raddr $mainIp")
+        Log.d(TAG, "rewriteRelayRaddr: swapped raddr 0.0.0.0 -> $mainIp")
+        return result
+    }
+
+    /** Apply rewriteRelayRaddr to every a=candidate line in a full SDP blob. */
+    private fun rewriteRelayRaddrInSdp(sdp: String): String {
+        if (!sdp.contains("typ relay") || !sdp.contains("raddr 0.0.0.0")) {
+            return sdp
+        }
+        val newline = if (sdp.contains("\r\n")) "\r\n" else "\n"
+        return sdp.split(newline).joinToString(newline) { line ->
+            if (line.startsWith("a=candidate:")) {
+                // Strip leading "a=" before running through rewriteRelayRaddr
+                val fixed = rewriteRelayRaddr(line.removePrefix("a="))
+                "a=$fixed"
+            } else line
+        }
     }
 
     private fun handleRemoteVideoChanged(event: CallEvent.RemoteVideoChanged) {
