@@ -87,13 +87,19 @@ class WebRTCClient(
         val servers = if (iceServers.isNotEmpty()) {
             iceServers
         } else {
-            // Fallback: Cloudflare STUN only (no Google dependencies)
-            listOf(PeerConnection.IceServer.builder("stun:stun.cloudflare.com:3478").createIceServer())
+            // Fallback: our own STUN on the TURN host. With RELAY-only ICE,
+            // STUN alone won't produce usable candidates — the call will fail
+            // closed rather than leak to Google/Cloudflare STUN.
+            listOf(PeerConnection.IceServer.builder("stun:turn.vettid.dev:3478").createIceServer())
         }
 
         val rtcConfig = PeerConnection.RTCConfiguration(servers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+            // PRIVACY: relay every packet through our TURN server so the peer
+            // never learns the local network's public IP. Same posture Signal
+            // uses for its always-relayed mode.
+            iceTransportsType = PeerConnection.IceTransportsType.RELAY
         }
 
         peerConnection = factory.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
@@ -232,9 +238,11 @@ class WebRTCClient(
     }
 
     /**
-     * Create SDP offer (caller).
+     * Create SDP offer (caller). Pass `wantsVideo=false` for voice-only calls
+     * so we don't negotiate a video m-section (saves TURN bandwidth and avoids
+     * an empty recvonly track on the peer).
      */
-    fun createOffer(callback: (SessionDescription?) -> Unit) {
+    fun createOffer(wantsVideo: Boolean = isVideoEnabled, callback: (SessionDescription?) -> Unit) {
         val pc = peerConnection ?: run {
             callback(null)
             return
@@ -242,7 +250,7 @@ class WebRTCClient(
 
         val constraints = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", wantsVideo.toString()))
         }
 
         pc.createOffer(object : SdpObserver {
@@ -275,9 +283,10 @@ class WebRTCClient(
     }
 
     /**
-     * Create SDP answer (callee).
+     * Create SDP answer (callee). `wantsVideo` mirrors the caller's choice —
+     * voice-only calls skip the video m-section.
      */
-    fun createAnswer(callback: (SessionDescription?) -> Unit) {
+    fun createAnswer(wantsVideo: Boolean = isVideoEnabled, callback: (SessionDescription?) -> Unit) {
         val pc = peerConnection ?: run {
             callback(null)
             return
@@ -285,7 +294,7 @@ class WebRTCClient(
 
         val constraints = MediaConstraints().apply {
             mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveAudio", "true"))
-            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", "true"))
+            mandatory.add(MediaConstraints.KeyValuePair("OfferToReceiveVideo", wantsVideo.toString()))
         }
 
         pc.createAnswer(object : SdpObserver {

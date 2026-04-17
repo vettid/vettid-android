@@ -69,7 +69,8 @@ class CallManager @Inject constructor(
     private var ringBackTone: ToneGenerator? = null
     private var ringBackJob: Job? = null
 
-    // TURN credential cache (23-hour TTL, server credentials expire at 24 hours)
+    // TURN credential cache. Parent issues 1h-TTL creds; we cache for 55 min so
+    // we always refresh before the server rejects.
     private var cachedIceServers: List<PeerConnection.IceServer>? = null
     private var iceServerCacheExpiry: Long = 0
 
@@ -158,7 +159,9 @@ class CallManager @Inject constructor(
             // description before its createAnswer runs.
             scope.launch {
                 val offerDeferred = CompletableDeferred<SessionDescription?>()
-                webRTCClient?.createOffer { sdp -> offerDeferred.complete(sdp) }
+                webRTCClient?.createOffer(wantsVideo = callType == CallType.VIDEO) { sdp ->
+                    offerDeferred.complete(sdp)
+                }
                 val offer = offerDeferred.await()
                 if (offer == null) {
                     Log.e(TAG, "Failed to create SDP offer for call ${call.callId}")
@@ -242,7 +245,7 @@ class CallManager @Inject constructor(
 
         // Create SDP answer
         val answerDeferred = CompletableDeferred<SessionDescription?>()
-        webRTCClient!!.createAnswer { sdp ->
+        webRTCClient!!.createAnswer(wantsVideo = state.call.callType == CallType.VIDEO) { sdp ->
             answerDeferred.complete(sdp)
         }
 
@@ -542,9 +545,13 @@ class CallManager @Inject constructor(
     // MARK: - ICE Server Management
 
     /**
-     * Fetch Cloudflare TURN/STUN credentials for WebRTC.
-     * Returns cached credentials if still valid, otherwise fetches fresh ones.
-     * Falls back to Cloudflare STUN only if the fetch fails.
+     * Fetch VettID TURN/STUN credentials for WebRTC from the parent (via the
+     * vault). Returns cached credentials if still valid.
+     *
+     * Fallback is STUN on our own relay host. With RELAY-only ICE enabled on
+     * the peer connection, a missing TURN credential will fail the call
+     * rather than leak host candidates — which is the correct privacy
+     * tradeoff here.
      */
     private suspend fun fetchIceServers(): List<PeerConnection.IceServer> {
         // Check cache
@@ -557,7 +564,7 @@ class CallManager @Inject constructor(
         }
 
         val fallback = listOf(
-            PeerConnection.IceServer.builder("stun:stun.cloudflare.com:3478").createIceServer()
+            PeerConnection.IceServer.builder("stun:turn.vettid.dev:3478").createIceServer()
         )
 
         // Fetch via the vault over NATS (uses the existing authenticated
@@ -582,8 +589,8 @@ class CallManager @Inject constructor(
 
             if (servers.isNotEmpty()) {
                 cachedIceServers = servers
-                // Cache for 23 hours (credentials expire at 24 hours)
-                iceServerCacheExpiry = now + (23 * 60 * 60 * 1000L)
+                // 55 min — credentials expire at 60 min.
+                iceServerCacheExpiry = now + (55 * 60 * 1000L)
                 Log.i(TAG, "Fetched ${servers.size} ICE servers (STUN + TURN)")
                 servers
             } else {
