@@ -214,7 +214,13 @@ class CallManager @Inject constructor(
                 return Result.failure(IllegalStateException("Failed to create peer connection"))
             }
         }
-        if (webRTCClient!!.getSenders().isEmpty()) {
+        // Check for senders with ACTUAL tracks, not just any sender — WebRTC's
+        // setRemoteDescription(offer) auto-creates a recvonly transceiver whose
+        // sender has a null track, so `getSenders().isEmpty()` is false even
+        // before we've attached a mic. Gate on "no audio sender with a live
+        // track" so we only add the mic once.
+        val hasLiveAudioSender = webRTCClient!!.getSenders().any { it.track()?.kind() == "audio" }
+        if (!hasLiveAudioSender) {
             webRTCClient!!.addAudioTrack()
             if (state.call.callType == CallType.VIDEO) {
                 val videoTrack = webRTCClient!!.addVideoTrack(null)
