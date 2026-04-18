@@ -81,18 +81,29 @@ class VaultUpdateViewModel @Inject constructor(
                     return@launch
                 }
 
-                // If the user already added the new enclave PCR0 to their
-                // trusted set (via the pre-PIN consent dialog), they've
-                // already approved this update. Skip the second prompt and
-                // apply migration automatically — go directly to Updating
-                // so the "Update Available" card never flashes onscreen.
+                // If the user already consented to the new enclave (via the
+                // pre-PIN trust prompt), OR if the migration's new PCR0
+                // matches the PCR0 the app is currently attested against,
+                // the post-PIN card is pure noise — the user has no
+                // decision left to make. Apply the migration silently in
+                // the background and keep the UI at NoUpdate so no card
+                // renders. Only if the silent migration actually fails do
+                // we surface the Error card for a retry tap.
                 val newPcr0 = config.newPcr0
-                val trusted = newPcr0?.let { pcrConfigManager.isPcr0Trusted(it) } ?: false
-                Log.d(TAG, "checkForUpdate: newPcr0=${newPcr0?.take(16)}..., trusted=$trusted, trustedSetSize=${pcrConfigManager.getTrustedPcr0Set().size}")
-                if (!newPcr0.isNullOrEmpty() && trusted) {
-                    Log.i(TAG, "New PCR0 already trusted — auto-applying migration without second prompt")
-                    _state.value = VaultUpdateState.Updating(config)
-                    startUpdate()
+                val trustedSet = pcrConfigManager.getTrustedPcr0Set()
+                val newPcr0Trusted = newPcr0?.let { pcrConfigManager.isPcr0Trusted(it) } ?: false
+                // Fallback: if the migration config doesn't carry new_pcr0
+                // (older backend), treat the CURRENT enclave PCR0 as the
+                // migration target. The pre-PIN approval flow always adds
+                // that one to the trusted set.
+                val currentPcr0 = pcrConfigManager.getCurrentPcrs().pcr0
+                val currentPcr0Trusted = pcrConfigManager.isPcr0Trusted(currentPcr0)
+                Log.d(TAG, "checkForUpdate: newPcr0=${newPcr0?.take(16)}..., newPcr0Trusted=$newPcr0Trusted, currentPcr0=${currentPcr0.take(16)}..., currentPcr0Trusted=$currentPcr0Trusted, trustedSetSize=${trustedSet.size}")
+                if ((!newPcr0.isNullOrEmpty() && newPcr0Trusted) || currentPcr0Trusted) {
+                    Log.i(TAG, "Migration target PCR0 already trusted — auto-applying silently (no card)")
+                    currentConfig = config
+                    _state.value = VaultUpdateState.NoUpdate
+                    runMigrationSilent(config)
                     return@launch
                 }
 
@@ -104,6 +115,46 @@ class VaultUpdateViewModel @Inject constructor(
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to check for update", e)
                 _state.value = VaultUpdateState.NoUpdate
+            }
+        }
+    }
+
+    /**
+     * Background variant of startUpdate for the pre-consented case. Unlike
+     * startUpdate(), this does not flip state to Updating (keeps the UI at
+     * NoUpdate), so no card is rendered at all while the migration runs.
+     * Only if every retry fails do we surface the Error card so the user
+     * has a way to retry.
+     */
+    private suspend fun runMigrationSilent(config: MigrationConfig) {
+        val maxRetries = 5
+        val retryDelayMs = 1500L
+        for (attempt in 1..maxRetries) {
+            val result = migrationClient.startMigration()
+            if (result.isSuccess) {
+                val version = result.getOrDefault("")
+                config.newPcr0?.let { newPcr0 ->
+                    pcrConfigManager.addTrustedPcr0(newPcr0)
+                }
+                getPrefs().edit()
+                    .putString(KEY_COMPLETED_VERSION, version.ifEmpty { config.version })
+                    .putBoolean(KEY_DISMISSED, false)
+                    .remove(KEY_REMINDED_AT)
+                    .apply()
+                Log.i(TAG, "Silent migration completed (version=${version.ifEmpty { config.version }})")
+                // Leave state at NoUpdate — user never sees anything.
+                return
+            }
+            val error = result.exceptionOrNull()
+            if (attempt < maxRetries) {
+                Log.w(TAG, "Silent migration attempt $attempt/$maxRetries failed, retrying: ${error?.message}")
+                delay(retryDelayMs)
+            } else {
+                Log.e(TAG, "Silent migration failed after $maxRetries attempts; surfacing error card", error)
+                _state.value = VaultUpdateState.Error(
+                    config = config,
+                    message = error?.message ?: "Update failed. Please try again."
+                )
             }
         }
     }
