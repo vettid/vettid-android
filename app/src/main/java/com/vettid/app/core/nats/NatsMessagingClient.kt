@@ -364,3 +364,30 @@ data class ConnectionStatusUpdate(
     val peerGuid: String?,
     val peerAlias: String?
 )
+
+/**
+ * Notification that a desktop device has completed stage 1 of pairing and is
+ * now awaiting the user's stage-2 authorization (QR scan + duration approval).
+ * See vettid-dev/docs/DESKTOP-CONNECTION-FLOW.md.
+ */
+data class DevicePendingAuthNotification(
+    val connectionId: String,
+    val deviceMetadata: DeviceMetadataSummary?,
+    val binaryFpPrefix: String,
+    val expiresAt: Long,
+    val defaultDurationSeconds: Long,
+    val maxDurationSeconds: Long
+)
+
+/** Fingerprint fields the desktop sends for the user to verify before approving. */
+data class DeviceMetadataSummary(
+    val deviceName: String,
+    val hostname: String,
+    val platform: String,
+    val osName: String,
+    val osVersion: String,
+    val appVersion: String,
+    val binaryFingerprint: String,
+    val machineFingerprint: String,
+    val clientIp: String
+)

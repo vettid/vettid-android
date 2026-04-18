@@ -1,19 +1,23 @@
 package com.vettid.app.features.devices
 
-import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.nats.VaultResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.*
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+/**
+ * Lists and revokes paired desktop devices. Session extension is not app-initiated
+ * under the new flow — the desktop asks via device.request-session and the user
+ * re-authorizes via QR scan. This screen is for oversight and logout.
+ */
 @HiltViewModel
 class DeviceManagementViewModel @Inject constructor(
     private val ownerSpaceClient: OwnerSpaceClient
@@ -25,22 +29,27 @@ class DeviceManagementViewModel @Inject constructor(
     private val _isRevoking = MutableStateFlow(false)
     val isRevoking: StateFlow<Boolean> = _isRevoking.asStateFlow()
 
-    private val _isExtending = MutableStateFlow(false)
-    val isExtending: StateFlow<Boolean> = _isExtending.asStateFlow()
-
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
-    private var heartbeatJob: Job? = null
-    private val heartbeatIntervalMs = 120_000L // 2 minutes
-    private val gson = Gson()
+    private var revocationListenerJob: Job? = null
+
+    init {
+        revocationListenerJob = viewModelScope.launch {
+            ownerSpaceClient.deviceSessionRevoked.collect {
+                // Another revoke happened (either from another client or from the
+                // desktop logging out) — refresh the list.
+                loadDevices()
+            }
+        }
+    }
 
     fun loadDevices() {
         viewModelScope.launch {
             _state.value = DeviceManagementState.Loading
             try {
                 val response = ownerSpaceClient.sendAndAwaitResponse(
-                    messageType = "connection.device.list",
+                    messageType = "device.list",
                     payload = JsonObject(),
                     timeoutMs = 15000L
                 )
@@ -52,7 +61,7 @@ class DeviceManagementViewModel @Inject constructor(
                                 val obj = element.asJsonObject
                                 ConnectedDevice(
                                     connectionId = obj.get("connection_id")?.asString ?: "",
-                                    deviceName = obj.get("device_name")?.asString ?: "Unknown",
+                                    deviceName = obj.get("device_name")?.asString ?: "Desktop",
                                     hostname = obj.get("hostname")?.asString,
                                     platform = obj.get("platform")?.asString,
                                     status = obj.get("status")?.asString ?: "unknown",
@@ -63,29 +72,15 @@ class DeviceManagementViewModel @Inject constructor(
                                     lastActiveAt = obj.get("last_active_at")?.asString
                                 )
                             } ?: emptyList()
-
-                            if (devices.isEmpty()) {
-                                _state.value = DeviceManagementState.Empty
-                            } else {
-                                _state.value = DeviceManagementState.Loaded(devices)
-                            }
-
-                            // Start heartbeat if any device has an active session
-                            val hasActive = devices.any { it.isSessionActive }
-                            if (hasActive) startHeartbeat() else stopHeartbeat()
+                            _state.value = if (devices.isEmpty()) DeviceManagementState.Empty
+                                           else DeviceManagementState.Loaded(devices)
                         } else {
                             _state.value = DeviceManagementState.Error(response.error ?: "Failed to load devices")
                         }
                     }
-                    is VaultResponse.Error -> {
-                        _state.value = DeviceManagementState.Error(response.message)
-                    }
-                    null -> {
-                        _state.value = DeviceManagementState.Error("Request timed out")
-                    }
-                    else -> {
-                        _state.value = DeviceManagementState.Error("Unexpected response")
-                    }
+                    is VaultResponse.Error -> _state.value = DeviceManagementState.Error(response.message)
+                    null -> _state.value = DeviceManagementState.Error("Request timed out")
+                    else -> _state.value = DeviceManagementState.Error("Unexpected response")
                 }
             } catch (e: Exception) {
                 _state.value = DeviceManagementState.Error(e.message ?: "Failed to load devices")
@@ -100,101 +95,33 @@ class DeviceManagementViewModel @Inject constructor(
             try {
                 val payload = JsonObject().apply {
                     addProperty("connection_id", connectionId)
+                    addProperty("reason", "admin")
                 }
                 val response = ownerSpaceClient.sendAndAwaitResponse(
-                    messageType = "connection.device.revoke",
+                    messageType = "device.revoke",
                     payload = payload,
                     timeoutMs = 15000L
                 )
                 when (response) {
                     is VaultResponse.HandlerResult -> {
-                        if (response.success) {
-                            loadDevices()
-                        } else {
-                            _errorMessage.value = "Failed to revoke device: ${response.error}"
-                        }
+                        if (response.success) loadDevices()
+                        else _errorMessage.value = response.error ?: "Failed to revoke device"
                     }
-                    is VaultResponse.Error -> {
-                        _errorMessage.value = "Failed to revoke device: ${response.message}"
-                    }
-                    else -> {
-                        _errorMessage.value = "Failed to revoke device: unexpected response"
-                    }
+                    is VaultResponse.Error -> _errorMessage.value = response.message
+                    else -> _errorMessage.value = "Failed to revoke device"
                 }
             } catch (e: Exception) {
-                _errorMessage.value = "Failed to revoke device: ${e.message}"
+                _errorMessage.value = e.message ?: "Failed to revoke device"
             } finally {
                 _isRevoking.value = false
             }
         }
     }
 
-    fun extendSession(connectionId: String) {
-        viewModelScope.launch {
-            _isExtending.value = true
-            _errorMessage.value = null
-            try {
-                val payload = JsonObject().apply {
-                    addProperty("connection_id", connectionId)
-                }
-                val response = ownerSpaceClient.sendAndAwaitResponse(
-                    messageType = "connection.device.extend-session",
-                    payload = payload,
-                    timeoutMs = 15000L
-                )
-                when (response) {
-                    is VaultResponse.HandlerResult -> {
-                        if (response.success) {
-                            loadDevices()
-                        } else {
-                            _errorMessage.value = "Failed to extend session: ${response.error}"
-                        }
-                    }
-                    is VaultResponse.Error -> {
-                        _errorMessage.value = "Failed to extend session: ${response.message}"
-                    }
-                    else -> {
-                        _errorMessage.value = "Failed to extend session: unexpected response"
-                    }
-                }
-            } catch (e: Exception) {
-                _errorMessage.value = "Failed to extend session: ${e.message}"
-            } finally {
-                _isExtending.value = false
-            }
-        }
-    }
-
-    private fun startHeartbeat() {
-        if (heartbeatJob?.isActive == true) return
-        heartbeatJob = viewModelScope.launch {
-            while (isActive) {
-                delay(heartbeatIntervalMs)
-                try {
-                    ownerSpaceClient.sendToVault(
-                        messageType = "connection.device.heartbeat",
-                        payload = JsonObject()
-                    )
-                } catch (_: Exception) { }
-            }
-        }
-    }
-
-    private fun stopHeartbeat() {
-        heartbeatJob?.cancel()
-        heartbeatJob = null
-    }
-
-    fun clearError() {
-        _errorMessage.value = null
-    }
+    fun clearError() { _errorMessage.value = null }
 
     override fun onCleared() {
         super.onCleared()
-        stopHeartbeat()
-    }
-
-    companion object {
-        private const val TAG = "DeviceManagementVM"
+        revocationListenerJob?.cancel()
     }
 }

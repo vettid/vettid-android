@@ -21,9 +21,17 @@ import androidx.hilt.navigation.compose.hiltViewModel
 @Composable
 fun DevicePairingScreen(
     onNavigateBack: () -> Unit,
+    onNavigateToAuthorize: (connectionId: String) -> Unit,
     viewModel: DevicePairingViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
+
+    LaunchedEffect(state) {
+        val s = state
+        if (s is DevicePairingState.DevicePending) {
+            onNavigateToAuthorize(s.info.connectionId)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -132,57 +140,9 @@ fun DevicePairingScreen(
                     }
                 }
 
-                is DevicePairingState.WaitingApproval -> {
+                is DevicePairingState.DevicePending -> {
+                    // UI transition is handled by the LaunchedEffect above.
                     CircularProgressIndicator()
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text("Desktop connected!", style = MaterialTheme.typography.titleMedium)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "Setting up the session...",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                is DevicePairingState.Approved -> {
-                    Icon(
-                        Icons.Default.CheckCircle,
-                        contentDescription = null,
-                        modifier = Modifier.size(64.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text(
-                        "Desktop Paired!",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "${s.deviceName} is now connected to your vault.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
-                    Spacer(modifier = Modifier.height(24.dp))
-                    Button(onClick = onNavigateBack) {
-                        Text("Done")
-                    }
-                }
-
-                is DevicePairingState.Denied -> {
-                    Icon(
-                        Icons.Default.Error,
-                        contentDescription = null,
-                        modifier = Modifier.size(64.dp),
-                        tint = MaterialTheme.colorScheme.error
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text("Pairing Denied", style = MaterialTheme.typography.headlineSmall)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(s.message, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(modifier = Modifier.height(24.dp))
-                    Button(onClick = { viewModel.startPairing() }) {
-                        Text("Try Again")
-                    }
                 }
 
                 is DevicePairingState.Timeout -> {

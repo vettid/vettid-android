@@ -24,7 +24,6 @@ fun DeviceManagementScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val isRevoking by viewModel.isRevoking.collectAsState()
-    val isExtending by viewModel.isExtending.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     var deviceToRevoke by remember { mutableStateOf<ConnectedDevice?>(null) }
 
@@ -141,8 +140,6 @@ fun DeviceManagementScreen(
                             items(activeDevices, key = { it.connectionId }) { device ->
                                 DeviceCard(
                                     device = device,
-                                    isExtending = isExtending,
-                                    onExtend = { viewModel.extendSession(device.connectionId) },
                                     onRevoke = { deviceToRevoke = device }
                                 )
                             }
@@ -160,8 +157,6 @@ fun DeviceManagementScreen(
                             items(inactiveDevices, key = { it.connectionId }) { device ->
                                 DeviceCard(
                                     device = device,
-                                    isExtending = false,
-                                    onExtend = null,
                                     onRevoke = { deviceToRevoke = device }
                                 )
                             }
@@ -222,8 +217,6 @@ fun DeviceManagementScreen(
 @Composable
 fun DeviceCard(
     device: ConnectedDevice,
-    isExtending: Boolean,
-    onExtend: (() -> Unit)?,
     onRevoke: () -> Unit
 ) {
     Card(
@@ -278,32 +271,16 @@ fun DeviceCard(
                 }
             }
 
-            // Actions
-            Spacer(modifier = Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (device.isSessionActive && onExtend != null) {
-                    OutlinedButton(
-                        onClick = onExtend,
-                        enabled = !isExtending,
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                    ) {
-                        if (isExtending) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                            Spacer(modifier = Modifier.width(4.dp))
-                        }
-                        Text("Extend", style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-                if (device.status != "revoked") {
-                    OutlinedButton(
-                        onClick = onRevoke,
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = MaterialTheme.colorScheme.error
-                        ),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                    ) {
-                        Text("Revoke", style = MaterialTheme.typography.labelSmall)
-                    }
+            if (device.status != "revoked") {
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = onRevoke,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                ) {
+                    Text("Revoke", style = MaterialTheme.typography.labelSmall)
                 }
             }
         }

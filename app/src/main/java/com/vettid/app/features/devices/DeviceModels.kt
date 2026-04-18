@@ -1,7 +1,8 @@
 package com.vettid.app.features.devices
 
 /**
- * Data models for desktop device connection management.
+ * UI models for the desktop device pairing + session lifecycle.
+ * Protocol reference: vettid-dev/docs/DESKTOP-CONNECTION-FLOW.md.
  */
 
 data class ConnectedDevice(
@@ -16,12 +17,12 @@ data class ConnectedDevice(
     val connectedAt: String,
     val lastActiveAt: String?
 ) {
-    val displayName: String get() = hostname?.takeIf { it.isNotEmpty() } ?: deviceName
+    val displayName: String get() = deviceName.ifEmpty { hostname ?: "Desktop" }
 
     val platformLabel: String get() = when {
-        platform?.contains("darwin") == true -> "macOS"
-        platform?.contains("linux") == true -> "Linux"
-        platform?.contains("windows") == true -> "Windows"
+        platform?.contains("darwin", ignoreCase = true) == true -> "macOS"
+        platform?.contains("linux", ignoreCase = true) == true -> "Linux"
+        platform?.contains("windows", ignoreCase = true) == true -> "Windows"
         else -> platform ?: "Unknown"
     }
 
@@ -35,10 +36,60 @@ data class ConnectedDevice(
     }
 }
 
-data class DeviceListResponse(
-    val devices: List<ConnectedDevice>,
-    val count: Int
+/** Metadata shown to the user when they authorize a new desktop session. */
+data class PendingDeviceInfo(
+    val connectionId: String,
+    val hostname: String,
+    val platform: String,
+    val osName: String,
+    val osVersion: String,
+    val appVersion: String,
+    val clientIp: String,
+    val binaryFpPrefix: String,
+    val defaultDurationSeconds: Long,
+    val maxDurationSeconds: Long
 )
+
+/** QR payload shown by the desktop at stage 2 — user scans this in the app. */
+data class ScannedDeviceAuthQr(
+    val approvalToken: String,
+    val connectionId: String
+)
+
+// -----------------------------------------------------------------------------
+// UI states
+// -----------------------------------------------------------------------------
+
+sealed class DeviceManagementState {
+    object Loading : DeviceManagementState()
+    data class Loaded(val devices: List<ConnectedDevice>) : DeviceManagementState()
+    object Empty : DeviceManagementState()
+    data class Error(val message: String) : DeviceManagementState()
+}
+
+sealed class DevicePairingState {
+    object Idle : DevicePairingState()
+    object Creating : DevicePairingState()
+    data class ShowingCode(val code: String, val remainingSeconds: Int) : DevicePairingState()
+    data class DevicePending(val info: PendingDeviceInfo) : DevicePairingState()
+    object Timeout : DevicePairingState()
+    data class Error(val message: String) : DevicePairingState()
+}
+
+sealed class AuthorizeDeviceState {
+    object Scanning : AuthorizeDeviceState()
+    data class Ready(
+        val scanned: ScannedDeviceAuthQr,
+        val info: PendingDeviceInfo,
+        val deviceName: String,
+        val durationSeconds: Long
+    ) : AuthorizeDeviceState()
+    object Submitting : AuthorizeDeviceState()
+    object Done : AuthorizeDeviceState()
+    data class Error(val message: String) : AuthorizeDeviceState()
+}
+
+// ---- Legacy per-operation approval (separate from stage-2 pairing) ---------
 
 data class DeviceApprovalRequest(
     val requestId: String,
@@ -51,27 +102,6 @@ data class DeviceApprovalRequest(
     val requestedAt: String
 )
 
-// Management state
-sealed class DeviceManagementState {
-    object Loading : DeviceManagementState()
-    data class Loaded(val devices: List<ConnectedDevice>) : DeviceManagementState()
-    object Empty : DeviceManagementState()
-    data class Error(val message: String) : DeviceManagementState()
-}
-
-// Pairing state
-sealed class DevicePairingState {
-    object Idle : DevicePairingState()
-    object Creating : DevicePairingState()
-    data class ShowingCode(val code: String, val remainingSeconds: Int) : DevicePairingState()
-    object WaitingApproval : DevicePairingState()
-    data class Approved(val deviceName: String) : DevicePairingState()
-    data class Denied(val message: String = "Pairing was denied") : DevicePairingState()
-    object Timeout : DevicePairingState()
-    data class Error(val message: String) : DevicePairingState()
-}
-
-// Approval state
 sealed class DeviceApprovalState {
     object Idle : DeviceApprovalState()
     data class Ready(val request: DeviceApprovalRequest, val elapsedSeconds: Int) : DeviceApprovalState()

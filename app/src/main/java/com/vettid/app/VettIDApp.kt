@@ -145,6 +145,12 @@ sealed class Screen(val route: String) {
     // Connections
     object Connections : Screen("connections")
     object CreateInvitation : Screen("connections/create-invitation")
+    // Desktop device pairing
+    object DevicePairing : Screen("devices/pair")
+    object DeviceAuthorize : Screen("devices/authorize/{connectionId}") {
+        fun createRoute(connectionId: String) = "devices/authorize/$connectionId"
+    }
+    object DevicesList : Screen("devices/list")
     object ScanInvitation : Screen("connections/scan-invitation?data={data}") {
         fun createRoute(data: String? = null) = if (data != null) {
             "connections/scan-invitation?data=${java.net.URLEncoder.encode(data, "UTF-8")}"
@@ -645,6 +651,9 @@ fun VettIDApp(
                 onNavigateToCreateAgentInvitation = {
                     navController.navigate(Screen.CreateAgentInvitation.route)
                 },
+                onNavigateToConnectDesktop = {
+                    navController.navigate(Screen.DevicePairing.route)
+                },
                 onNavigateToVaultStatus = {
                     navController.navigate(Screen.VaultStatus.route)
                 },
@@ -705,6 +714,33 @@ fun VettIDApp(
             CreateInvitationScreen(
                 onInvitationCreated = { /* Handle invitation created */ },
                 onBack = { navController.safePopBackStack() }
+            )
+        }
+        composable(Screen.DevicePairing.route) {
+            com.vettid.app.features.devices.DevicePairingScreen(
+                onNavigateBack = { navController.safePopBackStack() },
+                onNavigateToAuthorize = { connectionId ->
+                    navController.navigate(Screen.DeviceAuthorize.createRoute(connectionId)) {
+                        popUpTo(Screen.DevicePairing.route) { inclusive = true }
+                    }
+                }
+            )
+        }
+        composable(
+            route = Screen.DeviceAuthorize.route,
+            arguments = listOf(navArgument("connectionId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val connectionId = backStackEntry.arguments?.getString("connectionId") ?: ""
+            com.vettid.app.features.devices.AuthorizeDeviceScreen(
+                connectionId = connectionId,
+                onNavigateBack = { navController.safePopBackStack() }
+            )
+        }
+        composable(Screen.DevicesList.route) {
+            com.vettid.app.features.devices.DeviceManagementScreen(
+                onNavigateToPairing = {
+                    navController.navigate(Screen.DevicePairing.route)
+                }
             )
         }
         composable(
@@ -1649,6 +1685,7 @@ fun MainScreen(
     onNavigateToAgents: () -> Unit = {},
     onNavigateToAgentApproval: (requestId: String) -> Unit = {},
     onNavigateToCreateAgentInvitation: () -> Unit = {},
+    onNavigateToConnectDesktop: () -> Unit = {},
     onNavigateToVaultStatus: () -> Unit = {},
     onNavigateToVaultHome: () -> Unit = {},
     appViewModel: AppViewModel = hiltViewModel(),
@@ -1784,7 +1821,8 @@ fun MainScreen(
                 onNavigateToConnectionReview = onNavigateToConnectionReview,
                 onNavigateToCreateInvitation = onNavigateToCreateInvitation,
                 onNavigateToScanInvitation = onNavigateToScanInvitation,
-                onNavigateToCreateAgentInvitation = onNavigateToCreateAgentInvitation
+                onNavigateToCreateAgentInvitation = onNavigateToCreateAgentInvitation,
+                onNavigateToConnectDesktop = onNavigateToConnectDesktop
             )
         },
         votingContent = { _ ->

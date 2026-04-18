@@ -53,7 +53,8 @@ fun ConnectionsContentEmbedded(
     onConnectionClick: (String) -> Unit = {},
     onCreateInvitation: () -> Unit = {},
     onScanInvitation: () -> Unit = {},
-    onCreateAgentInvitation: () -> Unit = {}
+    onCreateAgentInvitation: () -> Unit = {},
+    onConnectDesktop: () -> Unit = {}
 ) {
     // Route search query from top bar to ViewModel
     LaunchedEffect(searchQuery) {
@@ -330,7 +331,7 @@ fun ConnectionsContentEmbedded(
                 }
                 Spacer(modifier = Modifier.height(12.dp))
                 FabMenuItem(label = "Connect Desktop", icon = Icons.Default.Computer) {
-                    showFabMenu = false; /* TODO: Connect desktop */
+                    showFabMenu = false; onConnectDesktop()
                 }
                 Spacer(modifier = Modifier.height(12.dp))
             }

@@ -13,6 +13,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import javax.inject.Inject
 
+/**
+ * Stage-1 pairing: ask the vault for an 8-char invite code, show it to the user,
+ * then wait for the desktop to complete stage 1 and post device.request-session.
+ * When that happens, OwnerSpaceClient emits on its devicePendingAuth flow and we
+ * transition to DevicePending — at which point the screen navigates to
+ * AuthorizeDeviceScreen to scan the desktop's QR and set duration.
+ */
 @HiltViewModel
 class DevicePairingViewModel @Inject constructor(
     private val ownerSpaceClient: OwnerSpaceClient
@@ -21,56 +28,62 @@ class DevicePairingViewModel @Inject constructor(
     private val _state = MutableStateFlow<DevicePairingState>(DevicePairingState.Idle)
     val state: StateFlow<DevicePairingState> = _state.asStateFlow()
 
-    private var pairingJob: Job? = null
+    private var createJob: Job? = null
     private var countdownJob: Job? = null
-    private val pairingTimeoutSeconds = 300 // 5 minutes
+    private var pendingListenerJob: Job? = null
+    private val inviteTtlSeconds = 120 // 2 min, matches backend
+
+    init {
+        pendingListenerJob = viewModelScope.launch {
+            ownerSpaceClient.devicePendingAuth.collect { notif ->
+                // Only transition if we're currently showing a code — otherwise a
+                // stale notification would pop us into pending unexpectedly.
+                val current = _state.value
+                if (current is DevicePairingState.ShowingCode) {
+                    val meta = notif.deviceMetadata
+                    _state.value = DevicePairingState.DevicePending(
+                        PendingDeviceInfo(
+                            connectionId = notif.connectionId,
+                            hostname = meta?.hostname ?: "",
+                            platform = meta?.platform ?: "",
+                            osName = meta?.osName ?: "",
+                            osVersion = meta?.osVersion ?: "",
+                            appVersion = meta?.appVersion ?: "",
+                            clientIp = meta?.clientIp ?: "",
+                            binaryFpPrefix = notif.binaryFpPrefix,
+                            defaultDurationSeconds = notif.defaultDurationSeconds,
+                            maxDurationSeconds = notif.maxDurationSeconds
+                        )
+                    )
+                    countdownJob?.cancel()
+                }
+            }
+        }
+    }
 
     fun startPairing() {
-        pairingJob?.cancel()
-        pairingJob = viewModelScope.launch {
+        createJob?.cancel()
+        createJob = viewModelScope.launch {
             _state.value = DevicePairingState.Creating
-
             try {
-                // Step 1: Create device invitation via vault
                 val response = ownerSpaceClient.sendAndAwaitResponse(
-                    messageType = "connection.device.create-invite",
+                    messageType = "device.create-invite",
                     payload = JsonObject(),
                     timeoutMs = 15000L
                 )
-
                 when (response) {
                     is VaultResponse.HandlerResult -> {
-                        if (response.success && response.result != null) {
-                            val code = response.result.get("code")?.asString
-                                ?: response.result.get("invitation_code")?.asString
-                                ?: ""
-
-                            if (code.isEmpty()) {
-                                _state.value = DevicePairingState.Error("No pairing code received")
-                                return@launch
-                            }
-
-                            // Step 2: Show code with countdown
-                            _state.value = DevicePairingState.ShowingCode(code, pairingTimeoutSeconds)
+                        val code = response.result?.get("invite_code")?.asString
+                        if (response.success && !code.isNullOrEmpty()) {
+                            _state.value = DevicePairingState.ShowingCode(code, inviteTtlSeconds)
                             startCountdown()
-
-                            // Step 3: Wait for device connection event
-                            // The vault will send a push notification on forApp.device.connection.request
-                            // when a device connects. For now we wait for the timeout.
-                            // TODO: Listen for device connection event via vaultEvents flow
                         } else {
-                            _state.value = DevicePairingState.Error(response.error ?: "Failed to create invitation")
+                            _state.value = DevicePairingState.Error(response.error ?: "No invite code received")
                         }
                     }
-                    is VaultResponse.Error -> {
-                        _state.value = DevicePairingState.Error(response.message)
-                    }
-                    null -> {
-                        _state.value = DevicePairingState.Error("Request timed out")
-                    }
-                    else -> {
-                        _state.value = DevicePairingState.Error("Unexpected response")
-                    }
+                    is VaultResponse.Error -> _state.value = DevicePairingState.Error(response.message)
+                    null -> _state.value = DevicePairingState.Error("Request timed out")
+                    else -> _state.value = DevicePairingState.Error("Unexpected response")
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -84,11 +97,14 @@ class DevicePairingViewModel @Inject constructor(
     private fun startCountdown() {
         countdownJob?.cancel()
         countdownJob = viewModelScope.launch {
-            var remaining = pairingTimeoutSeconds
+            var remaining = inviteTtlSeconds
             while (remaining > 0 && isActive) {
                 val current = _state.value
                 if (current is DevicePairingState.ShowingCode) {
                     _state.value = current.copy(remainingSeconds = remaining)
+                } else {
+                    // State changed (likely DevicePending) — stop countdown
+                    return@launch
                 }
                 delay(1000)
                 remaining--
@@ -101,44 +117,19 @@ class DevicePairingViewModel @Inject constructor(
     }
 
     fun cancel() {
-        pairingJob?.cancel()
+        createJob?.cancel()
         countdownJob?.cancel()
         _state.value = DevicePairingState.Idle
     }
 
-    fun dismiss() {
-        pairingJob?.cancel()
-        countdownJob?.cancel()
-    }
-
     override fun onCleared() {
         super.onCleared()
-        pairingJob?.cancel()
+        createJob?.cancel()
         countdownJob?.cancel()
+        pendingListenerJob?.cancel()
     }
 
     companion object {
         private const val TAG = "DevicePairingVM"
     }
 }
-
-// Response types (used when device pairing backend is implemented)
-data class CreateInviteResponse(
-    val connectionId: String,
-    val invitationId: String,
-    val inviteToken: String,
-    val vaultPublicKey: String,
-    val messagespaceUri: String,
-    val ownerGuid: String
-)
-
-data class ShortlinkResponse(
-    val code: String,
-    val expiresAt: String
-)
-
-data class DeviceConnectionEvent(
-    val connectionId: String,
-    val deviceName: String?,
-    val platform: String?
-)

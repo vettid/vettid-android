@@ -65,7 +65,8 @@ fun FeedContent(
     onNavigateToConnectionReview: (connectionId: String, eventId: String) -> Unit = { _, _ -> },
     onNavigateToCreateInvitation: () -> Unit = {},
     onNavigateToScanInvitation: () -> Unit = {},
-    onNavigateToCreateAgentInvitation: () -> Unit = {}
+    onNavigateToCreateAgentInvitation: () -> Unit = {},
+    onNavigateToConnectDesktop: () -> Unit = {}
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -257,6 +258,13 @@ fun FeedContent(
                         onClick = { showFabMenu = false; onNavigateToCreateAgentInvitation() },
                         icon = { Icon(Icons.Default.Computer, contentDescription = null) },
                         text = { Text("Agent Invitation") },
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                    ExtendedFloatingActionButton(
+                        onClick = { showFabMenu = false; onNavigateToConnectDesktop() },
+                        icon = { Icon(Icons.Default.Computer, contentDescription = null) },
+                        text = { Text("Connect Desktop") },
                         containerColor = MaterialTheme.colorScheme.secondaryContainer,
                         contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                     )

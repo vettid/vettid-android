@@ -78,6 +78,18 @@ class OwnerSpaceClient @Inject constructor(
     /** Flow of connection status updates (activated, key-exchanged, rejected). */
     val connectionStatusUpdates: SharedFlow<ConnectionStatusUpdate> = _connectionStatusUpdates.asSharedFlow()
 
+    private val _devicePendingAuth = MutableSharedFlow<DevicePendingAuthNotification>(extraBufferCapacity = 8)
+    /**
+     * Flow of desktop devices awaiting session authorization (stage 2 of pairing).
+     * Emitted when a desktop has resolved a device invite code and posted
+     * device.request-session — the user now needs to scan the desktop's QR and approve.
+     */
+    val devicePendingAuth: SharedFlow<DevicePendingAuthNotification> = _devicePendingAuth.asSharedFlow()
+
+    private val _deviceSessionRevoked = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    /** Flow of device connection_ids that were revoked (so UI can refresh). */
+    val deviceSessionRevoked: SharedFlow<String> = _deviceSessionRevoked.asSharedFlow()
+
     private val _callEvents = MutableSharedFlow<CallSignalEvent>(extraBufferCapacity = 64)
     /** Flow of call signaling events (vault-routed). */
     val callEvents: SharedFlow<CallSignalEvent> = _callEvents.asSharedFlow()
@@ -1424,6 +1436,15 @@ class OwnerSpaceClient @Inject constructor(
                     handleConnectionRevoked(message); return
                 }
 
+                // Device pairing — desktop has requested session authorization
+                subject.contains(".forApp.device.pending-authorization") -> {
+                    handleDevicePendingAuth(message); return
+                }
+                // Device pairing — a session was revoked (so UI lists refresh)
+                subject.contains(".forApp.device.") && subject.endsWith(".revoked") -> {
+                    handleDeviceRevoked(message); return
+                }
+
                 // Profile
                 subject.contains(".forApp.profile-update") -> {
                     handleProfileUpdate(message); return
@@ -1782,6 +1803,52 @@ class OwnerSpaceClient @Inject constructor(
             _connectionAcceptances.tryEmit(accepted)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to parse connection.peer-accepted event", e)
+        }
+    }
+
+    private fun handleDevicePendingAuth(message: NatsMessage) {
+        try {
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+
+            val meta = payload.optJSONObject("device_metadata")
+            val metadata = if (meta != null) {
+                DeviceMetadataSummary(
+                    deviceName = meta.optString("device_name", ""),
+                    hostname = meta.optString("hostname", ""),
+                    platform = meta.optString("platform", ""),
+                    osName = meta.optString("os_name", ""),
+                    osVersion = meta.optString("os_version", ""),
+                    appVersion = meta.optString("app_version", ""),
+                    binaryFingerprint = meta.optString("binary_fingerprint", ""),
+                    machineFingerprint = meta.optString("machine_fingerprint", ""),
+                    clientIp = meta.optString("client_ip", "")
+                )
+            } else null
+
+            val notif = DevicePendingAuthNotification(
+                connectionId = payload.getString("connection_id"),
+                deviceMetadata = metadata,
+                binaryFpPrefix = payload.optString("binary_fp_prefix", ""),
+                expiresAt = payload.optLong("expires_at", 0L),
+                defaultDurationSeconds = payload.optLong("default_duration_s", 3600L),
+                maxDurationSeconds = payload.optLong("max_duration_s", 24 * 3600L)
+            )
+            android.util.Log.i(TAG, "Device pending authorization: ${notif.connectionId}")
+            _devicePendingAuth.tryEmit(notif)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse device.pending-authorization event", e)
+        }
+    }
+
+    private fun handleDeviceRevoked(message: NatsMessage) {
+        try {
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+            val connId = payload.optString("connection_id", "")
+            if (connId.isNotEmpty()) _deviceSessionRevoked.tryEmit(connId)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse device.revoked event", e)
         }
     }
 
