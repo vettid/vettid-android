@@ -200,7 +200,12 @@ class CallManager @Inject constructor(
         stopRingtone()
         CallForegroundService.dismiss(context)
 
-        // Initialize WebRTC if not already
+        // Initialize WebRTC if not already. When handleIncomingCall already
+        // created the peer connection (to accept early ICE candidates), we
+        // still need to attach local media tracks here — that can't happen
+        // at ring time because we don't yet know whether the user will
+        // accept, and attaching the mic would light the mic-in-use
+        // indicator on ring.
         if (webRTCClient == null) {
             initializeWebRTC()
             val iceServers = fetchIceServers()
@@ -208,7 +213,8 @@ class CallManager @Inject constructor(
                 disposeWebRTC()
                 return Result.failure(IllegalStateException("Failed to create peer connection"))
             }
-
+        }
+        if (webRTCClient!!.getSenders().isEmpty()) {
             webRTCClient!!.addAudioTrack()
             if (state.call.callType == CallType.VIDEO) {
                 val videoTrack = webRTCClient!!.addVideoTrack(null)

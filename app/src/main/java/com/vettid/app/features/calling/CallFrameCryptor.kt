@@ -64,6 +64,15 @@ class CallFrameCryptor(
             DISCARD_FRAME_WHEN_CRYPTOR_NOT_READY
         )
 
+        // The constructor's `sharedKey` param sets the default shared key for
+        // the provider, but the per-participant senders/receivers look up the
+        // key by (participant, keyIndex). Binding the key at index 0 for both
+        // "local" and "remote" participants ensures the cryptor never enters
+        // MISSINGKEY state at frame time. Without this, the sender falls into
+        // MISSINGKEY and discards frames, producing a connected-but-silent
+        // call.
+        keyProvider.setSharedKey(0, sharedSecret)
+
         Log.i(TAG, "Frame cryptor initialized with shared key for participant: $participantId")
     }
 
