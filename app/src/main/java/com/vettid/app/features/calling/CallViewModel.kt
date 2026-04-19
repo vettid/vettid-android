@@ -22,6 +22,8 @@ class CallViewModel @Inject constructor(
 
     val callState: StateFlow<CallState> = callManager.callState
 
+    val isAccepting: StateFlow<Boolean> = callManager.isAccepting
+
     val remoteVideoTrack: StateFlow<VideoTrack?> = callManager.remoteVideoTrack
 
     val localVideoTrack: StateFlow<VideoTrack?> = callManager.localVideoTrack

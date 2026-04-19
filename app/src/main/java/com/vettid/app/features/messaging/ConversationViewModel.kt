@@ -11,6 +11,7 @@ import com.vettid.app.core.nats.NatsMessagingClient
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.network.*
 import com.vettid.app.core.storage.CredentialStore
+import com.vettid.app.features.feed.FeedNotificationService
 import com.vettid.app.features.feed.FeedRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
@@ -38,6 +39,7 @@ class ConversationViewModel @Inject constructor(
     private val credentialStore: CredentialStore,
     private val feedClient: FeedClient,
     private val feedRepository: FeedRepository,
+    private val feedNotificationService: FeedNotificationService,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -92,6 +94,9 @@ class ConversationViewModel @Inject constructor(
         observeReadReceipts()
         markConnectionEventsAsRead()
         sendPendingReadReceipts()
+        // Opening the conversation = user has seen the unread messages; drop
+        // any outstanding shade entry for this peer.
+        feedNotificationService.clearMessageNotification(connectionId)
     }
 
     /**

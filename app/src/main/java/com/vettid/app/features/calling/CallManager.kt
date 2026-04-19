@@ -63,6 +63,13 @@ class CallManager @Inject constructor(
     private val _localVideoTrack = MutableStateFlow<VideoTrack?>(null)
     val localVideoTrack: StateFlow<VideoTrack?> = _localVideoTrack.asStateFlow()
 
+    // True from the moment answerCall is invoked until the call reaches Active
+    // or fails. Lets IncomingCallScreen hide its Answer/Decline buttons while
+    // the SDP exchange is running — so a notification-initiated accept doesn't
+    // briefly show Answer again before the state flips to Active.
+    private val _isAccepting = MutableStateFlow(false)
+    val isAccepting: StateFlow<Boolean> = _isAccepting.asStateFlow()
+
     private var webRTCClient: WebRTCClient? = null
     private var frameCryptor: CallFrameCryptor? = null
     private var durationJob: Job? = null
@@ -204,7 +211,21 @@ class CallManager @Inject constructor(
         if (state !is CallState.Incoming) {
             return Result.failure(IllegalStateException("No incoming call"))
         }
+        // Signal to IncomingCallScreen to hide Answer/Decline. If accept was
+        // already in flight (e.g. the notification action fired it), return
+        // early so we don't double-run the SDP exchange.
+        if (!_isAccepting.compareAndSet(expect = false, update = true)) {
+            Log.d(TAG, "answerCall ignored — already accepting")
+            return Result.success(Unit)
+        }
+        return try {
+            doAnswerCall(state)
+        } finally {
+            _isAccepting.value = false
+        }
+    }
 
+    private suspend fun doAnswerCall(state: CallState.Incoming): Result<Unit> {
         Log.i(TAG, "Answering call ${state.call.callId}")
 
         stopRingtone()

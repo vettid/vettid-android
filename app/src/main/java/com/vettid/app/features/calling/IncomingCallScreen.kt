@@ -35,6 +35,7 @@ fun IncomingCallScreen(
 ) {
     val callState by viewModel.callState.collectAsState()
     val incomingState = callState as? CallState.Incoming
+    val isAccepting by viewModel.isAccepting.collectAsState()
 
     val answerPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -129,6 +130,28 @@ fun IncomingCallScreen(
             }
 
             Spacer(modifier = Modifier.weight(1f))
+
+            // While a notification-triggered accept is in flight, suppress
+            // the Answer/Decline buttons and show "Answering…" — the call is
+            // already in the SDP-exchange phase and will transition to
+            // ActiveCallScreen on completion. Rendering the buttons here
+            // would force the user to tap Answer a second time.
+            if (isAccepting) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    CircularProgressIndicator(color = Color.White)
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = "Answering…",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = Color.White
+                    )
+                }
+                Spacer(modifier = Modifier.height(48.dp))
+                return@Column
+            }
 
             // Answer/Reject buttons
             Row(

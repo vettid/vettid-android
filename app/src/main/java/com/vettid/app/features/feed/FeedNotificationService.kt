@@ -242,6 +242,10 @@ class FeedNotificationService @Inject constructor(
         "guide" to NotifyPolicy.SILENT,
         "message.sent" to NotifyPolicy.SILENT,
         "message.read" to NotifyPolicy.SILENT,
+        // The direct forApp.new-message push already surfaces an OS
+        // notification via showMessageNotification — the feed event for
+        // the same message would double up, one silent + one regular.
+        "message.received" to NotifyPolicy.SILENT,
         "connection.created" to NotifyPolicy.SILENT,
         "connection.accepted" to NotifyPolicy.SILENT,
         "connection.initiated" to NotifyPolicy.SILENT,
@@ -362,9 +366,10 @@ class FeedNotificationService @Inject constructor(
             NotificationImportance.LOW -> NotificationCompat.PRIORITY_MIN
         }
 
-        // Create intent that deep-links to the relevant screen after PIN unlock
+        // SINGLE_TOP reuses the running MainActivity via onNewIntent; see the
+        // message-notification path for why CLEAR_TOP is wrong here.
         val intent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra(EXTRA_OPEN_FEED, true)
             putExtra(EXTRA_EVENT_ID, event.eventId)
             putExtra(EXTRA_EVENT_TYPE, event.eventType)
@@ -429,7 +434,13 @@ class FeedNotificationService @Inject constructor(
      */
     private fun showMessageNotification(message: IncomingMessage) {
         val intent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            // SINGLE_TOP (not CLEAR_TOP) reuses the existing MainActivity
+            // via onNewIntent. CLEAR_TOP would destroy + recreate it,
+            // wiping AppViewModel state — including `isAuthenticated`,
+            // which forced a PIN re-entry on every notification tap even
+            // when the session was still valid and task-switcher entry
+            // didn't prompt.
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra(EXTRA_OPEN_FEED, true)
             putExtra(EXTRA_EVENT_TYPE, "message.received")
             putExtra(EXTRA_SOURCE_ID, message.connectionId)
@@ -459,12 +470,32 @@ class FeedNotificationService @Inject constructor(
         val notifManager = NotificationManagerCompat.from(context)
         if (!notifManager.areNotificationsEnabled()) return
         try {
-            notifManager.notify(message.messageId.hashCode(), notification)
+            // Key the notification by connectionId so multiple messages from
+            // the same peer collapse into one entry (newer replaces older)
+            // and we can cancel "all unread from peer X" by a single ID when
+            // the user opens the conversation.
+            notifManager.notify(messageNotificationId(message.connectionId), notification)
             Log.d(TAG, "Showed message notification for connection ${message.connectionId}")
         } catch (e: SecurityException) {
             Log.w(TAG, "Notification permission not granted for message", e)
         }
     }
+
+    /**
+     * Clear any outstanding message notification for a connection. Call this
+     * when the user opens the conversation — once they've seen the unread
+     * messages in-app, the shade entry is stale.
+     */
+    fun clearMessageNotification(connectionId: String) {
+        try {
+            NotificationManagerCompat.from(context)
+                .cancel(messageNotificationId(connectionId))
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to clear message notification for $connectionId", e)
+        }
+    }
+
+    private fun messageNotificationId(connectionId: String): Int = ("msg:$connectionId").hashCode()
 
     /**
      * Resolve a human-readable sender name from the connection cache.
