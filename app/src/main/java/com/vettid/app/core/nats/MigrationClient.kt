@@ -265,8 +265,12 @@ class MigrationClient @Inject constructor(
         val available = json.get("available")?.asBoolean ?: false
         if (!available) return null
 
-        // Extract new PCR0 from new_pcrs object
-        val newPcr0 = json.getAsJsonObject("new_pcrs")?.get("pcr0")?.asString
+        // Vault's MigrationConfigResponse returns the new PCR0 as a flat
+        // `new_pcr0` field. Also accept the nested `new_pcrs.pcr0` shape
+        // used in the signed manifest for forward compat with older vault
+        // builds that might send that form.
+        val newPcr0 = json.get("new_pcr0")?.takeIf { !it.isJsonNull }?.asString
+            ?: json.getAsJsonObject("new_pcrs")?.get("pcr0")?.asString
 
         return MigrationConfig(
             version = json.get("version")?.asString ?: "",

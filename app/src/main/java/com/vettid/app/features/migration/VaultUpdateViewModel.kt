@@ -81,26 +81,26 @@ class VaultUpdateViewModel @Inject constructor(
                     return@launch
                 }
 
-                // If the user already consented to the new enclave (via the
-                // pre-PIN trust prompt), OR if the migration's new PCR0
-                // matches the PCR0 the app is currently attested against,
-                // the post-PIN card is pure noise — the user has no
-                // decision left to make. Apply the migration silently in
-                // the background and keep the UI at NoUpdate so no card
-                // renders. Only if the silent migration actually fails do
-                // we surface the Error card for a retry tap.
+                // Only auto-apply silently when the user has ALREADY
+                // explicitly consented to the migration's new PCR0 (via the
+                // pre-PIN trust prompt during this unlock). Surfacing the
+                // card in that case would be pure noise — the user's already
+                // decided. In every other case the user gets the card so the
+                // update is visible consent, not a silent swap.
+                //
+                // Historical regression: this branch also used to
+                // auto-apply when `currentPcr0Trusted` was true. During
+                // migration both old and new enclaves run; when the app
+                // happened to hit the OLD enclave, currentPcr0 matched the
+                // previously-trusted PCR0 and the card was suppressed — so
+                // the new PCR0 got silently added to the trusted set with
+                // no user visibility. Don't do that.
                 val newPcr0 = config.newPcr0
-                val trustedSet = pcrConfigManager.getTrustedPcr0Set()
                 val newPcr0Trusted = newPcr0?.let { pcrConfigManager.isPcr0Trusted(it) } ?: false
-                // Fallback: if the migration config doesn't carry new_pcr0
-                // (older backend), treat the CURRENT enclave PCR0 as the
-                // migration target. The pre-PIN approval flow always adds
-                // that one to the trusted set.
                 val currentPcr0 = pcrConfigManager.getCurrentPcrs().pcr0
-                val currentPcr0Trusted = pcrConfigManager.isPcr0Trusted(currentPcr0)
-                Log.d(TAG, "checkForUpdate: newPcr0=${newPcr0?.take(16)}..., newPcr0Trusted=$newPcr0Trusted, currentPcr0=${currentPcr0.take(16)}..., currentPcr0Trusted=$currentPcr0Trusted, trustedSetSize=${trustedSet.size}")
-                if ((!newPcr0.isNullOrEmpty() && newPcr0Trusted) || currentPcr0Trusted) {
-                    Log.i(TAG, "Migration target PCR0 already trusted — auto-applying silently (no card)")
+                Log.d(TAG, "checkForUpdate: newPcr0=${newPcr0?.take(16)}..., newPcr0Trusted=$newPcr0Trusted, currentPcr0=${currentPcr0.take(16)}...")
+                if (!newPcr0.isNullOrEmpty() && newPcr0Trusted) {
+                    Log.i(TAG, "New PCR0 already trusted via pre-PIN prompt — auto-applying silently")
                     currentConfig = config
                     _state.value = VaultUpdateState.NoUpdate
                     runMigrationSilent(config)
