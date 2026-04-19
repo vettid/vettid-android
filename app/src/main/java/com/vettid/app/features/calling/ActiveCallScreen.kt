@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -79,6 +80,17 @@ fun ActiveCallScreen(
     val call = activeState.call
     val isVideoCall = call.callType == CallType.VIDEO
     val showVideo = isVideoCall && (activeState.isRemoteVideoEnabled || activeState.isLocalVideoEnabled)
+
+    // Keep the screen on for the duration of a video call — the user isn't
+    // touching it, so the system's idle timer would otherwise dim + lock
+    // mid-call. Audio calls don't need this (the screen off path doesn't
+    // interrupt audio). Cleared on disposal so leaving the screen restores
+    // normal timeout.
+    val view = LocalView.current
+    DisposableEffect(isVideoCall) {
+        view.keepScreenOn = isVideoCall
+        onDispose { view.keepScreenOn = false }
+    }
 
     Box(
         modifier = Modifier

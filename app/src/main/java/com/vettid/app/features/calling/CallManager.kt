@@ -293,7 +293,13 @@ class CallManager @Inject constructor(
             val answeredCall = state.call.copy(answeredAt = System.currentTimeMillis())
             _callState.value = CallState.Active(
                 call = answeredCall,
-                isLocalVideoEnabled = state.call.callType == CallType.VIDEO
+                isLocalVideoEnabled = state.call.callType == CallType.VIDEO,
+                // Default to true for video calls — mirrors the caller-side
+                // transition at handleCallAccepted. Without this, the callee's
+                // ActiveCallScreen gates remote rendering on isRemoteVideoEnabled
+                // which never flips true if onRemoteVideoTrack fires before the
+                // state transitions to Active.
+                isRemoteVideoEnabled = state.call.callType == CallType.VIDEO,
             )
             _showCallUI.emit(CallUIEvent.ShowActive(answeredCall))
             startDurationTimer(answeredCall)
