@@ -259,11 +259,21 @@ class PinUnlockViewModel @Inject constructor(
                             }
                         }
 
-                        // Get first name for welcome message
-                        val firstName = personalDataStore.getSystemFields()?.firstName
+                        // If the local cache is empty (fresh install, app data
+                        // cleared, profile never synced), wait briefly for the
+                        // vault to respond so the welcome message can include
+                        // the name. If the cache already has it, this is a
+                        // no-op either way — the vault response just refreshes
+                        // cache in place.
+                        val cachedFirstName = personalDataStore.getSystemFields()?.firstName
+                        if (cachedFirstName.isNullOrEmpty()) {
+                            loadProfileFromVault()
+                        } else {
+                            // Refresh in the background — don't block the UI.
+                            viewModelScope.launch { loadProfileFromVault() }
+                        }
 
-                        // Load profile from vault in background
-                        loadProfileFromVault()
+                        val firstName = personalDataStore.getSystemFields()?.firstName
 
                         _state.value = PinUnlockState.Success(firstName = firstName)
                         _effects.emit(PinUnlockEffect.UnlockSuccess)
@@ -593,57 +603,48 @@ class PinUnlockViewModel @Inject constructor(
      * Load profile data from vault after successful PIN unlock.
      * Populates PersonalDataStore with system and optional fields from vault.
      */
-    private fun loadProfileFromVault() {
-        viewModelScope.launch {
-            try {
-                if (!connectionManager.isConnected()) {
-                    Log.d(TAG, "Not connected to vault, skipping profile load")
-                    return@launch
-                }
-
-                Log.d(TAG, "Loading profile from vault after PIN unlock")
-
-                // Subscribe to vault responses
-                ownerSpaceClient.subscribeToVault()
-
-                // Send profile.get request
-                val requestResult = ownerSpaceClient.getProfileFromVault()
-                if (requestResult.isFailure) {
-                    Log.e(TAG, "Failed to request profile from vault: ${requestResult.exceptionOrNull()?.message}")
-                    return@launch
-                }
-
-                val requestId = requestResult.getOrThrow()
-                Log.d(TAG, "Profile request sent, waiting for response: $requestId")
-
-                // Wait for response with timeout
-                val response = withTimeoutOrNull(10000L) {
-                    ownerSpaceClient.vaultResponses.first { it.requestId == requestId }
-                }
-
-                if (response == null) {
-                    Log.w(TAG, "Profile request timed out")
-                    return@launch
-                }
-
-                when (response) {
-                    is com.vettid.app.core.nats.VaultResponse.HandlerResult -> {
-                        if (response.success && response.result != null) {
-                            processVaultProfileResponse(response.result)
-                        } else {
-                            Log.w(TAG, "Profile request failed: ${response.error}")
-                        }
-                    }
-                    is com.vettid.app.core.nats.VaultResponse.Error -> {
-                        Log.e(TAG, "Profile request error: ${response.code} - ${response.message}")
-                    }
-                    else -> {
-                        Log.w(TAG, "Unexpected response type for profile request")
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error loading profile from vault", e)
+    /**
+     * Fetch the profile from the vault and write system fields into
+     * [PersonalDataStore]. Uses JetStream request-response (durable) so the
+     * reply isn't dropped if the `forApp.>` subscription is still being
+     * re-established after the post-unlock NATS reconnect. The previous
+     * plain-publish path lost responses on that race.
+     */
+    private suspend fun loadProfileFromVault() {
+        try {
+            if (!connectionManager.isConnected()) {
+                Log.d(TAG, "Not connected to vault, skipping profile load")
+                return
             }
+
+            Log.d(TAG, "Loading profile from vault after PIN unlock (JetStream)")
+
+            val response = ownerSpaceClient.sendAndAwaitResponse(
+                messageType = "profile.get",
+                payload = com.google.gson.JsonObject(),
+                timeoutMs = 6000L,
+            )
+
+            when (response) {
+                is com.vettid.app.core.nats.VaultResponse.HandlerResult -> {
+                    if (response.success && response.result != null) {
+                        processVaultProfileResponse(response.result)
+                    } else {
+                        Log.w(TAG, "profile.get failed: ${response.error}")
+                    }
+                }
+                is com.vettid.app.core.nats.VaultResponse.Error -> {
+                    Log.e(TAG, "profile.get error: ${response.code} - ${response.message}")
+                }
+                null -> {
+                    Log.w(TAG, "profile.get timed out (cache may be stale)")
+                }
+                else -> {
+                    Log.w(TAG, "Unexpected response type for profile.get")
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading profile from vault", e)
         }
     }
 

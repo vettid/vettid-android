@@ -107,18 +107,13 @@ class ContractSigningViewModel @Inject constructor(
                     throw ContractSigningException("Not connected to vault")
                 }
 
-                // Send request to vault
-                val requestIdResult = ownerSpaceClient.sendToVault(MESSAGE_TYPE_CONTRACT_SIGN, payload)
-                val requestId = requestIdResult.getOrElse { error ->
-                    throw ContractSigningException("Failed to send request: ${error.message}")
-                }
-
-                android.util.Log.d(TAG, "Sign request sent with ID: $requestId")
-
-                // Wait for response with timeout
-                val response = withTimeout(SIGN_TIMEOUT_MS) {
-                    ownerSpaceClient.vaultResponses.first { it.requestId == requestId }
-                }
+                // Use JetStream request-response so the reply isn't dropped if
+                // the forApp.> subscription is in a reconnect window.
+                val response = ownerSpaceClient.sendAndAwaitResponse(
+                    MESSAGE_TYPE_CONTRACT_SIGN,
+                    payload,
+                    SIGN_TIMEOUT_MS,
+                ) ?: throw ContractSigningException("contract.sign timed out")
 
                 _state.value = ContractSigningState.Signing(
                     step = SigningStep.PROCESSING_RESPONSE,
@@ -132,7 +127,7 @@ class ContractSigningViewModel @Inject constructor(
                             throw ContractSigningException(response.error ?: "Signing failed")
                         }
 
-                        val signResponse = parseSignResponse(response.result, requestId)
+                        val signResponse = parseSignResponse(response.result, response.requestId)
 
                         // Step 4: Store signed contract
                         val storedContract = contractSigner.processSignedContract(signResponse, keyPair)

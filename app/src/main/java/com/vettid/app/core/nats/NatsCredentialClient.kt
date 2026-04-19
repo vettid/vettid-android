@@ -155,27 +155,17 @@ class NatsCredentialClient @Inject constructor(
         return expiryTime < threshold
     }
 
-    // Helper to send message and await response
+    // Helper to send message and await response. Uses JetStream request-response
+    // so replies aren't dropped when the forApp.> core-NATS subscription is in
+    // a reconnect window — the old sendToVault + flow-filter approach lost
+    // responses in that race (same fix applied to PinUnlockViewModel).
     private suspend fun <T> sendAndAwait(
         messageType: String,
         payload: JsonObject,
         timeoutMs: Long = DEFAULT_TIMEOUT_MS,
         transform: (JsonObject) -> T
     ): Result<T> {
-        val sendResult = ownerSpaceClient.sendToVault(messageType, payload)
-        if (sendResult.isFailure) {
-            return Result.failure(sendResult.exceptionOrNull() ?: NatsException("Send failed"))
-        }
-
-        val requestId = sendResult.getOrThrow()
-
-        // Wait for matching response
-        val response = withTimeoutOrNull(timeoutMs) {
-            ownerSpaceClient.vaultResponses
-                .filter { it.requestId == requestId }
-                .first()
-        }
-
+        val response = ownerSpaceClient.sendAndAwaitResponse(messageType, payload, timeoutMs)
         return when (response) {
             null -> Result.failure(NatsException("Request timed out"))
             is VaultResponse.HandlerResult -> {
