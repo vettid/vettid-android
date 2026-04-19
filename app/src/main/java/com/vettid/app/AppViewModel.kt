@@ -215,14 +215,12 @@ class AppViewModel @Inject constructor(
                             natsCredentialsExpiry = expiryFormatted
                         )
                     }
-                    // Fetch profile photo after successful connection
+                    // Fetch profile photo after successful connection.
+                    // Profile broadcast to peers is triggered by the shared
+                    // observeNatsConnectionState flow on the
+                    // disconnected→connected transition — covers this path
+                    // plus lifecycle reconnects.
                     fetchProfilePhoto()
-                    // Push current published-profile snapshot to peers so
-                    // their cached _peer_profile picks up any fields/wallets
-                    // added since we last broadcast. Fire-and-forget — the
-                    // vault fans out to each peer and a stale peer cache
-                    // resolves on their next connection-detail open.
-                    syncProfileToPeers()
                 }
 
                 is NatsAutoConnector.ConnectionResult.NotEnrolled -> {
@@ -288,6 +286,7 @@ class AppViewModel @Inject constructor(
      */
     private fun observeNatsConnectionState() {
         viewModelScope.launch {
+            var wasConnected = false
             natsAutoConnector.connectionState.collect { autoConnectState ->
                 val natsState = when (autoConnectState) {
                     is NatsAutoConnector.AutoConnectState.Idle -> NatsConnectionState.Idle
@@ -308,6 +307,18 @@ class AppViewModel @Inject constructor(
                     }
                 }
                 _appState.update { it.copy(natsConnectionState = natsState) }
+
+                // Fire the profile broadcast on every disconnected → connected
+                // transition, not just the first time connectToNats is invoked.
+                // AppLifecycleObserver auto-reconnects on foreground without
+                // going through AppViewModel.connectToNats, so without this
+                // the snapshot wouldn't reach peers when the user just resumes
+                // the app instead of doing a fresh PIN unlock.
+                val nowConnected = natsState == NatsConnectionState.Connected
+                if (nowConnected && !wasConnected) {
+                    syncProfileToPeers()
+                }
+                wasConnected = nowConnected
             }
         }
     }

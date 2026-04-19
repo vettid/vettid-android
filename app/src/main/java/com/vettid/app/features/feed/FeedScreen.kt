@@ -397,7 +397,12 @@ private fun FeedList(
                         onClick = {
                             when {
                                 item.needsReview -> onNavigateToConnectionReview(item.connectionId, "")
-                                item.connectionStatus == "active" -> onNavigateToConversation(item.connectionId)
+                                // Tap on the card (name/photo) opens the
+                                // peer's profile. The dedicated Text button
+                                // handles the messaging entry point — this
+                                // way each visible target has one clear
+                                // meaning and the More menu drops its
+                                // redundant "View Profile" item.
                                 else -> onNavigateToConnectionDetail(item.connectionId)
                             }
                         },
@@ -685,12 +690,15 @@ private fun ActiveConnectionCard(
                 Spacer(modifier = Modifier.width(12.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    Row(verticalAlignment = Alignment.Top) {
                         Text(
                             text = item.peerName,
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = if (item.isUnread) FontWeight.Bold else FontWeight.Normal,
-                            maxLines = 1,
+                            // Long names ("Firstname Middlename Lastname")
+                            // were getting elided at a single line. Allow up
+                            // to two lines before truncating.
+                            maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
                         )
@@ -760,16 +768,8 @@ private fun ActiveConnectionCard(
                         expanded = showMoreMenu,
                         onDismissRequest = { showMoreMenu = false }
                     ) {
-                        DropdownMenuItem(
-                            text = { Text("View Profile") },
-                            onClick = {
-                                showMoreMenu = false
-                                onLongClick()
-                            },
-                            leadingIcon = {
-                                Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(20.dp))
-                            }
-                        )
+                        // "View Profile" intentionally dropped — the card
+                        // itself navigates to the profile on tap.
                         DropdownMenuItem(
                             text = { Text("Send BTC") },
                             onClick = {
