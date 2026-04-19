@@ -84,19 +84,13 @@ class CallForegroundService : Service() {
 
         val action = intent.action
         if (action == ACTION_ANSWER) {
-            // Answer directly from the notification — don't bounce through
-            // MainActivity, which used to re-show IncomingCallScreen and
-            // force a second Accept tap. CallManager.answerCall emits a
-            // ShowActive UI event that the Compose layer picks up once
-            // MainActivity is in the foreground.
-            scope.launch {
-                callManager.answerCall().onFailure { err ->
-                    Log.w(TAG, "answerCall from notification failed", err)
-                }
-            }
+            // Fire answer on CallManager's long-lived scope — the service
+            // stops itself below, so launching on the service's own scope
+            // would cancel the coroutine mid-SDP-exchange and leave the
+            // call ringing even though the user tapped Answer.
+            callManager.acceptFromNotification()
             // Bring the app to the foreground so the active-call UI can
-            // render. No action/extras needed — routing is driven by
-            // CallManager's showCallUI flow, not by intent inspection.
+            // render. Routing is driven by CallManager's showCallUI flow.
             startActivity(
                 Intent(this, MainActivity::class.java).apply {
                     addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -107,11 +101,7 @@ class CallForegroundService : Service() {
             return START_NOT_STICKY
         }
         if (action == ACTION_DECLINE) {
-            scope.launch {
-                callManager.rejectCall().onFailure { err ->
-                    Log.w(TAG, "rejectCall from notification failed", err)
-                }
-            }
+            callManager.rejectFromNotification()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY

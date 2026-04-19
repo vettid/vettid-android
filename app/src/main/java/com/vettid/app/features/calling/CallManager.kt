@@ -206,6 +206,35 @@ class CallManager @Inject constructor(
     /**
      * Answer incoming call.
      */
+    /**
+     * Fire-and-forget accept from a notification action. The caller is the
+     * CallForegroundService which stops itself immediately after dispatch —
+     * if we used the service's scope for answerCall, stopSelf would cancel
+     * the coroutine before the SDP exchange completes and the call never
+     * actually answers. CallManager's own scope outlives any one service
+     * instance.
+     */
+    fun acceptFromNotification() {
+        scope.launch {
+            answerCall().onFailure { err ->
+                Log.w(TAG, "acceptFromNotification failed", err)
+            }
+        }
+    }
+
+    /**
+     * Fire-and-forget reject from a notification action. Same rationale as
+     * acceptFromNotification — service-scoped coroutine would be cancelled
+     * before the signaling round-trip completes.
+     */
+    fun rejectFromNotification() {
+        scope.launch {
+            rejectCall().onFailure { err ->
+                Log.w(TAG, "rejectFromNotification failed", err)
+            }
+        }
+    }
+
     suspend fun answerCall(): Result<Unit> {
         val state = _callState.value
         if (state !is CallState.Incoming) {

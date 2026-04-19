@@ -268,19 +268,14 @@ private fun EndedCallContent(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.padding(32.dp)
         ) {
-            Surface(
-                modifier = Modifier.size(100.dp),
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        text = call.peerDisplayName.take(2).uppercase(),
-                        style = MaterialTheme.typography.displaySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                }
-            }
+            // CallAvatar handles the photo-with-initials-fallback for us —
+            // the old inline Surface rendered initials even when the peer
+            // had a cached profile photo.
+            CallAvatar(
+                photoBase64 = call.peerPhotoBase64,
+                displayName = call.peerDisplayName,
+                size = 100.dp,
+            )
 
             Spacer(modifier = Modifier.height(24.dp))
 
