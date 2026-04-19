@@ -1,7 +1,9 @@
 package com.vettid.app
 
 import com.vettid.app.core.events.ProfilePhotoEvents
+import com.vettid.app.core.nats.AppLifecycleObserver
 import com.vettid.app.core.nats.NatsAutoConnector
+import com.vettid.app.core.nats.NatsMessagingClient
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.network.NatsConnectionInfo
 import com.vettid.app.core.storage.CredentialStore
@@ -25,8 +27,10 @@ class AppViewModelTest {
     private lateinit var credentialStore: CredentialStore
     private lateinit var natsAutoConnector: NatsAutoConnector
     private lateinit var ownerSpaceClient: OwnerSpaceClient
+    private lateinit var natsMessagingClient: NatsMessagingClient
     private lateinit var profilePhotoEvents: ProfilePhotoEvents
     private lateinit var personalDataStore: PersonalDataStore
+    private lateinit var appLifecycleObserver: AppLifecycleObserver
 
     private val testDispatcher = StandardTestDispatcher()
     private val connectionStateFlow = MutableStateFlow<NatsAutoConnector.AutoConnectState>(
@@ -44,14 +48,18 @@ class AppViewModelTest {
         credentialStore = mock()
         natsAutoConnector = mock()
         ownerSpaceClient = mock()
+        natsMessagingClient = mock()
         profilePhotoEvents = mock()
         personalDataStore = mock()
+        appLifecycleObserver = mock()
 
         // Default mock behavior
         whenever(credentialStore.hasStoredCredential()).thenReturn(false)
         whenever(natsAutoConnector.connectionState).thenReturn(connectionStateFlow)
         whenever(natsAutoConnector.isConnected()).thenReturn(false)
         whenever(profilePhotoEvents.photoUpdated).thenReturn(MutableSharedFlow())
+        whenever(appLifecycleObserver.sessionExpired).thenReturn(MutableSharedFlow())
+        whenever(ownerSpaceClient.vaultLocked).thenReturn(MutableSharedFlow())
     }
 
     @After
@@ -60,7 +68,15 @@ class AppViewModelTest {
     }
 
     private fun createViewModel(): AppViewModel {
-        return AppViewModel(credentialStore, natsAutoConnector, ownerSpaceClient, profilePhotoEvents, personalDataStore)
+        return AppViewModel(
+            credentialStore,
+            natsAutoConnector,
+            ownerSpaceClient,
+            natsMessagingClient,
+            profilePhotoEvents,
+            personalDataStore,
+            appLifecycleObserver,
+        )
     }
 
     // MARK: - refreshNatsCredentials Tests

@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.events.ProfilePhotoEvents
 import com.vettid.app.core.nats.NatsAutoConnector
+import com.vettid.app.core.nats.NatsMessagingClient
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.storage.CredentialStore
 import com.vettid.app.core.storage.PersonalDataStore
@@ -71,6 +72,7 @@ class AppViewModel @Inject constructor(
     private val credentialStore: CredentialStore,
     private val natsAutoConnector: NatsAutoConnector,
     private val ownerSpaceClient: OwnerSpaceClient,
+    private val natsMessagingClient: NatsMessagingClient,
     private val profilePhotoEvents: ProfilePhotoEvents,
     private val personalDataStore: PersonalDataStore,
     private val appLifecycleObserver: com.vettid.app.core.nats.AppLifecycleObserver,
@@ -215,6 +217,12 @@ class AppViewModel @Inject constructor(
                     }
                     // Fetch profile photo after successful connection
                     fetchProfilePhoto()
+                    // Push current published-profile snapshot to peers so
+                    // their cached _peer_profile picks up any fields/wallets
+                    // added since we last broadcast. Fire-and-forget — the
+                    // vault fans out to each peer and a stale peer cache
+                    // resolves on their next connection-detail open.
+                    syncProfileToPeers()
                 }
 
                 is NatsAutoConnector.ConnectionResult.NotEnrolled -> {
@@ -338,6 +346,25 @@ class AppViewModel @Inject constructor(
      * Check if NATS is currently connected.
      */
     fun isNatsConnected(): Boolean = natsAutoConnector.isConnected()
+
+    /**
+     * Broadcast the current published profile to all active peers so their
+     * cached _peer_profile stays in sync — picks up wallets/fields added
+     * since the last broadcast. Called once per successful auto-connect.
+     */
+    private fun syncProfileToPeers() {
+        viewModelScope.launch {
+            natsMessagingClient.broadcastProfileUpdate()
+                .onSuccess { count ->
+                    if (count > 0) {
+                        Log.d(TAG, "Broadcast profile to $count peers")
+                    }
+                }
+                .onFailure { error ->
+                    Log.d(TAG, "Profile broadcast skipped: ${error.message}")
+                }
+        }
+    }
 
     /**
      * Fetch profile photo from vault.

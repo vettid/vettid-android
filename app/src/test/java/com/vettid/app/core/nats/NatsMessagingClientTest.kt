@@ -175,7 +175,7 @@ class NatsMessagingClientTest {
     // MARK: - broadcastProfileUpdate Tests
 
     @Test
-    fun `broadcastProfileUpdate sends all fields`() = runTest {
+    fun `broadcastProfileUpdate sends empty payload and parses success_count`() = runTest {
         val requestId = "profile-broadcast-123"
         whenever(ownerSpaceClient.sendToVault(eq("profile.broadcast"), any())).thenReturn(
             Result.success(requestId)
@@ -189,32 +189,27 @@ class NatsMessagingClientTest {
                     handlerId = "profile.broadcast",
                     success = true,
                     result = JsonObject().apply {
-                        addProperty("notified_count", 5)
+                        addProperty("success_count", 5)
                     },
                     error = null
                 )
             )
         }
 
-        val result = messagingClient.broadcastProfileUpdate(
-            displayName = "John Doe",
-            avatarUrl = "https://example.com/avatar.png",
-            status = "Online"
-        )
+        val result = messagingClient.broadcastProfileUpdate()
 
         assertTrue(result.isSuccess)
         assertEquals(5, result.getOrThrow())
 
+        // Vault ignores the payload — it builds the snapshot from its own
+        // stored published profile. We just verify the call went out empty.
         verify(ownerSpaceClient).sendToVault(eq("profile.broadcast"), argThat { payload ->
-            val profile = payload.getAsJsonObject("profile")
-            profile.get("display_name")?.asString == "John Doe" &&
-            profile.get("avatar_url")?.asString == "https://example.com/avatar.png" &&
-            profile.get("status")?.asString == "Online"
+            payload.entrySet().isEmpty()
         })
     }
 
     @Test
-    fun `broadcastProfileUpdate sends only changed fields`() = runTest {
+    fun `broadcastProfileUpdate falls back to notified_count for legacy vaults`() = runTest {
         val requestId = "profile-broadcast-456"
         whenever(ownerSpaceClient.sendToVault(eq("profile.broadcast"), any())).thenReturn(
             Result.success(requestId)
@@ -235,19 +230,10 @@ class NatsMessagingClientTest {
             )
         }
 
-        val result = messagingClient.broadcastProfileUpdate(
-            displayName = "Jane Doe"
-            // avatarUrl and status are null - should not be included
-        )
+        val result = messagingClient.broadcastProfileUpdate()
 
         assertTrue(result.isSuccess)
-
-        verify(ownerSpaceClient).sendToVault(eq("profile.broadcast"), argThat { payload ->
-            val profile = payload.getAsJsonObject("profile")
-            profile.has("display_name") &&
-            !profile.has("avatar_url") &&
-            !profile.has("status")
-        })
+        assertEquals(3, result.getOrThrow())
     }
 
     // MARK: - notifyConnectionRevoked Tests

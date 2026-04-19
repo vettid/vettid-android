@@ -141,32 +141,23 @@ class NatsMessagingClient @Inject constructor(
     }
 
     /**
-     * Broadcast a profile update to all active connections.
+     * Broadcast the current published profile snapshot to all active peers.
      *
-     * @param displayName Updated display name
-     * @param avatarUrl Updated avatar URL (optional)
-     * @param status Updated status message (optional)
-     * @return Number of connections notified
+     * The vault ignores the request payload and builds the notification from
+     * its own stored published profile — including wallets and all published
+     * fields — so peers replace their cached `_peer_profile`. Triggered on
+     * app startup (see AppViewModel) so that peers who connected before the
+     * cache-refresh broadcast landed also pick up the latest snapshot.
+     *
+     * @return Number of connections notified.
      */
-    suspend fun broadcastProfileUpdate(
-        displayName: String? = null,
-        avatarUrl: String? = null,
-        status: String? = null
-    ): Result<Int> {
-        val profileUpdates = JsonObject().apply {
-            displayName?.let { addProperty("display_name", it) }
-            avatarUrl?.let { addProperty("avatar_url", it) }
-            status?.let { addProperty("status", it) }
-        }
+    suspend fun broadcastProfileUpdate(): Result<Int> {
+        Log.d(TAG, "Broadcasting profile snapshot to peers")
 
-        val payload = JsonObject().apply {
-            add("profile", profileUpdates)
-        }
-
-        Log.d(TAG, "Broadcasting profile update")
-
-        return sendAndAwait("profile.broadcast", payload) { result ->
-            result.get("notified_count")?.asInt ?: 0
+        return sendAndAwait("profile.broadcast", JsonObject()) { result ->
+            result.get("success_count")?.asInt
+                ?: result.get("notified_count")?.asInt
+                ?: 0
         }
     }
 
