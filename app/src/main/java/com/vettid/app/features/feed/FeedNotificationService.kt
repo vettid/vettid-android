@@ -44,7 +44,8 @@ import javax.inject.Singleton
 @Singleton
 class FeedNotificationService @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val ownerSpaceClient: OwnerSpaceClient
+    private val ownerSpaceClient: OwnerSpaceClient,
+    private val feedRepository: FeedRepository
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -442,9 +443,11 @@ class FeedNotificationService @Inject constructor(
         )
 
         val preview = message.content?.take(100) ?: "New message"
+        val senderName = resolveSenderName(message.connectionId)
+        val title = senderName?.let { "Message from $it" } ?: "New Message"
         val notification = NotificationCompat.Builder(context, CHANNEL_ID_DEFAULT)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("New Message")
+            .setContentTitle(title)
             .setContentText(preview)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
@@ -461,6 +464,24 @@ class FeedNotificationService @Inject constructor(
         } catch (e: SecurityException) {
             Log.w(TAG, "Notification permission not granted for message", e)
         }
+    }
+
+    /**
+     * Resolve a human-readable sender name from the connection cache.
+     * Returns null if the connection isn't cached or has no usable label /
+     * peer profile — caller falls back to a generic title.
+     */
+    private fun resolveSenderName(connectionId: String): String? {
+        val connection = feedRepository.getCachedConnections()
+            .firstOrNull { it.connectionId == connectionId }
+            ?: return null
+
+        val first = connection.peerProfile?.firstName.orEmpty().trim()
+        val last = connection.peerProfile?.lastName.orEmpty().trim()
+        val full = listOf(first, last).filter { it.isNotEmpty() }.joinToString(" ")
+        if (full.isNotEmpty()) return full
+
+        return connection.label.trim().takeIf { it.isNotEmpty() }
     }
 
     private fun createActionPendingIntent(eventId: String, action: String): PendingIntent {
