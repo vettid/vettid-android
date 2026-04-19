@@ -103,6 +103,11 @@ class CredentialStore @Inject constructor(
         // Credential key pair (for enrollment public key in secrets)
         private const val KEY_CREDENTIAL_PUBLIC_KEY = "credential_public_key"
         private const val KEY_CREDENTIAL_PRIVATE_KEY = "credential_private_key"
+
+        // UTK pool size cap. Each UTK is a tiny pubkey record, but the JSON blob
+        // lives inside EncryptedSharedPreferences and is decrypted on every read.
+        // 100 entries is far more than any practical unlock-to-replenish window.
+        private const val UTK_POOL_MAX = 100
     }
 
     // MARK: - Credential Storage
@@ -222,14 +227,38 @@ class CredentialStore @Inject constructor(
     // MARK: - UTK Pool (User Transaction Keys)
 
     /**
-     * Get all UTKs in the pool
+     * In-memory cache of the UTK pool. The on-disk JSON blob grows to ~1.4 MB
+     * with a typical pool size (14k+ entries), and every EncryptedSharedPreferences
+     * read decrypts the whole value. Decrypting + deserializing that on each
+     * call costs ~1 s on a mid-range phone; with `verifyPinWithEnclave` +
+     * `addUtks` + `removeUtk` + `getUtkCount` all hitting it in a single
+     * unlock, the pre-cache path added 3-4 s to PIN unlock. Keeping an
+     * in-memory snapshot that we invalidate on write eliminates those
+     * redundant reads.
      */
-    fun getUtkPool(): List<TransactionKeyInfo> {
+    @Volatile
+    private var utkPoolCache: List<TransactionKeyInfo>? = null
+
+    private fun loadUtkPoolFromDisk(): List<TransactionKeyInfo> {
         val json = encryptedPrefs.getString(KEY_UTK_POOL, null) ?: return emptyList()
         return try {
             gson.fromJson(json, Array<TransactionKeyInfo>::class.java).toList()
         } catch (e: Exception) {
             emptyList()
+        }
+    }
+
+    /**
+     * Get all UTKs in the pool. First call in the process decrypts + parses
+     * the blob once; subsequent calls read the cached list directly.
+     */
+    fun getUtkPool(): List<TransactionKeyInfo> {
+        utkPoolCache?.let { return it }
+        synchronized(utkLock) {
+            utkPoolCache?.let { return it }
+            val loaded = loadUtkPoolFromDisk()
+            utkPoolCache = loaded
+            return loaded
         }
     }
 
@@ -241,28 +270,54 @@ class CredentialStore @Inject constructor(
     }
 
     /**
-     * Remove a used UTK from the pool
+     * Remove a used UTK from the pool. The disk write uses `apply()` (async)
+     * rather than `commit()` because UTKs are advisory: if the write hasn't
+     * flushed when the app is killed, the vault will just hand out fresh
+     * replacements on the next unlock.
      */
     fun removeUtk(keyId: String) {
         synchronized(utkLock) {
-            val pool = getUtkPool().toMutableList()
-            pool.removeAll { it.keyId == keyId }
+            val pool = getUtkPool()
+            val newPool = pool.filterNot { it.keyId == keyId }
+            if (newPool.size == pool.size) return
+            utkPoolCache = newPool
             encryptedPrefs.edit()
-                .putString(KEY_UTK_POOL, gson.toJson(pool))
-                .commit()
+                .putString(KEY_UTK_POOL, gson.toJson(newPool))
+                .apply()
         }
     }
 
     /**
-     * Add new UTKs to the pool (after replenishment)
+     * Add new UTKs to the pool (after replenishment).
+     *
+     * Pools are capped at UTK_POOL_MAX entries — the pool only needs to be deep
+     * enough to survive a handful of operations before the next vault round-trip
+     * replenishes it. A prior vault bug that echoed the entire unused pool on
+     * every unlock caused some devices to accumulate ~14k UTKs, which made every
+     * EncryptedSharedPreferences read of the pool take ~1 s. Capping on write
+     * (keeping the newest entries) lets those legacy pools self-prune as soon as
+     * any replenishment lands.
      */
     fun addUtks(newKeys: List<TransactionKeyInfo>) {
+        if (newKeys.isEmpty()) return
         synchronized(utkLock) {
-            val pool = getUtkPool().toMutableList()
-            pool.addAll(newKeys)
+            val pool = getUtkPool()
+            val combined = pool + newKeys
+            val newPool = if (combined.size > UTK_POOL_MAX) {
+                combined.takeLast(UTK_POOL_MAX)
+            } else {
+                combined
+            }
+            utkPoolCache = newPool
             encryptedPrefs.edit()
-                .putString(KEY_UTK_POOL, gson.toJson(pool))
-                .commit()
+                .putString(KEY_UTK_POOL, gson.toJson(newPool))
+                .apply()
+            if (combined.size != newPool.size) {
+                android.util.Log.i(
+                    "CredentialStore",
+                    "UTK pool pruned: ${combined.size} -> ${newPool.size} (cap=$UTK_POOL_MAX)"
+                )
+            }
         }
     }
 
