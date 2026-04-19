@@ -168,6 +168,9 @@ sealed class Screen(val route: String) {
     object Conversation : Screen("connections/{connectionId}/messages") {
         fun createRoute(connectionId: String) = "connections/$connectionId/messages"
     }
+    object ConnectionHistory : Screen("connections/{connectionId}/history") {
+        fun createRoute(connectionId: String) = "connections/$connectionId/history"
+    }
     // Profile
     object Profile : Screen("profile")
     // Vault More items
@@ -591,6 +594,9 @@ fun VettIDApp(
                 onNavigateToConnectionDetail = { connectionId ->
                     navController.navigate(Screen.ConnectionDetail.createRoute(connectionId))
                 },
+                onNavigateToConnectionHistory = { connectionId ->
+                    navController.navigate(Screen.ConnectionHistory.createRoute(connectionId))
+                },
                 onNavigateToConnectionReview = { connectionId, eventId ->
                     navController.navigate(Screen.ConnectionReview.createRoute(connectionId, eventId))
                 },
@@ -821,6 +827,14 @@ fun VettIDApp(
                 onPaymentRequest = { connId ->
                     navController.navigate(Screen.SendBtc.createRoute(walletId = "", connectionId = connId))
                 }
+            )
+        }
+        composable(
+            route = Screen.ConnectionHistory.route,
+            arguments = listOf(navArgument("connectionId") { type = NavType.StringType })
+        ) {
+            com.vettid.app.features.feed.ConnectionHistoryScreen(
+                onBack = { navController.safePopBackStack() }
             )
         }
         // Profile route
@@ -1673,6 +1687,7 @@ fun MainScreen(
     onNavigateToBackups: () -> Unit = {},
     onNavigateToProteanRecovery: () -> Unit = {},
     onNavigateToConnectionDetail: (String) -> Unit = {},
+    onNavigateToConnectionHistory: (String) -> Unit = {},
     onNavigateToConnectionReview: (connectionId: String, eventId: String) -> Unit = { _, _ -> },
     onNavigateToCreateInvitation: () -> Unit = {},
     onNavigateToScanInvitation: () -> Unit = {},
@@ -1826,6 +1841,7 @@ fun MainScreen(
                 searchQuery = query,
                 onNavigateToConversation = onNavigateToConversation,
                 onNavigateToConnectionDetail = onNavigateToConnectionDetail,
+                onNavigateToConnectionHistory = onNavigateToConnectionHistory,
                 onNavigateToHandler = onNavigateToHandlerDetail,
                 onNavigateToBackup = { onNavigateToBackups() },
                 onNavigateToGuide = onNavigateToGuide,

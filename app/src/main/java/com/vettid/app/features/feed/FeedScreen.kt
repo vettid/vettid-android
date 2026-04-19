@@ -57,6 +57,7 @@ fun FeedContent(
     searchQuery: String = "",
     onNavigateToConversation: (String) -> Unit = {},
     onNavigateToConnectionDetail: (String) -> Unit = {},
+    onNavigateToConnectionHistory: (String) -> Unit = {},
     onNavigateToConnectionRequest: (String) -> Unit = {},
     onNavigateToHandler: (String) -> Unit = {},
     onNavigateToBackup: (String) -> Unit = {},
@@ -188,6 +189,7 @@ fun FeedContent(
                     onDisplayItemClick = { viewModel.onDisplayItemClick(it) },
                     onNavigateToConversation = onNavigateToConversation,
                     onNavigateToConnectionDetail = onNavigateToConnectionDetail,
+                    onNavigateToConnectionHistory = onNavigateToConnectionHistory,
                     onEventClick = { viewModel.onEventClick(it) },
                     onArchive = { viewModel.archiveEvent(it.eventId) },
                     onDelete = { viewModel.deleteEvent(it.eventId) },
@@ -341,6 +343,7 @@ private fun FeedList(
     onDisplayItemClick: (FeedDisplayItem) -> Unit,
     onNavigateToConversation: (String) -> Unit,
     onNavigateToConnectionDetail: (String) -> Unit = {},
+    onNavigateToConnectionHistory: (String) -> Unit = {},
     onEventClick: (FeedEvent) -> Unit,
     onArchive: (FeedEvent) -> Unit,
     onDelete: (FeedEvent) -> Unit,
@@ -410,7 +413,7 @@ private fun FeedList(
                         onAccept = { onConnectionAccept(item.connectionId) },
                         onDecline = { onConnectionDecline(item.connectionId) },
                         onMessageClick = { onNavigateToConversation(item.connectionId) },
-                        onHistoryClick = { onNavigateToConversation(item.connectionId) },
+                        onHistoryClick = { onNavigateToConnectionHistory(item.connectionId) },
                         onCallClick = { onVoiceCall(item.connectionId) },
                         onVideoCallClick = { onVideoCall(item.connectionId) },
                         onBtcClick = { /* TODO */ }
@@ -703,11 +706,27 @@ private fun ActiveConnectionCard(
                             modifier = Modifier.weight(1f)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = formatTimestamp(item.sortTimestamp),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                text = formatTimestamp(item.sortTimestamp),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                            // Compact type icon under the timestamp —
+                            // shows at-a-glance what the last activity
+                            // was (message/call/missed) without having
+                            // to read the preview text.
+                            val (typeIcon, typeTint) = lastActivityIcon(item.lastActivityType, item.lastActivityPreview)
+                            if (typeIcon != null) {
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Icon(
+                                    imageVector = typeIcon,
+                                    contentDescription = null,
+                                    tint = typeTint,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        }
                     }
                     Spacer(modifier = Modifier.height(2.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1214,6 +1233,39 @@ private fun getPriorityColor(priority: EventPriority): Color {
         EventPriority.LOW -> MaterialTheme.colorScheme.outline
     }
 }
+
+/**
+ * Map the connection's last activity to a compact type icon + tint. Sits
+ * under the timestamp so the user can tell at a glance what the last
+ * interaction was (call vs text, missed vs completed) without reading
+ * the preview text.
+ *
+ * The connection-list API today only flags activity as "message" or
+ * "connection" — it doesn't distinguish calls. We lean on the preview
+ * string for the missed/voice/video hint. If the FeedRepository later
+ * starts surfacing the specific event type per connection, this can be
+ * replaced with an eventType-based lookup.
+ */
+@Composable
+private fun lastActivityIcon(
+    activityType: String,
+    preview: String
+): Pair<ImageVector?, Color> {
+    val missed = preview.contains("Missed", ignoreCase = true)
+    val isCall = preview.contains("call", ignoreCase = true) ||
+        preview.contains("voice", ignoreCase = true) ||
+        preview.contains("video", ignoreCase = true)
+    return when {
+        missed -> Icons.Default.CallMissed to DeclineRedColor
+        isCall -> Icons.Default.Call to AnswerGreenColor
+        activityType == "message" -> Icons.AutoMirrored.Filled.Chat to MaterialTheme.colorScheme.outline
+        activityType == "connection" -> Icons.Default.Person to MaterialTheme.colorScheme.outline
+        else -> null to MaterialTheme.colorScheme.outline
+    }
+}
+
+private val DeclineRedColor = Color(0xFFE53935)
+private val AnswerGreenColor = Color(0xFF4CAF50)
 
 private fun formatTimestamp(epochMillis: Long): String {
     val millis = com.vettid.app.util.toEpochMillis(epochMillis)
