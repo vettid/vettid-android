@@ -41,6 +41,7 @@ fun OutgoingCallScreen(
 ) {
     val callState by viewModel.callState.collectAsState()
     val outgoingState = callState as? CallState.Outgoing
+    val localVideoTrack by viewModel.localVideoTrack.collectAsState()
 
     // Dismiss if no longer outgoing
     LaunchedEffect(callState) {
@@ -66,6 +67,8 @@ fun OutgoingCallScreen(
     }
 
     val call = outgoingState.call
+    val isVideoCall = call.callType == CallType.VIDEO
+    val showLocalPreview = isVideoCall && localVideoTrack != null
     var isMuted by remember { mutableStateOf(false) }
     var isSpeakerOn by remember { mutableStateOf(false) }
 
@@ -84,13 +87,30 @@ fun OutgoingCallScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(CallGradientStart, CallGradientEnd)
+            .then(
+                if (showLocalPreview) Modifier.background(Color.Black)
+                else Modifier.background(
+                    Brush.verticalGradient(colors = listOf(CallGradientStart, CallGradientEnd))
                 )
             ),
         contentAlignment = Alignment.Center
     ) {
+        // Local preview fills the screen while dialing so the user sees
+        // themselves immediately — no blank stare at an avatar.
+        if (showLocalPreview) {
+            VideoSurface(
+                videoTrack = localVideoTrack,
+                eglContext = viewModel.getEglContext(),
+                mirror = true, // front camera is the default
+                modifier = Modifier.fillMaxSize()
+            )
+            // Dim overlay so the UI stays readable on top of live video.
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color.Black.copy(alpha = 0.35f))
+            )
+        }
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween,

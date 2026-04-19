@@ -148,11 +148,15 @@ class CallManager @Inject constructor(
             webRTCClient!!.addAudioTrack()
             if (callType == CallType.VIDEO) {
                 val videoTrack = webRTCClient!!.addVideoTrack(null)
+                Log.d(TAG, "startCall: localVideoTrack id=${videoTrack?.id()}")
                 _localVideoTrack.value = videoTrack
             }
 
             _callState.value = CallState.Outgoing(call = call)
             _showCallUI.emit(CallUIEvent.ShowOutgoing(call))
+            // Ask other apps to pause as soon as we start dialing — don't
+            // wait for pickup.
+            requestCallAudioFocus()
             startRingBackTone()
             startRingingTimer()
 
@@ -535,7 +539,15 @@ class CallManager @Inject constructor(
     }
 
     override fun onRemoteVideoTrack(track: VideoTrack) {
-        Log.d(TAG, "Remote video track received")
+        val localId = _localVideoTrack.value?.id()
+        Log.d(TAG, "Remote video track received: id=${track.id()} (local id=$localId)")
+        if (localId != null && localId == track.id()) {
+            // Defensive: if WebRTC fires onAddTrack with our own local track
+            // (happens with some unified-plan renegotiation paths), ignore it
+            // so we don't point the remote VideoSurface at the local camera.
+            Log.w(TAG, "Ignoring onRemoteVideoTrack that matches our local track id")
+            return
+        }
         _remoteVideoTrack.value = track
 
         val state = _callState.value
@@ -725,6 +737,9 @@ class CallManager @Inject constructor(
             sdpOffer = event.sdpOffer
         )
         _showCallUI.emit(CallUIEvent.ShowIncoming(call))
+        // Pause other audio (music, podcast) before the ringtone kicks in so
+        // the user isn't startled by both playing at once.
+        requestCallAudioFocus()
         startRingtone()
 
         // Start streaming local ICE candidates to the caller IMMEDIATELY.
@@ -1093,13 +1108,14 @@ class CallManager @Inject constructor(
 
     private var audioFocusRequest: AudioFocusRequest? = null
 
-    private fun setupAudioForCall() {
-        audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-        setSpeakerphone(false)
-
-        // Ask the system to pause any other audio (music, podcast, video)
-        // while the call is live. Exclusive grant so notification sounds etc.
-        // don't mix in either.
+    /**
+     * Ask the system to pause other audio (music, podcasts, video) as soon as
+     * a call is being initiated or arriving. Separated from [setupAudioForCall]
+     * so we get the pause while still in the ringing phase, not only after
+     * pickup. Idempotent — safe to call more than once.
+     */
+    private fun requestCallAudioFocus() {
+        if (audioFocusRequest != null) return
         val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -1114,6 +1130,14 @@ class CallManager @Inject constructor(
         if (result != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
             Log.w(TAG, "Audio focus not granted (result=$result); other apps may keep playing")
         }
+    }
+
+    private fun setupAudioForCall() {
+        audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+        setSpeakerphone(false)
+        // Focus may already have been requested at dial/ring time; this is a
+        // no-op in that case.
+        requestCallAudioFocus()
     }
 
     private fun resetAudio() {

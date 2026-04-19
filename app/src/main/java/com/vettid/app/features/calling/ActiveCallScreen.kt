@@ -325,19 +325,33 @@ private fun ControlButton(
 }
 
 @Composable
-private fun VideoSurface(
+internal fun VideoSurface(
     videoTrack: VideoTrack?,
     eglContext: org.webrtc.EglBase.Context?,
     mirror: Boolean,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
-    var surfaceViewRenderer by remember { mutableStateOf<SurfaceViewRenderer?>(null) }
+    var renderer by remember { mutableStateOf<SurfaceViewRenderer?>(null) }
 
-    DisposableEffect(videoTrack) {
+    // Attach/detach the sink whenever the track or the renderer changes.
+    // Keyed on both so a track arriving AFTER the renderer mounts (remote
+    // video) gets picked up, and a renderer created AFTER the track is set
+    // (local preview first paint) does too.
+    DisposableEffect(videoTrack, renderer) {
+        val t = videoTrack
+        val r = renderer
+        if (t != null && r != null) t.addSink(r)
         onDispose {
-            videoTrack?.removeSink(surfaceViewRenderer)
-            surfaceViewRenderer?.release()
+            if (t != null && r != null) t.removeSink(r)
+        }
+    }
+
+    // Release the renderer only when the composable leaves the tree —
+    // separate effect so a track change doesn't kill the GL context.
+    DisposableEffect(Unit) {
+        onDispose {
+            renderer?.release()
+            renderer = null
         }
     }
 
@@ -347,13 +361,9 @@ private fun VideoSurface(
                 setMirror(mirror)
                 setEnableHardwareScaler(true)
                 eglContext?.let { init(it, null) }
-                surfaceViewRenderer = this
-                videoTrack?.addSink(this)
-            }
+            }.also { renderer = it }
         },
         modifier = modifier,
-        update = { renderer ->
-            renderer.setMirror(mirror)
-        }
+        update = { it.setMirror(mirror) }
     )
 }
