@@ -3,6 +3,7 @@ package com.vettid.app.features.calling
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
+import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Build
@@ -788,7 +789,13 @@ class CallManager @Inject constructor(
         val answeredCall = state.call.copy(answeredAt = event.answeredAt)
         _callState.value = CallState.Active(
             call = answeredCall,
-            isLocalVideoEnabled = state.call.callType == CallType.VIDEO
+            isLocalVideoEnabled = state.call.callType == CallType.VIDEO,
+            // Default to true for video calls — the peer also starts with
+            // video enabled. handleRemoteVideoChanged flips it off if the
+            // peer pauses their camera. Without this, the remote video
+            // surface never shows because onRemoteVideoTrack can fire
+            // before the state transitions to Active.
+            isRemoteVideoEnabled = state.call.callType == CallType.VIDEO,
         )
         _showCallUI.emit(CallUIEvent.ShowActive(answeredCall))
         startDurationTimer(answeredCall)
@@ -1084,15 +1091,37 @@ class CallManager @Inject constructor(
         stopRingBackTone()
     }
 
+    private var audioFocusRequest: AudioFocusRequest? = null
+
     private fun setupAudioForCall() {
         audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
         setSpeakerphone(false)
+
+        // Ask the system to pause any other audio (music, podcast, video)
+        // while the call is live. Exclusive grant so notification sounds etc.
+        // don't mix in either.
+        val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            .setOnAudioFocusChangeListener { /* handled by system while we hold focus */ }
+            .build()
+        audioFocusRequest = request
+        val result = audioManager.requestAudioFocus(request)
+        if (result != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+            Log.w(TAG, "Audio focus not granted (result=$result); other apps may keep playing")
+        }
     }
 
     private fun resetAudio() {
         audioManager.mode = AudioManager.MODE_NORMAL
         setSpeakerphone(false)
         audioManager.isMicrophoneMute = false
+        audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+        audioFocusRequest = null
     }
 
     private fun setSpeakerphone(enabled: Boolean) {
