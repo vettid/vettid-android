@@ -444,9 +444,21 @@ fun VettIDApp(
         }
     }
 
+    // Pick the right start destination based on synchronously-initialized
+    // appState (hasCredential is read from CredentialStore in the ViewModel
+    // ctor). Avoids a one-frame Welcome-screen flash on launches where the
+    // user is already enrolled and only needs to PIN-unlock.
+    val initialDestination = remember {
+        when {
+            !appState.hasCredential -> Screen.Welcome.route
+            !appState.isAuthenticated -> Screen.Authentication.route
+            else -> Screen.Main.route
+        }
+    }
+
     NavHost(
         navController = navController,
-        startDestination = Screen.Welcome.route
+        startDestination = initialDestination
     ) {
         composable(Screen.Welcome.route) {
             WelcomeScreen(
