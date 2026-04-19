@@ -150,6 +150,11 @@ class CallManager @Inject constructor(
                 val videoTrack = webRTCClient!!.addVideoTrack(null)
                 Log.d(TAG, "startCall: localVideoTrack id=${videoTrack?.id()}")
                 _localVideoTrack.value = videoTrack
+                // Enable capture + track forwarding. Without this the track
+                // stays disabled and pushes black frames to every sink — no
+                // local preview, black video to the peer. The camera-toggle
+                // workaround worked only because toggling called setVideoEnabled.
+                webRTCClient!!.setVideoEnabled(true)
             }
 
             _callState.value = CallState.Outgoing(call = call)
@@ -230,6 +235,8 @@ class CallManager @Inject constructor(
             if (state.call.callType == CallType.VIDEO) {
                 val videoTrack = webRTCClient!!.addVideoTrack(null)
                 _localVideoTrack.value = videoTrack
+                // See startCall — mirrors the fix for the callee path.
+                webRTCClient!!.setVideoEnabled(true)
             }
         }
 

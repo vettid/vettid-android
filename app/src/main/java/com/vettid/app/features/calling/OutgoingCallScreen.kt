@@ -69,6 +69,15 @@ fun OutgoingCallScreen(
     val call = outgoingState.call
     val isVideoCall = call.callType == CallType.VIDEO
     val showLocalPreview = isVideoCall && localVideoTrack != null
+
+    // Diagnostic — remove once the outgoing-preview path is confirmed
+    LaunchedEffect(isVideoCall, localVideoTrack) {
+        android.util.Log.d(
+            "OutgoingCallScreen",
+            "render: isVideoCall=$isVideoCall localTrack=${localVideoTrack?.id() ?: "null"} showLocalPreview=$showLocalPreview"
+        )
+    }
+
     var isMuted by remember { mutableStateOf(false) }
     var isSpeakerOn by remember { mutableStateOf(false) }
 
@@ -87,11 +96,11 @@ fun OutgoingCallScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            // Transparent where the SurfaceView should show; gradient otherwise.
             .then(
-                if (showLocalPreview) Modifier.background(Color.Black)
-                else Modifier.background(
+                if (!showLocalPreview) Modifier.background(
                     Brush.verticalGradient(colors = listOf(CallGradientStart, CallGradientEnd))
-                )
+                ) else Modifier
             ),
         contentAlignment = Alignment.Center
     ) {

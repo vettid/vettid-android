@@ -83,9 +83,14 @@ fun ActiveCallScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
+            // No opaque Compose background when showing video — SurfaceView is
+            // underneath the Compose layer and an opaque background obscures
+            // it. The SurfaceView renderer itself paints black in its non-video
+            // areas, which is what we want.
             .then(
-                if (showVideo) Modifier.background(Color.Black)
-                else Modifier.background(Brush.verticalGradient(colors = listOf(CallGradientStart, CallGradientEnd)))
+                if (!showVideo) {
+                    Modifier.background(Brush.verticalGradient(colors = listOf(CallGradientStart, CallGradientEnd)))
+                } else Modifier
             )
     ) {
         // Remote video (full screen background)
@@ -331,39 +336,51 @@ internal fun VideoSurface(
     mirror: Boolean,
     modifier: Modifier = Modifier
 ) {
-    var renderer by remember { mutableStateOf<SurfaceViewRenderer?>(null) }
-
-    // Attach/detach the sink whenever the track or the renderer changes.
-    // Keyed on both so a track arriving AFTER the renderer mounts (remote
-    // video) gets picked up, and a renderer created AFTER the track is set
-    // (local preview first paint) does too.
-    DisposableEffect(videoTrack, renderer) {
-        val t = videoTrack
-        val r = renderer
-        if (t != null && r != null) t.addSink(r)
-        onDispose {
-            if (t != null && r != null) t.removeSink(r)
-        }
-    }
-
-    // Release the renderer only when the composable leaves the tree —
-    // separate effect so a track change doesn't kill the GL context.
-    DisposableEffect(Unit) {
-        onDispose {
-            renderer?.release()
-            renderer = null
-        }
-    }
+    // Non-Compose state so the AndroidView update lambda can mutate it.
+    // Avoids a race where we rely on Compose-observed renderer state to
+    // be re-read before the next frame paints.
+    val holder = remember { VideoSurfaceHolder() }
 
     AndroidView(
         factory = { ctx ->
+            android.util.Log.d("VideoSurface", "factory: create renderer for track=${videoTrack?.id()}")
             SurfaceViewRenderer(ctx).apply {
-                setMirror(mirror)
                 setEnableHardwareScaler(true)
                 eglContext?.let { init(it, null) }
-            }.also { renderer = it }
+                holder.renderer = this
+            }
         },
         modifier = modifier,
-        update = { it.setMirror(mirror) }
+        update = { renderer ->
+            renderer.setMirror(mirror)
+
+            // Reconcile sink attachment on every recomposition. Track may
+            // arrive after the view mounts (remote) or be replaced (session
+            // rotation). Identity compare — don't re-attach the same track.
+            if (holder.attachedTrack !== videoTrack) {
+                android.util.Log.d(
+                    "VideoSurface",
+                    "update: swap sink from=${holder.attachedTrack?.id() ?: "null"} to=${videoTrack?.id() ?: "null"}"
+                )
+                holder.attachedTrack?.removeSink(renderer)
+                videoTrack?.addSink(renderer)
+                holder.attachedTrack = videoTrack
+            }
+        }
     )
+
+    // Release the renderer only when the composable leaves the tree.
+    DisposableEffect(Unit) {
+        onDispose {
+            holder.attachedTrack?.removeSink(holder.renderer)
+            holder.renderer?.release()
+            holder.renderer = null
+            holder.attachedTrack = null
+        }
+    }
+}
+
+private class VideoSurfaceHolder {
+    var renderer: SurfaceViewRenderer? = null
+    var attachedTrack: VideoTrack? = null
 }
