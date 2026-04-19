@@ -13,12 +13,25 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.vettid.app.MainActivity
 import com.vettid.app.R
+import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import javax.inject.Inject
 
 /**
  * Foreground service that shows a full-screen notification for incoming calls.
  * Ensures incoming calls are visible even when the app is backgrounded.
  */
+@AndroidEntryPoint
 class CallForegroundService : Service() {
+
+    @Inject
+    lateinit var callManager: CallManager
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     companion object {
         private const val TAG = "CallForegroundService"
@@ -70,15 +83,35 @@ class CallForegroundService : Service() {
         }
 
         val action = intent.action
-        if (action == ACTION_ANSWER || action == ACTION_DECLINE) {
-            // Action button pressed from notification
-            // The main activity will handle the actual call action via deep link
-            val launchIntent = Intent(this, MainActivity::class.java).apply {
-                this.action = action
-                putExtra(EXTRA_CALL_ID, intent.getStringExtra(EXTRA_CALL_ID))
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        if (action == ACTION_ANSWER) {
+            // Answer directly from the notification — don't bounce through
+            // MainActivity, which used to re-show IncomingCallScreen and
+            // force a second Accept tap. CallManager.answerCall emits a
+            // ShowActive UI event that the Compose layer picks up once
+            // MainActivity is in the foreground.
+            scope.launch {
+                callManager.answerCall().onFailure { err ->
+                    Log.w(TAG, "answerCall from notification failed", err)
+                }
             }
-            startActivity(launchIntent)
+            // Bring the app to the foreground so the active-call UI can
+            // render. No action/extras needed — routing is driven by
+            // CallManager's showCallUI flow, not by intent inspection.
+            startActivity(
+                Intent(this, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                }
+            )
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        if (action == ACTION_DECLINE) {
+            scope.launch {
+                callManager.rejectCall().onFailure { err ->
+                    Log.w(TAG, "rejectCall from notification failed", err)
+                }
+            }
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
@@ -96,6 +129,7 @@ class CallForegroundService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        scope.cancel()
         Log.d(TAG, "CallForegroundService destroyed")
     }
 
