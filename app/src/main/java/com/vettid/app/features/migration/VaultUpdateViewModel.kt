@@ -95,7 +95,11 @@ class VaultUpdateViewModel @Inject constructor(
                 when (consentTracker.consume()) {
                     MigrationIntent.APPROVED -> {
                         Log.i(TAG, "Pre-PIN approval recorded — auto-applying migration with visible state")
-                        startUpdate()
+                        // autoApplied=true tells the UI to render a slim
+                        // progress indicator instead of the full card, so
+                        // the user doesn't see the action card flash up
+                        // for a second before the success card replaces it.
+                        startUpdate(autoApplied = true)
                         return@launch
                     }
                     MigrationIntent.SKIPPED -> {
@@ -140,13 +144,13 @@ class VaultUpdateViewModel @Inject constructor(
      * User tapped "Update Now" — start the re-sealing process.
      * Automatically retries on failure (NATS may route to either old or new instance).
      */
-    fun startUpdate() {
+    fun startUpdate(autoApplied: Boolean = false) {
         val config = currentConfig ?: return
         val maxRetries = 5
         val retryDelayMs = 1500L
 
         viewModelScope.launch {
-            _state.value = VaultUpdateState.Updating(config)
+            _state.value = VaultUpdateState.Updating(config, autoApplied = autoApplied)
 
             for (attempt in 1..maxRetries) {
                 val result = migrationClient.startMigration()
@@ -316,8 +320,9 @@ sealed class VaultUpdateState {
         val isMandatory: Boolean
     ) : VaultUpdateState()
 
-    /** Migration in progress — show spinner */
-    data class Updating(val config: MigrationConfig) : VaultUpdateState()
+    /** Migration in progress — show spinner. autoApplied=true when
+     *  pre-PIN consent drove the update so the UI can skip the big card. */
+    data class Updating(val config: MigrationConfig, val autoApplied: Boolean = false) : VaultUpdateState()
 
     /** Migration completed — show brief success */
     object Updated : VaultUpdateState()

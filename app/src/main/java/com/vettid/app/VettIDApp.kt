@@ -95,6 +95,7 @@ import com.vettid.app.features.migration.EmergencyRecoveryScreen
 import com.vettid.app.features.migration.SecurityAuditLogScreen
 import com.vettid.app.features.migration.VaultUpdateCard
 import com.vettid.app.features.migration.VaultUpdateSuccessCard
+import com.vettid.app.features.migration.VaultUpdatingInlineCard
 import com.vettid.app.features.migration.VaultUpdateViewModel
 import com.vettid.app.features.migration.VaultUpdateState
 import com.vettid.app.features.enrollmentwizard.EnrollmentWizardScreen
@@ -1803,14 +1804,20 @@ fun MainScreen(
                 )
             }
             is VaultUpdateState.Updating -> {
-                VaultUpdateCard(
-                    config = updateState.config,
-                    isMandatory = true,
-                    isUpdating = true,
-                    onUpdateNow = {},
-                    onRemindLater = {},
-                    onReviewDetails = {}
-                )
+                if (updateState.autoApplied) {
+                    // Pre-PIN consent path — skip the action card so it
+                    // doesn't flash between Checking and Updated.
+                    VaultUpdatingInlineCard()
+                } else {
+                    VaultUpdateCard(
+                        config = updateState.config,
+                        isMandatory = true,
+                        isUpdating = true,
+                        onUpdateNow = {},
+                        onRemindLater = {},
+                        onReviewDetails = {}
+                    )
+                }
             }
             is VaultUpdateState.Updated -> {
                 VaultUpdateSuccessCard(

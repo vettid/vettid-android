@@ -114,6 +114,42 @@ fun VaultUpdateCard(
 }
 
 /**
+ * Slim progress card shown while a pre-approved migration is being
+ * applied. The big action card would flash up for a second before the
+ * success card replaces it, which reads as a glitch — this gives the
+ * user a subtle indicator without the action-card vocabulary.
+ */
+@Composable
+fun VaultUpdatingInlineCard(modifier: Modifier = Modifier) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer
+        ),
+        shape = RoundedCornerShape(16.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(16.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(18.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Text(
+                "Applying vault security update…",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+        }
+    }
+}
+
+/**
  * Success confirmation shown briefly after migration completes.
  */
 @Composable
@@ -137,7 +173,11 @@ fun VaultUpdateSuccessCard(
             Icon(
                 Icons.Default.Security,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
+                // onPrimaryContainer is the paired role for content
+                // sitting on primaryContainer — high contrast by design.
+                // primary on primaryContainer was the same hue and read
+                // as very faint against the background.
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
                 modifier = Modifier.size(24.dp)
             )
             Spacer(modifier = Modifier.width(12.dp))
@@ -148,8 +188,13 @@ fun VaultUpdateSuccessCard(
                 color = MaterialTheme.colorScheme.onPrimaryContainer,
                 modifier = Modifier.weight(1f)
             )
-            TextButton(onClick = onDismiss) {
-                Text("OK")
+            TextButton(
+                onClick = onDismiss,
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            ) {
+                Text("OK", fontWeight = FontWeight.SemiBold)
             }
         }
     }
