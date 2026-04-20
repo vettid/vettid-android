@@ -1850,7 +1850,8 @@ fun MainScreen(
                 onNavigateToCreateInvitation = onNavigateToCreateInvitation,
                 onNavigateToScanInvitation = onNavigateToScanInvitation,
                 onNavigateToCreateAgentInvitation = onNavigateToCreateAgentInvitation,
-                onNavigateToConnectDesktop = onNavigateToConnectDesktop
+                onNavigateToConnectDesktop = onNavigateToConnectDesktop,
+                onResurfaceVaultUpdate = { vaultUpdateViewModel.resurface() }
             )
         },
         votingContent = { _ ->

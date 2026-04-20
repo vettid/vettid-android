@@ -193,6 +193,21 @@ class VaultUpdateViewModel @Inject constructor(
      * post-unlock card is easy to miss if you're in a hurry). The event
      * gets wiped on the next full sync; subsequent deferrals re-add it.
      */
+    /**
+     * Re-surface the update card. Triggered when the user taps the
+     * "Vault Security Update Pending" feed entry they created by
+     * tapping Remind Me Later earlier — clears the dismissed flag so
+     * checkForUpdate actually shows the card again, then runs it.
+     */
+    fun resurface() {
+        getPrefs().edit()
+            .remove(KEY_DISMISSED)
+            .remove(KEY_DISMISSED_VERSION)
+            .remove(KEY_REMINDED_AT)
+            .apply()
+        checkForUpdate()
+    }
+
     fun remindLater() {
         val config = currentConfig
         val edit = getPrefs().edit()
@@ -224,7 +239,10 @@ class VaultUpdateViewModel @Inject constructor(
             metadata = mapOf("migration_version" to config.version),
             feedStatus = "active",
             actionType = null,
-            priority = 1,
+            // Normal priority — HIGH had the feed pin the entry at the
+            // top which read as "urgent / demanding attention." It's a
+            // deferred reminder, not a pinned item.
+            priority = 0,
             createdAt = now,
             readAt = null,
             actionedAt = null,

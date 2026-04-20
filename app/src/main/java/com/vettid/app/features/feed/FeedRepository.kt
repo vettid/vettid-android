@@ -352,7 +352,14 @@ class FeedRepository @Inject constructor(
         Log.d(TAG, "Performing full fetch")
         return feedClient.listFeed(status = null, limit = 100).fold(
             onSuccess = { response ->
-                val sortedEvents = response.events.sortedWith(
+                // Preserve any locally-originated events (added via
+                // addEventLocally — e.g. the deferred-vault-update
+                // reminder) that the server doesn't know about. Without
+                // this, a pull-to-refresh wipes them from the cache and
+                // the user loses their in-app reminders.
+                val localOnly = getCachedEvents().filter { it.eventId.startsWith("local-") }
+                val merged = (response.events + localOnly).distinctBy { it.eventId }
+                val sortedEvents = merged.sortedWith(
                     compareByDescending<FeedEvent> { it.priority }
                         .thenByDescending { it.createdAt }
                 )

@@ -80,6 +80,8 @@ sealed class FeedEffect {
     data class StartVoiceCall(val peerGuid: String, val peerName: String) : FeedEffect()
     data class StartVideoCall(val peerGuid: String, val peerName: String) : FeedEffect()
     data class ShowEventDetail(val event: com.vettid.app.core.nats.FeedEvent) : FeedEffect()
+    /** Bring the Vault Security Update card back — user tapped the deferred-update entry. */
+    object ShowVaultUpdatePrompt : FeedEffect()
     data class ShowError(val message: String) : FeedEffect()
     data class ShowActionSuccess(val message: String) : FeedEffect()
 }

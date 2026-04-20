@@ -59,6 +59,7 @@ fun FeedContent(
     onNavigateToConnectionDetail: (String) -> Unit = {},
     onNavigateToConnectionHistory: (String) -> Unit = {},
     onNavigateToConnectionRequest: (String) -> Unit = {},
+    onResurfaceVaultUpdate: () -> Unit = {},
     onNavigateToHandler: (String) -> Unit = {},
     onNavigateToBackup: (String) -> Unit = {},
     onNavigateToGuide: (guideId: String, eventId: String, userName: String) -> Unit = { _, _, _ -> },
@@ -118,6 +119,7 @@ fun FeedContent(
                 is FeedEffect.NavigateToConnectionReview -> onNavigateToConnectionReview(effect.connectionId, effect.eventId)
                 is FeedEffect.NavigateToConnectionDetail -> onNavigateToConnectionDetail(effect.connectionId)
                 is FeedEffect.ShowEventDetail -> selectedEvent = effect.event
+                is FeedEffect.ShowVaultUpdatePrompt -> onResurfaceVaultUpdate()
                 is FeedEffect.ShowError -> snackbarHostState.showSnackbar(effect.message)
                 is FeedEffect.ShowActionSuccess -> snackbarHostState.showSnackbar(effect.message)
                 else -> { /* Handle other effects */ }
@@ -712,47 +714,20 @@ private fun ActiveConnectionCard(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.outline
                             )
-                            // Compact type icon under the timestamp. The
-                            // unread count rides directly on the icon so
-                            // the user can see at-a-glance both "what was
-                            // the last interaction" and "how many are
-                            // unread" — no separate preview/badge row.
+                            // Compact type icon under the timestamp —
+                            // tells the eye what the last interaction
+                            // was (message / call / missed). Unread
+                            // counts live on the action buttons below
+                            // so the badge highlights *where to tap*.
                             val (typeIcon, typeTint) = lastActivityIcon(item.lastActivityType, item.lastActivityPreview)
                             if (typeIcon != null) {
                                 Spacer(modifier = Modifier.height(4.dp))
-                                BadgedBox(
-                                    badge = {
-                                        if (item.unreadCount > 0) {
-                                            Badge(
-                                                containerColor = MaterialTheme.colorScheme.primary,
-                                                contentColor = MaterialTheme.colorScheme.onPrimary
-                                            ) {
-                                                Text(
-                                                    text = item.unreadCount.toString(),
-                                                    style = MaterialTheme.typography.labelSmall
-                                                )
-                                            }
-                                        }
-                                    }
-                                ) {
-                                    Icon(
-                                        imageVector = typeIcon,
-                                        contentDescription = null,
-                                        tint = typeTint,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
-                            } else if (item.unreadCount > 0) {
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Badge(
-                                    containerColor = MaterialTheme.colorScheme.primary,
-                                    contentColor = MaterialTheme.colorScheme.onPrimary
-                                ) {
-                                    Text(
-                                        text = item.unreadCount.toString(),
-                                        style = MaterialTheme.typography.labelSmall
-                                    )
-                                }
+                                Icon(
+                                    imageVector = typeIcon,
+                                    contentDescription = null,
+                                    tint = typeTint,
+                                    modifier = Modifier.size(16.dp)
+                                )
                             }
                         }
                     }
@@ -761,6 +736,11 @@ private fun ActiveConnectionCard(
 
             // Quick action buttons
             Spacer(modifier = Modifier.height(8.dp))
+            // If the last interaction was a missed call, flag the Voice
+            // button so the user sees where to call back. Pure text
+            // heuristic until the connection-list API surfaces a
+            // per-type unread count.
+            val missedCallPending = item.lastActivityPreview.contains("Missed", ignoreCase = true) && item.isUnread
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly
@@ -768,12 +748,14 @@ private fun ActiveConnectionCard(
                 ConnectionActionButton(
                     icon = Icons.AutoMirrored.Filled.Chat,
                     label = "Text",
-                    onClick = onMessageClick
+                    onClick = onMessageClick,
+                    badgeCount = if (item.lastActivityType == "message") item.unreadCount else 0
                 )
                 ConnectionActionButton(
                     icon = Icons.Default.Call,
                     label = "Voice",
-                    onClick = onCallClick
+                    onClick = onCallClick,
+                    badgeCount = if (missedCallPending) 1 else 0
                 )
                 ConnectionActionButton(
                     icon = Icons.Default.Videocam,
@@ -885,7 +867,8 @@ private fun ConnectionAvatar(
 private fun ConnectionActionButton(
     icon: ImageVector,
     label: String,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    badgeCount: Int = 0
 ) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -894,12 +877,31 @@ private fun ConnectionActionButton(
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 4.dp)
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            modifier = Modifier.size(20.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        // Badge rides on the icon so the user's eye is drawn to the
+        // action they need to take — Text button lights up for unread
+        // messages, Voice for a missed call, etc.
+        BadgedBox(
+            badge = {
+                if (badgeCount > 0) {
+                    Badge(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    ) {
+                        Text(
+                            text = badgeCount.toString(),
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
+            }
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = label,
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,

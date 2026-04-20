@@ -1,7 +1,7 @@
 package com.vettid.app.features.migration
 
-import androidx.compose.animation.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Security
@@ -19,7 +19,7 @@ import com.vettid.app.core.nats.MigrationConfig
  * Displays the update summary and provides actions to:
  * - Review details (opens browser)
  * - Update now (triggers vault re-sealing)
- * - Remind me later (defers until next app open, hidden after 72h)
+ * - Remind me later (defers until next app open, hidden after deadline)
  */
 @Composable
 fun VaultUpdateCard(
@@ -35,89 +35,77 @@ fun VaultUpdateCard(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.secondaryContainer
         ),
+        shape = RoundedCornerShape(16.dp),
         modifier = modifier
             .fillMaxWidth()
             .padding(16.dp)
     ) {
-        Column {
-            Row(
-                modifier = Modifier.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Row(verticalAlignment = Alignment.Top) {
                 Icon(
                     Icons.Default.Lock,
                     contentDescription = null,
                     tint = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.size(32.dp)
+                    modifier = Modifier.size(28.dp)
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         "Vault Security Update Available",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSecondaryContainer
                     )
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
                     Text(
                         config.summary.ifEmpty { "A security update is available for your vault." },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f)
                     )
+                    if (!config.detailsUrl.isNullOrEmpty()) {
+                        TextButton(
+                            onClick = onReviewDetails,
+                            enabled = !isUpdating,
+                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp)
+                        ) {
+                            Text("Review details")
+                        }
+                    }
                 }
             }
 
-            // All three actions use TextButton so they share the same
-            // visual weight — the old filled-Button "Update Now" jumped
-            // out next to the two TextButton siblings. Differentiation
-            // is now through the "Update Now" label's primary-colored
-            // text (it's still the main action; just not shouting).
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp)
-                    .padding(bottom = 8.dp),
-                horizontalArrangement = Arrangement.End
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Primary action: full-width filled button so the Update
+            // Now affordance is always visible and never clipped off the
+            // side of narrow screens. Tertiary "Remind Me Later" sits
+            // under it as a text button when deferral is still allowed.
+            Button(
+                onClick = onUpdateNow,
+                enabled = !isUpdating,
+                modifier = Modifier.fillMaxWidth()
             ) {
-                if (!config.detailsUrl.isNullOrEmpty()) {
-                    TextButton(
-                        onClick = onReviewDetails,
-                        enabled = !isUpdating
-                    ) {
-                        Text("Review Details")
-                    }
-                    Spacer(modifier = Modifier.width(4.dp))
-                }
-
-                // "Remind Me Later" — hidden when mandatory
-                if (!isMandatory) {
-                    TextButton(
-                        onClick = onRemindLater,
-                        enabled = !isUpdating
-                    ) {
-                        Text("Remind Me Later")
-                    }
-                    Spacer(modifier = Modifier.width(4.dp))
-                }
-
-                TextButton(
-                    onClick = onUpdateNow,
-                    enabled = !isUpdating,
-                    colors = ButtonDefaults.textButtonColors(
-                        contentColor = MaterialTheme.colorScheme.primary
+                if (isUpdating) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary
                     )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Updating…")
+                } else {
+                    Text("Update Now", fontWeight = FontWeight.SemiBold)
+                }
+            }
+
+            if (!isMandatory) {
+                Spacer(modifier = Modifier.height(4.dp))
+                TextButton(
+                    onClick = onRemindLater,
+                    enabled = !isUpdating,
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    if (isUpdating) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(14.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Updating…")
-                    } else {
-                        Text("Update Now", fontWeight = FontWeight.SemiBold)
-                    }
+                    Text("Remind Me Later")
                 }
             }
         }
@@ -136,6 +124,7 @@ fun VaultUpdateSuccessCard(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.primaryContainer
         ),
+        shape = RoundedCornerShape(16.dp),
         modifier = modifier
             .fillMaxWidth()
             .padding(16.dp)

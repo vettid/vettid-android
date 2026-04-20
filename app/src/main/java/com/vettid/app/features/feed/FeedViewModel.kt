@@ -845,6 +845,13 @@ class FeedViewModel @Inject constructor(
                         _effects.emit(FeedEffect.ShowEventDetail(event))
                     }
                 }
+                "security.migration" -> {
+                    // Deferred vault-update reminder — bounce back into
+                    // the migration flow so the user can review the
+                    // details and actually approve the update instead of
+                    // just reading a stale event detail dialog.
+                    _effects.emit(FeedEffect.ShowVaultUpdatePrompt)
+                }
                 EventTypes.AGENT_SECRET_REQUEST, EventTypes.AGENT_ACTION_REQUEST -> {
                     val requestId = event.metadata?.get("request_id")
                     if (requestId != null) {
