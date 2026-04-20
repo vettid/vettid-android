@@ -32,6 +32,7 @@ class ConnectionAuditClient @Inject constructor(
         limit: Int = 100,
         cursor: AuditCursor? = null,
         sinceEpoch: Long? = null,
+        untilEpoch: Long? = null,
         eventTypePrefixes: List<String>? = null,
     ): Result<AuditListResult> {
         val payload = JsonObject().apply {
@@ -41,7 +42,8 @@ class ConnectionAuditClient @Inject constructor(
                 addProperty("cursor_created_at", it.createdAt)
                 addProperty("cursor_entry_id", it.entryId)
             }
-            sinceEpoch?.let { addProperty("since_epoch", it) }
+            sinceEpoch?.takeIf { it > 0 }?.let { addProperty("since_epoch", it) }
+            untilEpoch?.takeIf { it > 0 }?.let { addProperty("until_epoch", it) }
             eventTypePrefixes?.takeIf { it.isNotEmpty() }?.let {
                 val arr = com.google.gson.JsonArray()
                 it.forEach(arr::add)

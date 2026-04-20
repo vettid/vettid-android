@@ -43,7 +43,9 @@ fun ConnectionHistoryScreen(
     val isPaginating by viewModel.isPaginating.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val peerName by viewModel.peerName.collectAsState()
+    val timeFilter by viewModel.timeFilter.collectAsState()
     var searchExpanded by remember { mutableStateOf(false) }
+    var showTimeFilterSheet by remember { mutableStateOf(false) }
 
     // Refresh on every re-entry so entries produced on other screens
     // (e.g. a message just sent from ConversationScreen) appear
@@ -102,6 +104,20 @@ fun ConnectionHistoryScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { showTimeFilterSheet = true }) {
+                        BadgedBox(
+                            badge = {
+                                if (timeFilter != null) {
+                                    Badge(containerColor = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DateRange,
+                                contentDescription = "Filter by time",
+                            )
+                        }
+                    }
                     IconButton(onClick = {
                         if (searchExpanded && searchQuery.isNotEmpty()) {
                             viewModel.onSearchQueryChanged("")
@@ -170,6 +186,17 @@ fun ConnectionHistoryScreen(
                     detailSheet = null
                 }
             }
+        }
+
+        if (showTimeFilterSheet) {
+            TimeFilterSheet(
+                current = timeFilter,
+                onDismiss = { showTimeFilterSheet = false },
+                onPick = { range ->
+                    viewModel.onTimeFilterChanged(range)
+                    showTimeFilterSheet = false
+                },
+            )
         }
     }
 }
@@ -540,6 +567,89 @@ private fun DetailRow(label: String, value: String, mono: Boolean = false) {
             style = if (mono) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
             fontWeight = if (mono) FontWeight.Normal else FontWeight.Medium,
             modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TimeFilterSheet(
+    current: TimeRangeFilter?,
+    onDismiss: () -> Unit,
+    onPick: (TimeRangeFilter?) -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState()
+    val zone = java.time.ZoneId.systemDefault()
+    val now = java.time.ZonedDateTime.now(zone)
+    val presets = listOf(
+        "Today" to TimeRangeFilter(
+            label = "Today",
+            sinceEpoch = now.toLocalDate().atStartOfDay(zone).toEpochSecond(),
+            untilEpoch = 0L,
+        ),
+        "Last 7 days" to TimeRangeFilter(
+            label = "Last 7 days",
+            sinceEpoch = now.minusDays(7).toEpochSecond(),
+            untilEpoch = 0L,
+        ),
+        "Last 30 days" to TimeRangeFilter(
+            label = "Last 30 days",
+            sinceEpoch = now.minusDays(30).toEpochSecond(),
+            untilEpoch = 0L,
+        ),
+        "Last 90 days" to TimeRangeFilter(
+            label = "Last 90 days",
+            sinceEpoch = now.minusDays(90).toEpochSecond(),
+            untilEpoch = 0L,
+        ),
+    )
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(modifier = Modifier.padding(vertical = 16.dp)) {
+            Text(
+                text = "Filter by time",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+            )
+            // "All time" clears the filter.
+            TimeFilterRow(
+                label = "All time",
+                selected = current == null,
+                onClick = { onPick(null) },
+            )
+            presets.forEach { (_, range) ->
+                TimeFilterRow(
+                    label = range.label,
+                    selected = current?.label == range.label,
+                    onClick = { onPick(range) },
+                )
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun TimeFilterRow(label: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = if (selected) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+            contentDescription = null,
+            tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+            modifier = Modifier.size(20.dp),
+        )
+        Spacer(modifier = Modifier.width(16.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyLarge,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
         )
     }
 }

@@ -108,6 +108,21 @@ fun FeedContent(
         pendingCallConnectionId = null
     }
 
+    // Refresh on every resume so the card's last-activity timestamp
+    // reflects anything that happened on another screen (e.g. a call
+    // just placed from the detail view) without the user pulling to
+    // refresh. Same pattern as ConnectionHistoryScreen.
+    val feedLifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(feedLifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                viewModel.refresh()
+            }
+        }
+        feedLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { feedLifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     // Handle effects
     LaunchedEffect(Unit) {
         viewModel.effects.collect { effect ->

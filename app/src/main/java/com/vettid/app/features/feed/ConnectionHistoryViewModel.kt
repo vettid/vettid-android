@@ -51,6 +51,10 @@ class ConnectionHistoryViewModel @Inject constructor(
     private val _peerName = MutableStateFlow("")
     val peerName: StateFlow<String> = _peerName.asStateFlow()
 
+    // Time-range filter for the history list. Null = all time.
+    private val _timeFilter = MutableStateFlow<TimeRangeFilter?>(null)
+    val timeFilter: StateFlow<TimeRangeFilter?> = _timeFilter.asStateFlow()
+
     // Most recent loaded page — used for the "load next page" request
     // and to suppress duplicate inflight requests.
     private var nextCursor: AuditCursor? = null
@@ -98,14 +102,26 @@ class ConnectionHistoryViewModel @Inject constructor(
         }
     }
 
+    /** Set or clear (null) the time-range filter. Triggers a reload. */
+    fun onTimeFilterChanged(range: TimeRangeFilter?) {
+        _timeFilter.value = range
+        loadFirstPage(pushState = true)
+    }
+
     fun loadNextPage() {
         if (endReached || _isPaginating.value) return
         val cursor = nextCursor ?: return
         viewModelScope.launch {
             _isPaginating.value = true
             val q = _searchQuery.value.trim()
+            val range = _timeFilter.value
             val result = if (q.isEmpty()) {
-                auditClient.list(connectionId, cursor = cursor)
+                auditClient.list(
+                    connectionId,
+                    cursor = cursor,
+                    sinceEpoch = range?.sinceEpoch,
+                    untilEpoch = range?.untilEpoch,
+                )
             } else {
                 auditClient.search(connectionId, query = q, cursor = cursor)
             }
@@ -132,8 +148,13 @@ class ConnectionHistoryViewModel @Inject constructor(
             endReached = false
 
             val q = _searchQuery.value.trim()
+            val range = _timeFilter.value
             val result = if (q.isEmpty()) {
-                auditClient.list(connectionId)
+                auditClient.list(
+                    connectionId,
+                    sinceEpoch = range?.sinceEpoch,
+                    untilEpoch = range?.untilEpoch,
+                )
             } else {
                 auditClient.search(connectionId, query = q)
             }
@@ -158,6 +179,16 @@ class ConnectionHistoryViewModel @Inject constructor(
         }
     }
 }
+
+/**
+ * Time window applied to the history list. Epochs are seconds so they
+ * can be passed straight to the vault's since_epoch / until_epoch fields.
+ */
+data class TimeRangeFilter(
+    val label: String,            // "Today", "Last 7 days", "Custom (…)"
+    val sinceEpoch: Long,
+    val untilEpoch: Long,          // exclusive upper bound; 0 = open
+)
 
 sealed class ConnectionHistoryState {
     data object Loading : ConnectionHistoryState()
