@@ -10,6 +10,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Message
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -18,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -39,6 +41,10 @@ fun ConnectionHistoryScreen(
     val isPaginating by viewModel.isPaginating.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     var searchExpanded by remember { mutableStateOf(false) }
+    // Detail sheets open in-place rather than as separate routes —
+    // these entries are leaf views (a read-only summary) and a sheet
+    // keeps the user's position in the list when they dismiss.
+    var detailSheet by remember { mutableStateOf<AuditEntry?>(null) }
 
     Scaffold(
         topBar = {
@@ -101,8 +107,32 @@ fun ConnectionHistoryScreen(
                     endReached = current.endReached,
                     isPaginating = isPaginating,
                     onLoadMore = viewModel::loadNextPage,
-                    onEventClick = { event -> handleHistoryClick(event, onOpenConversation) }
+                    onEventClick = { event ->
+                        handleHistoryClick(
+                            event = event,
+                            onOpenConversation = onOpenConversation,
+                            onOpenDetailSheet = { detailSheet = it },
+                        )
+                    }
                 )
+            }
+        }
+
+        detailSheet?.let { entry ->
+            when {
+                entry.event_type.startsWith("call.") -> CallDetailSheet(
+                    entry = entry,
+                    onDismiss = { detailSheet = null },
+                )
+                entry.event_type.startsWith("transfer.btc.") -> TransferDetailSheet(
+                    entry = entry,
+                    onDismiss = { detailSheet = null },
+                )
+                else -> {
+                    // Shouldn't happen — handleHistoryClick only opens
+                    // sheets for call / transfer types.
+                    detailSheet = null
+                }
             }
         }
     }
@@ -156,14 +186,27 @@ private fun ErrorCentered(message: String) {
     }
 }
 
-// handleHistoryClick maps an audit row to a navigation intent. Only
-// message rows navigate today — call and transfer detail screens are
-// tracked as follow-ups in docs/CONNECTION-AUDIT-TRAIL-PLAN.md §5.
-private fun handleHistoryClick(event: AuditEntry, onOpenConversation: (String) -> Unit) {
-    if (event.event_type.startsWith("message.")) {
-        onOpenConversation(event.connection_id)
+// handleHistoryClick maps an audit row to a navigation intent.
+//   - message.*     → open the conversation
+//   - call.*        → open the call detail bottom sheet
+//   - transfer.btc  → open the transfer detail bottom sheet
+//   - everything else (lifecycle, security) has no detail view yet
+private fun handleHistoryClick(
+    event: AuditEntry,
+    onOpenConversation: (String) -> Unit,
+    onOpenDetailSheet: (AuditEntry) -> Unit,
+) {
+    when {
+        event.event_type.startsWith("message.") -> onOpenConversation(event.connection_id)
+        event.event_type.startsWith("call.") -> onOpenDetailSheet(event)
+        event.event_type.startsWith("transfer.btc.") -> onOpenDetailSheet(event)
     }
 }
+
+private fun AuditEntry.isInteractive(): Boolean =
+    event_type.startsWith("message.") ||
+        event_type.startsWith("call.") ||
+        event_type.startsWith("transfer.btc.")
 
 @Composable
 private fun HistoryList(
@@ -212,7 +255,7 @@ private fun HistoryList(
 private fun HistoryRow(event: AuditEntry, onClick: () -> Unit) {
     val (icon, tint) = iconForEventType(event.event_type)
     val body = renderEventBody(event)
-    val clickable = event.event_type.startsWith("message.")
+    val clickable = event.isInteractive()
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -313,4 +356,109 @@ private fun formatEventTimestamp(epochSeconds: Long): String {
     val millis = if (epochSeconds < 10_000_000_000L) epochSeconds * 1000 else epochSeconds
     val fmt = SimpleDateFormat("MMM d, yyyy · h:mm a", Locale.getDefault())
     return fmt.format(Date(millis))
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CallDetailSheet(entry: AuditEntry, onDismiss: () -> Unit) {
+    val sheetState = rememberModalBottomSheetState()
+    val meta = entry.metadata ?: emptyMap()
+    val isVideo = entry.event_type.contains("video")
+    val outcome = when {
+        entry.event_type.contains("missed") -> "Missed"
+        entry.event_type.contains("completed") -> "Completed"
+        entry.event_type.contains("rejected") -> "Rejected"
+        entry.event_type.contains("started") -> "Started"
+        else -> "Call"
+    }
+    val duration = meta["duration_seconds"]?.toLongOrNull()?.let { formatDuration(it) }
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(modifier = Modifier.padding(24.dp)) {
+            Text(
+                text = if (isVideo) "Video call" else "Voice call",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = formatEventTimestamp(entry.created_at),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            DetailRow("Outcome", outcome)
+            if (duration != null) DetailRow("Duration", duration)
+            meta["reason"]?.takeIf { it.isNotBlank() }?.let { DetailRow("Reason", it) }
+            entry.refs?.get("call_id")?.let { DetailRow("Call ID", it, mono = true) }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TransferDetailSheet(entry: AuditEntry, onDismiss: () -> Unit) {
+    val sheetState = rememberModalBottomSheetState()
+    val meta = entry.metadata ?: emptyMap()
+    val txId = entry.refs?.get("tx_id")
+    val uriHandler = LocalUriHandler.current
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(modifier = Modifier.padding(24.dp)) {
+            Text(
+                text = if (entry.event_type.endsWith(".sent")) "BTC sent" else "BTC received",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = formatEventTimestamp(entry.created_at),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            meta["amount_sats"]?.let { DetailRow("Amount", "$it sats") }
+            meta["fee_sats"]?.let { DetailRow("Fee", "$it sats") }
+            txId?.let { DetailRow("Transaction", it, mono = true) }
+            if (!txId.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                OutlinedButton(
+                    onClick = { uriHandler.openUri("https://mempool.space/tx/$txId") },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("View on mempool.space")
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+@Composable
+private fun DetailRow(label: String, value: String, mono: Boolean = false) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.width(100.dp),
+        )
+        Text(
+            text = value,
+            style = if (mono) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
+            fontWeight = if (mono) FontWeight.Normal else FontWeight.Medium,
+            modifier = Modifier.weight(1f),
+        )
+    }
 }
