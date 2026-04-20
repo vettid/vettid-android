@@ -834,7 +834,10 @@ fun VettIDApp(
             arguments = listOf(navArgument("connectionId") { type = NavType.StringType })
         ) {
             com.vettid.app.features.feed.ConnectionHistoryScreen(
-                onBack = { navController.safePopBackStack() }
+                onBack = { navController.safePopBackStack() },
+                onOpenConversation = { connId ->
+                    navController.navigate(Screen.Conversation.createRoute(connId))
+                }
             )
         }
         // Profile route

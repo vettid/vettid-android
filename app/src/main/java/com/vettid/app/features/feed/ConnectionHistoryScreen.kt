@@ -1,5 +1,6 @@
 package com.vettid.app.features.feed
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -30,6 +31,7 @@ import java.util.Locale
 @Composable
 fun ConnectionHistoryScreen(
     onBack: () -> Unit,
+    onOpenConversation: (connectionId: String) -> Unit = {},
     viewModel: ConnectionHistoryViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
@@ -98,7 +100,8 @@ fun ConnectionHistoryScreen(
                     events = current.events,
                     endReached = current.endReached,
                     isPaginating = isPaginating,
-                    onLoadMore = viewModel::loadNextPage
+                    onLoadMore = viewModel::loadNextPage,
+                    onEventClick = { event -> handleHistoryClick(event, onOpenConversation) }
                 )
             }
         }
@@ -153,12 +156,22 @@ private fun ErrorCentered(message: String) {
     }
 }
 
+// handleHistoryClick maps an audit row to a navigation intent. Only
+// message rows navigate today — call and transfer detail screens are
+// tracked as follow-ups in docs/CONNECTION-AUDIT-TRAIL-PLAN.md §5.
+private fun handleHistoryClick(event: AuditEntry, onOpenConversation: (String) -> Unit) {
+    if (event.event_type.startsWith("message.")) {
+        onOpenConversation(event.connection_id)
+    }
+}
+
 @Composable
 private fun HistoryList(
     events: List<AuditEntry>,
     endReached: Boolean,
     isPaginating: Boolean,
     onLoadMore: () -> Unit,
+    onEventClick: (AuditEntry) -> Unit,
 ) {
     val listState = rememberLazyListState()
 
@@ -180,7 +193,7 @@ private fun HistoryList(
         contentPadding = PaddingValues(vertical = 8.dp)
     ) {
         items(items = events, key = { it.entry_id }) { event ->
-            HistoryRow(event)
+            HistoryRow(event, onClick = { onEventClick(event) })
         }
         if (!endReached) {
             item {
@@ -196,12 +209,14 @@ private fun HistoryList(
 }
 
 @Composable
-private fun HistoryRow(event: AuditEntry) {
+private fun HistoryRow(event: AuditEntry, onClick: () -> Unit) {
     val (icon, tint) = iconForEventType(event.event_type)
     val body = renderEventBody(event)
+    val clickable = event.event_type.startsWith("message.")
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .then(if (clickable) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.Top
     ) {
