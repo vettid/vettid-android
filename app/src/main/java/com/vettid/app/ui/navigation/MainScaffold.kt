@@ -15,24 +15,25 @@ import com.vettid.app.NatsConnectionState
 private const val TAG = "MainScaffold"
 
 /**
- * Main scaffold for the Activity screen (home).
- * Shows Feed | Voting | Archive tabs at the top.
- * Avatar navigates to Vault screen, cloud icon opens Settings.
+ * Main scaffold for the Connections screen (home).
+ *
+ * Renamed from "Activity" with Feed | Voting | Archive tabs to a single
+ * "Connections" list. Everything that used to be a standalone feed event
+ * (guides, migration prompts, vote notifications, security alerts) now
+ * lives in the VettID system connection's audit trail, reached by
+ * tapping that connection's card. See
+ * plans/luminous-unifying-manatee.md.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainActivityScaffold(
-    activitySegment: ActivitySegment,
-    onActivitySegmentChange: (ActivitySegment) -> Unit,
     isSettingsOpen: Boolean,
     onSettingsToggle: () -> Unit,
     profilePhotoBase64: String? = null,
     natsConnectionState: NatsConnectionState = NatsConnectionState.Idle,
     onAvatarClick: () -> Unit = {},
-    // Activity content slots
+    // Connections content (formerly the "Feed" tab)
     feedContent: @Composable (searchQuery: String) -> Unit,
-    votingContent: @Composable (searchQuery: String) -> Unit,
-    archiveContent: @Composable (searchQuery: String) -> Unit,
     // Settings overlay
     settingsContent: @Composable () -> Unit,
     snackbarHostState: SnackbarHostState = remember { SnackbarHostState() }
@@ -41,7 +42,7 @@ fun MainActivityScaffold(
     var isSearchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
 
-    LaunchedEffect(activitySegment, isSettingsOpen) {
+    LaunchedEffect(isSettingsOpen) {
         if (isSearchActive) { isSearchActive = false; searchQuery = "" }
     }
 
@@ -49,7 +50,7 @@ fun MainActivityScaffold(
         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
         topBar = {
             HeaderView(
-                title = if (isSettingsOpen) "Settings" else "Activities",
+                title = if (isSettingsOpen) "Settings" else "Connections",
                 onProfileClick = onAvatarClick,
                 natsConnectionState = natsConnectionState,
                 onNatsStatusClick = onSettingsToggle,
@@ -75,17 +76,8 @@ fun MainActivityScaffold(
             if (isSettingsOpen) {
                 settingsContent()
             } else {
-                ActivityIconTabSelector(
-                    segments = ActivitySegment.entries,
-                    selectedIndex = ActivitySegment.entries.indexOf(activitySegment),
-                    onSegmentSelected = { onActivitySegmentChange(ActivitySegment.entries[it]) }
-                )
                 Box(modifier = Modifier.fillMaxSize()) {
-                    when (activitySegment) {
-                        ActivitySegment.FEED -> feedContent(searchQuery)
-                        ActivitySegment.VOTING -> votingContent(searchQuery)
-                        ActivitySegment.ARCHIVE -> archiveContent(searchQuery)
-                    }
+                    feedContent(searchQuery)
                 }
             }
         }
@@ -193,31 +185,6 @@ fun VaultScaffold(
 @Composable
 fun IconTabSelector(
     segments: List<VaultSegment>,
-    selectedIndex: Int,
-    onSegmentSelected: (Int) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    TabRow(
-        selectedTabIndex = selectedIndex,
-        modifier = modifier
-    ) {
-        segments.forEachIndexed { index, segment ->
-            Tab(
-                selected = index == selectedIndex,
-                onClick = { onSegmentSelected(index) },
-                icon = { Icon(segment.icon, contentDescription = segment.title) },
-                text = { Text(segment.title, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-            )
-        }
-    }
-}
-
-/**
- * Tab row with icons and labels for Activity segments.
- */
-@Composable
-fun ActivityIconTabSelector(
-    segments: List<ActivitySegment>,
     selectedIndex: Int,
     onSegmentSelected: (Int) -> Unit,
     modifier: Modifier = Modifier

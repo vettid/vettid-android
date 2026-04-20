@@ -39,7 +39,6 @@ object GuideContentProvider {
             "critical_secrets" -> criticalSecretsGuide()
             "voting" -> votingGuide()
             "connections" -> connectionsGuide()
-            "archive" -> archiveGuide()
             "wallets" -> walletsGuide()
             "calling" -> callingGuide()
             "messaging" -> messagingGuide()
@@ -228,7 +227,8 @@ object GuideContentProvider {
             GuideSection.Paragraph(
                 "Your vote is cryptographically signed by your vault, ensuring it can\u2019t be tampered with or forged."
             ),
-            GuideSection.NavigationLink("Go to Voting", NavigationTarget.DrawerNav(DrawerItem.VOTING))
+            // Voting now lives under the VettID system connection's
+            // audit trail instead of its own tab — nothing to link to.
         )
     )
 
@@ -265,28 +265,9 @@ object GuideContentProvider {
         )
     )
 
-    private fun archiveGuide() = GuideContent(
-        title = "The Archive",
-        icon = Icons.Default.Archive,
-        sections = listOf(
-            GuideSection.Paragraph(
-                "The archive is where dismissed and old items go. Nothing is truly lost \u2014 you can always find it here."
-            ),
-            GuideSection.Heading("What Gets Archived"),
-            GuideSection.BulletList(
-                listOf(
-                    "Feed events you archive manually",
-                    "Auto-archived items based on your settings",
-                    "Old notifications and completed actions"
-                )
-            ),
-            GuideSection.Heading("Restoring Items"),
-            GuideSection.Paragraph(
-                "Browse the archive and restore anything you need back to your active feed."
-            ),
-            GuideSection.NavigationLink("Go to Archive", NavigationTarget.DrawerNav(DrawerItem.ARCHIVE))
-        )
-    )
+    // Archive guide removed — the feed is purely connection-based now,
+    // so there is no separate archive concept. Connections archive at
+    // the per-connection level via the detail screen.
 
     private fun walletsGuide() = GuideContent(
         title = "Bitcoin Wallets",

@@ -12,7 +12,7 @@ enum class BottomTab(
     val icon: ImageVector
 ) {
     VAULT("Vault", Icons.Default.Lock),
-    ACTIVITY("Activity", Icons.Default.DynamicFeed)
+    ACTIVITY("Connections", Icons.Default.People)
 }
 
 /**
@@ -25,21 +25,11 @@ enum class VaultSegment(val title: String, val icon: ImageVector) {
 }
 
 /**
- * Segments within the Activity tab.
- */
-enum class ActivitySegment(val title: String, val icon: ImageVector) {
-    FEED("Feed", Icons.Default.DynamicFeed),
-    VOTING("Voting", Icons.Default.HowToVote),
-    ARCHIVE("Archive", Icons.Default.Archive)
-}
-
-/**
  * Navigation state for bottom tabs + segments.
  */
 data class NavigationState(
     val bottomTab: BottomTab = BottomTab.ACTIVITY,
     val vaultSegment: VaultSegment = VaultSegment.DATA,
-    val activitySegment: ActivitySegment = ActivitySegment.FEED,
     val isSettingsOpen: Boolean = false
 ) {
     /** Current page title for the header. */
@@ -47,7 +37,7 @@ data class NavigationState(
         get() = when {
             isSettingsOpen -> "Settings"
             bottomTab == BottomTab.VAULT -> vaultSegment.title
-            else -> activitySegment.title
+            else -> "Connections"
         }
 }
 
@@ -56,11 +46,9 @@ enum class DrawerItem(
     val title: String,
     val icon: ImageVector
 ) {
-    FEED("Feed", Icons.Default.DynamicFeed),
+    FEED("Connections", Icons.Default.People),
     PERSONAL_DATA("Personal Data", Icons.Default.Person),
     SECRETS("Secrets", Icons.Default.Lock),
-    ARCHIVE("Archive", Icons.Default.Archive),
-    VOTING("Voting", Icons.Default.HowToVote),
     WALLETS("Wallets", Icons.Default.AccountBalance),
     AUDIT_LOG("Audit Log", Icons.Default.Security)
 }

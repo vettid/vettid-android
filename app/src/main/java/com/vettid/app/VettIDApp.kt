@@ -1737,17 +1737,13 @@ fun MainScreen(
     // Handle "Review Details" — open browser
     val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
 
-    var activitySegment by rememberSaveable { mutableStateOf(ActivitySegment.FEED) }
     var isSettingsOpen by rememberSaveable { mutableStateOf(false) }
 
-    // Handle navigation results from guide screens
+    // Drawer items "FEED", "ARCHIVE", "VOTING" collapsed into a single
+    // Connections view — the only special-case is the Settings overlay.
     LaunchedEffect(initialDrawerItem, initialOpenSettings) {
         if (initialDrawerItem != null) {
-            when (initialDrawerItem) {
-                "FEED" -> { activitySegment = ActivitySegment.FEED; isSettingsOpen = false }
-                "ARCHIVE" -> { activitySegment = ActivitySegment.ARCHIVE; isSettingsOpen = false }
-                "VOTING" -> { activitySegment = ActivitySegment.VOTING; isSettingsOpen = false }
-            }
+            isSettingsOpen = false
             onConsumeNavResult()
         } else if (initialOpenSettings) {
             isSettingsOpen = true
@@ -1843,14 +1839,12 @@ fun MainScreen(
         }
 
     MainActivityScaffold(
-        activitySegment = activitySegment,
-        onActivitySegmentChange = { activitySegment = it },
         isSettingsOpen = isSettingsOpen,
         onSettingsToggle = { isSettingsOpen = !isSettingsOpen },
         profilePhotoBase64 = appState.profilePhoto,
         natsConnectionState = appState.natsConnectionState,
         onAvatarClick = onNavigateToVaultHome,
-        // Activity content
+        // Connections content — the single-screen list, formerly the "Feed" tab.
         feedContent = { query ->
             FeedContent(
                 searchQuery = query,
@@ -1868,14 +1862,6 @@ fun MainScreen(
                 onNavigateToConnectDesktop = onNavigateToConnectDesktop,
                 onResurfaceVaultUpdate = { vaultUpdateViewModel.resurface() }
             )
-        },
-        votingContent = { _ ->
-            ProposalsContent(
-                onNavigateToProposal = { proposalId -> onNavigateToProposalDetail(proposalId) }
-            )
-        },
-        archiveContent = { query ->
-            ArchiveContentEmbedded(searchQuery = query)
         },
         settingsContent = {
             SettingsContent(
