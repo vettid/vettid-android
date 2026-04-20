@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.nats.AuditCursor
 import com.vettid.app.core.nats.AuditEntry
 import com.vettid.app.core.nats.ConnectionAuditClient
+import com.vettid.app.core.nats.ConnectionsClient
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -26,6 +27,7 @@ import javax.inject.Inject
 @HiltViewModel
 class ConnectionHistoryViewModel @Inject constructor(
     private val auditClient: ConnectionAuditClient,
+    private val connectionsClient: ConnectionsClient,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -44,6 +46,11 @@ class ConnectionHistoryViewModel @Inject constructor(
     private val _isPaginating = MutableStateFlow(false)
     val isPaginating: StateFlow<Boolean> = _isPaginating.asStateFlow()
 
+    // Connection peer name for the screen header. Loaded once from
+    // connection.list on init; the audit trail itself doesn't carry it.
+    private val _peerName = MutableStateFlow("")
+    val peerName: StateFlow<String> = _peerName.asStateFlow()
+
     // Most recent loaded page — used for the "load next page" request
     // and to suppress duplicate inflight requests.
     private var nextCursor: AuditCursor? = null
@@ -55,6 +62,21 @@ class ConnectionHistoryViewModel @Inject constructor(
 
     init {
         loadFirstPage()
+        loadPeerName()
+    }
+
+    private fun loadPeerName() {
+        viewModelScope.launch {
+            connectionsClient.list().onSuccess { result ->
+                val match = result.items.firstOrNull { it.connectionId == connectionId }
+                if (match != null) {
+                    val name = listOfNotNull(
+                        match.peerProfile?.firstName, match.peerProfile?.lastName,
+                    ).joinToString(" ").trim().ifEmpty { match.label }
+                    _peerName.value = name
+                }
+            }
+        }
     }
 
     fun refresh() {

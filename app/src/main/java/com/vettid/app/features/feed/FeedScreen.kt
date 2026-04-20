@@ -671,28 +671,18 @@ private fun ActiveConnectionCard(
                 Spacer(modifier = Modifier.width(12.dp))
 
                 Column(modifier = Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.Top) {
-                        Text(
-                            text = item.peerName,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = if (item.isUnread) FontWeight.Bold else FontWeight.Normal,
-                            // Long names ("Firstname Middlename Lastname")
-                            // were getting elided at a single line. Allow up
-                            // to two lines before truncating.
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        // Just the timestamp now — the activity type and
-                        // direction live in the notification/activity
-                        // row below, which shows them with a label.
-                        Text(
-                            text = formatTimestamp(item.sortTimestamp),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                    }
+                    // Header is now just the peer name. Timestamp moved
+                    // to the pending-row block at the bottom (same line
+                    // as the event description). The space right of the
+                    // name is reserved for a future presence indicator
+                    // (plans/luminous-unifying-manatee.md §15).
+                    Text(
+                        text = item.peerName,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = if (item.isUnread) FontWeight.Bold else FontWeight.Normal,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
 

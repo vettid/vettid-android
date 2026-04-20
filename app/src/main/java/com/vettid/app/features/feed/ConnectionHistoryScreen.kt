@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.vettid.app.core.nats.AuditEntry
@@ -41,7 +42,24 @@ fun ConnectionHistoryScreen(
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val isPaginating by viewModel.isPaginating.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
+    val peerName by viewModel.peerName.collectAsState()
     var searchExpanded by remember { mutableStateOf(false) }
+
+    // Refresh on every re-entry so entries produced on other screens
+    // (e.g. a message just sent from ConversationScreen) appear
+    // without requiring pull-to-refresh. LaunchedEffect(Unit) only
+    // fires on first composition; nav-back doesn't recompose, so
+    // subscribe to ON_RESUME via the lifecycle observer too.
+    val historyLifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(historyLifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                viewModel.refresh()
+            }
+        }
+        historyLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { historyLifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     // Detail sheets open in-place rather than as separate routes —
     // these entries are leaf views (a read-only summary) and a sheet
     // keeps the user's position in the list when they dismiss.
@@ -61,7 +79,21 @@ fun ConnectionHistoryScreen(
                             modifier = Modifier.fillMaxWidth()
                         )
                     } else {
-                        Text("Interaction History")
+                        Column {
+                            Text(
+                                text = peerName.ifEmpty { "Interaction History" },
+                                style = MaterialTheme.typography.titleLarge,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            if (peerName.isNotEmpty()) {
+                                Text(
+                                    text = "Interaction history",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
                     }
                 },
                 navigationIcon = {
