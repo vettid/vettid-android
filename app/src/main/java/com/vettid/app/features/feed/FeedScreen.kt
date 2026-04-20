@@ -389,9 +389,12 @@ private fun FeedList(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(vertical = 8.dp)
         ) {
-            // --- Section: Connections ---
+            // Connection-only feed — service events (guides, migration
+            // prompts, vote notifications, security alerts) now live on
+            // the VettID system connection's audit trail, not as
+            // separate activity rows. See
+            // plans/luminous-unifying-manatee.md.
             val connectionCards = items.filterIsInstance<FeedDisplayItem.ConnectionCard>()
-            val activityItems = items.filterIsInstance<FeedDisplayItem.EventItem>()
 
             items(
                 items = connectionCards,
@@ -420,33 +423,6 @@ private fun FeedList(
                         onVideoCallClick = { onVideoCall(item.connectionId) },
                         onBtcClick = { /* TODO */ }
                     )
-            }
-
-            // --- Section divider ---
-            if (connectionCards.isNotEmpty() && activityItems.isNotEmpty()) {
-                item(key = "section-divider") {
-                    Text(
-                        text = "ACTIVITY",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
-                    )
-                }
-            }
-
-            // --- Section: Activity ---
-            items(
-                items = activityItems,
-                key = { it.event.eventId }
-            ) { item ->
-                EventCard(
-                    event = item.event,
-                    onClick = { onEventClick(item.event) },
-                    onArchive = { onArchive(item.event) },
-                    onDelete = { onDelete(item.event) },
-                    onAction = { action -> onAction(item.event, action) },
-                    onTogglePriority = { onTogglePriority(item.event) }
-                )
             }
         }
     }
