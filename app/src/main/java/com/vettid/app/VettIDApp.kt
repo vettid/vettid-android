@@ -619,6 +619,15 @@ fun VettIDApp(
                 onNavigateToConversation = { connectionId ->
                     navController.navigate(Screen.Conversation.createRoute(connectionId))
                 },
+                onNavigateToBtcSend = { connectionId ->
+                    navController.navigate(Screen.SendBtc.createRoute(walletId = "", connectionId = connectionId))
+                },
+                onNavigateToBtcRequest = { connectionId ->
+                    // Request payment is invoked from inside the
+                    // ConversationScreen via its + menu today — route
+                    // there until a dedicated request screen exists.
+                    navController.navigate(Screen.Conversation.createRoute(connectionId))
+                },
                 onNavigateToHandlerDetail = { handlerId ->
                     navController.navigate(Screen.HandlerDetail.createRoute(handlerId))
                 },
@@ -1710,6 +1719,8 @@ fun MainScreen(
     onNavigateToCreateInvitation: () -> Unit = {},
     onNavigateToScanInvitation: () -> Unit = {},
     onNavigateToConversation: (String) -> Unit = {},
+    onNavigateToBtcSend: (connectionId: String) -> Unit = {},
+    onNavigateToBtcRequest: (connectionId: String) -> Unit = {},
     onNavigateToHandlerDetail: (String) -> Unit = {},
     onNavigateToPersonalData: () -> Unit = {},
     onNavigateToSecrets: () -> Unit = {},
@@ -1869,7 +1880,9 @@ fun MainScreen(
                 onNavigateToScanInvitation = onNavigateToScanInvitation,
                 onNavigateToCreateAgentInvitation = onNavigateToCreateAgentInvitation,
                 onNavigateToConnectDesktop = onNavigateToConnectDesktop,
-                onResurfaceVaultUpdate = { vaultUpdateViewModel.resurface() }
+                onResurfaceVaultUpdate = { vaultUpdateViewModel.resurface() },
+                onBtcSend = onNavigateToBtcSend,
+                onBtcRequest = onNavigateToBtcRequest,
             )
         },
         settingsContent = {

@@ -68,7 +68,9 @@ fun FeedContent(
     onNavigateToCreateInvitation: () -> Unit = {},
     onNavigateToScanInvitation: () -> Unit = {},
     onNavigateToCreateAgentInvitation: () -> Unit = {},
-    onNavigateToConnectDesktop: () -> Unit = {}
+    onNavigateToConnectDesktop: () -> Unit = {},
+    onBtcSend: (connectionId: String) -> Unit = {},
+    onBtcRequest: (connectionId: String) -> Unit = {},
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -225,6 +227,8 @@ fun FeedContent(
                         }
                     },
                     onResurfaceVaultUpdate = onResurfaceVaultUpdate,
+                    onBtcSend = onBtcSend,
+                    onBtcRequest = onBtcRequest,
                 )
                 is FeedState.Error -> {
                     // If in offline mode, show friendly offline content instead of error
@@ -357,6 +361,8 @@ private fun FeedList(
     onNavigateToConnectionReview: (String, String) -> Unit = { _, _ -> },
     onVoiceCall: (String) -> Unit = {},
     onVideoCall: (String) -> Unit = {},
+    onBtcSend: (String) -> Unit = {},
+    onBtcRequest: (String) -> Unit = {},
     onResurfaceVaultUpdate: () -> Unit = {},
 ) {
     val listState = rememberLazyListState()
@@ -423,7 +429,8 @@ private fun FeedList(
                         onHistoryClick = { onNavigateToConnectionHistory(item.connectionId) },
                         onCallClick = { onVoiceCall(item.connectionId) },
                         onVideoCallClick = { onVideoCall(item.connectionId) },
-                        onBtcClick = { /* TODO */ },
+                        onBtcClick = { onBtcSend(item.connectionId) },
+                        onBtcRequestClick = { onBtcRequest(item.connectionId) },
                         onNavigateToConnectionReview = onNavigateToConnectionReview,
                         onOpenMigration = onResurfaceVaultUpdate,
                     )
@@ -445,6 +452,7 @@ private fun StatusAwareConnectionCard(
     onCallClick: () -> Unit = {},
     onVideoCallClick: () -> Unit = {},
     onBtcClick: () -> Unit = {},
+    onBtcRequestClick: () -> Unit = {},
     onNavigateToConnectionReview: (connectionId: String, eventId: String) -> Unit = { _, _ -> },
     onOpenMigration: () -> Unit = {},
 ) {
@@ -454,13 +462,13 @@ private fun StatusAwareConnectionCard(
         item.hasAccepted -> WaitingConnectionCard(item, onClick)
         item.connectionStatus == "active" -> ActiveConnectionCard(
             item, onClick, onLongClick, onMessageClick, onHistoryClick,
-            onCallClick, onVideoCallClick, onBtcClick,
+            onCallClick, onVideoCallClick, onBtcClick, onBtcRequestClick,
             onNavigateToConnectionReview, onOpenMigration,
         )
         item.connectionStatus == "revoked" || item.connectionStatus == "rejected" -> InactiveConnectionCard(item, onClick)
         else -> ActiveConnectionCard(
             item, onClick, onLongClick, onMessageClick, onHistoryClick,
-            onCallClick, onVideoCallClick, onBtcClick,
+            onCallClick, onVideoCallClick, onBtcClick, onBtcRequestClick,
             onNavigateToConnectionReview, onOpenMigration,
         )
     }
@@ -623,6 +631,7 @@ private fun ActiveConnectionCard(
     onCallClick: () -> Unit = {},
     onVideoCallClick: () -> Unit = {},
     onBtcClick: () -> Unit = {},
+    onBtcRequestClick: () -> Unit = {},
     onNavigateToConnectionReview: (connectionId: String, eventId: String) -> Unit = { _, _ -> },
     onOpenMigration: () -> Unit = {},
 ) {
@@ -675,43 +684,83 @@ private fun ActiveConnectionCard(
                             modifier = Modifier.weight(1f)
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text(
-                                text = formatTimestamp(item.sortTimestamp),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.outline
+                        // Just the timestamp now — the activity type and
+                        // direction live in the notification/activity
+                        // row below, which shows them with a label.
+                        Text(
+                            text = formatTimestamp(item.sortTimestamp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                }
+            }
+
+            // Quick action strip — peer connections get Text/Voice/Video
+            // + More menu; the system (VettID) connection has no
+            // interactive actions from the feed, so the strip is hidden.
+            if (!isSystem) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                ) {
+                    ConnectionActionButton(
+                        icon = Icons.AutoMirrored.Filled.Chat,
+                        label = "Text",
+                        onClick = onMessageClick,
+                    )
+                    ConnectionActionButton(
+                        icon = Icons.Default.Call,
+                        label = "Voice",
+                        onClick = onCallClick,
+                    )
+                    ConnectionActionButton(
+                        icon = Icons.Default.Videocam,
+                        label = "Video",
+                        onClick = onVideoCallClick,
+                    )
+                    Box {
+                        var showMoreMenu by remember { mutableStateOf(false) }
+                        ConnectionActionButton(
+                            icon = Icons.Default.MoreVert,
+                            label = "More",
+                            onClick = { showMoreMenu = true },
+                        )
+                        DropdownMenu(
+                            expanded = showMoreMenu,
+                            onDismissRequest = { showMoreMenu = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Send BTC") },
+                                onClick = { showMoreMenu = false; onBtcClick() },
+                                leadingIcon = {
+                                    Icon(Icons.Default.CurrencyBitcoin, contentDescription = null, modifier = Modifier.size(20.dp))
+                                },
                             )
-                            // Compact type icon under the timestamp —
-                            // tells the eye what the last interaction
-                            // was (message / call / missed). Unread
-                            // counts live on the action buttons below
-                            // so the badge highlights *where to tap*.
-                            val (typeIcon, typeTint) = lastActivityIcon(
-                                activityType = item.lastActivityType,
-                                direction = item.lastActivityDirection,
-                                subtype = item.lastActivitySubtype,
-                                outcome = item.lastActivityOutcome,
+                            DropdownMenuItem(
+                                text = { Text("Request BTC") },
+                                onClick = { showMoreMenu = false; onBtcRequestClick() },
+                                leadingIcon = {
+                                    Icon(Icons.Default.CallReceived, contentDescription = null, modifier = Modifier.size(20.dp))
+                                },
                             )
-                            if (typeIcon != null) {
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Icon(
-                                    imageVector = typeIcon,
-                                    contentDescription = null,
-                                    tint = typeTint,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
+                            DropdownMenuItem(
+                                text = { Text("History") },
+                                onClick = { showMoreMenu = false; onHistoryClick() },
+                                leadingIcon = {
+                                    Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(20.dp))
+                                },
+                            )
                         }
                     }
                 }
             }
 
-            // Pending rows replace the old Text/Voice/Video/More
-            // button strip. Each row is an explicit actionable item
-            // (unread messages, missed calls, pending review, …) with
-            // a tap target. When nothing is pending, a single passive
-            // last-activity row shows the most recent interaction.
-            // See plans/luminous-unifying-manatee.md §12.
+            // Notification / last-activity rows sit below the action
+            // strip so waiting items are legible and tappable without
+            // competing with the quick-send buttons above. See
+            // plans/luminous-unifying-manatee.md §12.
             if (item.pendingRows.isNotEmpty()) {
                 Spacer(modifier = Modifier.height(8.dp))
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
