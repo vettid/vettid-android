@@ -193,6 +193,7 @@ class FeedViewModel @Inject constructor(
                 e2eReady = conn.e2eReady,
                 lastActivityPreview = preview,
                 lastActivityType = if (conn.lastMessagePreview != null) "message" else "connection",
+                lastActivityDirection = conn.lastMessageDirection,
                 unreadCount = conn.unreadMessageCount,
                 sortTimestamp = sortTime,
                 isUnread = needsReview || conn.unreadMessageCount > 0

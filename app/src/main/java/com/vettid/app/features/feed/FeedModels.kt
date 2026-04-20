@@ -47,6 +47,7 @@ sealed class FeedDisplayItem {
         val e2eReady: Boolean,             // can message (key exchange complete)
         val lastActivityPreview: String,   // latest message text or status description
         val lastActivityType: String,      // "message", "call", "connection", etc.
+        val lastActivityDirection: String? = null, // "incoming" | "outgoing" | null
         val unreadCount: Int,
         override val sortTimestamp: Long,
         override val isUnread: Boolean

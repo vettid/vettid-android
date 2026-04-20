@@ -587,6 +587,7 @@ class ConnectionsClient @Inject constructor(
             needsAttention = json.get("needs_attention")?.asBoolean ?: false,
             lastMessagePreview = json.get("last_message_preview")?.takeIf { !it.isJsonNull }?.asString,
             lastMessageAt = json.get("last_message_at")?.takeIf { !it.isJsonNull }?.asString,
+            lastMessageDirection = json.get("last_message_direction")?.takeIf { !it.isJsonNull }?.asString,
             unreadMessageCount = json.get("unread_count")?.asInt ?: 0,
             peerProfile = peerProfile
         )
@@ -733,6 +734,7 @@ data class ConnectionRecord(
     val needsAttention: Boolean = false,
     val lastMessagePreview: String? = null,
     val lastMessageAt: String? = null,
+    val lastMessageDirection: String? = null, // "incoming" | "outgoing" | null
     val unreadMessageCount: Int = 0,
     val peerProfile: PeerProfileData? = null
 )

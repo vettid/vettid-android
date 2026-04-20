@@ -694,7 +694,7 @@ private fun ActiveConnectionCard(
                             // was (message / call / missed). Unread
                             // counts live on the action buttons below
                             // so the badge highlights *where to tap*.
-                            val (typeIcon, typeTint) = lastActivityIcon(item.lastActivityType, item.lastActivityPreview)
+                            val (typeIcon, typeTint) = lastActivityIcon(item.lastActivityType, item.lastActivityPreview, item.lastActivityDirection)
                             if (typeIcon != null) {
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Icon(
@@ -1250,15 +1250,24 @@ private fun getPriorityColor(priority: EventPriority): Color {
 @Composable
 private fun lastActivityIcon(
     activityType: String,
-    preview: String
+    preview: String,
+    direction: String? = null,
 ): Pair<ImageVector?, Color> {
     val missed = preview.contains("Missed", ignoreCase = true)
     val isCall = preview.contains("call", ignoreCase = true) ||
         preview.contains("voice", ignoreCase = true) ||
         preview.contains("video", ignoreCase = true)
+    // Directional variants make it obvious at a glance whether the last
+    // activity was something the user sent or received.
     return when {
         missed -> Icons.Default.CallMissed to DeclineRedColor
+        isCall && direction == "outgoing" -> Icons.Default.CallMade to AnswerGreenColor
+        isCall && direction == "incoming" -> Icons.Default.CallReceived to AnswerGreenColor
         isCall -> Icons.Default.Call to AnswerGreenColor
+        activityType == "message" && direction == "outgoing" ->
+            Icons.Default.Send to MaterialTheme.colorScheme.outline
+        activityType == "message" && direction == "incoming" ->
+            Icons.AutoMirrored.Filled.Reply to MaterialTheme.colorScheme.outline
         activityType == "message" -> Icons.AutoMirrored.Filled.Chat to MaterialTheme.colorScheme.outline
         activityType == "connection" -> Icons.Default.Person to MaterialTheme.colorScheme.outline
         else -> null to MaterialTheme.colorScheme.outline
