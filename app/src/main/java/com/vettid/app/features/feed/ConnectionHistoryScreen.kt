@@ -3,8 +3,8 @@ package com.vettid.app.features.feed
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -21,17 +21,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.vettid.app.core.nats.FeedEvent
+import com.vettid.app.core.nats.AuditEntry
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/**
- * Per-connection audit trail. Opened from the feed card's More > History
- * and intended as the user's complete record of interactions with a peer:
- * messages, calls (voice + video, including missed), connection
- * lifecycle, key rotations, etc.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConnectionHistoryScreen(
@@ -40,6 +34,7 @@ fun ConnectionHistoryScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
+    val isPaginating by viewModel.isPaginating.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     var searchExpanded by remember { mutableStateOf(false) }
 
@@ -66,8 +61,6 @@ fun ConnectionHistoryScreen(
                     }
                 },
                 actions = {
-                    // Single Search toggle — refresh is handled by
-                    // pulling down on the list, not a bar button.
                     IconButton(onClick = {
                         if (searchExpanded && searchQuery.isNotEmpty()) {
                             viewModel.onSearchQueryChanged("")
@@ -101,7 +94,12 @@ fun ConnectionHistoryScreen(
                     subtitle = "Nothing in this contact's history mentions \"${current.query}\"."
                 )
                 is ConnectionHistoryState.Error -> ErrorCentered(current.message)
-                is ConnectionHistoryState.Loaded -> HistoryList(current.events)
+                is ConnectionHistoryState.Loaded -> HistoryList(
+                    events = current.events,
+                    endReached = current.endReached,
+                    isPaginating = isPaginating,
+                    onLoadMore = viewModel::loadNextPage
+                )
             }
         }
     }
@@ -156,20 +154,50 @@ private fun ErrorCentered(message: String) {
 }
 
 @Composable
-private fun HistoryList(events: List<FeedEvent>) {
+private fun HistoryList(
+    events: List<AuditEntry>,
+    endReached: Boolean,
+    isPaginating: Boolean,
+    onLoadMore: () -> Unit,
+) {
+    val listState = rememberLazyListState()
+
+    // Trigger pagination when the user scrolls within the last three
+    // rows of the current page. LazyListState exposes visible-item
+    // info synchronously, no LaunchedEffect needed.
+    val lastVisibleIndex by remember(listState) {
+        derivedStateOf { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }
+    }
+    LaunchedEffect(lastVisibleIndex, events.size, endReached, isPaginating) {
+        if (!endReached && !isPaginating && lastVisibleIndex >= events.size - 3) {
+            onLoadMore()
+        }
+    }
+
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(vertical = 8.dp)
     ) {
-        items(items = events, key = { it.eventId }) { event ->
+        items(items = events, key = { it.entry_id }) { event ->
             HistoryRow(event)
+        }
+        if (!endReached) {
+            item {
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun HistoryRow(event: FeedEvent) {
-    val (icon, tint) = iconForEventType(event.eventType)
+private fun HistoryRow(event: AuditEntry) {
+    val (icon, tint) = iconForEventType(event.event_type)
     val body = renderEventBody(event)
     Row(
         modifier = Modifier
@@ -194,7 +222,7 @@ private fun HistoryRow(event: FeedEvent) {
         Spacer(modifier = Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(
-                text = event.title.ifEmpty { humanizeEventType(event.eventType) },
+                text = event.title.ifEmpty { humanizeEventType(event.event_type) },
                 style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.Medium
             )
@@ -208,7 +236,7 @@ private fun HistoryRow(event: FeedEvent) {
             }
             Spacer(modifier = Modifier.height(4.dp))
             Text(
-                text = formatEventTimestamp(event.createdAt),
+                text = formatEventTimestamp(event.created_at),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.outline
             )
@@ -217,41 +245,27 @@ private fun HistoryRow(event: FeedEvent) {
     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
 }
 
-/**
- * Resolve a useful body string for an event. The vault frequently sets
- * event.message = "New message" as a placeholder title fragment, which
- * isn't worth showing. Prefer the real message body (or a call summary)
- * from metadata, and fall back to a humanized description.
- */
-private fun renderEventBody(event: FeedEvent): String {
-    val meta = event.metadata ?: emptyMap()
-    val rawMessage = event.message?.trim().orEmpty()
-    val placeholder = rawMessage.equals("New message", ignoreCase = true) ||
-        rawMessage.equals("Tap to view", ignoreCase = true) ||
-        rawMessage.equals("View details", ignoreCase = true)
+private fun renderEventBody(event: AuditEntry): String {
+    val body = event.body?.trim().orEmpty()
+    if (body.isNotEmpty()) return body
 
+    val meta = event.metadata ?: emptyMap()
     return when {
-        event.eventType.startsWith("message.") -> {
-            val preview = meta["preview"] ?: meta["content"] ?: meta["body"]
-                ?: if (!placeholder) rawMessage else ""
-            preview.orEmpty().ifBlank {
-                if (event.eventType == "message.sent") "Sent a message" else "Received a message"
-            }
-        }
-        event.eventType.startsWith("call.") -> {
+        event.event_type.startsWith("call.") -> {
             val duration = meta["duration_seconds"]?.toLongOrNull()?.let { formatDuration(it) }
-            val parts = listOfNotNull(
-                when (event.eventType) {
-                    "call.missed" -> "Missed call"
-                    "call.completed" -> "Call ended"
-                    "call.incoming" -> "Incoming call"
-                    else -> null
-                },
-                duration?.let { "Duration $it" }
-            )
-            parts.joinToString(" · ")
+            val prefix = when {
+                event.event_type.contains("missed") -> "Missed call"
+                event.event_type.contains("completed") -> "Call ended"
+                event.event_type.contains("started") -> "Call started"
+                else -> "Call"
+            }
+            listOfNotNull(prefix, duration?.let { "Duration $it" }).joinToString(" · ")
         }
-        else -> if (placeholder) "" else rawMessage
+        event.event_type.startsWith("transfer.btc.") -> {
+            val amount = meta["amount_sats"]
+            if (amount != null) "Amount $amount sats" else ""
+        }
+        else -> ""
     }
 }
 
@@ -264,16 +278,12 @@ private fun formatDuration(seconds: Long): String {
     return "%d:%02d".format(m, s)
 }
 
-/**
- * Map event type → (icon, tint). Aligned with FeedScreen's card icon so
- * a phone call shows the same green phone in both places.
- */
 @Composable
 private fun iconForEventType(eventType: String): Pair<ImageVector, Color> {
     val green = Color(0xFF4CAF50)
     val red = Color(0xFFE53935)
     return when {
-        eventType == "call.missed" -> Icons.Default.CallMissed to red
+        eventType.contains("missed") -> Icons.Default.CallMissed to red
         eventType.startsWith("call.") -> Icons.Default.Call to green
         eventType.startsWith("message.") -> Icons.AutoMirrored.Filled.Message to MaterialTheme.colorScheme.primary
         eventType == "connection.revoked" -> Icons.Default.PersonRemove to red
