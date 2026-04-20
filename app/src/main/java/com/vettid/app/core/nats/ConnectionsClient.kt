@@ -589,6 +589,12 @@ class ConnectionsClient @Inject constructor(
             lastMessageAt = json.get("last_message_at")?.takeIf { !it.isJsonNull }?.asString,
             lastMessageDirection = json.get("last_message_direction")?.takeIf { !it.isJsonNull }?.asString,
             unreadMessageCount = json.get("unread_count")?.asInt ?: 0,
+            lastActivityType = json.get("last_activity_type")?.takeIf { !it.isJsonNull }?.asString,
+            lastActivityAt = json.get("last_activity_at")?.takeIf { !it.isJsonNull }?.asString,
+            lastActivityDirection = json.get("last_activity_direction")?.takeIf { !it.isJsonNull }?.asString,
+            lastActivitySubtype = json.get("last_activity_subtype")?.takeIf { !it.isJsonNull }?.asString,
+            lastActivityOutcome = json.get("last_activity_outcome")?.takeIf { !it.isJsonNull }?.asString,
+            missedCallCount = json.get("missed_call_count")?.asInt ?: 0,
             peerProfile = peerProfile
         )
     }
@@ -736,6 +742,13 @@ data class ConnectionRecord(
     val lastMessageAt: String? = null,
     val lastMessageDirection: String? = null, // "incoming" | "outgoing" | null
     val unreadMessageCount: Int = 0,
+    // Merged message+call last-activity (vault picks the newer one).
+    val lastActivityType: String? = null,       // "message" | "call"
+    val lastActivityAt: String? = null,
+    val lastActivityDirection: String? = null,  // "incoming" | "outgoing"
+    val lastActivitySubtype: String? = null,    // calls: "voice" | "video"
+    val lastActivityOutcome: String? = null,    // calls: "completed" | "missed" | "rejected"
+    val missedCallCount: Int = 0,
     val peerProfile: PeerProfileData? = null
 )
 

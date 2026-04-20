@@ -670,7 +670,12 @@ private fun ActiveConnectionCard(
                             // was (message / call / missed). Unread
                             // counts live on the action buttons below
                             // so the badge highlights *where to tap*.
-                            val (typeIcon, typeTint) = lastActivityIcon(item.lastActivityType, item.lastActivityPreview, item.lastActivityDirection)
+                            val (typeIcon, typeTint) = lastActivityIcon(
+                                activityType = item.lastActivityType,
+                                direction = item.lastActivityDirection,
+                                subtype = item.lastActivitySubtype,
+                                outcome = item.lastActivityOutcome,
+                            )
                             if (typeIcon != null) {
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Icon(
@@ -690,11 +695,12 @@ private fun ActiveConnectionCard(
             // actionable sits on the detail screen's action strip).
             if (!isSystem) {
             Spacer(modifier = Modifier.height(8.dp))
-            // If the last interaction was a missed call, flag the Voice
-            // button so the user sees where to call back. Pure text
-            // heuristic until the connection-list API surfaces a
-            // per-type unread count.
-            val missedCallPending = item.lastActivityPreview.contains("Missed", ignoreCase = true) && item.isUnread
+            // Missed-call badges use the vault's missed_call_count.
+            // Voice and video share a pool — the vault doesn't yet split
+            // the count by call subtype, so the badge shows on Voice
+            // (primary call affordance). Splitting voice vs video is a
+            // follow-up if it becomes confusing.
+            val missedCalls = item.missedCallCount
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly
@@ -703,13 +709,13 @@ private fun ActiveConnectionCard(
                     icon = Icons.AutoMirrored.Filled.Chat,
                     label = "Text",
                     onClick = onMessageClick,
-                    badgeCount = if (item.lastActivityType == "message") item.unreadCount else 0
+                    badgeCount = item.unreadCount
                 )
                 ConnectionActionButton(
                     icon = Icons.Default.Call,
                     label = "Voice",
                     onClick = onCallClick,
-                    badgeCount = if (missedCallPending) 1 else 0
+                    badgeCount = missedCalls
                 )
                 ConnectionActionButton(
                     icon = Icons.Default.Videocam,
@@ -1223,20 +1229,22 @@ private fun getPriorityColor(priority: EventPriority): Color {
 @Composable
 private fun lastActivityIcon(
     activityType: String,
-    preview: String,
     direction: String? = null,
+    subtype: String? = null,
+    outcome: String? = null,
 ): Pair<ImageVector?, Color> {
-    val missed = preview.contains("Missed", ignoreCase = true)
-    val isCall = preview.contains("call", ignoreCase = true) ||
-        preview.contains("voice", ignoreCase = true) ||
-        preview.contains("video", ignoreCase = true)
-    // Directional variants make it obvious at a glance whether the last
-    // activity was something the user sent or received.
+    val isCall = activityType == "call"
+    val isVideo = subtype == "video"
     return when {
-        missed -> Icons.Default.CallMissed to DeclineRedColor
+        // Calls: missed reads red; completed/rejected use directional
+        // green glyphs matching who started the call.
+        isCall && outcome == "missed" -> Icons.Default.CallMissed to DeclineRedColor
+        isCall && isVideo && direction == "outgoing" -> Icons.Default.Videocam to AnswerGreenColor
+        isCall && isVideo -> Icons.Default.Videocam to AnswerGreenColor
         isCall && direction == "outgoing" -> Icons.Default.CallMade to AnswerGreenColor
         isCall && direction == "incoming" -> Icons.Default.CallReceived to AnswerGreenColor
         isCall -> Icons.Default.Call to AnswerGreenColor
+        // Messages: direction arrow when we have it.
         activityType == "message" && direction == "outgoing" ->
             Icons.Default.Send to MaterialTheme.colorScheme.outline
         activityType == "message" && direction == "incoming" ->

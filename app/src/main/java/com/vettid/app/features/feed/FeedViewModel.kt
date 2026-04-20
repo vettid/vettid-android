@@ -189,6 +189,13 @@ class FeedViewModel @Inject constructor(
                 try { java.time.Instant.parse(it).toEpochMilli() } catch (_: Exception) { null }
             } ?: try { java.time.Instant.parse(conn.createdAt).toEpochMilli() } catch (_: Exception) { System.currentTimeMillis() }
 
+            // Prefer the merged last-activity fields from the vault
+            // (messages + calls); fall back to the legacy message-only
+            // fields for older enclaves that don't send them.
+            val activityType = conn.lastActivityType
+                ?: if (conn.lastMessagePreview != null) "message" else "connection"
+            val activityDirection = conn.lastActivityDirection ?: conn.lastMessageDirection
+
             FeedDisplayItem.ConnectionCard(
                 connectionId = conn.connectionId,
                 peerName = peerName,
@@ -201,11 +208,17 @@ class FeedViewModel @Inject constructor(
                 connectionType = conn.connectionType,
                 e2eReady = conn.e2eReady,
                 lastActivityPreview = preview,
-                lastActivityType = if (conn.lastMessagePreview != null) "message" else "connection",
-                lastActivityDirection = conn.lastMessageDirection,
+                lastActivityType = activityType,
+                lastActivityDirection = activityDirection,
+                lastActivitySubtype = conn.lastActivitySubtype,
+                lastActivityOutcome = conn.lastActivityOutcome,
+                missedCallCount = conn.missedCallCount,
                 unreadCount = conn.unreadMessageCount,
                 sortTimestamp = sortTime,
-                isUnread = needsReview || conn.unreadMessageCount > 0
+                // Unread badges the card if: pending review, unread
+                // messages exist, or there's an unacknowledged missed
+                // incoming call.
+                isUnread = needsReview || conn.unreadMessageCount > 0 || conn.missedCallCount > 0
             )
         }.sortedWith(
             compareByDescending<FeedDisplayItem.ConnectionCard> { if (it.needsReview) 1 else 0 }

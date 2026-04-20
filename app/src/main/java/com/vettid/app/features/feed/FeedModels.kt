@@ -48,6 +48,9 @@ sealed class FeedDisplayItem {
         val lastActivityPreview: String,   // latest message text or status description
         val lastActivityType: String,      // "message", "call", "connection", etc.
         val lastActivityDirection: String? = null, // "incoming" | "outgoing" | null
+        val lastActivitySubtype: String? = null,   // "voice" | "video" when type=call
+        val lastActivityOutcome: String? = null,   // "completed" | "missed" | "rejected" for calls
+        val missedCallCount: Int = 0,
         val unreadCount: Int,
         override val sortTimestamp: Long,
         override val isUnread: Boolean
