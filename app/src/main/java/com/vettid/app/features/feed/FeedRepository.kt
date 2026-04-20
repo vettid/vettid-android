@@ -306,6 +306,20 @@ class FeedRepository @Inject constructor(
     }
 
     /**
+     * Insert a client-originated event into the local cache. Used for
+     * things the server doesn't know about (e.g. "you deferred a vault
+     * update — we left this in your feed so you can find it again"). The
+     * event will be wiped on the next full sync, so callers that need
+     * persistence should re-add on each relevant state change. If an
+     * event with the same id already exists, this is a no-op.
+     */
+    fun addEventLocally(event: FeedEvent) {
+        val existing = getCachedEvents()
+        if (existing.any { it.eventId == event.eventId }) return
+        saveEvents(existing + event)
+    }
+
+    /**
      * Check if cache data is stale.
      */
     fun isCacheStale(): Boolean {

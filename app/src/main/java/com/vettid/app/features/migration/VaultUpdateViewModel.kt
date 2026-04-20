@@ -7,8 +7,10 @@ import androidx.lifecycle.viewModelScope
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.vettid.app.core.attestation.PcrConfigManager
+import com.vettid.app.core.nats.FeedEvent
 import com.vettid.app.core.nats.MigrationClient
 import com.vettid.app.core.nats.MigrationConfig
+import com.vettid.app.features.feed.FeedRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -30,6 +32,7 @@ import javax.inject.Inject
 class VaultUpdateViewModel @Inject constructor(
     private val migrationClient: MigrationClient,
     private val pcrConfigManager: PcrConfigManager,
+    private val feedRepository: FeedRepository,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -210,15 +213,50 @@ class VaultUpdateViewModel @Inject constructor(
     }
 
     /**
-     * User tapped "Remind Me Later" — defer until next app open.
+     * User tapped "Remind Me Later" — defer until next app open and also
+     * drop a synthetic entry into the feed so the deferred update stays
+     * discoverable from the feed (user asked for this explicitly — the
+     * post-unlock card is easy to miss if you're in a hurry). The event
+     * gets wiped on the next full sync; subsequent deferrals re-add it.
      */
     fun remindLater() {
+        val config = currentConfig
         getPrefs().edit()
             .putLong(KEY_REMINDED_AT, System.currentTimeMillis())
             .putBoolean(KEY_DISMISSED, true)
             .apply()
 
+        if (config != null) {
+            pushDeferredUpdateToFeed(config)
+        }
+
         _state.value = VaultUpdateState.NoUpdate
+    }
+
+    private fun pushDeferredUpdateToFeed(config: MigrationConfig) {
+        val now = System.currentTimeMillis() / 1000
+        val event = FeedEvent(
+            // Stable id per config version — re-adding the same id after a
+            // sync wipe just reinstates the entry rather than spamming.
+            eventId = "local-migration-${config.version}",
+            eventType = "security.migration",
+            sourceType = "local",
+            sourceId = null,
+            title = "Vault Security Update Pending",
+            message = config.summary.ifEmpty { "A vault update is waiting for your approval. Tap to review." },
+            metadata = mapOf("migration_version" to config.version),
+            feedStatus = "active",
+            actionType = null,
+            priority = 1,
+            createdAt = now,
+            readAt = null,
+            actionedAt = null,
+            archivedAt = null,
+            expiresAt = null,
+            syncSequence = 0L,
+            retentionClass = "standard"
+        )
+        feedRepository.addEventLocally(event)
     }
 
     /**

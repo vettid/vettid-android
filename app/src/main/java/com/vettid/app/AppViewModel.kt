@@ -107,18 +107,44 @@ class AppViewModel @Inject constructor(
      * When the vault reports "vault_locked" (e.g., after enclave instance refresh
      * where the DEK is lost), force the user back to PIN entry so the DEK can
      * be re-derived from PIN + sealed material.
+     *
+     * Grace window: during a migration the ASG runs two enclaves and NATS may
+     * load-balance a request to the "cold" instance that doesn't hold our
+     * just-derived DEK. Treating a single vault_locked response as a real
+     * lockout would kick the user back to the PIN screen seconds after they
+     * typed it. Ignore vault_locked responses within VAULT_LOCK_GRACE_MS of
+     * the last successful authentication and instead just log them.
      */
     private fun observeVaultLock() {
         viewModelScope.launch {
             ownerSpaceClient.vaultLocked.collect {
-                // Only force re-auth if user is currently authenticated.
-                // If already on PIN screen, ignore to avoid re-entry loops.
-                if (_appState.value.isAuthenticated) {
-                    Log.i(TAG, "Vault locked — requiring PIN re-entry")
-                    _appState.update { it.copy(isAuthenticated = false) }
+                if (!_appState.value.isAuthenticated) return@collect
+                val sinceAuth = System.currentTimeMillis() - lastAuthenticatedAtMillis
+                if (sinceAuth < VAULT_LOCK_GRACE_MS) {
+                    Log.w(TAG, "vault_locked within grace window (${sinceAuth}ms since auth) — likely migration routing, ignoring")
+                    return@collect
                 }
+                Log.i(TAG, "Vault locked — requiring PIN re-entry")
+                _appState.update { it.copy(isAuthenticated = false) }
             }
         }
+    }
+
+    // Tracked so observeVaultLock can ignore transient vault_locked responses
+    // that arrive right after a successful unlock (migration-time routing race).
+    private var lastAuthenticatedAtMillis: Long = 0L
+
+    private companion object {
+        /**
+         * Window during which a vault_locked response is ignored rather than
+         * forcing re-auth. Sized to cover a migration-window routing blip —
+         * during migration, NATS may deliver a few consecutive requests to a
+         * cold enclave before the warm one takes over. 60s is long enough to
+         * ride out the handful of background requests the app fires after
+         * unlock (feed.sync, profile.broadcast, profile.get, photo fetch)
+         * without masking a genuine lockout caused by enclave restart.
+         */
+        private const val VAULT_LOCK_GRACE_MS = 60_000L
     }
 
     /**
@@ -157,6 +183,9 @@ class AppViewModel @Inject constructor(
      * Set authentication state and trigger NATS auto-connect if authenticated.
      */
     fun setAuthenticated(authenticated: Boolean) {
+        if (authenticated) {
+            lastAuthenticatedAtMillis = System.currentTimeMillis()
+        }
         _appState.update { it.copy(isAuthenticated = authenticated) }
 
         if (authenticated && !credentialStore.getOfflineMode()) {

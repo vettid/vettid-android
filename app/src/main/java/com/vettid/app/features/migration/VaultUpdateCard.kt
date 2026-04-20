@@ -67,17 +67,11 @@ fun VaultUpdateCard(
                 }
             }
 
-            // Review details link
-            if (!config.detailsUrl.isNullOrEmpty()) {
-                TextButton(
-                    onClick = onReviewDetails,
-                    modifier = Modifier.padding(horizontal = 8.dp)
-                ) {
-                    Text("Review Details")
-                }
-            }
-
-            // Action buttons
+            // All three actions use TextButton so they share the same
+            // visual weight — the old filled-Button "Update Now" jumped
+            // out next to the two TextButton siblings. Differentiation
+            // is now through the "Update Now" label's primary-colored
+            // text (it's still the main action; just not shouting).
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -85,6 +79,16 @@ fun VaultUpdateCard(
                     .padding(bottom = 8.dp),
                 horizontalArrangement = Arrangement.End
             ) {
+                if (!config.detailsUrl.isNullOrEmpty()) {
+                    TextButton(
+                        onClick = onReviewDetails,
+                        enabled = !isUpdating
+                    ) {
+                        Text("Review Details")
+                    }
+                    Spacer(modifier = Modifier.width(4.dp))
+                }
+
                 // "Remind Me Later" — hidden when mandatory
                 if (!isMandatory) {
                     TextButton(
@@ -93,23 +97,26 @@ fun VaultUpdateCard(
                     ) {
                         Text("Remind Me Later")
                     }
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
                 }
 
-                Button(
+                TextButton(
                     onClick = onUpdateNow,
-                    enabled = !isUpdating
+                    enabled = !isUpdating,
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.primary
+                    )
                 ) {
                     if (isUpdating) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
+                            modifier = Modifier.size(14.dp),
                             strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary
+                            color = MaterialTheme.colorScheme.primary
                         )
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Updating...")
+                        Text("Updating…")
                     } else {
-                        Text("Update Now")
+                        Text("Update Now", fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
