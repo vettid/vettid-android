@@ -807,20 +807,17 @@ private fun ConnectionAvatar(
             }
         }
     } else if (connectionType == "system") {
-        Surface(
-            modifier = Modifier.size(44.dp),
-            shape = CircleShape,
-            color = MaterialTheme.colorScheme.secondaryContainer
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    Icons.Default.Shield,
-                    contentDescription = "VettID",
-                    modifier = Modifier.size(24.dp),
-                    tint = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-            }
-        }
+        // The VettID vector logo is multicolor (path-tinted inside the
+        // asset), so render it via Image rather than Icon to preserve
+        // its fill. Drop shape clipping since the logo is already a
+        // shield.
+        Image(
+            painter = androidx.compose.ui.res.painterResource(
+                id = com.vettid.app.R.drawable.vettid_logo
+            ),
+            contentDescription = "VettID",
+            modifier = Modifier.size(44.dp)
+        )
     } else {
         val photoBitmap = remember(photoBase64) {
             photoBase64?.let { base64 ->
