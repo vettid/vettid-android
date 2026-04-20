@@ -161,16 +161,25 @@ sealed class Screen(val route: String) {
     }
     object ConnectionReview : Screen("connections/review/{connectionId}?eventId={eventId}") {
         fun createRoute(connectionId: String, eventId: String? = null) =
-            "connections/review/$connectionId" + if (eventId != null) "?eventId=$eventId" else ""
+            "connections/review/${encodeId(connectionId)}" + if (eventId != null) "?eventId=$eventId" else ""
     }
     object ConnectionDetail : Screen("connections/{connectionId}") {
-        fun createRoute(connectionId: String) = "connections/$connectionId"
+        fun createRoute(connectionId: String) = "connections/${encodeId(connectionId)}"
     }
     object Conversation : Screen("connections/{connectionId}/messages") {
-        fun createRoute(connectionId: String) = "connections/$connectionId/messages"
+        fun createRoute(connectionId: String) = "connections/${encodeId(connectionId)}/messages"
     }
     object ConnectionHistory : Screen("connections/{connectionId}/history") {
-        fun createRoute(connectionId: String) = "connections/$connectionId/history"
+        fun createRoute(connectionId: String) = "connections/${encodeId(connectionId)}/history"
+    }
+    companion object {
+        // Connection IDs historically were UUIDs with no special chars,
+        // but the VettID system connection shipped briefly under
+        // "system/vettid" — a "/" inside the id collides with the path
+        // template. URL-encoding every id on the way in and letting
+        // NavType.StringType decode on the way out keeps old clients
+        // that still have that value in local state from crashing.
+        private fun encodeId(id: String) = java.net.URLEncoder.encode(id, "UTF-8")
     }
     // Profile
     object Profile : Screen("profile")

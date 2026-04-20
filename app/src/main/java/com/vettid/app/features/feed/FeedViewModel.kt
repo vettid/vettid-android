@@ -151,6 +151,15 @@ class FeedViewModel @Inject constructor(
         val query = _searchQuery.value.trim()
 
         return cachedConnections.mapNotNull { conn ->
+            // Defensive filter: connection IDs with a "/" collide with
+            // the Compose nav route template `connections/{connectionId}`
+            // and crash the app on tap. The v3 enclave shipped the
+            // VettID system connection as "system/vettid"; v4 renames
+            // it and cleans up the orphan, but caches sometimes linger.
+            // Skip any such row rather than rendering an untappable card.
+            if (conn.connectionId.contains('/')) {
+                return@mapNotNull null
+            }
             val peerName = listOfNotNull(
                 conn.peerProfile?.firstName, conn.peerProfile?.lastName
             ).joinToString(" ").trim().ifEmpty { conn.label }
