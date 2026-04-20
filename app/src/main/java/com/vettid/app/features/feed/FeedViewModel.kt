@@ -195,6 +195,18 @@ class FeedViewModel @Inject constructor(
             val activityType = conn.lastActivityType
                 ?: if (conn.lastMessagePreview != null) "message" else "connection"
             val activityDirection = conn.lastActivityDirection ?: conn.lastMessageDirection
+            val activityAtMs = (conn.lastActivityAt ?: conn.lastMessageAt)?.let {
+                try { java.time.Instant.parse(it).toEpochMilli() } catch (_: Exception) { 0L }
+            } ?: 0L
+
+            val pendingRows = buildPendingRows(
+                conn = conn,
+                needsReview = needsReview,
+                activityType = activityType,
+                activityDirection = activityDirection,
+                activityAtMs = activityAtMs,
+                preview = preview,
+            )
 
             FeedDisplayItem.ConnectionCard(
                 connectionId = conn.connectionId,
@@ -212,8 +224,10 @@ class FeedViewModel @Inject constructor(
                 lastActivityDirection = activityDirection,
                 lastActivitySubtype = conn.lastActivitySubtype,
                 lastActivityOutcome = conn.lastActivityOutcome,
+                lastActivityAt = activityAtMs,
                 missedCallCount = conn.missedCallCount,
                 unreadCount = conn.unreadMessageCount,
+                pendingRows = pendingRows,
                 sortTimestamp = sortTime,
                 // Unread badges the card if: pending review, unread
                 // messages exist, or there's an unacknowledged missed
@@ -224,6 +238,65 @@ class FeedViewModel @Inject constructor(
             compareByDescending<FeedDisplayItem.ConnectionCard> { if (it.needsReview) 1 else 0 }
                 .thenByDescending { it.sortTimestamp }
         )
+    }
+
+    /**
+     * Collect the explicit "pending items" rows shown at the bottom of
+     * a connection card. Order: review → migration → missed calls →
+     * unread messages → (fallback) last-activity. System connections
+     * bubble migration/vote rows here rather than as separate cards.
+     * See plans/luminous-unifying-manatee.md §12.
+     */
+    private fun buildPendingRows(
+        conn: com.vettid.app.core.nats.ConnectionRecord,
+        needsReview: Boolean,
+        activityType: String,
+        activityDirection: String?,
+        activityAtMs: Long,
+        preview: String,
+    ): List<PendingRow> {
+        val rows = mutableListOf<PendingRow>()
+
+        if (needsReview) {
+            rows += PendingRow.PendingReview(timestamp = activityAtMs)
+        }
+        if (conn.missedCallCount > 0) {
+            rows += PendingRow.MissedCall(
+                count = conn.missedCallCount,
+                subtype = conn.lastActivitySubtype,
+                timestamp = activityAtMs,
+            )
+        }
+        if (conn.unreadMessageCount > 0) {
+            rows += PendingRow.UnreadMessages(
+                count = conn.unreadMessageCount,
+                timestamp = activityAtMs,
+            )
+        }
+
+        if (rows.isEmpty() && activityType != "connection") {
+            rows += PendingRow.LastActivity(
+                text = preview.ifEmpty {
+                    when (activityType) {
+                        "call" -> when (conn.lastActivityOutcome) {
+                            "missed" -> "Missed call"
+                            "completed" -> "Call ended"
+                            "rejected" -> "Call declined"
+                            else -> "Call"
+                        }
+                        "message" -> if (activityDirection == "outgoing") "You sent a message" else "Received a message"
+                        else -> ""
+                    }
+                },
+                direction = activityDirection,
+                activityType = activityType,
+                subtype = conn.lastActivitySubtype,
+                outcome = conn.lastActivityOutcome,
+                timestamp = activityAtMs,
+            )
+        }
+
+        return rows
     }
 
     /**

@@ -223,7 +223,8 @@ fun FeedContent(
                                 android.Manifest.permission.CAMERA
                             ))
                         }
-                    }
+                    },
+                    onResurfaceVaultUpdate = onResurfaceVaultUpdate,
                 )
                 is FeedState.Error -> {
                     // If in offline mode, show friendly offline content instead of error
@@ -355,7 +356,8 @@ private fun FeedList(
     onConnectionDecline: (String) -> Unit = {},
     onNavigateToConnectionReview: (String, String) -> Unit = { _, _ -> },
     onVoiceCall: (String) -> Unit = {},
-    onVideoCall: (String) -> Unit = {}
+    onVideoCall: (String) -> Unit = {},
+    onResurfaceVaultUpdate: () -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
@@ -421,7 +423,9 @@ private fun FeedList(
                         onHistoryClick = { onNavigateToConnectionHistory(item.connectionId) },
                         onCallClick = { onVoiceCall(item.connectionId) },
                         onVideoCallClick = { onVideoCall(item.connectionId) },
-                        onBtcClick = { /* TODO */ }
+                        onBtcClick = { /* TODO */ },
+                        onNavigateToConnectionReview = onNavigateToConnectionReview,
+                        onOpenMigration = onResurfaceVaultUpdate,
                     )
             }
         }
@@ -440,15 +444,25 @@ private fun StatusAwareConnectionCard(
     onHistoryClick: () -> Unit = {},
     onCallClick: () -> Unit = {},
     onVideoCallClick: () -> Unit = {},
-    onBtcClick: () -> Unit = {}
+    onBtcClick: () -> Unit = {},
+    onNavigateToConnectionReview: (connectionId: String, eventId: String) -> Unit = { _, _ -> },
+    onOpenMigration: () -> Unit = {},
 ) {
     // Render different card variants based on connection status
     when {
         item.needsReview -> PendingReviewConnectionCard(item, onClick, onAccept, onDecline)
         item.hasAccepted -> WaitingConnectionCard(item, onClick)
-        item.connectionStatus == "active" -> ActiveConnectionCard(item, onClick, onLongClick, onMessageClick, onHistoryClick, onCallClick, onVideoCallClick, onBtcClick)
+        item.connectionStatus == "active" -> ActiveConnectionCard(
+            item, onClick, onLongClick, onMessageClick, onHistoryClick,
+            onCallClick, onVideoCallClick, onBtcClick,
+            onNavigateToConnectionReview, onOpenMigration,
+        )
         item.connectionStatus == "revoked" || item.connectionStatus == "rejected" -> InactiveConnectionCard(item, onClick)
-        else -> ActiveConnectionCard(item, onClick, onLongClick, onMessageClick, onHistoryClick, onCallClick, onVideoCallClick, onBtcClick)
+        else -> ActiveConnectionCard(
+            item, onClick, onLongClick, onMessageClick, onHistoryClick,
+            onCallClick, onVideoCallClick, onBtcClick,
+            onNavigateToConnectionReview, onOpenMigration,
+        )
     }
 }
 
@@ -608,7 +622,9 @@ private fun ActiveConnectionCard(
     onHistoryClick: () -> Unit = {},
     onCallClick: () -> Unit = {},
     onVideoCallClick: () -> Unit = {},
-    onBtcClick: () -> Unit = {}
+    onBtcClick: () -> Unit = {},
+    onNavigateToConnectionReview: (connectionId: String, eventId: String) -> Unit = { _, _ -> },
+    onOpenMigration: () -> Unit = {},
 ) {
     val haptic = LocalHapticFeedback.current
 
@@ -690,78 +706,113 @@ private fun ActiveConnectionCard(
                 }
             }
 
-            // Quick action buttons — hidden on the system connection
-            // which has no interactive actions from the feed (everything
-            // actionable sits on the detail screen's action strip).
-            if (!isSystem) {
-            Spacer(modifier = Modifier.height(8.dp))
-            // Missed-call badges use the vault's missed_call_count.
-            // Voice and video share a pool — the vault doesn't yet split
-            // the count by call subtype, so the badge shows on Voice
-            // (primary call affordance). Splitting voice vs video is a
-            // follow-up if it becomes confusing.
-            val missedCalls = item.missedCallCount
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly
-            ) {
-                ConnectionActionButton(
-                    icon = Icons.AutoMirrored.Filled.Chat,
-                    label = "Text",
-                    onClick = onMessageClick,
-                    badgeCount = item.unreadCount
-                )
-                ConnectionActionButton(
-                    icon = Icons.Default.Call,
-                    label = "Voice",
-                    onClick = onCallClick,
-                    badgeCount = missedCalls
-                )
-                ConnectionActionButton(
-                    icon = Icons.Default.Videocam,
-                    label = "Video",
-                    onClick = onVideoCallClick
-                )
-                // More button with dropdown menu
-                Box {
-                    var showMoreMenu by remember { mutableStateOf(false) }
-                    ConnectionActionButton(
-                        icon = Icons.Default.MoreVert,
-                        label = "More",
-                        onClick = { showMoreMenu = true }
-                    )
-                    DropdownMenu(
-                        expanded = showMoreMenu,
-                        onDismissRequest = { showMoreMenu = false }
-                    ) {
-                        // "View Profile" intentionally dropped — the card
-                        // itself navigates to the profile on tap.
-                        DropdownMenuItem(
-                            text = { Text("Send BTC") },
-                            onClick = {
-                                showMoreMenu = false
-                                onBtcClick()
-                            },
-                            leadingIcon = {
-                                Icon(Icons.Default.CurrencyBitcoin, contentDescription = null, modifier = Modifier.size(20.dp))
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("View History") },
-                            onClick = {
-                                showMoreMenu = false
-                                onHistoryClick()
-                            },
-                            leadingIcon = {
-                                Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(20.dp))
-                            }
-                        )
+            // Pending rows replace the old Text/Voice/Video/More
+            // button strip. Each row is an explicit actionable item
+            // (unread messages, missed calls, pending review, …) with
+            // a tap target. When nothing is pending, a single passive
+            // last-activity row shows the most recent interaction.
+            // See plans/luminous-unifying-manatee.md §12.
+            if (item.pendingRows.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+                item.pendingRows.forEachIndexed { idx, row ->
+                    if (idx > 0) {
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
                     }
+                    PendingRowView(
+                        row = row,
+                        onClick = {
+                            when (row) {
+                                is PendingRow.PendingReview ->
+                                    onNavigateToConnectionReview(item.connectionId, "")
+                                is PendingRow.UnreadMessages ->
+                                    onMessageClick()
+                                is PendingRow.MissedCall ->
+                                    onHistoryClick()
+                                is PendingRow.PendingMigration ->
+                                    onOpenMigration()
+                                is PendingRow.LastActivity ->
+                                    onHistoryClick()
+                            }
+                        }
+                    )
                 }
             }
-            } // end if (!isSystem) for quick action buttons
         }
     }
+}
+
+@Composable
+private fun PendingRowView(row: PendingRow, onClick: () -> Unit) {
+    val (icon, tint) = pendingRowIcon(row)
+    val label = pendingRowLabel(row)
+    val interactive = row !is PendingRow.LastActivity
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (interactive) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (icon != null) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = tint,
+                modifier = Modifier.size(18.dp),
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+        }
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (interactive) FontWeight.Medium else FontWeight.Normal,
+            color = if (interactive) MaterialTheme.colorScheme.onSurface
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+        if (row.timestamp > 0L) {
+            Text(
+                text = formatTimestamp(row.timestamp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.outline,
+            )
+        }
+    }
+}
+
+@Composable
+private fun pendingRowIcon(row: PendingRow): Pair<ImageVector?, Color> {
+    return when (row) {
+        is PendingRow.UnreadMessages ->
+            Icons.AutoMirrored.Filled.Chat to MaterialTheme.colorScheme.primary
+        is PendingRow.MissedCall ->
+            Icons.Default.CallMissed to DeclineRedColor
+        is PendingRow.PendingReview ->
+            Icons.Default.PersonAdd to MaterialTheme.colorScheme.primary
+        is PendingRow.PendingMigration ->
+            Icons.Default.Lock to MaterialTheme.colorScheme.secondary
+        is PendingRow.LastActivity -> lastActivityIcon(
+            activityType = row.activityType,
+            direction = row.direction,
+            subtype = row.subtype,
+            outcome = row.outcome,
+        )
+    }
+}
+
+private fun pendingRowLabel(row: PendingRow): String = when (row) {
+    is PendingRow.UnreadMessages ->
+        if (row.count == 1) "1 new message" else "${row.count} new messages"
+    is PendingRow.MissedCall -> {
+        val subtype = when (row.subtype) { "video" -> "video call"; "voice" -> "call"; else -> "call" }
+        if (row.count == 1) "Missed $subtype" else "${row.count} missed calls"
+    }
+    is PendingRow.PendingReview -> "Wants to connect"
+    is PendingRow.PendingMigration -> "Vault security update available"
+    is PendingRow.LastActivity -> row.text.ifEmpty { "Connected" }
 }
 
 /**

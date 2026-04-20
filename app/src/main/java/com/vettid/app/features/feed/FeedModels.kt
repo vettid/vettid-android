@@ -50,8 +50,10 @@ sealed class FeedDisplayItem {
         val lastActivityDirection: String? = null, // "incoming" | "outgoing" | null
         val lastActivitySubtype: String? = null,   // "voice" | "video" when type=call
         val lastActivityOutcome: String? = null,   // "completed" | "missed" | "rejected" for calls
+        val lastActivityAt: Long = 0L,             // epoch-millis for last-activity row timestamp
         val missedCallCount: Int = 0,
         val unreadCount: Int,
+        val pendingRows: List<PendingRow> = emptyList(),
         override val sortTimestamp: Long,
         override val isUnread: Boolean
     ) : FeedDisplayItem()
@@ -64,6 +66,56 @@ sealed class FeedDisplayItem {
         override val sortTimestamp: Long,
         override val isUnread: Boolean
     ) : FeedDisplayItem()
+}
+
+/**
+ * A single actionable row at the bottom of a connection card —
+ * replaces badges + icons with an explicit, tappable "something is
+ * waiting for you" item. See plans/luminous-unifying-manatee.md §12.
+ *
+ * `timestamp` is epoch millis when available (so the UI can format it
+ * as "5m ago"). Rows with no natural timestamp (e.g. the passive
+ * last-activity fallback) carry 0 and the card shows the sort time.
+ */
+sealed class PendingRow {
+    abstract val timestamp: Long
+
+    /** N unread messages from this peer. Tap → Conversation. */
+    data class UnreadMessages(
+        val count: Int,
+        override val timestamp: Long,
+    ) : PendingRow()
+
+    /** One or more unanswered incoming calls. Tap → call detail. */
+    data class MissedCall(
+        val count: Int,
+        val subtype: String?, // "voice" | "video" | null
+        override val timestamp: Long,
+    ) : PendingRow()
+
+    /** Pending connection request awaiting user review. Tap → review screen. */
+    data class PendingReview(
+        override val timestamp: Long,
+    ) : PendingRow()
+
+    /** Vault security update waiting on approval (system connection only). */
+    data class PendingMigration(
+        val version: String,
+        override val timestamp: Long,
+    ) : PendingRow()
+
+    /**
+     * Passive last-activity row shown when nothing is pending. Not
+     * interactive beyond opening the default card destination.
+     */
+    data class LastActivity(
+        val text: String,
+        val direction: String?,    // "incoming" | "outgoing" | null
+        val activityType: String,  // "message" | "call" | "connection" …
+        val subtype: String?,      // "voice" | "video" | null
+        val outcome: String?,      // "missed" | "completed" | "rejected" | null
+        override val timestamp: Long,
+    ) : PendingRow()
 }
 
 /**
