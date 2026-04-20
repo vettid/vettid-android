@@ -41,6 +41,7 @@ class VaultUpdateViewModel @Inject constructor(
         private const val PREFS_NAME = "vault_migration_prefs"
         private const val KEY_REMINDED_AT = "migration_reminded_at"
         private const val KEY_DISMISSED = "migration_dismissed"
+        private const val KEY_DISMISSED_VERSION = "migration_dismissed_version"
         private const val KEY_COMPLETED_VERSION = "migration_completed_version"
     }
 
@@ -72,14 +73,30 @@ class VaultUpdateViewModel @Inject constructor(
                     return@launch
                 }
 
-                // Check if user dismissed and whether it's now mandatory
+                // Check if user dismissed and whether it's now mandatory.
+                // Dismissal is version-scoped so a later migration isn't
+                // silently suppressed by an older deferral. The legacy
+                // boolean (KEY_DISMISSED) is honored for back-compat with
+                // installs that only wrote that key; when a new version is
+                // detected we clear it so the card shows again.
                 val isMandatory = isMandatoryNow(config)
-                val isDismissed = prefs.getBoolean(KEY_DISMISSED, false)
+                val dismissedVersion = prefs.getString(KEY_DISMISSED_VERSION, null)
+                val legacyDismissed = prefs.getBoolean(KEY_DISMISSED, false)
+                val isDismissedForThisVersion = when {
+                    dismissedVersion == config.version -> true
+                    dismissedVersion == null && legacyDismissed -> true
+                    else -> false
+                }
+                if (!isDismissedForThisVersion && legacyDismissed) {
+                    // Legacy flag persisted from an older version — clear it
+                    // so the user sees the current version's card.
+                    prefs.edit().remove(KEY_DISMISSED).apply()
+                }
 
                 currentConfig = config
 
-                if (isDismissed && !isMandatory) {
-                    // User dismissed but not yet mandatory — check again on next app open
+                if (isDismissedForThisVersion && !isMandatory) {
+                    // User dismissed this version — check again on next app open
                     _state.value = VaultUpdateState.NoUpdate
                     return@launch
                 }
@@ -221,10 +238,13 @@ class VaultUpdateViewModel @Inject constructor(
      */
     fun remindLater() {
         val config = currentConfig
-        getPrefs().edit()
+        val edit = getPrefs().edit()
             .putLong(KEY_REMINDED_AT, System.currentTimeMillis())
             .putBoolean(KEY_DISMISSED, true)
-            .apply()
+        if (config != null) {
+            edit.putString(KEY_DISMISSED_VERSION, config.version)
+        }
+        edit.apply()
 
         if (config != null) {
             pushDeferredUpdateToFeed(config)

@@ -84,7 +84,8 @@ class PinUnlockViewModel @Inject constructor(
     private val connectionManager: NatsConnectionManager,
     private val natsAutoConnector: NatsAutoConnector,
     private val personalDataStore: PersonalDataStore,
-    private val pcrConfigManager: PcrConfigManager
+    private val pcrConfigManager: PcrConfigManager,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context
 ) : ViewModel() {
 
     companion object {
@@ -354,18 +355,56 @@ class PinUnlockViewModel @Inject constructor(
     }
 
     /**
-     * User chooses to skip the update for now.
-     * Returns to PIN entry without adding the new PCR0.
-     * The old enclave (with their existing trusted PCR0) will handle the request.
+     * User chooses to skip the update for now. Reuses the stashed PIN
+     * to finish unlock against the old enclave — forcing the user to
+     * re-type the same PIN felt like two back-to-back prompts. Also
+     * marks the pending vault-update card dismissed so the post-PIN
+     * path doesn't ask the same question a second time.
      */
     fun skipEnclaveUpdate() {
-        Log.i(TAG, "User deferred enclave update — will be prompted again next session")
+        Log.i(TAG, "User deferred enclave update — reusing stashed PIN against old enclave")
         _pendingUntrustedPcr0 = null
-        // Drop the stashed PIN — user declined, so make them re-consent by
-        // re-typing. Don't silently reuse it against the old enclave.
-        _pendingPin = null
         _skipPcr0Check = true
-        _state.value = PinUnlockState.EnteringPin()
+
+        // Coalesce the two defer flows (pre-PIN + post-PIN) so VaultUpdateVM
+        // treats this migration version as already deferred — otherwise the
+        // user gets asked again on the post-unlock card seconds later.
+        markMigrationDismissedByPrePinFlow()
+
+        val pendingPin = _pendingPin
+        _pendingPin = null
+        if (!pendingPin.isNullOrEmpty()) {
+            _state.value = PinUnlockState.EnteringPin(pin = pendingPin)
+            viewModelScope.launch { submitPin() }
+        } else {
+            _state.value = PinUnlockState.EnteringPin()
+        }
+    }
+
+    /**
+     * Write a deferral marker into the same EncryptedSharedPreferences that
+     * VaultUpdateViewModel reads. Keys must stay in sync with the companion
+     * constants over there.
+     */
+    private fun markMigrationDismissedByPrePinFlow() {
+        try {
+            val masterKey = androidx.security.crypto.MasterKey.Builder(appContext)
+                .setKeyScheme(androidx.security.crypto.MasterKey.KeyScheme.AES256_GCM)
+                .build()
+            val prefs = androidx.security.crypto.EncryptedSharedPreferences.create(
+                appContext,
+                "vault_migration_prefs",
+                masterKey,
+                androidx.security.crypto.EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                androidx.security.crypto.EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+            prefs.edit()
+                .putLong("migration_reminded_at", System.currentTimeMillis())
+                .putBoolean("migration_dismissed", true)
+                .apply()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to record pre-PIN deferral", e)
+        }
     }
 
     private suspend fun connectToNats(): Boolean = withContext(Dispatchers.IO) {
