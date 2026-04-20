@@ -306,6 +306,16 @@ class FeedRepository @Inject constructor(
     }
 
     /**
+     * Remove every event matching a predicate. Used for bulk sweeps like
+     * purging stale "local-migration-*" entries after a successful
+     * vault update.
+     */
+    fun removeEventsLocallyWhere(predicate: (FeedEvent) -> Boolean) {
+        val events = getCachedEvents().filterNot(predicate)
+        saveEvents(events)
+    }
+
+    /**
      * Insert a client-originated event into the local cache. Used for
      * things the server doesn't know about (e.g. "you deferred a vault
      * update — we left this in your feed so you can find it again"). The

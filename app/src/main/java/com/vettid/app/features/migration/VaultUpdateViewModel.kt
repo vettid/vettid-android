@@ -171,6 +171,21 @@ class VaultUpdateViewModel @Inject constructor(
                         .putBoolean(KEY_DISMISSED, false)
                         .remove(KEY_REMINDED_AT)
                         .apply()
+                    // Clear any leftover deferred-update entries from the
+                    // local feed cache. pushDeferredUpdateToFeed seeds
+                    // them on Remind Me Later; without this, the row
+                    // stays in the Connections screen as unread after
+                    // the update is applied. Sweep every version we've
+                    // written so stale entries from prior deploys go
+                    // away too.
+                    val sweepIds = listOf(
+                        "local-migration-${config.version}",
+                        "local-migration-${version.ifEmpty { config.version }}",
+                    ).distinct()
+                    sweepIds.forEach { feedRepository.removeEventLocally(it) }
+                    // Also purge any local-migration-* entry from earlier
+                    // versions — the completed update supersedes them.
+                    feedRepository.removeEventsLocallyWhere { it.eventId.startsWith("local-migration-") }
                     _state.value = VaultUpdateState.Updated
                     return@launch
                 }
