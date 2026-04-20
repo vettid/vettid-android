@@ -62,24 +62,14 @@ fun VaultUpdateCard(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f)
                     )
-                    if (!config.detailsUrl.isNullOrEmpty()) {
-                        TextButton(
-                            onClick = onReviewDetails,
-                            enabled = !isUpdating,
-                            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp)
-                        ) {
-                            Text("Review details")
-                        }
-                    }
                 }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Primary action: full-width filled button so the Update
-            // Now affordance is always visible and never clipped off the
-            // side of narrow screens. Tertiary "Remind Me Later" sits
-            // under it as a text button when deferral is still allowed.
+            // All three actions render as full-width stacked buttons so
+            // their edges line up and each one clearly reads as tappable.
+            // Primary (filled) → secondary (outlined) → tertiary (outlined).
             Button(
                 onClick = onUpdateNow,
                 enabled = !isUpdating,
@@ -98,9 +88,20 @@ fun VaultUpdateCard(
                 }
             }
 
+            if (!config.detailsUrl.isNullOrEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = onReviewDetails,
+                    enabled = !isUpdating,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Review Details")
+                }
+            }
+
             if (!isMandatory) {
-                Spacer(modifier = Modifier.height(4.dp))
-                TextButton(
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(
                     onClick = onRemindLater,
                     enabled = !isUpdating,
                     modifier = Modifier.fillMaxWidth()
