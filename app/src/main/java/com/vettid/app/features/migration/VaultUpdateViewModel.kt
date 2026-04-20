@@ -33,6 +33,7 @@ class VaultUpdateViewModel @Inject constructor(
     private val migrationClient: MigrationClient,
     private val pcrConfigManager: PcrConfigManager,
     private val feedRepository: FeedRepository,
+    private val consentTracker: MigrationConsentTracker,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
@@ -73,27 +74,38 @@ class VaultUpdateViewModel @Inject constructor(
                     return@launch
                 }
 
-                // Check if user dismissed and whether it's now mandatory.
                 // Dismissal is version-scoped so a later migration isn't
                 // silently suppressed by an older deferral. The legacy
-                // boolean (KEY_DISMISSED) is honored for back-compat with
-                // installs that only wrote that key; when a new version is
-                // detected we clear it so the card shows again.
+                // boolean (KEY_DISMISSED) without a version key is treated
+                // as stale — we can't tell which migration it was for, so
+                // clear it unconditionally on first read.
                 val isMandatory = isMandatoryNow(config)
                 val dismissedVersion = prefs.getString(KEY_DISMISSED_VERSION, null)
                 val legacyDismissed = prefs.getBoolean(KEY_DISMISSED, false)
-                val isDismissedForThisVersion = when {
-                    dismissedVersion == config.version -> true
-                    dismissedVersion == null && legacyDismissed -> true
-                    else -> false
-                }
-                if (!isDismissedForThisVersion && legacyDismissed) {
-                    // Legacy flag persisted from an older version — clear it
-                    // so the user sees the current version's card.
+                if (legacyDismissed && dismissedVersion == null) {
                     prefs.edit().remove(KEY_DISMISSED).apply()
                 }
+                val isDismissedForThisVersion = dismissedVersion == config.version
 
                 currentConfig = config
+
+                // Pre-PIN consent recorded in this session short-circuits
+                // the post-unlock flow so the user isn't asked twice about
+                // the same update.
+                when (consentTracker.consume()) {
+                    MigrationIntent.APPROVED -> {
+                        Log.i(TAG, "Pre-PIN approval recorded — auto-applying migration with visible state")
+                        startUpdate()
+                        return@launch
+                    }
+                    MigrationIntent.SKIPPED -> {
+                        Log.i(TAG, "Pre-PIN skip recorded — suppressing card, writing feed entry")
+                        pushDeferredUpdateToFeed(config)
+                        _state.value = VaultUpdateState.NoUpdate
+                        return@launch
+                    }
+                    MigrationIntent.UNDECIDED -> { /* fall through */ }
+                }
 
                 if (isDismissedForThisVersion && !isMandatory) {
                     // User dismissed this version — check again on next app open

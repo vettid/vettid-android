@@ -712,42 +712,47 @@ private fun ActiveConnectionCard(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.outline
                             )
-                            // Compact type icon under the timestamp —
-                            // shows at-a-glance what the last activity
-                            // was (message/call/missed) without having
-                            // to read the preview text.
+                            // Compact type icon under the timestamp. The
+                            // unread count rides directly on the icon so
+                            // the user can see at-a-glance both "what was
+                            // the last interaction" and "how many are
+                            // unread" — no separate preview/badge row.
                             val (typeIcon, typeTint) = lastActivityIcon(item.lastActivityType, item.lastActivityPreview)
                             if (typeIcon != null) {
-                                Spacer(modifier = Modifier.height(2.dp))
-                                Icon(
-                                    imageVector = typeIcon,
-                                    contentDescription = null,
-                                    tint = typeTint,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                            }
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = item.lastActivityPreview,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
-                        if (item.unreadCount > 0) {
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Badge(
-                                containerColor = MaterialTheme.colorScheme.primary,
-                                contentColor = MaterialTheme.colorScheme.onPrimary
-                            ) {
-                                Text(
-                                    text = item.unreadCount.toString(),
-                                    style = MaterialTheme.typography.labelSmall
-                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                BadgedBox(
+                                    badge = {
+                                        if (item.unreadCount > 0) {
+                                            Badge(
+                                                containerColor = MaterialTheme.colorScheme.primary,
+                                                contentColor = MaterialTheme.colorScheme.onPrimary
+                                            ) {
+                                                Text(
+                                                    text = item.unreadCount.toString(),
+                                                    style = MaterialTheme.typography.labelSmall
+                                                )
+                                            }
+                                        }
+                                    }
+                                ) {
+                                    Icon(
+                                        imageVector = typeIcon,
+                                        contentDescription = null,
+                                        tint = typeTint,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            } else if (item.unreadCount > 0) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Badge(
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
+                                ) {
+                                    Text(
+                                        text = item.unreadCount.toString(),
+                                        style = MaterialTheme.typography.labelSmall
+                                    )
+                                }
                             }
                         }
                     }
