@@ -34,6 +34,7 @@ import java.util.Locale
 fun ConnectionHistoryScreen(
     onBack: () -> Unit,
     onOpenConversation: (connectionId: String) -> Unit = {},
+    onOpenGuide: (guideId: String, userName: String) -> Unit = { _, _ -> },
     viewModel: ConnectionHistoryViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
@@ -111,6 +112,7 @@ fun ConnectionHistoryScreen(
                         handleHistoryClick(
                             event = event,
                             onOpenConversation = onOpenConversation,
+                            onOpenGuide = onOpenGuide,
                             onOpenDetailSheet = { detailSheet = it },
                         )
                     }
@@ -128,9 +130,11 @@ fun ConnectionHistoryScreen(
                     entry = entry,
                     onDismiss = { detailSheet = null },
                 )
+                entry.event_type.startsWith("system.") -> SystemEventDetailSheet(
+                    entry = entry,
+                    onDismiss = { detailSheet = null },
+                )
                 else -> {
-                    // Shouldn't happen — handleHistoryClick only opens
-                    // sheets for call / transfer types.
                     detailSheet = null
                 }
             }
@@ -187,26 +191,35 @@ private fun ErrorCentered(message: String) {
 }
 
 // handleHistoryClick maps an audit row to a navigation intent.
-//   - message.*     → open the conversation
-//   - call.*        → open the call detail bottom sheet
-//   - transfer.btc  → open the transfer detail bottom sheet
-//   - everything else (lifecycle, security) has no detail view yet
+//   - message.*              → open the conversation
+//   - call.*                 → open the call detail bottom sheet
+//   - transfer.btc           → open the transfer detail bottom sheet
+//   - system.guide.published → open the guide
+//   - other system.*         → detail sheet fallback
 private fun handleHistoryClick(
     event: AuditEntry,
     onOpenConversation: (String) -> Unit,
+    onOpenGuide: (guideId: String, userName: String) -> Unit,
     onOpenDetailSheet: (AuditEntry) -> Unit,
 ) {
     when {
         event.event_type.startsWith("message.") -> onOpenConversation(event.connection_id)
         event.event_type.startsWith("call.") -> onOpenDetailSheet(event)
         event.event_type.startsWith("transfer.btc.") -> onOpenDetailSheet(event)
+        event.event_type == "system.guide.published" -> {
+            val guideId = event.refs?.get("guide_id").orEmpty()
+            val userName = event.metadata?.get("user_name").orEmpty()
+            if (guideId.isNotEmpty()) onOpenGuide(guideId, userName)
+        }
+        event.event_type.startsWith("system.") -> onOpenDetailSheet(event)
     }
 }
 
 private fun AuditEntry.isInteractive(): Boolean =
     event_type.startsWith("message.") ||
         event_type.startsWith("call.") ||
-        event_type.startsWith("transfer.btc.")
+        event_type.startsWith("transfer.btc.") ||
+        event_type.startsWith("system.")
 
 @Composable
 private fun HistoryList(
@@ -435,6 +448,42 @@ private fun TransferDetailSheet(entry: AuditEntry, onDismiss: () -> Unit) {
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("View on mempool.space")
                 }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SystemEventDetailSheet(entry: AuditEntry, onDismiss: () -> Unit) {
+    val sheetState = rememberModalBottomSheetState()
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(modifier = Modifier.padding(24.dp)) {
+            Text(
+                text = entry.title.ifEmpty { entry.event_type.replace(".", " · ") },
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = formatEventTimestamp(entry.created_at),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (!entry.body.isNullOrBlank()) {
+                Spacer(modifier = Modifier.height(16.dp))
+                Text(
+                    text = entry.body,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            entry.metadata?.forEach { (key, value) ->
+                if (key == "is_update") return@forEach
+                DetailRow(
+                    label = key.replace("_", " ").replaceFirstChar { it.uppercase() },
+                    value = value,
+                )
             }
             Spacer(modifier = Modifier.height(16.dp))
         }

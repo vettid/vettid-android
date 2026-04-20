@@ -634,15 +634,6 @@ private fun ActiveConnectionCard(
     onVideoCallClick: () -> Unit = {},
     onBtcClick: () -> Unit = {}
 ) {
-    val photoBitmap = remember(item.peerPhotoBase64) {
-        item.peerPhotoBase64?.let { base64 ->
-            try {
-                val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
-                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            } catch (_: Exception) { null }
-        }
-    }
-
     val haptic = LocalHapticFeedback.current
 
     Card(
@@ -664,33 +655,17 @@ private fun ActiveConnectionCard(
             }
         )
     ) {
+        val isSystem = item.connectionType == "system"
+
         Column(modifier = Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.Top) {
-                // Avatar
-                if (photoBitmap != null) {
-                    Image(
-                        bitmap = photoBitmap.asImageBitmap(),
-                        contentDescription = null,
-                        modifier = Modifier
-                            .size(44.dp)
-                            .clip(CircleShape),
-                        contentScale = ContentScale.Crop
-                    )
-                } else {
-                    Surface(
-                        modifier = Modifier.size(44.dp),
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.primaryContainer
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Text(
-                                text = item.peerName.take(2).uppercase(),
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        }
-                    }
-                }
+                // Avatar — defers to the shared ConnectionAvatar helper so
+                // agent and system connections get their branded glyphs.
+                ConnectionAvatar(
+                    photoBase64 = item.peerPhotoBase64,
+                    name = item.peerName,
+                    connectionType = item.connectionType
+                )
 
                 Spacer(modifier = Modifier.width(12.dp))
 
@@ -734,7 +709,10 @@ private fun ActiveConnectionCard(
                 }
             }
 
-            // Quick action buttons
+            // Quick action buttons — hidden on the system connection
+            // which has no interactive actions from the feed (everything
+            // actionable sits on the detail screen's action strip).
+            if (!isSystem) {
             Spacer(modifier = Modifier.height(8.dp))
             // If the last interaction was a missed call, flag the Voice
             // button so the user sees where to call back. Pure text
@@ -799,6 +777,7 @@ private fun ActiveConnectionCard(
                     }
                 }
             }
+            } // end if (!isSystem) for quick action buttons
         }
     }
 }
@@ -824,6 +803,21 @@ private fun ConnectionAvatar(
                     contentDescription = "Agent",
                     modifier = Modifier.size(24.dp),
                     tint = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
+        }
+    } else if (connectionType == "system") {
+        Surface(
+            modifier = Modifier.size(44.dp),
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.secondaryContainer
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Default.Shield,
+                    contentDescription = "VettID",
+                    modifier = Modifier.size(24.dp),
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer
                 )
             }
         }

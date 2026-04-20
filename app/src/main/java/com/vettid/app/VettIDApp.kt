@@ -838,6 +838,11 @@ fun VettIDApp(
                 onBack = { navController.safePopBackStack() },
                 onOpenConversation = { connId ->
                     navController.navigate(Screen.Conversation.createRoute(connId))
+                },
+                onOpenGuide = { guideId, userName ->
+                    // Empty eventId — the audit row replaces the feed
+                    // event; Screen.Guide accepts empty for this arg.
+                    navController.navigate(Screen.Guide.createRoute(guideId, "", userName))
                 }
             )
         }
