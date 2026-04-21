@@ -72,7 +72,9 @@ data class VaultPreferencesState(
     val locationFrequency: LocationUpdateFrequency = LocationUpdateFrequency.THIRTY_MINUTES,
     val locationDisplacementThreshold: DisplacementThreshold = DisplacementThreshold.ONE_HUNDRED,
     val locationRetention: LocationRetention = LocationRetention.THIRTY_DAYS,
-    val hasLocationPermission: Boolean = false
+    val hasLocationPermission: Boolean = false,
+    // Presence (opt-in online signal to peers — plans/luminous-unifying-manatee.md §15)
+    val presenceShareDefault: Boolean = false,
 )
 
 /**
@@ -112,6 +114,8 @@ class VaultPreferencesViewModel @Inject constructor(
         loadBackupSettings()
         // Load location preferences
         loadLocationPreferences()
+        // Load presence share default from vault
+        loadPresenceSettings()
         // Load credential settings from vault
         loadCredentialSettingsFromVault()
     }
@@ -369,6 +373,40 @@ class VaultPreferencesViewModel @Inject constructor(
             // With Nitro Enclave, vault is always ready
             kotlinx.coroutines.delay(500) // Brief delay for UX
             setEnclaveReady()
+        }
+    }
+
+    // MARK: - Presence (opt-in online signal)
+
+    /**
+     * Fetch the current user-wide presence share default from the
+     * vault. Fire-and-forget on error — the UI simply keeps the
+     * default (false) until a fresh read succeeds.
+     */
+    fun loadPresenceSettings() {
+        viewModelScope.launch {
+            val enabled = ownerSpaceClient.getPresenceShareDefault()
+            _state.update { it.copy(presenceShareDefault = enabled) }
+        }
+    }
+
+    /**
+     * Toggle the user-wide presence share default. Optimistically
+     * flips the UI; reverts on vault failure so the toggle never
+     * lies about what the vault actually stores.
+     */
+    fun togglePresenceShareDefault(enabled: Boolean) {
+        val previous = _state.value.presenceShareDefault
+        _state.update { it.copy(presenceShareDefault = enabled) }
+        viewModelScope.launch {
+            ownerSpaceClient.setPresenceShareDefault(enabled).onFailure {
+                _state.update { it.copy(presenceShareDefault = previous) }
+                _effects.emit(
+                    VaultPreferencesEffect.ShowError(
+                        "Couldn't update presence setting: ${it.message ?: "unknown error"}"
+                    )
+                )
+            }
         }
     }
 

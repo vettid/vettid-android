@@ -205,6 +205,14 @@ fun VaultPreferencesContent(
                     onClick = { viewModel.onLocationSettingsClick() }
                 )
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                PreferencesToggleItem(
+                    icon = Icons.Default.Circle,
+                    title = "Share online presence",
+                    subtitle = "Let connections see when you're online. Per-connection toggle in each connection detail.",
+                    checked = state.presenceShareDefault,
+                    onCheckedChange = { viewModel.togglePresenceShareDefault(it) }
+                )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                 ArchiveDropdownItem(
                     label = "Archive after",
                     currentValue = state.archiveAfterDays,
@@ -711,6 +719,34 @@ private fun PreferencesItem(
                 imageVector = Icons.Default.ChevronRight,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    )
+}
+
+@Composable
+private fun PreferencesToggleItem(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String? = null,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    ListItem(
+        modifier = Modifier.clickable { onCheckedChange(!checked) },
+        headlineContent = { Text(title) },
+        supportingContent = subtitle?.let { s -> { Text(s) } },
+        leadingContent = {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        },
+        trailingContent = {
+            Switch(
+                checked = checked,
+                onCheckedChange = onCheckedChange,
             )
         }
     )

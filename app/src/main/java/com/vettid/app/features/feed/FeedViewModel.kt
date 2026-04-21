@@ -33,6 +33,7 @@ class FeedViewModel @Inject constructor(
     private val connectionsClient: ConnectionsClient,
     private val callManager: com.vettid.app.features.calling.CallManager,
     private val guideReadTracker: GuideReadTracker,
+    private val presenceAggregator: com.vettid.app.core.nats.PresenceAggregator,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<FeedState>(FeedState.Loading)
@@ -97,6 +98,28 @@ class FeedViewModel @Inject constructor(
         startPeriodicRefresh()
         observeFilterChanges()
         observeGuideReadState()
+        observePresence()
+    }
+
+    /**
+     * Rebuild display items whenever peer presence flips. Keeps the
+     * avatar ring responsive to incoming heartbeats and the
+     * aggregator's 90s timeout without waiting for the next periodic
+     * refresh.
+     */
+    private fun observePresence() {
+        viewModelScope.launch {
+            presenceAggregator.online
+                .drop(1)
+                .collect {
+                    val currentState = _state.value
+                    if (currentState is FeedState.Loaded) {
+                        val events = feedRepository.getCachedEvents()
+                        val displayItems = buildDisplayItems(events)
+                        _state.value = currentState.copy(items = displayItems)
+                    }
+                }
+        }
     }
 
     /**
@@ -277,6 +300,11 @@ class FeedViewModel @Inject constructor(
                 unreadCount = conn.unreadMessageCount,
                 pendingRows = pendingRows,
                 systemGuidesBadge = unreadGuidesCount,
+                // Presence: "online" when the aggregator has seen a
+                // fresh peer heartbeat, null otherwise. The system
+                // card never gets a presence ring.
+                presence = if (conn.connectionType != "system" &&
+                    presenceAggregator.isOnline(conn.connectionId)) "online" else null,
                 sortTimestamp = sortTime,
                 // Unread badges the card if: pending review, unread
                 // messages exist, or there's an unacknowledged missed

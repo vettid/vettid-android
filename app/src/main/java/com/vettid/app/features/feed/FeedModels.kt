@@ -58,6 +58,12 @@ sealed class FeedDisplayItem {
         val systemVaultMessagesBadge: Int = 0,
         val systemVotesBadge: Int = 0,
         val systemGuidesBadge: Int = 0,
+        // Presence from the peer. "online" when a fresh heartbeat
+        // arrived within the aggregator's timeout; null means "no
+        // signal" (peer hasn't opted in, hasn't opened the app
+        // recently, or we're out of range). Absence is not "offline"
+        // per plans/luminous-unifying-manatee.md §15.
+        val presence: String? = null,
         override val sortTimestamp: Long,
         override val isUnread: Boolean
     ) : FeedDisplayItem()

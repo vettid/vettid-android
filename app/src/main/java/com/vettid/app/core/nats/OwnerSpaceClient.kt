@@ -78,6 +78,17 @@ class OwnerSpaceClient @Inject constructor(
     /** Flow of connection status updates (activated, key-exchanged, rejected). */
     val connectionStatusUpdates: SharedFlow<ConnectionStatusUpdate> = _connectionStatusUpdates.asSharedFlow()
 
+    private val _presenceHeartbeats = MutableSharedFlow<PresenceHeartbeat>(extraBufferCapacity = 32)
+    /**
+     * Flow of peer presence heartbeats re-emitted by our vault. Each
+     * event means "this peer is online as of <at>." The observer side
+     * infers offline from heartbeat absence (no event for 90s).
+     * Opt-in is handled by the peer vault — if we receive nothing for
+     * a given connection, the peer hasn't opted in (or the user
+     * hasn't overridden their default).
+     */
+    val presenceHeartbeats: SharedFlow<PresenceHeartbeat> = _presenceHeartbeats.asSharedFlow()
+
     private val _devicePendingAuth = MutableSharedFlow<DevicePendingAuthNotification>(extraBufferCapacity = 8)
     /**
      * Flow of desktop devices awaiting session authorization (stage 2 of pairing).
@@ -1073,6 +1084,63 @@ class OwnerSpaceClient @Inject constructor(
         }
     }
 
+    // MARK: - Presence (opt-in online signal)
+
+    /**
+     * Read the user-wide presence share default. Returns false (the
+     * opt-in default) on any error — presence is a privacy signal,
+     * always fail closed.
+     */
+    suspend fun getPresenceShareDefault(): Boolean {
+        return try {
+            val response = sendAndAwaitResponse("presence.get", JsonObject(), 8000L)
+            (response as? VaultResponse.HandlerResult)
+                ?.result
+                ?.get("share_default")
+                ?.asBoolean
+                ?: false
+        } catch (e: Exception) {
+            Log.w(TAG, "presence.get failed: ${e.message}")
+            false
+        }
+    }
+
+    /** Update the user-wide presence share default. */
+    suspend fun setPresenceShareDefault(enabled: Boolean): Result<Unit> {
+        val payload = JsonObject().apply { addProperty("share_default", enabled) }
+        return when (val response = sendAndAwaitResponse("presence.set-default", payload, 8000L)) {
+            is VaultResponse.HandlerResult ->
+                if (response.success) Result.success(Unit)
+                else Result.failure(Exception(response.error ?: "Unknown vault error"))
+            is VaultResponse.Error ->
+                Result.failure(Exception("${response.code}: ${response.message}"))
+            else ->
+                Result.failure(Exception("Unexpected vault response"))
+        }
+    }
+
+    /**
+     * Update the per-connection presence override. Passing null
+     * clears the override so the connection follows the user-wide
+     * default.
+     */
+    suspend fun setPresenceOverride(connectionId: String, override: Boolean?): Result<Unit> {
+        val payload = JsonObject().apply {
+            addProperty("connection_id", connectionId)
+            if (override == null) add("override", com.google.gson.JsonNull.INSTANCE)
+            else addProperty("override", override)
+        }
+        return when (val response = sendAndAwaitResponse("presence.set-override", payload, 8000L)) {
+            is VaultResponse.HandlerResult ->
+                if (response.success) Result.success(Unit)
+                else Result.failure(Exception(response.error ?: "Unknown vault error"))
+            is VaultResponse.Error ->
+                Result.failure(Exception("${response.code}: ${response.message}"))
+            else ->
+                Result.failure(Exception("Unexpected vault response"))
+        }
+    }
+
     // MARK: - Credential Operations (KMS-Sealed Protean Credential)
 
     /**
@@ -1434,6 +1502,11 @@ class OwnerSpaceClient @Inject constructor(
                 }
                 subject.contains(".forApp.connection-revoked") -> {
                     handleConnectionRevoked(message); return
+                }
+
+                // Presence heartbeat re-emitted by our vault — peer is online.
+                subject.contains(".forApp.presence.heartbeat") -> {
+                    handlePresenceHeartbeat(message); return
                 }
 
                 // Device pairing — desktop has requested session authorization
@@ -1849,6 +1922,31 @@ class OwnerSpaceClient @Inject constructor(
             if (connId.isNotEmpty()) _deviceSessionRevoked.tryEmit(connId)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to parse device.revoked event", e)
+        }
+    }
+
+    /**
+     * Parse a forApp.presence.heartbeat message and emit a domain
+     * event. Observers subscribe to [presenceHeartbeats] and track
+     * timestamps themselves — no retention logic in the client.
+     */
+    private fun handlePresenceHeartbeat(message: NatsMessage) {
+        try {
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+            val connectionId = payload.optString("connection_id", "")
+            if (connectionId.isEmpty()) return
+            val status = payload.optString("status", "online")
+            val at = payload.optLong("at", System.currentTimeMillis() / 1000)
+            _presenceHeartbeats.tryEmit(
+                PresenceHeartbeat(
+                    connectionId = connectionId,
+                    status = status,
+                    at = at,
+                )
+            )
+        } catch (e: Exception) {
+            android.util.Log.d(TAG, "Ignoring malformed presence heartbeat: ${e.message}")
         }
     }
 

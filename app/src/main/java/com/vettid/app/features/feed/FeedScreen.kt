@@ -3,6 +3,7 @@ package com.vettid.app.features.feed
 import android.content.pm.PackageManager
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
@@ -725,7 +726,8 @@ private fun ActiveConnectionCard(
                 ConnectionAvatar(
                     photoBase64 = item.peerPhotoBase64,
                     name = item.peerName,
-                    connectionType = item.connectionType
+                    connectionType = item.connectionType,
+                    presence = item.presence,
                 )
 
                 Spacer(modifier = Modifier.width(12.dp))
@@ -996,12 +998,62 @@ private fun pendingRowLabel(row: PendingRow): String = when (row) {
 
 /**
  * Reusable connection avatar — shows photo, initials, or agent icon based on type.
+ * When [presence] == "online", the avatar gets a 2-dp green ring and
+ * a small filled dot at the bottom-right so the signal survives
+ * without color perception. See plans/luminous-unifying-manatee.md §15.
  */
 @Composable
 private fun ConnectionAvatar(
     photoBase64: String?,
     name: String,
-    connectionType: String
+    connectionType: String,
+    presence: String? = null,
+) {
+    val online = presence == "online"
+    val outerModifier = if (online) {
+        Modifier
+            .size(50.dp)
+            .border(
+                width = 2.dp,
+                color = PresenceOnlineColor,
+                shape = CircleShape,
+            )
+            .padding(3.dp)
+    } else {
+        Modifier
+    }
+    Box(modifier = outerModifier) {
+        ConnectionAvatarCore(photoBase64, name, connectionType)
+        if (online) {
+            // Small filled dot at the bottom-right so the presence
+            // signal survives without color perception (ring alone
+            // is ambiguous to users with color vision deficiencies).
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(1.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(CircleShape)
+                        .background(PresenceOnlineColor)
+                )
+            }
+        }
+    }
+}
+
+private val PresenceOnlineColor = androidx.compose.ui.graphics.Color(0xFF22C55E)
+
+@Composable
+private fun ConnectionAvatarCore(
+    photoBase64: String?,
+    name: String,
+    connectionType: String,
 ) {
     if (connectionType == "agent") {
         Surface(

@@ -357,6 +357,17 @@ data class ConnectionStatusUpdate(
 )
 
 /**
+ * Peer presence heartbeat re-emitted by our vault. Vault receives
+ * the peer's forVault.presence.heartbeat, forwards to our app as
+ * forApp.presence.heartbeat with the same payload shape.
+ */
+data class PresenceHeartbeat(
+    val connectionId: String,
+    val status: String, // "online"
+    val at: Long,       // unix seconds
+)
+
+/**
  * Notification that a desktop device has completed stage 1 of pairing and is
  * now awaiting the user's stage-2 authorization (QR scan + duration approval).
  * See vettid-dev/docs/DESKTOP-CONNECTION-FLOW.md.
