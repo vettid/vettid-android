@@ -444,14 +444,14 @@ private fun FeedList(
                         onClick = {
                             when {
                                 item.needsReview -> onNavigateToConnectionReview(item.connectionId, "")
-                                // Outbound invites that the peer
-                                // hasn't resolved yet — tapping the
-                                // card reopens the invitation share
-                                // flow so the inviter can resend
-                                // the link or reshow the QR. The
-                                // broker TTL is short so a new
-                                // invite is the simplest path.
-                                item.connectionStatus == "pending"
+                                // Outbound invites (pending or
+                                // already expired) go back to the
+                                // invitation share flow so the
+                                // inviter can resend. The broker
+                                // TTL is short, so "expired" just
+                                // means "create a fresh one".
+                                (item.connectionStatus == "pending"
+                                    || item.connectionStatus == "expired")
                                     && item.direction == "outbound" ->
                                     onNavigateToCreateInvitation()
                                 // The VettID system connection has no
@@ -522,7 +522,9 @@ private fun StatusAwareConnectionCard(
             onSystemVaultMessagesClick, onSystemVotesClick, onSystemGuidesClick,
             onOpenGuide,
         )
-        item.connectionStatus == "revoked" || item.connectionStatus == "rejected" -> InactiveConnectionCard(item, onClick)
+        item.connectionStatus == "revoked"
+            || item.connectionStatus == "rejected"
+            || item.connectionStatus == "expired" -> InactiveConnectionCard(item, onClick)
         else -> ActiveConnectionCard(
             item, onClick, onLongClick, onMessageClick, onHistoryClick,
             onCallClick, onVideoCallClick, onBtcClick, onBtcRequestClick,

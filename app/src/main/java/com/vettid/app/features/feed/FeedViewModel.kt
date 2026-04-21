@@ -190,22 +190,6 @@ class FeedViewModel @Inject constructor(
             if (conn.connectionId.contains('/')) {
                 return@mapNotNull null
             }
-
-            // Drop expired pending invitations that were never used.
-            // The broker TTL is short (5 min) but the vault keeps
-            // the pending record indefinitely until cleanup — no
-            // point showing the user an invite that can't be
-            // resolved anymore. "Active" / "revoked" / "rejected"
-            // records stay visible regardless of expiresAt so the
-            // user can still see that history.
-            if (conn.status == "pending") {
-                val expiredAtMs = conn.expiresAt?.let { iso ->
-                    try { java.time.Instant.parse(iso).toEpochMilli() } catch (_: Exception) { null }
-                }
-                if (expiredAtMs != null && expiredAtMs < System.currentTimeMillis()) {
-                    return@mapNotNull null
-                }
-            }
             // Outbound pending invites don't have a peer profile yet —
             // the other side hasn't scanned / resolved the invite. Show
             // "Pending invitation" so the card isn't rendered blank.
@@ -215,7 +199,11 @@ class FeedViewModel @Inject constructor(
                 conn.peerProfile?.firstName, conn.peerProfile?.lastName
             ).joinToString(" ").trim().ifEmpty {
                 conn.label.ifEmpty {
-                    if (isOutboundPending) "Pending invitation" else ""
+                    when {
+                        isOutboundPending -> "Pending invitation"
+                        conn.status == "expired" -> "Expired invitation"
+                        else -> ""
+                    }
                 }
             }
 
@@ -238,6 +226,7 @@ class FeedViewModel @Inject constructor(
                 conn.status == "active" -> "Connected"
                 conn.status == "revoked" -> "Connection revoked"
                 conn.status == "rejected" -> "Declined"
+                conn.status == "expired" -> "Invitation expired"
                 else -> ""
             }
 
