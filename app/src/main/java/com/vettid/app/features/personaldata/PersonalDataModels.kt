@@ -587,6 +587,7 @@ data class GroupedByCategory(
             listOf(
                 DataCategory.IDENTITY,
                 DataCategory.CONTACT,
+                DataCategory.FAMILY,
                 DataCategory.ADDRESS,
                 DataCategory.FINANCIAL,
                 DataCategory.MEDICAL,
