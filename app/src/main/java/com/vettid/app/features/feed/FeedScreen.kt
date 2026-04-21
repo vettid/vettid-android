@@ -501,7 +501,7 @@ private fun StatusAwareConnectionCard(
 ) {
     // Render different card variants based on connection status
     when {
-        item.needsReview -> PendingReviewConnectionCard(item, onClick, onAccept, onDecline)
+        item.needsReview -> PendingReviewConnectionCard(item, onClick)
         item.hasAccepted -> WaitingConnectionCard(item, onClick)
         item.connectionStatus == "active" -> ActiveConnectionCard(
             item, onClick, onLongClick, onMessageClick, onHistoryClick,
@@ -525,9 +525,12 @@ private fun StatusAwareConnectionCard(
 private fun PendingReviewConnectionCard(
     item: FeedDisplayItem.ConnectionCard,
     onClick: () -> Unit,
-    onAccept: () -> Unit,
-    onDecline: () -> Unit
 ) {
+    // Pending cards are tap-to-review only — accept/decline live on
+    // the review screen so the user always reviews the peer's
+    // profile before acting. Avoids the card and review screen
+    // offering duplicate actions that can drift out of sync after
+    // an accept.
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -537,47 +540,39 @@ private fun PendingReviewConnectionCard(
             containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f)
         )
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                ConnectionAvatar(item.peerPhotoBase64, item.peerName, item.connectionType)
-                Spacer(modifier = Modifier.width(12.dp))
-                Column(modifier = Modifier.weight(1f)) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ConnectionAvatar(item.peerPhotoBase64, item.peerName, item.connectionType)
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = item.peerName,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                item.peerEmail?.let {
                     Text(
-                        text = item.peerName,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    item.peerEmail?.let {
-                        Text(
-                            text = it,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1
-                        )
-                    }
-                    Text(
-                        text = "Wants to connect",
+                        text = it,
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.primary
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
                     )
                 }
+                Text(
+                    text = "Wants to connect · Tap to review",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary,
+                )
             }
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
-            ) {
-                OutlinedButton(
-                    onClick = onDecline,
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    )
-                ) { Text("Decline") }
-                Spacer(modifier = Modifier.width(8.dp))
-                Button(onClick = onAccept) { Text("Accept") }
-            }
+            Icon(
+                imageVector = Icons.Default.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+            )
         }
     }
 }

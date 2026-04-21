@@ -354,7 +354,16 @@ internal fun VideoSurface(
             SurfaceViewRenderer(ctx).apply {
                 setEnableHardwareScaler(true)
                 eglContext?.let { init(it, null) }
+                setMirror(mirror)
+                // Attach the track sink here so the very first frame has a
+                // path to the renderer without waiting for the update
+                // lambda to run. Prevents the "local preview stays blank
+                // until I toggle the camera" regression where the update
+                // lambda either didn't run or ran before the surface was
+                // ready to receive frames.
+                videoTrack?.addSink(this)
                 holder.renderer = this
+                holder.attachedTrack = videoTrack
             }
         },
         modifier = modifier,

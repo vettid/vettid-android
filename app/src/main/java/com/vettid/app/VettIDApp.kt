@@ -274,25 +274,35 @@ fun VettIDApp(
 ) {
     val appState by appViewModel.appState.collectAsState()
 
-    // Handle call UI events
+    // Handle call UI events. showCallUI now has replay=1 so a
+    // late-arriving collector (e.g. the Activity recreated after the
+    // incoming-call notification's Answer action) still receives the
+    // most recent event. Navigation is idempotent: we skip if the
+    // user is already on the target screen.
     LaunchedEffect(callManager) {
         callManager?.showCallUI?.collect { event ->
+            val current = navController.currentDestination?.route
             when (event) {
                 is CallUIEvent.ShowIncoming -> {
-                    navController.navigate(Screen.IncomingCall.route)
+                    if (current != Screen.IncomingCall.route) {
+                        navController.navigate(Screen.IncomingCall.route)
+                    }
                 }
                 is CallUIEvent.ShowOutgoing -> {
-                    navController.navigate(Screen.OutgoingCall.route)
+                    if (current != Screen.OutgoingCall.route) {
+                        navController.navigate(Screen.OutgoingCall.route)
+                    }
                 }
                 is CallUIEvent.ShowActive -> {
-                    // Pop any existing call screens and navigate to active
-                    navController.navigate(Screen.ActiveCall.route) {
-                        popUpTo(Screen.IncomingCall.route) { inclusive = true }
-                        popUpTo(Screen.OutgoingCall.route) { inclusive = true }
+                    if (current != Screen.ActiveCall.route) {
+                        navController.navigate(Screen.ActiveCall.route) {
+                            popUpTo(Screen.IncomingCall.route) { inclusive = true }
+                            popUpTo(Screen.OutgoingCall.route) { inclusive = true }
+                        }
                     }
                 }
                 is CallUIEvent.DismissCall -> {
-                    // Pop back from call screens
+                    // Pop back from call screens (no-op if none on stack)
                     navController.popBackStack(Screen.IncomingCall.route, inclusive = true)
                     navController.popBackStack(Screen.OutgoingCall.route, inclusive = true)
                     navController.popBackStack(Screen.ActiveCall.route, inclusive = true)

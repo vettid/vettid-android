@@ -54,7 +54,14 @@ class CallManager @Inject constructor(
     private val _callState = MutableStateFlow<CallState>(CallState.Idle)
     val callState: StateFlow<CallState> = _callState.asStateFlow()
 
-    private val _showCallUI = MutableSharedFlow<CallUIEvent>(extraBufferCapacity = 1)
+    // replay=1 so that when the Activity is recreated (e.g. brought to
+    // foreground from the incoming-call notification's Answer action),
+    // VettIDApp's late-subscribing collector still receives the most
+    // recent ShowActive/ShowIncoming/DismissCall event. Without replay,
+    // the emit happens before onCreate → setContent → LaunchedEffect
+    // subscribes, and the navigation is lost — leaving the user on
+    // whatever screen was visible before.
+    private val _showCallUI = MutableSharedFlow<CallUIEvent>(replay = 1, extraBufferCapacity = 1)
     val showCallUI: SharedFlow<CallUIEvent> = _showCallUI.asSharedFlow()
 
     private val _remoteVideoTrack = MutableStateFlow<VideoTrack?>(null)

@@ -547,10 +547,13 @@ class FeedViewModel @Inject constructor(
                                 return@collect
                             }
                             // Debounce: cancel pending refresh and wait before starting a new one
-                            // so rapid-fire notifications (guide sync) become a single refresh
+                            // so rapid-fire notifications (guide sync) become a single refresh.
+                            // 150ms is enough to coalesce truly simultaneous events without
+                            // stalling a single-event case like an inviter waiting for the
+                            // pending-connection card to appear after a peer scan.
                             refreshJob?.cancel()
                             refreshJob = viewModelScope.launch {
-                                delay(1000) // Wait 1s for more notifications to arrive
+                                delay(150)
                                 refresh()
                             }
                         }
