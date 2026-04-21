@@ -657,9 +657,21 @@ class FeedViewModel @Inject constructor(
             _state.value = FeedState.Loading
         }
 
+        // Primary data source for cards. Without this, the VettID
+        // system card (and any other connections) doesn't render on
+        // the first paint after enrollment — the user had to wait up
+        // to 5 seconds for the first silent periodic refresh to
+        // populate cachedConnections. Fetch in parallel with the feed
+        // so we don't stall feed loading on a slow connection-list
+        // response.
+        val connectionsJob = viewModelScope.launch { refreshConnections() }
+
         val delays = longArrayOf(2000, 3000, 5000) // delays between retries
         for (attempt in 0..2) {
             try {
+                // Wait for connections so buildDisplayItems has the
+                // VettID system card the first time we render.
+                connectionsJob.join()
                 val result = feedRepository.getFeed(forceRefresh = attempt > 0)
                 if (result.isSuccess) {
                     val events = result.getOrThrow()
@@ -824,6 +836,11 @@ class FeedViewModel @Inject constructor(
         refreshJob = viewModelScope.launch {
             _isRefreshing.value = true
             try {
+                // Refresh connections alongside feed events — pull-to-refresh
+                // should pick up new connection cards (e.g. a pending
+                // request the vault just received) without waiting for
+                // the next periodic silent refresh.
+                refreshConnections()
                 // Use repository sync for incremental updates
                 feedRepository.sync()
                     .onSuccess { result ->
