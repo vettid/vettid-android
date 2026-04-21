@@ -8,6 +8,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -37,6 +38,17 @@ fun VaultMessagesScreen(
     viewModel: VaultUpdateViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsState()
+
+    // This screen is the user's explicit "show me what VettID has for
+    // me" surface. When the user tapped Remind Me Later on the
+    // post-unlock banner, VaultUpdateViewModel flipped to NoUpdate
+    // and stashed a dismissal flag. resurface() clears the dismissal
+    // and re-runs the check so any pending migration becomes visible
+    // again. Safe to call unconditionally — if no update exists it
+    // just lands on NoUpdate → EmptyState.
+    LaunchedEffect(Unit) {
+        viewModel.resurface()
+    }
 
     Scaffold(
         topBar = {
