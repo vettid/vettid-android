@@ -190,6 +190,22 @@ class FeedViewModel @Inject constructor(
             if (conn.connectionId.contains('/')) {
                 return@mapNotNull null
             }
+
+            // Drop expired pending invitations that were never used.
+            // The broker TTL is short (5 min) but the vault keeps
+            // the pending record indefinitely until cleanup — no
+            // point showing the user an invite that can't be
+            // resolved anymore. "Active" / "revoked" / "rejected"
+            // records stay visible regardless of expiresAt so the
+            // user can still see that history.
+            if (conn.status == "pending") {
+                val expiredAtMs = conn.expiresAt?.let { iso ->
+                    try { java.time.Instant.parse(iso).toEpochMilli() } catch (_: Exception) { null }
+                }
+                if (expiredAtMs != null && expiredAtMs < System.currentTimeMillis()) {
+                    return@mapNotNull null
+                }
+            }
             // Outbound pending invites don't have a peer profile yet —
             // the other side hasn't scanned / resolved the invite. Show
             // "Pending invitation" so the card isn't rendered blank.
