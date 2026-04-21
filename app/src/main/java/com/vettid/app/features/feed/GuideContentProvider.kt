@@ -31,334 +31,235 @@ object GuideContentProvider {
 
     fun getContent(guideId: String, userName: String = ""): GuideContent? {
         return when (guideId) {
-            "welcome" -> welcomeGuide(userName)
-            "navigation" -> navigationGuide()
+            "getting_started" -> gettingStartedGuide(userName)
+            "vettid_system_card" -> vettidSystemCardGuide()
+            "your_vault" -> yourVaultGuide()
+            "public_profile" -> publicProfileGuide()
+            "connecting_users" -> connectingUsersGuide()
+            "connecting_things" -> connectingThingsGuide()
             "settings" -> settingsGuide()
-            "personal_data" -> personalDataGuide()
-            "secrets" -> secretsGuide()
-            "critical_secrets" -> criticalSecretsGuide()
-            "voting" -> votingGuide()
-            "connections" -> connectionsGuide()
-            "wallets" -> walletsGuide()
-            "calling" -> callingGuide()
-            "messaging" -> messagingGuide()
             else -> null
         }
     }
 
     /** Every guide id the catalog knows, in the presentation order. */
     fun allGuideIds(): List<String> = listOf(
-        "welcome",
-        "navigation",
-        "connections",
-        "messaging",
-        "calling",
-        "personal_data",
-        "secrets",
-        "critical_secrets",
-        "wallets",
-        "voting",
+        "getting_started",
+        "vettid_system_card",
+        "your_vault",
+        "public_profile",
+        "connecting_users",
+        "connecting_things",
         "settings",
     )
 
-    private fun welcomeGuide(userName: String) = GuideContent(
-        title = if (userName.isNotEmpty()) "Welcome to VettID, $userName!" else "Welcome to VettID!",
-        icon = Icons.Default.Celebration,
+    private fun gettingStartedGuide(userName: String) = GuideContent(
+        title = if (userName.isNotEmpty()) "Getting Started, $userName" else "Getting Started",
+        icon = Icons.Default.Explore,
         sections = listOf(
             GuideSection.Paragraph(
-                "Your digital identity vault is set up and ready to use. Everything in VettID is encrypted and stored securely in your personal vault."
+                "Welcome to VettID. Your digital identity vault is live and everything in it is encrypted. Here's how to get around."
+            ),
+            GuideSection.Heading("Connections"),
+            GuideSection.Paragraph(
+                "Your home screen lists your connections, sorted by recent activity. The pinned card at the top is VettID itself — your system connection. The + button creates an invitation for a new connection."
+            ),
+            GuideSection.Heading("Your Vault"),
+            GuideSection.Paragraph(
+                "Tap your profile avatar in the top-left to open your vault. A profile strip showing your photo and name sits above the three vault tabs: Data, Secrets, and Wallets."
+            ),
+            GuideSection.Heading("Settings"),
+            GuideSection.Paragraph(
+                "Tap the status icon in the top-right to open settings — PIN and password, session timeout, appearance, location sharing, backup status, and audit logs."
             ),
             GuideSection.Paragraph(
-                "Your home screen lists your Connections. The VettID card at the top is your system connection — it surfaces guides, vault security updates, and governance votes. Tap your profile avatar in the top-left to open your vault."
-            ),
-            GuideSection.Paragraph(
-                "Open the VettID card's Guides button any time to browse the rest of these guides and learn about each feature."
+                "When you're ready, open the VettID card's Guides button to read the rest of these guides in order."
             )
         )
     )
 
-    private fun navigationGuide() = GuideContent(
-        title = "Getting Around",
-        icon = Icons.Default.Explore,
+    private fun vettidSystemCardGuide() = GuideContent(
+        title = "The VettID System Card",
+        icon = Icons.Default.Campaign,
         sections = listOf(
             GuideSection.Paragraph(
-                "VettID has two main areas: your Connections home screen and your Vault."
+                "The VettID card is pinned at the top of your Connections screen. It's your system connection — everything that comes from the platform (rather than from another person) lives here."
             ),
-            GuideSection.Heading("Connections"),
-            GuideSection.Paragraph(
-                "Your home screen lists every connection as a card, sorted by recent activity. The VettID card is pinned at the top — it's your system connection and carries four actions:"
-            ),
+            GuideSection.Heading("Four actions"),
             GuideSection.BulletList(
                 listOf(
-                    "Messages — vault security alerts and platform updates",
-                    "Votes — governance proposals open for voting",
-                    "Guides — this catalog of how-to guides",
+                    "Messages — platform announcements and vault security alerts",
+                    "Votes — governance proposals that are open for your vote (the badge shows how many)",
+                    "Guides — this catalog of how-to guides (the badge shows unread)",
                     "History — the audit trail of system-level events"
                 )
             ),
+            GuideSection.Heading("Notifications"),
             GuideSection.Paragraph(
-                "Each connection card shows unread notifications below the contact row. Tap a card to open its detail screen for messaging, calling, and payments."
+                "Unread guide notifications appear as rows below the card. Tap one to open that guide; tap the \"N more notifications\" row to expand the full list."
             ),
-            GuideSection.Heading("Your Vault"),
             GuideSection.Paragraph(
-                "Tap your profile avatar in the top-left corner to open your vault. A profile strip shows your photo and name at the top of every vault tab, with a shared \"publish changes\" banner whenever you have unpublished updates. The three vault tabs are:"
+                "Tapping the card body opens the system connection's history — the same audit trail you get from the History action."
+            )
+        )
+    )
+
+    private fun yourVaultGuide() = GuideContent(
+        title = "Your Vault",
+        icon = Icons.Default.Lock,
+        sections = listOf(
+            GuideSection.Paragraph(
+                "Your vault is where everything sensitive lives. The app can't read it directly — all reads and writes go through your personal enclave, which is hardware-attested before it answers."
             ),
+            GuideSection.Heading("Getting there"),
+            GuideSection.Paragraph(
+                "Tap your profile avatar in the top-left of the Connections screen. A profile strip sits above the tabs on every vault view, showing your photo and name plus a \"publish changes\" banner whenever you have unpublished updates."
+            ),
+            GuideSection.Heading("Profile Photo"),
+            GuideSection.Paragraph(
+                "Tap the avatar in the strip to capture or pick a photo. It's stored encrypted in your vault and shown to connections when you share your public profile."
+            ),
+            GuideSection.Heading("Data tab"),
+            GuideSection.Paragraph(
+                "Personal information — name, contact details, addresses, IDs, medical info, and more. Use templates for common groups (family contact, government ID, home address) or add custom fields. See the Public Profile guide for sharing."
+            ),
+            GuideSection.Heading("Secrets tab"),
+            GuideSection.Paragraph(
+                "Passwords, PINs, bank accounts, API keys, public keys, and anything else you need to keep safe. Templates cover common secret types. Public keys you flag for sharing show up on your public profile as QR codes connections can scan."
+            ),
+            GuideSection.Heading("Critical Secrets"),
+            GuideSection.Paragraph(
+                "Critical Secrets are your most sensitive data — seed phrases, master passwords, recovery keys. They live inside your credential blob and require an extra password every time you unlock them. Values auto-hide after 30 seconds and are never cached outside the enclave."
+            ),
+            GuideSection.Heading("Wallets tab"),
+            GuideSection.Paragraph(
+                "Bitcoin wallets with BIP84 HD key derivation. Private keys never leave the enclave. Create multiple wallets, send BTC to any address or connection, and optionally mark a wallet address as public so it appears on your profile."
+            ),
+            GuideSection.NavigationLink("Open Personal Data", NavigationTarget.DrawerNav(DrawerItem.PERSONAL_DATA)),
+            GuideSection.NavigationLink("Open Secrets", NavigationTarget.DrawerNav(DrawerItem.SECRETS)),
+            GuideSection.NavigationLink("Open Wallets", NavigationTarget.DrawerNav(DrawerItem.WALLETS))
+        )
+    )
+
+    private fun publicProfileGuide() = GuideContent(
+        title = "Your Public Profile",
+        icon = Icons.Default.Person,
+        sections = listOf(
+            GuideSection.Paragraph(
+                "Your public profile is the subset of vault data that connections see when they connect with you. Everything else stays private."
+            ),
+            GuideSection.Heading("Picking what to share"),
+            GuideSection.Paragraph(
+                "Each item in the Data and Secrets tabs has a visibility toggle. Flip it on to include that field in your public profile. Public keys and public wallet addresses work the same way — a toggle per item."
+            ),
+            GuideSection.Heading("Publishing"),
+            GuideSection.Paragraph(
+                "Changes aren't visible to connections until you publish. Whenever you have unpublished changes, a banner appears above the vault tabs — tap Publish to update your public profile. The same banner covers both personal data and public-key changes."
+            ),
+            GuideSection.Heading("Previewing"),
+            GuideSection.Paragraph(
+                "Tap your name in the vault profile strip (\"Tap to preview\") to see exactly how connections will see you — hero photo and name, a clickable contact card, categorized fields, and QR codes for any public keys or wallet addresses."
+            ),
+            GuideSection.Paragraph(
+                "Connections always see the most recently published version. Changes you make after publishing stay staged until you publish again."
+            ),
+            GuideSection.NavigationLink("Go to Personal Data", NavigationTarget.DrawerNav(DrawerItem.PERSONAL_DATA))
+        )
+    )
+
+    private fun connectingUsersGuide() = GuideContent(
+        title = "Connecting with People",
+        icon = Icons.Default.People,
+        sections = listOf(
+            GuideSection.Paragraph(
+                "Connecting links your vault with another VettID user's vault so you can message, call, and send Bitcoin with one end-to-end encrypted session."
+            ),
+            GuideSection.Heading("Making a connection"),
             GuideSection.BulletList(
                 listOf(
-                    "Data — your personal information and public profile fields",
-                    "Secrets — passwords, keys, and sensitive data",
-                    "Wallets — your Bitcoin wallets"
+                    "Tap the + button on the Connections screen to create an invitation. Share it as a QR code for in-person scanning or as a short link through any messenger.",
+                    "To accept an incoming invitation, scan the QR code or open the link. Your app shows a preview of the inviter's public profile.",
+                    "Either side can decline or accept on the review screen. Once both sides accept, the connection is live."
                 )
             ),
-            GuideSection.Heading("Status & Settings"),
+            GuideSection.Heading("The connection card"),
             GuideSection.Paragraph(
-                "Tap the status icon in the top-right corner to view vault status and open settings."
+                "Each connection appears as a card on your Connections screen with quick buttons for messaging, calling, payments, and history. Unread notifications for that connection show up below the card."
+            ),
+            GuideSection.Heading("Messaging"),
+            GuideSection.Paragraph(
+                "Messages are end-to-end encrypted. Your app encrypts before sending to your vault, your vault re-encrypts to the peer vault, the peer vault decrypts and delivers to the peer app. The server only ever sees ciphertext."
+            ),
+            GuideSection.Heading("Voice & Video Calls"),
+            GuideSection.Paragraph(
+                "Calls use WebRTC with an ephemeral key per call. Audio and video are encrypted before leaving your device; not even the relay server can see or hear the content. Open a connection card and tap the phone or video icon."
+            ),
+            GuideSection.Heading("Bitcoin payments"),
+            GuideSection.Paragraph(
+                "Send BTC directly to a connection — the payment request appears inline in your conversation. Transaction signing happens inside your vault's enclave, and you choose a fee priority before confirming."
+            ),
+            GuideSection.Heading("Managing connections"),
+            GuideSection.Paragraph(
+                "Tap any card to open the peer's public profile and the connection detail screen. From there you can review the audit trail, rotate session keys, toggle location sharing, or revoke the connection."
+            )
+        )
+    )
+
+    private fun connectingThingsGuide() = GuideContent(
+        title = "Connecting with Agents & Services",
+        icon = Icons.Default.Hub,
+        sections = listOf(
+            GuideSection.Paragraph(
+                "VettID connections aren't just for people. You can pair your vault with agents, your desktop client, and vault-to-vault service integrations. Every integration goes through the same enclave-gated key exchange as a peer connection."
+            ),
+            GuideSection.Heading("Desktop client"),
+            GuideSection.Paragraph(
+                "Pair the VettID desktop app with your phone. The desktop generates a short code; you scan it from the phone to authorize. After pairing, both endpoints share a session with your vault — messaging, calling, and BTC all work from the desktop."
+            ),
+            GuideSection.Heading("Agent connector"),
+            GuideSection.Paragraph(
+                "Run an AI agent alongside your vault. The agent connects with scoped capabilities you approve and never has plaintext access to data you haven't exposed. You can revoke an agent at any time from the connection detail screen."
+            ),
+            GuideSection.Heading("Service vaults"),
+            GuideSection.Paragraph(
+                "Some services (healthcare, identity verification, payment processors) operate their own VettID vaults. You can connect to them with the same invitation flow — the difference is you review the service's scope and capabilities before accepting."
+            ),
+            GuideSection.Paragraph(
+                "All of these appear on the Connections screen alongside your human connections. The card layout tells you which type (person, desktop, agent, or service) and gives you the same revoke, rotate-keys, and audit-trail controls."
             )
         )
     )
 
     private fun settingsGuide() = GuideContent(
-        title = "Customize Your Settings",
+        title = "Settings",
         icon = Icons.Default.Settings,
         sections = listOf(
             GuideSection.Paragraph(
-                "VettID lets you customize several aspects of your experience. Tap the status icon in the top-right corner to open settings."
+                "Tap the status icon in the top-right corner to open settings."
             ),
             GuideSection.Heading("Account"),
             GuideSection.BulletList(
                 listOf(
                     "Change your PIN or password",
-                    "Session TTL — how long until you need to re-enter your PIN",
+                    "Session TTL — how long until you need to re-unlock",
                     "Credential backup toggle"
                 )
             ),
             GuideSection.Heading("Privacy, Data & Logging"),
             GuideSection.BulletList(
                 listOf(
-                    "Location tracking preferences",
+                    "Location sharing preferences (per-connection)",
                     "Auto-archive and auto-delete timers for per-connection notifications",
-                    "View audit logs of vault operations"
+                    "Audit log of vault operations"
                 )
             ),
             GuideSection.Heading("Appearance & About"),
             GuideSection.BulletList(
                 listOf(
                     "Light, dark, or auto theme",
-                    "App details and vault status with enclave attestation"
+                    "App details and vault status with live enclave PCR attestation"
                 )
             )
-        )
-    )
-
-    private fun personalDataGuide() = GuideContent(
-        title = "Your Personal Data",
-        icon = Icons.Default.Person,
-        sections = listOf(
-            GuideSection.Paragraph(
-                "Your personal data section stores information about you — name, contact details, addresses, and more."
-            ),
-            GuideSection.Heading("Profile Strip"),
-            GuideSection.Paragraph(
-                "The profile strip above the vault tabs shows your avatar and display name on every tab. Tap the photo to edit it, or the name to preview how your profile looks to connections. A banner appears whenever you have unpublished changes."
-            ),
-            GuideSection.Heading("Templates"),
-            GuideSection.Paragraph(
-                "Use templates to quickly add common fields like Date of Birth, SSN, Passport, Driver License, Home Address, Emergency Contact, and more. Templates provide the right field types and structure automatically."
-            ),
-            GuideSection.Heading("Adding Information"),
-            GuideSection.Paragraph(
-                "Add fields from templates or create custom fields for anything you need. Organize them into categories like Identity, Contact, Address, Financial, and Medical."
-            ),
-            GuideSection.Heading("Public Profile"),
-            GuideSection.Paragraph(
-                "Toggle which fields are included in your public profile. Connections see your public profile when they connect with you. Publish from the banner at the top of the vault whenever you change public fields."
-            ),
-            GuideSection.NavigationLink("Go to Personal Data", NavigationTarget.DrawerNav(DrawerItem.PERSONAL_DATA))
-        )
-    )
-
-    private fun secretsGuide() = GuideContent(
-        title = "Managing Secrets",
-        icon = Icons.Default.Lock,
-        sections = listOf(
-            GuideSection.Paragraph(
-                "The Secrets tab lets you securely store sensitive information in your vault."
-            ),
-            GuideSection.Heading("Types of Secrets"),
-            GuideSection.BulletList(
-                listOf(
-                    "Passwords and PINs",
-                    "Bank accounts and credit cards",
-                    "Driver's license and passport details",
-                    "Cryptocurrency wallets",
-                    "API keys and certificates",
-                    "WiFi passwords and custom notes"
-                )
-            ),
-            GuideSection.Heading("Templates"),
-            GuideSection.Paragraph(
-                "Use pre-built templates for common secret types like credit cards, bank accounts, and IDs."
-            ),
-            GuideSection.Heading("Public Keys"),
-            GuideSection.Paragraph(
-                "Public keys can be shared on your profile as QR codes for others to scan. Publishing shared keys uses the same banner as the Data tab — one tap updates your public profile."
-            ),
-            GuideSection.NavigationLink("Go to Secrets", NavigationTarget.DrawerNav(DrawerItem.SECRETS))
-        )
-    )
-
-    private fun criticalSecretsGuide() = GuideContent(
-        title = "Critical Secrets",
-        icon = Icons.Default.Security,
-        sections = listOf(
-            GuideSection.Paragraph(
-                "Critical secrets are your most sensitive data — stored inside your credential blob and protected by an additional password verification."
-            ),
-            GuideSection.Heading("How It Works"),
-            GuideSection.BulletList(
-                listOf(
-                    "Password required to access — every time",
-                    "30-second reveal timer — values auto-hide",
-                    "No local caching — data only exists in vault memory",
-                    "Second password required to reveal individual values"
-                )
-            ),
-            GuideSection.Heading("What to Store"),
-            GuideSection.Paragraph(
-                "Use critical secrets for seed phrases, private keys, master passwords, and anything that needs maximum protection."
-            ),
-            GuideSection.NavigationLink("Go to Critical Secrets", NavigationTarget.ScreenNav("critical-secrets"))
-        )
-    )
-
-    private fun votingGuide() = GuideContent(
-        title = "Governance & Voting",
-        icon = Icons.Default.HowToVote,
-        sections = listOf(
-            GuideSection.Paragraph(
-                "VettID includes a governance system where you can participate in decisions that affect the platform."
-            ),
-            GuideSection.Heading("Where to Find Votes"),
-            GuideSection.Paragraph(
-                "Open the VettID system card on your Connections screen and tap the Votes button. The badge shows how many proposals are open for your vote."
-            ),
-            GuideSection.Heading("Proposals"),
-            GuideSection.Paragraph(
-                "Each proposal lists who filed it, what it's asking, and when voting closes. Cast your vote before the deadline — your vote is cryptographically signed by your vault so it can't be tampered with or forged."
-            ),
-        )
-    )
-
-    private fun connectionsGuide() = GuideContent(
-        title = "Connections",
-        icon = Icons.Default.People,
-        sections = listOf(
-            GuideSection.Paragraph(
-                "Connections let you link your vault with other VettID users for secure communication, calling, and payments."
-            ),
-            GuideSection.Heading("Adding Connections"),
-            GuideSection.Paragraph(
-                "Tap the add button on the Connections screen to create an invitation. Share it as a QR code for in-person scanning or as a time-limited link through any messaging app. To accept someone else's invite, scan their QR code or open their link."
-            ),
-            GuideSection.Heading("The Connection Card"),
-            GuideSection.Paragraph(
-                "Each connection appears as a card on the Connections screen with their photo, name, and quick-action buttons for messaging, calling, and payments. Unread notifications for that connection appear as rows below the card — the first row is shown with an expandable \"N more\" row if there are several."
-            ),
-            GuideSection.Heading("Managing Connections"),
-            GuideSection.Paragraph(
-                "Tap a card to open its detail screen, where you can view the public profile, review the audit trail, and revoke the connection at any time."
-            ),
-            GuideSection.Heading("Messaging"),
-            GuideSection.Paragraph(
-                "Send encrypted messages to your connections. Messages are encrypted in your vault before sending — only the recipient's vault can decrypt them."
-            ),
-            GuideSection.Heading("Voice & Video Calls"),
-            GuideSection.Paragraph(
-                "Make encrypted voice and video calls to your connections. Calls use end-to-end encryption with keys generated fresh for every call."
-            ),
-            GuideSection.Heading("Bitcoin Payments"),
-            GuideSection.Paragraph(
-                "Send and request Bitcoin payments directly through your connections. Transaction signing happens inside your vault's secure enclave."
-            ),
-        )
-    )
-
-    // Archive guide removed — the feed is purely connection-based now,
-    // so there is no separate archive concept. Connections archive at
-    // the per-connection level via the detail screen.
-
-    private fun walletsGuide() = GuideContent(
-        title = "Bitcoin Wallets",
-        icon = Icons.Default.AccountBalance,
-        sections = listOf(
-            GuideSection.Paragraph(
-                "VettID includes built-in Bitcoin wallet support. Your private keys are generated and stored inside the secure enclave — they never leave."
-            ),
-            GuideSection.Heading("Creating a Wallet"),
-            GuideSection.Paragraph(
-                "Create one or more wallets, each with its own address. Wallets use industry-standard BIP84 HD key derivation from your vault's master secret."
-            ),
-            GuideSection.Heading("Sending Bitcoin"),
-            GuideSection.Paragraph(
-                "Send BTC to a connection or any Bitcoin address. Choose your fee priority (fast, standard, or economy) and confirm. The transaction is signed inside the enclave and broadcast to the Bitcoin network."
-            ),
-            GuideSection.Heading("Receiving Bitcoin"),
-            GuideSection.Paragraph(
-                "Share your wallet address via QR code or copy it to receive payments."
-            ),
-            GuideSection.Heading("Privacy"),
-            GuideSection.Paragraph(
-                "Your wallet addresses are private by default. You can optionally make an address public on your profile if you choose."
-            ),
-            GuideSection.NavigationLink("Go to Wallets", NavigationTarget.DrawerNav(DrawerItem.WALLETS))
-        )
-    )
-
-    private fun callingGuide() = GuideContent(
-        title = "Voice & Video Calls",
-        icon = Icons.Default.VideoCall,
-        sections = listOf(
-            GuideSection.Paragraph(
-                "Make secure voice and video calls to anyone in your connections."
-            ),
-            GuideSection.Heading("Making a Call"),
-            GuideSection.Paragraph(
-                "Tap a connection card to open its detail page, then tap the call or video call button. The app will request microphone (and camera for video) permission if needed."
-            ),
-            GuideSection.Heading("Receiving Calls"),
-            GuideSection.Paragraph(
-                "Incoming calls appear as full-screen notifications, even when the app is in the background. Tap Answer or Decline."
-            ),
-            GuideSection.Heading("End-to-End Encryption"),
-            GuideSection.Paragraph(
-                "Every call generates fresh encryption keys. Your audio and video are encrypted before leaving your device — not even the relay server can see or hear the content."
-            ),
-            GuideSection.Heading("Call History"),
-            GuideSection.Paragraph(
-                "View your past calls, including missed calls, from the connection detail screen's audit trail."
-            )
-        )
-    )
-
-    private fun messagingGuide() = GuideContent(
-        title = "Encrypted Messaging",
-        icon = Icons.Default.Chat,
-        sections = listOf(
-            GuideSection.Paragraph(
-                "Send encrypted messages to your connections. Every message is encrypted inside your vault before it leaves."
-            ),
-            GuideSection.Heading("Sending Messages"),
-            GuideSection.Paragraph(
-                "Tap a connection card's message button to open a conversation, or open the card's detail screen and pick Messages. Type your message and hit send."
-            ),
-            GuideSection.Heading("Encryption"),
-            GuideSection.Paragraph(
-                "Messages are encrypted with keys unique to each connection. Your vault encrypts outgoing messages and decrypts incoming ones — the server only sees encrypted data."
-            ),
-            GuideSection.Heading("Payment Messages"),
-            GuideSection.Paragraph(
-                "You can send and receive Bitcoin payment requests directly in your conversations. Payment request cards appear inline with options to pay or view transaction details."
-            ),
         )
     )
 }
