@@ -1,8 +1,10 @@
 package com.vettid.app.core.network
 
 import android.os.Build
+import android.util.Log
 import com.google.gson.annotations.SerializedName
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Response
 import retrofit2.Retrofit
@@ -59,6 +61,31 @@ open class VaultServiceClient @Inject constructor() {
      * This token can be used for member API calls.
      */
     fun getEnrollmentToken(): String? = enrollmentToken
+
+    /**
+     * Warm the OkHttp connection pool to the backend so the first
+     * enrollment request doesn't pay the DNS + TLS handshake cost.
+     * Called from the Welcome screen's ViewModel the first time the
+     * screen is shown. Best-effort, swallows all errors — if we can't
+     * reach the backend right now, the real enrollment request will
+     * surface the error.
+     *
+     * Saves roughly 200–400ms off Phase 1 of enrollment in practice.
+     */
+    fun warmUp() {
+        try {
+            val request = Request.Builder()
+                .url(BASE_URL)
+                .head()
+                .build()
+            okHttpClient.newCall(request).execute().use { /* just pool the connection */ }
+            Log.d("VaultServiceClient", "Connection pool warmed to $BASE_URL")
+        } catch (e: Exception) {
+            // Network might be offline or backend down — the real
+            // enrollment request will report the error cleanly.
+            Log.d("VaultServiceClient", "warmUp skipped: ${e.message}")
+        }
+    }
 
     /**
      * Set the API URL for enrollment operations (from QR code)

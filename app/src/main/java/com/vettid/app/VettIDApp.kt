@@ -1478,8 +1478,16 @@ fun VettIDApp(
 fun WelcomeScreen(
     onScanQR: () -> Unit,
     onEnterCode: () -> Unit = {},
-    onRecoverAccount: () -> Unit = {}
+    onRecoverAccount: () -> Unit = {},
+    @Suppress("UNUSED_PARAMETER")
+    viewModel: com.vettid.app.features.welcome.WelcomeViewModel =
+        androidx.hilt.navigation.compose.hiltViewModel(),
 ) {
+    // WelcomeViewModel's init block warms the backend HTTP
+    // connection pool in the background so enrollment's first POST
+    // can reuse an already-handshaked TLS connection. The viewModel
+    // parameter is intentionally unused — constructing it is what
+    // triggers the warm-up.
     val context = LocalContext.current
     val iconBitmap = remember {
         context.assets.open("vettid-icon-1024.png").use { inputStream ->

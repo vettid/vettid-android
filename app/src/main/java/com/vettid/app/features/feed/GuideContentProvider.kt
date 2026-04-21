@@ -66,11 +66,11 @@ object GuideContentProvider {
             ),
             GuideSection.Heading("Your Vault"),
             GuideSection.Paragraph(
-                "Tap your profile avatar in the top-left to open your vault. A profile strip showing your photo and name sits above the three vault tabs: Data, Secrets, and Wallets."
+                "Tap your profile avatar in the top-left to open your vault. A profile strip showing your photo and name sits above the three vault tabs: Data, Secrets, and Wallets. Tap the avatar again to return to Connections."
             ),
             GuideSection.Heading("Settings"),
             GuideSection.Paragraph(
-                "Tap the status icon in the top-right to open settings — PIN and password, session timeout, appearance, location sharing, backup status, and audit logs."
+                "Tap the status icon in the top-right to open settings — PIN and password, session timeout, appearance, location sharing, backup status, and audit logs. Tap the icon again to close settings and go back to what you were looking at."
             ),
             GuideSection.Paragraph(
                 "When you're ready, open the VettID card's Guides button to read the rest of these guides in order."
@@ -117,7 +117,7 @@ object GuideContentProvider {
             ),
             GuideSection.Heading("Profile Photo"),
             GuideSection.Paragraph(
-                "Tap the avatar in the strip to capture or pick a photo. It's stored encrypted in your vault and shown to connections when you share your public profile."
+                "Tap the avatar in the strip to take a photo with your camera. It's stored encrypted in your vault and shown to connections when you share your public profile."
             ),
             GuideSection.Heading("Data tab"),
             GuideSection.Paragraph(
