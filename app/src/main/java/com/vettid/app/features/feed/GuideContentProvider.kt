@@ -46,6 +46,21 @@ object GuideContentProvider {
         }
     }
 
+    /** Every guide id the catalog knows, in the presentation order. */
+    fun allGuideIds(): List<String> = listOf(
+        "welcome",
+        "navigation",
+        "connections",
+        "messaging",
+        "calling",
+        "personal_data",
+        "secrets",
+        "critical_secrets",
+        "wallets",
+        "voting",
+        "settings",
+    )
+
     private fun welcomeGuide(userName: String) = GuideContent(
         title = if (userName.isNotEmpty()) "Welcome to VettID, $userName!" else "Welcome to VettID!",
         icon = Icons.Default.Celebration,

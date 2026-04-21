@@ -54,6 +54,10 @@ sealed class FeedDisplayItem {
         val missedCallCount: Int = 0,
         val unreadCount: Int,
         val pendingRows: List<PendingRow> = emptyList(),
+        // System connection badge counts. Ignored for non-system cards.
+        val systemVaultMessagesBadge: Int = 0,
+        val systemVotesBadge: Int = 0,
+        val systemGuidesBadge: Int = 0,
         override val sortTimestamp: Long,
         override val isUnread: Boolean
     ) : FeedDisplayItem()

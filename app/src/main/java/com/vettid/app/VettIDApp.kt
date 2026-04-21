@@ -210,6 +210,9 @@ sealed class Screen(val route: String) {
     object CallHistory : Screen("call/history")
     // Debug
     object CredentialDebug : Screen("debug/credentials")
+    // VettID system connection action targets
+    object VaultMessages : Screen("system/vault-messages")
+    object GuidesList : Screen("system/guides")
     // Voting (Issue #50)
     object Proposals : Screen("voting/proposals")
     object ProposalDetail : Screen("voting/proposals/{proposalId}") {
@@ -627,6 +630,15 @@ fun VettIDApp(
                     // ConversationScreen via its + menu today — route
                     // there until a dedicated request screen exists.
                     navController.navigate(Screen.Conversation.createRoute(connectionId))
+                },
+                onNavigateToVaultMessages = {
+                    navController.navigate(Screen.VaultMessages.route)
+                },
+                onNavigateToVotes = {
+                    navController.navigate(Screen.Proposals.route)
+                },
+                onNavigateToGuidesList = {
+                    navController.navigate(Screen.GuidesList.route)
                 },
                 onNavigateToHandlerDetail = { handlerId ->
                     navController.navigate(Screen.HandlerDetail.createRoute(handlerId))
@@ -1160,6 +1172,22 @@ fun VettIDApp(
         ) {
             ReceiveBtcScreen(
                 onBack = { navController.safePopBackStack() }
+            )
+        }
+        // VettID system connection action targets
+        composable(Screen.VaultMessages.route) {
+            val uri = androidx.compose.ui.platform.LocalUriHandler.current
+            com.vettid.app.features.feed.VaultMessagesScreen(
+                onBack = { navController.safePopBackStack() },
+                onOpenDetailsUrl = { url -> uri.openUri(url) },
+            )
+        }
+        composable(Screen.GuidesList.route) {
+            com.vettid.app.features.feed.GuidesListScreen(
+                onBack = { navController.safePopBackStack() },
+                onOpenGuide = { guideId ->
+                    navController.navigate(Screen.Guide.createRoute(guideId, "", ""))
+                },
             )
         }
         // Voting screens (Issue #50)
@@ -1721,6 +1749,9 @@ fun MainScreen(
     onNavigateToConversation: (String) -> Unit = {},
     onNavigateToBtcSend: (connectionId: String) -> Unit = {},
     onNavigateToBtcRequest: (connectionId: String) -> Unit = {},
+    onNavigateToVaultMessages: () -> Unit = {},
+    onNavigateToVotes: () -> Unit = {},
+    onNavigateToGuidesList: () -> Unit = {},
     onNavigateToHandlerDetail: (String) -> Unit = {},
     onNavigateToPersonalData: () -> Unit = {},
     onNavigateToSecrets: () -> Unit = {},
@@ -1883,6 +1914,9 @@ fun MainScreen(
                 onResurfaceVaultUpdate = { vaultUpdateViewModel.resurface() },
                 onBtcSend = onNavigateToBtcSend,
                 onBtcRequest = onNavigateToBtcRequest,
+                onNavigateToVaultMessages = onNavigateToVaultMessages,
+                onNavigateToVotes = onNavigateToVotes,
+                onNavigateToGuidesList = onNavigateToGuidesList,
             )
         },
         settingsContent = {

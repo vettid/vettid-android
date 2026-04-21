@@ -71,6 +71,9 @@ fun FeedContent(
     onNavigateToConnectDesktop: () -> Unit = {},
     onBtcSend: (connectionId: String) -> Unit = {},
     onBtcRequest: (connectionId: String) -> Unit = {},
+    onNavigateToVaultMessages: () -> Unit = {},
+    onNavigateToVotes: () -> Unit = {},
+    onNavigateToGuidesList: () -> Unit = {},
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -244,6 +247,9 @@ fun FeedContent(
                     onResurfaceVaultUpdate = onResurfaceVaultUpdate,
                     onBtcSend = onBtcSend,
                     onBtcRequest = onBtcRequest,
+                    onSystemVaultMessages = onNavigateToVaultMessages,
+                    onSystemVotes = onNavigateToVotes,
+                    onSystemGuides = onNavigateToGuidesList,
                 )
                 is FeedState.Error -> {
                     // If in offline mode, show friendly offline content instead of error
@@ -379,6 +385,9 @@ private fun FeedList(
     onBtcSend: (String) -> Unit = {},
     onBtcRequest: (String) -> Unit = {},
     onResurfaceVaultUpdate: () -> Unit = {},
+    onSystemVaultMessages: () -> Unit = {},
+    onSystemVotes: () -> Unit = {},
+    onSystemGuides: () -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
@@ -448,6 +457,9 @@ private fun FeedList(
                         onBtcRequestClick = { onBtcRequest(item.connectionId) },
                         onNavigateToConnectionReview = onNavigateToConnectionReview,
                         onOpenMigration = onResurfaceVaultUpdate,
+                        onSystemVaultMessagesClick = onSystemVaultMessages,
+                        onSystemVotesClick = onSystemVotes,
+                        onSystemGuidesClick = onSystemGuides,
                     )
             }
         }
@@ -470,6 +482,9 @@ private fun StatusAwareConnectionCard(
     onBtcRequestClick: () -> Unit = {},
     onNavigateToConnectionReview: (connectionId: String, eventId: String) -> Unit = { _, _ -> },
     onOpenMigration: () -> Unit = {},
+    onSystemVaultMessagesClick: () -> Unit = {},
+    onSystemVotesClick: () -> Unit = {},
+    onSystemGuidesClick: () -> Unit = {},
 ) {
     // Render different card variants based on connection status
     when {
@@ -479,12 +494,14 @@ private fun StatusAwareConnectionCard(
             item, onClick, onLongClick, onMessageClick, onHistoryClick,
             onCallClick, onVideoCallClick, onBtcClick, onBtcRequestClick,
             onNavigateToConnectionReview, onOpenMigration,
+            onSystemVaultMessagesClick, onSystemVotesClick, onSystemGuidesClick,
         )
         item.connectionStatus == "revoked" || item.connectionStatus == "rejected" -> InactiveConnectionCard(item, onClick)
         else -> ActiveConnectionCard(
             item, onClick, onLongClick, onMessageClick, onHistoryClick,
             onCallClick, onVideoCallClick, onBtcClick, onBtcRequestClick,
             onNavigateToConnectionReview, onOpenMigration,
+            onSystemVaultMessagesClick, onSystemVotesClick, onSystemGuidesClick,
         )
     }
 }
@@ -649,6 +666,9 @@ private fun ActiveConnectionCard(
     onBtcRequestClick: () -> Unit = {},
     onNavigateToConnectionReview: (connectionId: String, eventId: String) -> Unit = { _, _ -> },
     onOpenMigration: () -> Unit = {},
+    onSystemVaultMessagesClick: () -> Unit = {},
+    onSystemVotesClick: () -> Unit = {},
+    onSystemGuidesClick: () -> Unit = {},
 ) {
     val haptic = LocalHapticFeedback.current
 
@@ -701,11 +721,42 @@ private fun ActiveConnectionCard(
                 }
             }
 
-            // Quick action strip — peer connections get Text/Voice/Video
-            // + More menu; the system (VettID) connection has no
-            // interactive actions from the feed, so the strip is hidden.
-            if (!isSystem) {
-                Spacer(modifier = Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(8.dp))
+            if (isSystem) {
+                // VettID system connection gets a dedicated 4-button
+                // strip matching the peer layout footprint: service
+                // messages + votes + guides + history. Badges come
+                // from the card data the feed view model computes.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                ) {
+                    ConnectionActionButton(
+                        icon = Icons.Default.Campaign,
+                        label = "Messages",
+                        onClick = onSystemVaultMessagesClick,
+                        badgeCount = item.systemVaultMessagesBadge,
+                    )
+                    ConnectionActionButton(
+                        icon = Icons.Default.HowToVote,
+                        label = "Votes",
+                        onClick = onSystemVotesClick,
+                        badgeCount = item.systemVotesBadge,
+                    )
+                    ConnectionActionButton(
+                        icon = Icons.Default.MenuBook,
+                        label = "Guides",
+                        onClick = onSystemGuidesClick,
+                        badgeCount = item.systemGuidesBadge,
+                    )
+                    ConnectionActionButton(
+                        icon = Icons.Default.History,
+                        label = "History",
+                        onClick = onHistoryClick,
+                    )
+                }
+            } else {
+                // Peer connection action strip.
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly,
