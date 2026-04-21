@@ -257,14 +257,87 @@ class ScanInvitationViewModel @Inject constructor(
     }
 
     /**
-     * Submit manually entered code.
-     * Note: Manual entry is limited - full invitation data is in QR code.
+     * Submit manually entered code. Accepts anything a user might
+     * reasonably paste from a share sheet or copied link:
+     *
+     *   - A short invite code (8–32 chars of [A-Za-z0-9_-]) — the
+     *     compact token the QR broker stores.
+     *   - A full https://vettid.dev/connect?data=... deep link.
+     *   - A full vettid://connect?data=... custom-scheme link.
+     *   - Raw base64 of the JSON blob (what's under the `data` param).
+     *   - The JSON blob itself ({"c":"…","e":"…"} or the full inline form).
+     *
+     * All paths funnel through the same onQrCodeScanned() pipeline
+     * after normalization so the downstream state machine (Processing
+     * → Preview) doesn't need to know where the input came from.
      */
     fun onManualCodeEntered() {
         viewModelScope.launch {
-            _effects.emit(ScanInvitationEffect.ShowError(
-                "Please scan the QR code to accept an invitation"
-            ))
+            val raw = _manualCode.value.trim()
+            if (raw.isEmpty()) {
+                _effects.emit(ScanInvitationEffect.ShowError("Enter an invitation code or paste a link"))
+                return@launch
+            }
+            val normalized = normalizeManualInput(raw)
+            if (normalized == null) {
+                _effects.emit(ScanInvitationEffect.ShowError(
+                    "That doesn't look like a valid invitation. Paste the link you were sent or scan the QR code."
+                ))
+                return@launch
+            }
+            onQrCodeScanned(normalized)
+        }
+    }
+
+    /**
+     * Convert free-form user input into the JSON blob the QR-scan
+     * pipeline expects. Returns null if the input can't be
+     * recognized as any known invitation form.
+     */
+    private fun normalizeManualInput(raw: String): String? {
+        // Already a JSON blob? Pass through unchanged.
+        if (raw.startsWith("{") && raw.endsWith("}")) {
+            return raw
+        }
+
+        // Full URL — extract the data= query param and decode it.
+        if (raw.startsWith("vettid://") || raw.startsWith("http://") || raw.startsWith("https://")) {
+            return try {
+                val uri = android.net.Uri.parse(raw)
+                val dataParam = uri.getQueryParameter("data")
+                val codeParam = uri.getQueryParameter("code")
+                when {
+                    dataParam != null -> decodeBase64OrNull(dataParam)
+                    codeParam != null -> gson.toJson(mapOf("c" to codeParam))
+                    else -> null
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        // Bare base64 payload — decode it and hope it's the JSON blob.
+        decodeBase64OrNull(raw)?.let { return it }
+
+        // Bare short code? Wrap it as the broker-compact JSON form.
+        if (raw.matches(Regex("^[A-Za-z0-9_-]{6,64}$"))) {
+            return gson.toJson(mapOf("c" to raw))
+        }
+
+        return null
+    }
+
+    private fun decodeBase64OrNull(input: String): String? {
+        return try {
+            val decoded = try {
+                android.util.Base64.decode(input, android.util.Base64.URL_SAFE or android.util.Base64.NO_WRAP)
+            } catch (_: Exception) {
+                android.util.Base64.decode(input, android.util.Base64.DEFAULT)
+            }
+            val str = String(decoded, Charsets.UTF_8)
+            if (str.startsWith("{") && str.endsWith("}")) str else null
+        } catch (_: Exception) {
+            null
         }
     }
 

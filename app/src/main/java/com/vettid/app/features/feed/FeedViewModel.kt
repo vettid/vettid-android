@@ -190,9 +190,18 @@ class FeedViewModel @Inject constructor(
             if (conn.connectionId.contains('/')) {
                 return@mapNotNull null
             }
+            // Outbound pending invites don't have a peer profile yet —
+            // the other side hasn't scanned / resolved the invite. Show
+            // "Pending invitation" so the card isn't rendered blank.
+            val isOutboundPending = conn.status == "pending" &&
+                conn.direction == "outbound" && !conn.needsAttention
             val peerName = listOfNotNull(
                 conn.peerProfile?.firstName, conn.peerProfile?.lastName
-            ).joinToString(" ").trim().ifEmpty { conn.label }
+            ).joinToString(" ").trim().ifEmpty {
+                conn.label.ifEmpty {
+                    if (isOutboundPending) "Pending invitation" else ""
+                }
+            }
 
             // Search filter
             if (query.isNotEmpty()) {
@@ -207,6 +216,7 @@ class FeedViewModel @Inject constructor(
             // Preview comes from vault's connection.list (no event dependency)
             val preview = when {
                 needsReview -> "Wants to connect"
+                isOutboundPending -> "Tap to view invitation"
                 hasAccepted -> "Waiting for response"
                 conn.lastMessagePreview != null -> conn.lastMessagePreview
                 conn.status == "active" -> "Connected"

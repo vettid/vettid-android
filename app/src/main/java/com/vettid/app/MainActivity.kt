@@ -159,14 +159,15 @@ class MainActivity : ComponentActivity() {
                     code = data?.let { decodeBase64IfNeeded(it) } ?: code
                 )
             }
-            // Custom scheme: vettid://connect?code=xxx or vettid://connect?data=xxx (base64 JSON)
+            // Custom scheme: vettid://connect?c=xxx (broker code — preferred),
+            // vettid://connect?code=xxx, or vettid://connect?data=xxx (base64 JSON).
             uri.scheme == "vettid" && uri.host == "connect" -> {
-                // Support both code (short code) and data (base64-encoded JSON)
                 val data = uri.getQueryParameter("data")
-                val code = uri.getQueryParameter("code")
+                val brokerCode = uri.getQueryParameter("c") ?: uri.getQueryParameter("code")
                 DeepLinkData(
                     type = DeepLinkType.CONNECT,
-                    code = data?.let { decodeBase64IfNeeded(it) } ?: code
+                    code = data?.let { decodeBase64IfNeeded(it) }
+                        ?: brokerCode?.let { wrapBrokerCodeAsJson(it) }
                 )
             }
             // Custom scheme: vettid://votes?id=xxx (Issue #50: Vault-based voting)
@@ -193,12 +194,18 @@ class MainActivity : ComponentActivity() {
                     code = data?.let { decodeBase64IfNeeded(it) } ?: uri.pathSegments.getOrNull(1)
                 )
             }
-            // HTTPS: https://vettid.dev/connect/xxx or https://vettid.dev/connect?data=xxx
+            // HTTPS:
+            //   https://vettid.dev/connect?c=<broker-code>  (preferred — share link from Android)
+            //   https://vettid.dev/connect/<broker-code>    (path-segment variant)
+            //   https://vettid.dev/connect?data=<base64>    (legacy inline format)
             uri.host == "vettid.dev" && uri.pathSegments.firstOrNull() == "connect" -> {
                 val data = uri.getQueryParameter("data")
+                val brokerCode = uri.getQueryParameter("c")
+                    ?: uri.pathSegments.getOrNull(1)
                 DeepLinkData(
                     type = DeepLinkType.CONNECT,
-                    code = data?.let { decodeBase64IfNeeded(it) } ?: uri.pathSegments.getOrNull(1)
+                    code = data?.let { decodeBase64IfNeeded(it) }
+                        ?: brokerCode?.let { wrapBrokerCodeAsJson(it) }
                 )
             }
             // HTTPS: https://vettid.dev/votes/xxx or https://vettid.dev/votes?id=xxx
@@ -212,6 +219,16 @@ class MainActivity : ComponentActivity() {
             else -> DeepLinkData(DeepLinkType.NONE)
         }
     }
+
+    /**
+     * The ScanInvitationViewModel's scan pipeline expects a JSON blob
+     * like {"c":"<code>","e":"<endpoint>"} — the same shape QR codes
+     * carry. Share links use the bare broker code as a query param
+     * (?c=<code>) to keep the URL short and linkifiable; wrap it back
+     * into that JSON form here so downstream code is unchanged.
+     */
+    private fun wrapBrokerCodeAsJson(code: String): String =
+        """{"c":"$code"}"""
 
     /**
      * Decode base64 string if it appears to be base64-encoded.

@@ -220,6 +220,7 @@ fun FeedContent(
                     onConnectionAccept = { connectionId -> viewModel.acceptConnection(connectionId) },
                     onConnectionDecline = { connectionId -> viewModel.declineConnection(connectionId) },
                     onNavigateToConnectionReview = onNavigateToConnectionReview,
+                    onNavigateToCreateInvitation = onNavigateToCreateInvitation,
                     onVoiceCall = { connectionId ->
                         val hasAudio = ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
                         if (hasAudio) {
@@ -384,6 +385,7 @@ private fun FeedList(
     onConnectionAccept: (String) -> Unit = {},
     onConnectionDecline: (String) -> Unit = {},
     onNavigateToConnectionReview: (String, String) -> Unit = { _, _ -> },
+    onNavigateToCreateInvitation: () -> Unit = {},
     onVoiceCall: (String) -> Unit = {},
     onVideoCall: (String) -> Unit = {},
     onBtcSend: (String) -> Unit = {},
@@ -442,6 +444,16 @@ private fun FeedList(
                         onClick = {
                             when {
                                 item.needsReview -> onNavigateToConnectionReview(item.connectionId, "")
+                                // Outbound invites that the peer
+                                // hasn't resolved yet — tapping the
+                                // card reopens the invitation share
+                                // flow so the inviter can resend
+                                // the link or reshow the QR. The
+                                // broker TTL is short so a new
+                                // invite is the simplest path.
+                                item.connectionStatus == "pending"
+                                    && item.direction == "outbound" ->
+                                    onNavigateToCreateInvitation()
                                 // The VettID system connection has no
                                 // profile / detail screen — tapping the
                                 // card goes straight to its Interaction

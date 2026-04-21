@@ -222,12 +222,30 @@ class CreateInvitationViewModel @Inject constructor(
 
     /**
      * Build deep link URL from invitation.
+     *
+     * https://vettid.dev/connect?c=<invite_code>
+     *
+     *   - https:// so email clients auto-linkify it (the vettid://
+     *     custom scheme gets rendered as plain text in most mail
+     *     apps and the recipient can't tap it).
+     *   - The App Link intent filter on the connect path opens the
+     *     app directly on devices where it's installed.
+     *   - Just the short broker code (~16 chars) — the scanner's
+     *     vault resolves it via the INVITATIONS NATS stream to get
+     *     the full credentials, so we don't need to stuff base64
+     *     JSON into the URL. Keeps the link short and paste-friendly.
+     *
+     * The fallback path (inline credentials, when the broker publish
+     * failed) still ships the full base64 blob under `?data=` since
+     * there's no broker code to resolve.
      */
     private fun buildDeepLink(invitation: com.vettid.app.core.nats.ConnectionInvitation): String {
-        // Encode invitation data in base64 for the deep link
+        if (invitation.inviteCode.isNotEmpty()) {
+            return "https://vettid.dev/connect?c=${invitation.inviteCode}"
+        }
         val qrData = buildQrCodeData(invitation)
         val encoded = Base64.encodeToString(qrData.toByteArray(), Base64.URL_SAFE or Base64.NO_WRAP)
-        return "vettid://connect?data=$encoded"
+        return "https://vettid.dev/connect?data=$encoded"
     }
 
     /**
