@@ -1110,10 +1110,7 @@ fun VettIDApp(
                 onSettingsToggle = { isSettingsOpen = !isSettingsOpen },
                 isSettingsOpen = isSettingsOpen,
                 profileSection = {
-                    com.vettid.app.features.personaldata.VaultProfileSection(
-                        onEditPhoto = { vaultSegment = VaultSegment.DATA },
-                        onNameClick = { vaultSegment = VaultSegment.DATA },
-                    )
+                    com.vettid.app.features.personaldata.VaultProfileSection()
                 },
                 personalDataContent = { query -> PersonalDataContent(searchQuery = query) },
                 secretsContent = { query ->

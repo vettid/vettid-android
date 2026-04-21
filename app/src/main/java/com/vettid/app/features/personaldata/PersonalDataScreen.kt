@@ -86,8 +86,6 @@ fun PersonalDataContent(
 ) {
     val state by viewModel.state.collectAsState()
     val showAddDialog by viewModel.showAddDialog.collectAsState()
-    val showPublicProfilePreview by viewModel.showPublicProfilePreview.collectAsState()
-    val showPhotoCapture by viewModel.showPhotoCapture.collectAsState()
     val editState by viewModel.editState.collectAsState()
     val profilePhoto by viewModel.profilePhoto.collectAsState()
     val customCategories by viewModel.customCategories.collectAsState()
@@ -252,55 +250,9 @@ fun PersonalDataContent(
         )
     }
 
-    // Full screen public profile view - use Dialog to cover entire window (including scaffold top bar)
-    if (showPublicProfilePreview) {
-        val publishedProfile by viewModel.publishedProfile.collectAsState()
-        val isLoadingPublishedProfile by viewModel.isLoadingPublishedProfile.collectAsState()
-        val publicSecrets by viewModel.publicSecrets.collectAsState()
-        val publicPersonalData by viewModel.publicPersonalData.collectAsState()
-        val installedHandlers by viewModel.installedHandlers.collectAsState()
-
-        androidx.compose.ui.window.Dialog(
-            onDismissRequest = viewModel::hidePublicProfilePreview,
-            properties = androidx.compose.ui.window.DialogProperties(
-                dismissOnBackPress = true,
-                dismissOnClickOutside = false,
-                usePlatformDefaultWidth = false
-            )
-        ) {
-            PublicProfileFullScreen(
-                publishedProfile = publishedProfile,
-                isLoading = isLoadingPublishedProfile,
-                publicSecrets = publicSecrets,
-                publicPersonalData = publicPersonalData,
-                handlers = installedHandlers,
-                onBack = viewModel::hidePublicProfilePreview
-            )
-        }
-    }
-
-    // Full screen photo capture dialog
-    if (showPhotoCapture) {
-        androidx.compose.ui.window.Dialog(
-            onDismissRequest = viewModel::hidePhotoCaptureDialog,
-            properties = androidx.compose.ui.window.DialogProperties(
-                dismissOnBackPress = true,
-                dismissOnClickOutside = false,
-                usePlatformDefaultWidth = false
-            )
-        ) {
-            // Consume back press within dialog to prevent propagation to NavController
-            androidx.activity.compose.BackHandler(enabled = true) {
-                viewModel.hidePhotoCaptureDialog()
-            }
-            ProfilePhotoCapture(
-                onPhotoCapture = { bytes ->
-                    viewModel.uploadPhoto(bytes)
-                },
-                onCancel = viewModel::hidePhotoCaptureDialog
-            )
-        }
-    }
+    // Public-profile preview and photo capture dialogs are rendered
+    // by VaultProfileSection (above the tabs) so they work from any
+    // vault tab, not just Data.
 }
 
 @Composable
@@ -1338,7 +1290,7 @@ private fun maskString(value: String): String {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PublicProfileFullScreen(
+internal fun PublicProfileFullScreen(
     publishedProfile: PublishedProfileData?,
     isLoading: Boolean,
     publicSecrets: List<PublicMetadataItem> = emptyList(),
