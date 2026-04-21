@@ -15,6 +15,8 @@ import com.vettid.app.core.network.ConnectionStatus
 import com.vettid.app.core.network.Profile
 import com.vettid.app.features.calling.CallManager
 import com.vettid.app.features.calling.CallType
+import com.vettid.app.features.personaldata.PublishedProfileData
+import com.vettid.app.features.personaldata.peerProfileToPublishedProfileData
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -73,6 +75,15 @@ class ConnectionDetailViewModel @Inject constructor(
     private val _peerWallets = MutableStateFlow<List<com.vettid.app.core.nats.PeerWalletInfo>>(emptyList())
     val peerWallets: StateFlow<List<com.vettid.app.core.nats.PeerWalletInfo>> = _peerWallets.asStateFlow()
 
+    // Peer profile rendered through the same BusinessCardView the user
+    // sees for their own public-profile preview — gives one canonical
+    // layout across scanner review, inviter review, and this detail
+    // screen. Rebuilt each time the connection record reloads.
+    private val _peerPublishedProfile = MutableStateFlow(
+        PublishedProfileData(items = emptyList(), isFromVault = false)
+    )
+    val peerPublishedProfile: StateFlow<PublishedProfileData> = _peerPublishedProfile.asStateFlow()
+
     // Dialog state for revoke confirmation
     private val _showRevokeDialog = MutableStateFlow(false)
     val showRevokeDialog: StateFlow<Boolean> = _showRevokeDialog.asStateFlow()
@@ -129,6 +140,17 @@ class ConnectionDetailViewModel @Inject constructor(
                         _peerUserGuid.value = record.peerProfile?.userGuid ?: record.peerGuid
                         _peerIdentityKey.value = record.peerProfile?.publicKey
                         _peerWallets.value = record.peerProfile?.wallets ?: emptyList()
+                        _peerPublishedProfile.value = record.peerProfile?.let { peer ->
+                            peerProfileToPublishedProfileData(
+                                peer = peer,
+                                fallbackDisplayName = record.label,
+                                fallbackEmail = record.peerProfile?.email,
+                            )
+                        } ?: PublishedProfileData(
+                            items = emptyList(),
+                            isFromVault = false,
+                            photo = record.peerProfile?.photo,
+                        )
                         _state.value = ConnectionDetailState.Loaded(
                             connection = connection,
                             profile = null

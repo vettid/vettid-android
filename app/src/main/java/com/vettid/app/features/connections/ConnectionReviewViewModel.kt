@@ -9,6 +9,8 @@ import com.vettid.app.core.nats.FeedClient
 import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.features.connections.components.PeerProfilePreview
 import com.vettid.app.features.connections.components.WalletPreview
+import com.vettid.app.features.personaldata.PublishedProfileData
+import com.vettid.app.features.personaldata.peerProfileToPublishedProfileData
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -80,8 +82,21 @@ class ConnectionReviewViewModel @Inject constructor(
                             wallets = wallets
                         )
 
+                        // Build a PublishedProfileData so the review
+                        // screen can render through the same
+                        // BusinessCardView the user sees for their own
+                        // public-profile preview.
+                        val publishedProfile = profile?.let {
+                            peerProfileToPublishedProfileData(
+                                peer = it,
+                                fallbackDisplayName = displayName.takeIf { n -> n.isNotBlank() },
+                                fallbackEmail = profile?.email,
+                            )
+                        } ?: PublishedProfileData(items = emptyList(), isFromVault = true)
+
                         _state.value = ConnectionReviewState.Loaded(
                             peerProfile = peerPreview,
+                            publishedProfile = publishedProfile,
                             connectionId = connectionId,
                             status = record.status,
                             direction = record.direction,
@@ -147,6 +162,7 @@ sealed class ConnectionReviewState {
     object Loading : ConnectionReviewState()
     data class Loaded(
         val peerProfile: PeerProfilePreview,
+        val publishedProfile: PublishedProfileData,
         val connectionId: String,
         val status: String,
         val direction: String,

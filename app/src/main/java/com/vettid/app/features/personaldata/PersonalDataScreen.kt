@@ -1694,7 +1694,7 @@ private fun ProfileInstructionStep(
  * Shows the user's identity prominently with clickable contact info.
  */
 @Composable
-private fun BusinessCardView(
+internal fun BusinessCardView(
     profile: PublishedProfileData,
     isReadOnly: Boolean = false,
     onEditPhoto: () -> Unit = {},
@@ -2225,7 +2225,7 @@ private fun BusinessCardField(
  * QR code dialog for displaying public key values.
  */
 @Composable
-private fun PublicKeyQRDialog(
+internal fun PublicKeyQRDialog(
     item: PersonalDataItem,
     onDismiss: () -> Unit
 ) {

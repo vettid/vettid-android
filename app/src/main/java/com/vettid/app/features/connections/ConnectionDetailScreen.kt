@@ -52,6 +52,7 @@ fun ConnectionDetailScreen(
     val peerUserGuid by viewModel.peerUserGuid.collectAsState()
     val peerIdentityKey by viewModel.peerIdentityKey.collectAsState()
     val peerWallets by viewModel.peerWallets.collectAsState()
+    val peerPublishedProfile by viewModel.peerPublishedProfile.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -155,6 +156,7 @@ fun ConnectionDetailScreen(
                     peerUserGuid = peerUserGuid,
                     peerIdentityKey = peerIdentityKey,
                     peerWallets = peerWallets,
+                    peerPublishedProfile = peerPublishedProfile,
                     isRevoking = currentState.isRevoking,
                     isRotating = currentState.isRotating,
                     isLocationSharingEnabled = currentState.isLocationSharingEnabled,
@@ -211,6 +213,8 @@ private fun LoadedContent(
     peerUserGuid: String? = null,
     peerIdentityKey: String? = null,
     peerWallets: List<com.vettid.app.core.nats.PeerWalletInfo> = emptyList(),
+    peerPublishedProfile: com.vettid.app.features.personaldata.PublishedProfileData =
+        com.vettid.app.features.personaldata.PublishedProfileData(emptyList(), false),
     isRevoking: Boolean,
     isRotating: Boolean = false,
     isLocationSharingEnabled: Boolean = false,
@@ -224,15 +228,6 @@ private fun LoadedContent(
     onLocationSharingToggle: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    val photoBitmap = remember(peerPhotoBase64) {
-        peerPhotoBase64?.let { base64 ->
-            try {
-                val bytes = Base64.decode(base64, Base64.DEFAULT)
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            } catch (e: Exception) { null }
-        }
-    }
-
     val connectedDateFormatter = java.text.SimpleDateFormat("MMMM d, yyyy 'at' h:mm a", java.util.Locale.getDefault())
     val connectedDate = connectedDateFormatter.format(java.util.Date(
         if (connection.createdAt < 10000000000L) connection.createdAt * 1000 else connection.createdAt
@@ -241,105 +236,29 @@ private fun LoadedContent(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+            .verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         // === 1. PUBLIC PROFILE ===
-        // Avatar
-        if (photoBitmap != null) {
-            Image(
-                bitmap = photoBitmap.asImageBitmap(),
-                contentDescription = "Profile photo",
-                modifier = Modifier.size(100.dp).clip(CircleShape),
-                contentScale = ContentScale.Crop
-            )
-        } else {
-            Surface(
-                modifier = Modifier.size(100.dp),
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.primaryContainer
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        text = connection.peerDisplayName.take(2).uppercase(),
-                        style = MaterialTheme.typography.displaySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                }
-            }
-        }
+        // Rendered through the same BusinessCardView used for the
+        // user's own public-profile preview so both sides show the
+        // same hero avatar / clickable contact card / categorized
+        // fields / public keys layout. PublishedProfileData is built
+        // in ConnectionDetailViewModel from the cached peer profile.
+        com.vettid.app.features.personaldata.PeerProfileView(
+            profile = peerPublishedProfile,
+            modifier = Modifier.fillMaxWidth(),
+        )
 
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(text = connection.peerDisplayName, style = MaterialTheme.typography.headlineMedium)
-
-        peerEmail?.let {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(text = it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-
-        // Profile fields
-        if (!peerFields.isNullOrEmpty()) {
-            val displayFields = peerFields!!.entries
-                .filter { (it.value["value"] ?: "").isNotBlank() }
-                .filter { it.key != "_system_first_name" && it.key != "_system_last_name" && it.key != "_system_email" }
-
-            if (displayFields.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(16.dp))
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        displayFields.forEachIndexed { index, (_, fieldData) ->
-                            if (index > 0) {
-                                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                            }
-                            val displayName = (fieldData["display_name"] ?: "").trim()
-                                .removePrefix(" System ").replaceFirstChar { it.uppercase() }
-                            Text(text = displayName, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(text = fieldData["value"] ?: "", style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-                }
-            }
-        }
-
-        // Public wallet addresses
-        if (peerWallets.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(16.dp))
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Default.AccountBalance,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Bitcoin Wallets", style = MaterialTheme.typography.titleSmall)
-                    }
-                    peerWallets.forEachIndexed { index, wallet ->
-                        if (index > 0) {
-                            HorizontalDivider(
-                                modifier = Modifier.padding(vertical = 8.dp),
-                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
-                            )
-                        } else {
-                            Spacer(modifier = Modifier.height(8.dp))
-                        }
-                        Text(
-                            text = "${wallet.label} (${wallet.network})",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            text = wallet.address,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                        )
-                    }
-                }
-            }
-        }
+        // Action buttons + detail sections below the profile use the
+        // screen's side padding. PeerProfileView handles its own
+        // horizontal padding internally, so we only pad the rest.
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
 
         // === ACTION BUTTONS ===
         if (connection.status == ConnectionStatus.ACTIVE) {
@@ -570,6 +489,7 @@ private fun LoadedContent(
         }
 
         Spacer(modifier = Modifier.height(32.dp))
+        } // end padded inner Column
     }
 }
 

@@ -12,7 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.vettid.app.features.connections.components.ConnectionPreviewCard
+import com.vettid.app.features.personaldata.PeerProfileView
 
 /**
  * Unified connection review screen used by both sides:
@@ -69,18 +69,49 @@ fun ConnectionReviewScreen(
             }
 
             is ConnectionReviewState.Loaded -> {
-                Box(
+                Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(padding)
-                        .padding(16.dp)
                 ) {
-                    ConnectionPreviewCard(
-                        profile = currentState.peerProfile,
-                        onAccept = { viewModel.acceptConnection() },
-                        onDecline = { viewModel.declineConnection() },
-                        isProcessing = currentState.isProcessing
-                    )
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        PeerProfileView(profile = currentState.publishedProfile)
+                    }
+                    // Accept / Decline action strip — always rendered
+                    // below the profile so the user reviews first.
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        OutlinedButton(
+                            onClick = { viewModel.declineConnection() },
+                            enabled = !currentState.isProcessing,
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            ),
+                        ) { Text("Decline") }
+                        Button(
+                            onClick = { viewModel.acceptConnection() },
+                            enabled = !currentState.isProcessing,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            if (currentState.isProcessing) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(18.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                            } else {
+                                Text("Accept")
+                            }
+                        }
+                    }
                 }
             }
 
