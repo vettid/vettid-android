@@ -833,8 +833,13 @@ fun VettIDApp(
             val eventId = backStackEntry.arguments?.getString("eventId")
             com.vettid.app.features.connections.ConnectionReviewScreen(
                 onAccepted = {
+                    // Land on the connection detail after accepting —
+                    // the user wants to see the peer's full profile
+                    // and the set of available actions (Message,
+                    // Call, Send BTC) rather than being dropped
+                    // straight into the Messages screen.
                     navController.safePopBackStack()
-                    navController.navigate(Screen.Conversation.createRoute(connectionId))
+                    navController.navigate(Screen.ConnectionDetail.createRoute(connectionId))
                 },
                 onDeclined = { navController.safePopBackStack() },
                 onBack = { navController.safePopBackStack() }
@@ -1406,7 +1411,14 @@ fun VettIDApp(
             } else {
                 hiltViewModel()
             }
-            // Auto-mark guide as read when opened
+            // GuideDetailViewModel's init block marks the guide read
+            // in the shared GuideReadTracker regardless of whether
+            // we have an eventId. Both the feed-notification path
+            // and the Guides-list path now clear the unread dot.
+            @Suppress("UNUSED_VARIABLE")
+            val guideDetailVm: com.vettid.app.features.feed.GuideDetailViewModel = hiltViewModel()
+            // Auto-mark the feed event read too (when we came in
+            // from a feed notification — eventId is non-empty).
             LaunchedEffect(eventId) {
                 if (eventId.isNotEmpty()) {
                     feedViewModel.markAsRead(eventId)

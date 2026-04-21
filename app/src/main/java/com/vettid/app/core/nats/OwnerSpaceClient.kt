@@ -1852,6 +1852,25 @@ class OwnerSpaceClient @Inject constructor(
         }
     }
 
+    /**
+     * Locally broadcast a connection status-change event. Used by
+     * ConnectionReviewViewModel after a successful accept/decline so
+     * FeedViewModel's collector on [connectionStatusUpdates] re-fetches
+     * the connection list without waiting for the vault's broadcast
+     * to round-trip back. Avoids the "card still says Wants to
+     * connect after I accepted" stale state.
+     */
+    fun notifyLocalConnectionStatusChanged(connectionId: String, type: String) {
+        _connectionStatusUpdates.tryEmit(
+            ConnectionStatusUpdate(
+                type = type,
+                connectionId = connectionId,
+                peerGuid = null,
+                peerAlias = null,
+            )
+        )
+    }
+
     private fun handleConnectionStatusUpdate(message: NatsMessage) {
         try {
             val json = JSONObject(String(message.data, Charsets.UTF_8))

@@ -59,6 +59,7 @@ enum class DataType(val displayName: String, val description: String) {
 enum class DataCategory(val displayName: String, val iconName: String) {
     IDENTITY("Identity", "person"),
     CONTACT("Contact", "phone"),
+    FAMILY("Family", "people"),
     ADDRESS("Address", "location_on"),
     FINANCIAL("Financial", "account_balance"),
     MEDICAL("Medical", "medical_services"),
@@ -316,12 +317,12 @@ data class PersonalDataMultiTemplate(
             PersonalDataMultiTemplate(
                 name = "Family Member",
                 description = "Name, relationship, phone, email",
-                category = DataCategory.CONTACT,
+                category = DataCategory.FAMILY,
                 fields = listOf(
-                    PersonalDataTemplateField("Full Name", "contact.family.name", DataCategory.CONTACT, "e.g., Jane Doe"),
-                    PersonalDataTemplateField("Relationship", "contact.family.relationship", DataCategory.CONTACT, "e.g., Spouse, Parent"),
-                    PersonalDataTemplateField("Phone", "contact.family.phone", DataCategory.CONTACT, "", PersonalDataFieldInputHint.PHONE),
-                    PersonalDataTemplateField("Email", "contact.family.email", DataCategory.CONTACT, "", PersonalDataFieldInputHint.EMAIL)
+                    PersonalDataTemplateField("Full Name", "contact.family.name", DataCategory.FAMILY, "e.g., Jane Doe"),
+                    PersonalDataTemplateField("Relationship", "contact.family.relationship", DataCategory.FAMILY, "e.g., Spouse, Parent"),
+                    PersonalDataTemplateField("Phone", "contact.family.phone", DataCategory.FAMILY, "", PersonalDataFieldInputHint.PHONE),
+                    PersonalDataTemplateField("Email", "contact.family.email", DataCategory.FAMILY, "", PersonalDataFieldInputHint.EMAIL)
                 )
             ),
             PersonalDataMultiTemplate(

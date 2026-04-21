@@ -173,6 +173,10 @@ private fun categoryFromNamespace(namespace: String): DataCategory = when {
     namespace.startsWith("personal.legal") -> DataCategory.IDENTITY
     namespace.startsWith("personal.info") -> DataCategory.IDENTITY
     namespace.startsWith("identity.") -> DataCategory.IDENTITY
+    // Family template fields route to the Family category so the
+    // peer's profile shows them grouped separately from their
+    // primary contact info.
+    namespace.startsWith("contact.family.") -> DataCategory.FAMILY
     namespace.startsWith("contact.") -> DataCategory.CONTACT
     namespace.startsWith("social.") -> DataCategory.CONTACT
     namespace.startsWith("address.") -> DataCategory.ADDRESS

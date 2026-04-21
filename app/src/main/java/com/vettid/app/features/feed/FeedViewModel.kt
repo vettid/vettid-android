@@ -96,6 +96,35 @@ class FeedViewModel @Inject constructor(
         observeFeedUpdates()
         startPeriodicRefresh()
         observeFilterChanges()
+        observeGuideReadState()
+    }
+
+    /**
+     * Rebuild display items whenever the guide read-state flips.
+     * The VettID system card's pending rows and unread-count badge
+     * both derive from GuideReadTracker.readIds; if a guide is
+     * opened from the Guides list route (which doesn't go through
+     * this ViewModel's markGuideRead), we'd otherwise show stale
+     * unread rows on the card until the next periodic refresh.
+     */
+    private fun observeGuideReadState() {
+        viewModelScope.launch {
+            guideReadTracker.readIds
+                .drop(1) // skip the initial value — init already rendered it
+                .collect {
+                    val currentState = _state.value
+                    if (currentState is FeedState.Loaded) {
+                        val events = feedRepository.getCachedEvents()
+                        val displayItems = buildDisplayItems(events)
+                        _state.value = FeedState.Loaded(
+                            items = displayItems,
+                            hasMore = currentState.hasMore,
+                            unreadCount = displayItems.count { it.isUnread },
+                            isOffline = currentState.isOffline,
+                        )
+                    }
+                }
+        }
     }
 
     /**

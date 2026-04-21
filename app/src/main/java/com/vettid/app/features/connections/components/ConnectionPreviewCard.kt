@@ -699,15 +699,18 @@ fun CompactConnectionPreview(
 }
 
 /**
- * Clickable key/address field with copy and QR code options.
+ * Tap the row to open a QR dialog; tap the QR code or the key value
+ * inside the dialog to copy to the clipboard. Matches the self-preview
+ * UX so the scanner sees the same interactions they see on their
+ * own public profile preview.
  */
 @Composable
 private fun CopyableKeyField(
     value: String,
     label: String
 ) {
-    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
     var showQrDialog by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     Row(
         modifier = Modifier
@@ -723,29 +726,19 @@ private fun CopyableKeyField(
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.weight(1f)
         )
-        Spacer(modifier = Modifier.width(4.dp))
-        Icon(
-            Icons.Default.ContentCopy,
-            contentDescription = "Copy",
-            modifier = Modifier
-                .size(18.dp)
-                .clickable {
-                    clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(value))
-                },
-            tint = MaterialTheme.colorScheme.primary
-        )
-        Spacer(modifier = Modifier.width(4.dp))
-        Icon(
-            Icons.Default.QrCode,
-            contentDescription = "QR Code",
-            modifier = Modifier
-                .size(18.dp)
-                .clickable { showQrDialog = true },
-            tint = MaterialTheme.colorScheme.primary
-        )
     }
 
     if (showQrDialog) {
+        val copyToClipboard = {
+            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+                as android.content.ClipboardManager
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText(label, value))
+            android.widget.Toast.makeText(
+                context,
+                "Copied to clipboard",
+                android.widget.Toast.LENGTH_SHORT,
+            ).show()
+        }
         val qrBitmap = remember(value) {
             try {
                 val writer = com.google.zxing.qrcode.QRCodeWriter()
@@ -766,33 +759,45 @@ private fun CopyableKeyField(
             text = {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                     qrBitmap?.let { bitmap ->
-                        Card(modifier = Modifier.size(250.dp)) {
+                        Card(
+                            onClick = copyToClipboard,
+                            modifier = Modifier.size(250.dp),
+                        ) {
                             Box(modifier = Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
                                 Image(
                                     bitmap = bitmap.asImageBitmap(),
-                                    contentDescription = "QR Code",
+                                    contentDescription = "QR Code — tap to copy",
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
                         }
+                        Text(
+                            text = "Tap QR code or key to copy",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
                     }
                     Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = value,
-                        style = MaterialTheme.typography.bodySmall.copy(
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
-                        ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Surface(
+                        onClick = copyToClipboard,
+                        shape = MaterialTheme.shapes.small,
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = value,
+                            modifier = Modifier.padding(12.dp),
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             },
             confirmButton = {
-                Row {
-                    TextButton(onClick = {
-                        clipboardManager.setText(androidx.compose.ui.text.AnnotatedString(value))
-                    }) { Text("Copy") }
-                    TextButton(onClick = { showQrDialog = false }) { Text("Close") }
-                }
+                TextButton(onClick = { showQrDialog = false }) { Text("Close") }
             }
         )
     }

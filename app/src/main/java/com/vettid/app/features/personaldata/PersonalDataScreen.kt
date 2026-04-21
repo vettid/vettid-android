@@ -1997,6 +1997,7 @@ internal fun BusinessCardView(
             val categoryOrder = listOf(
                 DataCategory.IDENTITY,
                 DataCategory.CONTACT,
+                DataCategory.FAMILY,
                 DataCategory.ADDRESS,
                 DataCategory.FINANCIAL,
                 DataCategory.MEDICAL,
@@ -2146,6 +2147,7 @@ private fun BusinessCardField(
                         item.name.contains("Birthday", ignoreCase = true) -> Icons.Default.Cake
                         item.category == DataCategory.IDENTITY -> Icons.Default.Person
                         item.category == DataCategory.CONTACT -> Icons.Default.ContactPhone
+                        item.category == DataCategory.FAMILY -> Icons.Default.People
                         item.category == DataCategory.ADDRESS -> Icons.Default.Home
                         item.category == DataCategory.FINANCIAL -> Icons.Default.AccountBalance
                         item.category == DataCategory.MEDICAL -> Icons.Default.LocalHospital
@@ -2358,6 +2360,7 @@ private fun getDataCategoryIcon(category: DataCategory): ImageVector {
     return when (category) {
         DataCategory.IDENTITY -> Icons.Default.Person
         DataCategory.CONTACT -> Icons.Default.Contacts
+        DataCategory.FAMILY -> Icons.Default.People
         DataCategory.ADDRESS -> Icons.Default.LocationOn
         DataCategory.FINANCIAL -> Icons.Default.AccountBalance
         DataCategory.MEDICAL -> Icons.Default.LocalHospital

@@ -475,6 +475,9 @@ class PersonalDataViewModel @Inject constructor(
             namespace.startsWith("personal.legal") -> DataCategory.IDENTITY
             namespace.startsWith("personal.info") -> DataCategory.IDENTITY
             namespace.startsWith("identity.") -> DataCategory.IDENTITY
+            // Family template fields go in their own category so
+            // they don't bleed into the user's own Contact card.
+            namespace.startsWith("contact.family.") -> DataCategory.FAMILY
             namespace.startsWith("contact.") -> DataCategory.CONTACT
             namespace.startsWith("social.") -> DataCategory.CONTACT
             namespace.startsWith("address.") -> DataCategory.ADDRESS
@@ -1207,6 +1210,7 @@ class PersonalDataViewModel @Inject constructor(
         val prefix = when (category) {
             DataCategory.IDENTITY -> "personal.custom"
             DataCategory.CONTACT -> "contact.custom"
+            DataCategory.FAMILY -> "contact.family.custom"
             DataCategory.ADDRESS -> "address.custom"
             DataCategory.FINANCIAL -> "financial.custom"
             DataCategory.MEDICAL -> "medical.custom"

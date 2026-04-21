@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.nats.ConnectionsClient
 import com.vettid.app.core.nats.FeedClient
 import com.vettid.app.core.nats.NatsAutoConnector
+import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.features.connections.components.PeerProfilePreview
 import com.vettid.app.features.connections.components.WalletPreview
 import com.vettid.app.features.personaldata.PublishedProfileData
@@ -23,6 +24,7 @@ class ConnectionReviewViewModel @Inject constructor(
     private val connectionsClient: ConnectionsClient,
     private val natsAutoConnector: NatsAutoConnector,
     private val feedClient: FeedClient,
+    private val ownerSpaceClient: OwnerSpaceClient,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -133,6 +135,12 @@ class ConnectionReviewViewModel @Inject constructor(
                 )
             }
 
+            // Locally kick FeedViewModel's connectionStatusUpdates
+            // collector so the Connections screen refreshes and the
+            // card drops "Wants to connect" immediately — don't wait
+            // for the vault's status broadcast to round-trip back.
+            ownerSpaceClient.notifyLocalConnectionStatusChanged(connectionId, "accepted")
+
             _effects.emit(ConnectionReviewEffect.Accepted)
         }
     }
@@ -152,6 +160,8 @@ class ConnectionReviewViewModel @Inject constructor(
                     }
                 )
             }
+
+            ownerSpaceClient.notifyLocalConnectionStatusChanged(connectionId, "declined")
 
             _effects.emit(ConnectionReviewEffect.Declined)
         }
