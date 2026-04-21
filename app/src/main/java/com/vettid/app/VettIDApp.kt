@@ -1109,6 +1109,12 @@ fun VettIDApp(
                 onBack = { if (isSettingsOpen) isSettingsOpen = false else navController.safePopBackStack() },
                 onSettingsToggle = { isSettingsOpen = !isSettingsOpen },
                 isSettingsOpen = isSettingsOpen,
+                profileSection = {
+                    com.vettid.app.features.personaldata.VaultProfileSection(
+                        onEditPhoto = { vaultSegment = VaultSegment.DATA },
+                        onNameClick = { vaultSegment = VaultSegment.DATA },
+                    )
+                },
                 personalDataContent = { query -> PersonalDataContent(searchQuery = query) },
                 secretsContent = { query ->
                     SecretsContentEmbedded(

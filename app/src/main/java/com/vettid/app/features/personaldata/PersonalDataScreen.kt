@@ -353,63 +353,9 @@ private fun PersonalDataList(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
     ) {
-        // Unpublished changes notification (matches secrets tab style)
-        if (hasUnpublishedChanges) {
-            item {
-                Card(
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer
-                    )
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.CloudUpload,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "Unpublished Changes",
-                                style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                            Text(
-                                text = "Publish to update your public profile",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
-                            )
-                        }
-                        Button(
-                            onClick = onPublishClick,
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = MaterialTheme.colorScheme.primary
-                            )
-                        ) {
-                            Text("Publish")
-                        }
-                    }
-                }
-            }
-        }
-
-        // Profile header with photo/initials — name tappable for preview
-        item {
-            ProfileHeaderSection(
-                firstName = firstName,
-                lastName = lastName,
-                photoBase64 = profilePhotoBase64,
-                onEditPhoto = onEditPhoto,
-                onNameClick = onPreviewClick
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-        }
+        // Profile header + "unpublished changes" banner moved to the
+        // VaultScaffold's profileSection slot — visible across every
+        // Vault tab rather than only on Data. See VaultProfileSection.
 
         // Group data by category with collapsible sections
         filteredGroups.forEach { (category, categoryItems) ->

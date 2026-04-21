@@ -31,7 +31,8 @@ class FeedViewModel @Inject constructor(
     private val ownerSpaceClient: OwnerSpaceClient,
     private val personalDataStore: PersonalDataStore,
     private val connectionsClient: ConnectionsClient,
-    private val callManager: com.vettid.app.features.calling.CallManager
+    private val callManager: com.vettid.app.features.calling.CallManager,
+    private val guideReadTracker: GuideReadTracker,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<FeedState>(FeedState.Loading)
@@ -195,6 +196,9 @@ class FeedViewModel @Inject constructor(
             val activityType = conn.lastActivityType
                 ?: if (conn.lastMessagePreview != null) "message" else "connection"
             val activityDirection = conn.lastActivityDirection ?: conn.lastMessageDirection
+            val unreadGuidesCount = if (conn.connectionType == "system") {
+                guideReadTracker.unreadGuideIds().size
+            } else 0
             val activityAtMs = (conn.lastActivityAt ?: conn.lastMessageAt)?.let {
                 try { java.time.Instant.parse(it).toEpochMilli() } catch (_: Exception) { 0L }
             } ?: 0L
@@ -228,6 +232,7 @@ class FeedViewModel @Inject constructor(
                 missedCallCount = conn.missedCallCount,
                 unreadCount = conn.unreadMessageCount,
                 pendingRows = pendingRows,
+                systemGuidesBadge = unreadGuidesCount,
                 sortTimestamp = sortTime,
                 // Unread badges the card if: pending review, unread
                 // messages exist, or there's an unacknowledged missed
@@ -256,6 +261,20 @@ class FeedViewModel @Inject constructor(
         preview: String,
     ): List<PendingRow> {
         val rows = mutableListOf<PendingRow>()
+
+        // System (VettID) connection: surface one row per unread guide
+        // so users can spot and open them individually. Peer cards
+        // don't carry these rows.
+        if (conn.connectionType == "system") {
+            guideReadTracker.unreadGuideIds().forEach { guideId ->
+                val title = GuideContentProvider.getContent(guideId)?.title ?: guideId
+                rows += PendingRow.GuideUnread(
+                    guideId = guideId,
+                    title = title,
+                    timestamp = 0L,
+                )
+            }
+        }
 
         if (needsReview) {
             rows += PendingRow.PendingReview(timestamp = activityAtMs)
@@ -775,6 +794,23 @@ class FeedViewModel @Inject constructor(
                 Log.e(TAG, "Failed to load feed", e)
                 _state.value = FeedState.Error(e.message ?: "Failed to load feed")
             }
+        }
+    }
+
+    /**
+     * Mark a guide as read (so the VettID card's unread row for it
+     * disappears) and refresh the feed to propagate the change.
+     * Called when the user taps a GuideUnread pending row.
+     */
+    fun markGuideRead(guideId: String) {
+        guideReadTracker.markRead(guideId)
+        // Rebuild display items in-place so the row vanishes immediately
+        // without waiting for the next periodic refresh.
+        val currentState = _state.value
+        if (currentState is FeedState.Loaded) {
+            val events = feedRepository.getCachedEvents()
+            val displayItems = buildDisplayItems(events)
+            _state.value = FeedState.Loaded(items = displayItems)
         }
     }
 

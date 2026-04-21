@@ -250,6 +250,10 @@ fun FeedContent(
                     onSystemVaultMessages = onNavigateToVaultMessages,
                     onSystemVotes = onNavigateToVotes,
                     onSystemGuides = onNavigateToGuidesList,
+                    onOpenGuideById = { guideId ->
+                        viewModel.markGuideRead(guideId)
+                        onNavigateToGuide(guideId, "", "")
+                    },
                 )
                 is FeedState.Error -> {
                     // If in offline mode, show friendly offline content instead of error
@@ -388,6 +392,7 @@ private fun FeedList(
     onSystemVaultMessages: () -> Unit = {},
     onSystemVotes: () -> Unit = {},
     onSystemGuides: () -> Unit = {},
+    onOpenGuideById: (guideId: String) -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
@@ -437,6 +442,12 @@ private fun FeedList(
                         onClick = {
                             when {
                                 item.needsReview -> onNavigateToConnectionReview(item.connectionId, "")
+                                // The VettID system connection has no
+                                // profile / detail screen — tapping the
+                                // card goes straight to its Interaction
+                                // History (the natural "detail" for
+                                // system events).
+                                item.connectionType == "system" -> onNavigateToConnectionHistory(item.connectionId)
                                 // Tap on the card (name/photo) opens the
                                 // peer's profile. The dedicated Text button
                                 // handles the messaging entry point — this
@@ -460,6 +471,7 @@ private fun FeedList(
                         onSystemVaultMessagesClick = onSystemVaultMessages,
                         onSystemVotesClick = onSystemVotes,
                         onSystemGuidesClick = onSystemGuides,
+                        onOpenGuide = onOpenGuideById,
                     )
             }
         }
@@ -485,6 +497,7 @@ private fun StatusAwareConnectionCard(
     onSystemVaultMessagesClick: () -> Unit = {},
     onSystemVotesClick: () -> Unit = {},
     onSystemGuidesClick: () -> Unit = {},
+    onOpenGuide: (guideId: String) -> Unit = {},
 ) {
     // Render different card variants based on connection status
     when {
@@ -495,6 +508,7 @@ private fun StatusAwareConnectionCard(
             onCallClick, onVideoCallClick, onBtcClick, onBtcRequestClick,
             onNavigateToConnectionReview, onOpenMigration,
             onSystemVaultMessagesClick, onSystemVotesClick, onSystemGuidesClick,
+            onOpenGuide,
         )
         item.connectionStatus == "revoked" || item.connectionStatus == "rejected" -> InactiveConnectionCard(item, onClick)
         else -> ActiveConnectionCard(
@@ -502,6 +516,7 @@ private fun StatusAwareConnectionCard(
             onCallClick, onVideoCallClick, onBtcClick, onBtcRequestClick,
             onNavigateToConnectionReview, onOpenMigration,
             onSystemVaultMessagesClick, onSystemVotesClick, onSystemGuidesClick,
+            onOpenGuide,
         )
     }
 }
@@ -669,6 +684,7 @@ private fun ActiveConnectionCard(
     onSystemVaultMessagesClick: () -> Unit = {},
     onSystemVotesClick: () -> Unit = {},
     onSystemGuidesClick: () -> Unit = {},
+    onOpenGuide: (guideId: String) -> Unit = {},
 ) {
     val haptic = LocalHapticFeedback.current
 
@@ -723,10 +739,11 @@ private fun ActiveConnectionCard(
 
             Spacer(modifier = Modifier.height(8.dp))
             if (isSystem) {
-                // VettID system connection gets a dedicated 4-button
-                // strip matching the peer layout footprint: service
-                // messages + votes + guides + history. Badges come
-                // from the card data the feed view model computes.
+                // VettID system connection gets three outward actions
+                // (Messages / Votes / Guides). History lives at the
+                // card body — tapping the card opens the system
+                // connection's Interaction History, which IS the
+                // detail view for this connection.
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly,
@@ -748,11 +765,6 @@ private fun ActiveConnectionCard(
                         label = "Guides",
                         onClick = onSystemGuidesClick,
                         badgeCount = item.systemGuidesBadge,
-                    )
-                    ConnectionActionButton(
-                        icon = Icons.Default.History,
-                        label = "History",
-                        onClick = onHistoryClick,
                     )
                 }
             } else {
@@ -838,6 +850,9 @@ private fun ActiveConnectionCard(
                                     onOpenMigration()
                                 is PendingRow.LastActivity ->
                                     onHistoryClick()
+                                is PendingRow.GuideUnread -> {
+                                    onOpenGuide(row.guideId)
+                                }
                             }
                         }
                     )
@@ -899,6 +914,8 @@ private fun pendingRowIcon(row: PendingRow): Pair<ImageVector?, Color> {
             Icons.Default.PersonAdd to MaterialTheme.colorScheme.primary
         is PendingRow.PendingMigration ->
             Icons.Default.Lock to MaterialTheme.colorScheme.secondary
+        is PendingRow.GuideUnread ->
+            Icons.Default.MenuBook to MaterialTheme.colorScheme.secondary
         is PendingRow.LastActivity -> lastActivityIcon(
             activityType = row.activityType,
             direction = row.direction,
@@ -917,6 +934,7 @@ private fun pendingRowLabel(row: PendingRow): String = when (row) {
     }
     is PendingRow.PendingReview -> "Wants to connect"
     is PendingRow.PendingMigration -> "Vault security update available"
+    is PendingRow.GuideUnread -> "Guide: ${row.title}"
     is PendingRow.LastActivity -> row.text.ifEmpty { "Connected" }
 }
 

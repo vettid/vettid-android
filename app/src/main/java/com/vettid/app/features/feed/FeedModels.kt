@@ -108,6 +108,13 @@ sealed class PendingRow {
         override val timestamp: Long,
     ) : PendingRow()
 
+    /** Unread guide (system connection). One row per unread guide. */
+    data class GuideUnread(
+        val guideId: String,
+        val title: String,
+        override val timestamp: Long,
+    ) : PendingRow()
+
     /**
      * Passive last-activity row shown when nothing is pending. Not
      * interactive beyond opening the default card destination.

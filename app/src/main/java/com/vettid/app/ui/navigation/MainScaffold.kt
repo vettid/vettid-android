@@ -99,6 +99,10 @@ fun VaultScaffold(
     onBack: () -> Unit = {},
     onSettingsToggle: () -> Unit = {},
     isSettingsOpen: Boolean = false,
+    // Persistent profile strip rendered above the tab selector. Shows
+    // avatar + name + "profile needs publishing" banner, visible on
+    // every Vault tab so signals live in one place.
+    profileSection: @Composable () -> Unit = {},
     // Vault content slots
     personalDataContent: @Composable (searchQuery: String) -> Unit,
     secretsContent: @Composable (searchQuery: String) -> Unit,
@@ -162,6 +166,7 @@ fun VaultScaffold(
             if (isSettingsOpen) {
                 settingsContent()
             } else {
+                profileSection()
                 IconTabSelector(
                     segments = VaultSegment.entries,
                     selectedIndex = VaultSegment.entries.indexOf(vaultSegment),
