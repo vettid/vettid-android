@@ -1707,7 +1707,16 @@ private fun BusinessCardView(
     val lastName = profile.items.find { it.name == "Last Name" }?.value ?: ""
     val fullName = listOf(firstName, lastName).filter { it.isNotBlank() }.joinToString(" ")
     val email = profile.items.find { it.name == "Email" }?.value
-    val phone = profile.items.find { it.category == DataCategory.CONTACT && it.name.contains("Phone", ignoreCase = true) }?.value
+    // Only hoist the user's *own* primary phone into the hero card —
+    // skip template-grouped phones like contact.family.* or
+    // medical.emergency.* so those stay rendered alongside the rest
+    // of their group's fields.
+    val phone = profile.items.find {
+        it.category == DataCategory.CONTACT
+            && it.name.contains("Phone", ignoreCase = true)
+            && !it.id.contains(".family.")
+            && !it.id.contains(".emergency.")
+    }?.value
 
     // Group all fields by category, sorted by sortOrder
     // Note: First Name and Last Name are shown in header, Email shown in Contact section,
@@ -2000,7 +2009,12 @@ private fun BusinessCardView(
                     // Skip items already shown in Contact card or Public Keys section
                     val filteredItems = categoryItems.filter { item ->
                         val isEmailShown = email != null && item.name == "Email" && item.value == email
-                        val isPhoneShown = phone != null && item.category == DataCategory.CONTACT && item.name.contains("Phone", ignoreCase = true) && item.value == phone
+                        val isPhoneShown = phone != null
+                            && item.category == DataCategory.CONTACT
+                            && item.name.contains("Phone", ignoreCase = true)
+                            && item.value == phone
+                            && !item.id.contains(".family.")
+                            && !item.id.contains(".emergency.")
                         val isKeyShown = item.type == DataType.KEY
                         !isEmailShown && !isPhoneShown && !isKeyShown
                     }
@@ -2218,6 +2232,13 @@ private fun PublicKeyQRDialog(
     val qrBitmap = remember(item.value) {
         profileGenerateQrCode(item.value, 300)
     }
+    val context = LocalContext.current
+    val copyToClipboard = {
+        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+            as android.content.ClipboardManager
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText(item.name, item.value))
+        android.widget.Toast.makeText(context, "Copied to clipboard", android.widget.Toast.LENGTH_SHORT).show()
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -2244,6 +2265,7 @@ private fun PublicKeyQRDialog(
             ) {
                 qrBitmap?.let { bitmap ->
                     Card(
+                        onClick = copyToClipboard,
                         modifier = Modifier.size(280.dp),
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.surface
@@ -2257,11 +2279,17 @@ private fun PublicKeyQRDialog(
                         ) {
                             Image(
                                 bitmap = bitmap.asImageBitmap(),
-                                contentDescription = "QR Code for ${item.name}",
+                                contentDescription = "QR Code for ${item.name} - tap to copy",
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
                     }
+                    Text(
+                        text = "Tap QR code or key to copy",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
                 } ?: run {
                     Box(
                         modifier = Modifier.size(280.dp),
@@ -2276,22 +2304,21 @@ private fun PublicKeyQRDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Full value display
+                // Full value display — tap to copy.
                 Surface(
+                    onClick = copyToClipboard,
                     modifier = Modifier.fillMaxWidth(),
                     shape = MaterialTheme.shapes.small,
                     color = MaterialTheme.colorScheme.surfaceVariant
                 ) {
-                    androidx.compose.foundation.text.selection.SelectionContainer {
-                        Text(
-                            text = item.value,
-                            modifier = Modifier.padding(12.dp),
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                            maxLines = 6,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
+                    Text(
+                        text = item.value,
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        maxLines = 6,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         },

@@ -41,6 +41,22 @@ fun WalletListContentEmbedded(
 
     var showCreateSheet by remember { mutableStateOf(false) }
 
+    // Reload on resume so the public indicator (and balances) pick
+    // up changes made from the wallet detail screen without
+    // requiring a pull-to-refresh. WalletDetailViewModel updates its
+    // own state on visibility toggle but can't reach into this
+    // list's ViewModel, so we refresh when returning here.
+    val walletLifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(walletLifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                viewModel.loadWallets()
+            }
+        }
+        walletLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { walletLifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     // Handle effects
     LaunchedEffect(Unit) {
         viewModel.effects.collectLatest { effect ->
