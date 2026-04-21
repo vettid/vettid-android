@@ -318,11 +318,15 @@ private fun SecretsList(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
     ) {
-        // Publish banner (if unpublished public keys)
+        // Publish banner (if unpublished public keys). Shared layout
+        // with the profile banner above the tabs — one consistent
+        // unpublished-changes affordance across the Vault.
         if (hasUnpublishedChanges) {
             item {
-                PublishBanner(onPublishClick = onPublishClick)
-                Spacer(modifier = Modifier.height(12.dp))
+                com.vettid.app.features.personaldata.UnpublishedChangesBanner(
+                    title = "Unpublished Public Keys",
+                    onPublish = onPublishClick,
+                )
             }
         }
 

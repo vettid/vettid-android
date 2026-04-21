@@ -827,12 +827,21 @@ private fun ActiveConnectionCard(
 
             // Notification / last-activity rows sit below the action
             // strip so waiting items are legible and tappable without
-            // competing with the quick-send buttons above. See
-            // plans/luminous-unifying-manatee.md §12.
+            // competing with the quick-send buttons above.
+            //
+            // Collapse when there's more than one: show just the
+            // first row and a secondary "N more" row that expands
+            // into the full list on tap. Keeps cards short by
+            // default but still one-tap accessible when a connection
+            // has a lot of waiting items.
             if (item.pendingRows.isNotEmpty()) {
+                var expanded by remember(item.connectionId) { mutableStateOf(false) }
+                val total = item.pendingRows.size
+                val shown = if (expanded || total == 1) item.pendingRows else item.pendingRows.take(1)
+
                 Spacer(modifier = Modifier.height(8.dp))
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
-                item.pendingRows.forEachIndexed { idx, row ->
+                shown.forEachIndexed { idx, row ->
                     if (idx > 0) {
                         HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
                     }
@@ -857,8 +866,46 @@ private fun ActiveConnectionCard(
                         }
                     )
                 }
+                if (total > 1) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f))
+                    MoreNotificationsRow(
+                        hiddenCount = if (expanded) 0 else total - 1,
+                        expanded = expanded,
+                        onToggle = { expanded = !expanded },
+                    )
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun MoreNotificationsRow(
+    hiddenCount: Int,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(18.dp),
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = if (expanded) "Show less" else "$hiddenCount more notifications",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 

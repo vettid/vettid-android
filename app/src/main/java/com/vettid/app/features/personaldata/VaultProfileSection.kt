@@ -159,48 +159,62 @@ private fun ProfileHeaderRow(
     }
 }
 
+/**
+ * Shared "unpublished changes" banner. Same visual as the Secrets
+ * tab's unpublished-keys banner so the user sees one consistent
+ * affordance whether profile fields or public keys are dirty.
+ * Callers pass their own title / subtitle so the message stays
+ * accurate to the change source.
+ */
 @Composable
-private fun PublishNeededBanner(
+fun UnpublishedChangesBanner(
+    title: String,
+    subtitle: String = "Publish to update your public profile",
     onPublish: () -> Unit,
 ) {
-    Surface(
-        color = MaterialTheme.colorScheme.tertiaryContainer,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
-        shape = RoundedCornerShape(8.dp),
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.primaryContainer,
+        ),
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
                 imageVector = Icons.Default.CloudUpload,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.onTertiaryContainer,
-                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
             )
-            Spacer(modifier = Modifier.width(10.dp))
+            Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Profile has unpublished changes",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
                 Text(
-                    text = "Publish so your connections see the latest.",
+                    text = subtitle,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.75f),
+                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f),
                 )
             }
-            Spacer(modifier = Modifier.width(8.dp))
-            TextButton(
+            Button(
                 onClick = onPublish,
-                colors = ButtonDefaults.textButtonColors(
-                    contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
                 ),
-            ) { Text("Publish", fontWeight = FontWeight.SemiBold) }
+            ) { Text("Publish") }
         }
     }
+}
+
+@Composable
+private fun PublishNeededBanner(onPublish: () -> Unit) {
+    UnpublishedChangesBanner(
+        title = "Unpublished Profile Changes",
+        subtitle = "Publish to update your public profile",
+        onPublish = onPublish,
+    )
 }
