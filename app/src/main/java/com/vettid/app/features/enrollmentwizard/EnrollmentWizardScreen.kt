@@ -117,7 +117,9 @@ fun EnrollmentWizardScreen(
                         is WizardState.VerifyingPassword,
                         is WizardState.Authenticating,
                         is WizardState.VerificationSuccess -> "verify"
-                        is WizardState.ConfirmProfile -> "confirm_profile"
+                        // ConfirmProfile is a silent post-verify publish;
+                        // group it with verify so no animation fires.
+                        is WizardState.ConfirmProfile -> "verify"
                         is WizardState.RequestingPermissions -> "permissions"
                         is WizardState.Complete -> "complete"
                         is WizardState.Error -> "error_${targetState.previousPhase}"
@@ -206,9 +208,32 @@ fun EnrollmentWizardScreen(
                                 lastName = currentState.lastName,
                                 email = currentState.email,
                                 attestationInfo = currentState.attestationInfo,
+                                photoBytes = currentState.photoBytes,
                                 onConfirm = { viewModel.onEvent(WizardEvent.ConfirmIdentity) },
-                                onCancel = { viewModel.onEvent(WizardEvent.RejectIdentity) }
+                                onCancel = { viewModel.onEvent(WizardEvent.RejectIdentity) },
+                                onAddPhoto = { viewModel.onEvent(WizardEvent.AddProfilePhoto) },
+                                onRemovePhoto = { viewModel.onEvent(WizardEvent.RemoveProfilePhoto) }
                             )
+                            if (currentState.isCapturingPhoto) {
+                                androidx.compose.ui.window.Dialog(
+                                    onDismissRequest = { viewModel.onEvent(WizardEvent.DismissProfilePhoto) },
+                                    properties = androidx.compose.ui.window.DialogProperties(
+                                        dismissOnBackPress = true,
+                                        dismissOnClickOutside = false,
+                                        usePlatformDefaultWidth = false
+                                    )
+                                ) {
+                                    androidx.activity.compose.BackHandler(enabled = true) {
+                                        viewModel.onEvent(WizardEvent.DismissProfilePhoto)
+                                    }
+                                    com.vettid.app.ui.components.ProfilePhotoCapture(
+                                        onPhotoCapture = { bytes ->
+                                            viewModel.onEvent(WizardEvent.ProfilePhotoCaptured(bytes))
+                                        },
+                                        onCancel = { viewModel.onEvent(WizardEvent.DismissProfilePhoto) }
+                                    )
+                                }
+                            }
                         }
 
                         // Identity Rejected - mismatch reported
@@ -289,16 +314,15 @@ fun EnrollmentWizardScreen(
                             )
                         }
 
-                        // Confirm Profile Phase
+                        // Confirm Profile (silent): default-profile publish
+                        // runs in the background. Show a brief finalizing
+                        // spinner — the state auto-advances to Permissions
+                        // as soon as the publish completes.
                         is WizardState.ConfirmProfile -> {
-                            ConfirmProfilePhaseContent(
-                                firstName = currentState.firstName,
-                                lastName = currentState.lastName,
-                                email = currentState.email,
-                                isPublishing = currentState.isPublishing,
-                                error = currentState.error,
-                                onDismissError = { viewModel.onEvent(WizardEvent.DismissError) },
-                                onConfirm = { viewModel.onEvent(WizardEvent.ConfirmProfile) }
+                            VerifyPhaseContent(
+                                mode = VerifyPhaseMode.AUTHENTICATING,
+                                progress = 1.0f,
+                                statusMessage = "Finalizing your profile..."
                             )
                         }
 

@@ -5,21 +5,31 @@ import com.vettid.app.features.enrollment.AttestationInfo
 import com.vettid.app.features.enrollment.PasswordStrength
 
 /**
- * Wizard phase enumeration for step indicator
+ * Wizard phase enumeration for step indicator.
+ *
+ * 7-step flow: Start → Review → PIN → Password → Verify → Permissions → Done.
+ *
+ * Collapsed from the earlier 9-step design:
+ *   - ATTESTATION folded into START (attestation is automatic after
+ *     scan; brief success animation, no separate step).
+ *   - CONFIRM_IDENTITY and CONFIRM_PROFILE merged into REVIEW —
+ *     both were verify-only (no editing), so one screen covers
+ *     both "is this really you" and "this is what your connections
+ *     will see". Default public profile publishing happens silently
+ *     after credential verification; user can edit from the Data
+ *     tab any time.
  */
 enum class WizardPhase(val stepIndex: Int, val label: String) {
     START(0, "Start"),
-    ATTESTATION(1, "Verify"),
-    CONFIRM_IDENTITY(2, "Identity"),
-    PIN_SETUP(3, "PIN"),
-    PASSWORD_SETUP(4, "Password"),
-    VERIFY_CREDENTIAL(5, "Confirm"),
-    CONFIRM_PROFILE(6, "Profile"),
-    PERMISSIONS(7, "Permissions"),
-    COMPLETE(8, "Done");
+    REVIEW(1, "Review"),
+    PIN_SETUP(2, "PIN"),
+    PASSWORD_SETUP(3, "Password"),
+    VERIFY_CREDENTIAL(4, "Verify"),
+    PERMISSIONS(5, "Permissions"),
+    COMPLETE(6, "Done");
 
     companion object {
-        const val TOTAL_STEPS = 9
+        const val TOTAL_STEPS = 7
 
         fun fromIndex(index: Int): WizardPhase? = entries.find { it.stepIndex == index }
     }
@@ -57,20 +67,25 @@ sealed class WizardState {
         override val phase = WizardPhase.START
     }
 
-    // ============== PHASE 2: ATTESTATION ==============
+    // ============== PHASE 1 (cont): START — attestation sub-states ==============
+    //
+    // Attestation happens automatically after the QR scan with a
+    // progress indicator and brief success animation, but no
+    // separate step in the indicator. All of the sub-states below
+    // map to the START phase.
 
     /** Processing invite code */
     data class ProcessingInvite(
         val message: String = "Validating invitation..."
     ) : WizardState() {
-        override val phase = WizardPhase.ATTESTATION
+        override val phase = WizardPhase.START
     }
 
     /** Connecting to NATS */
     data class ConnectingToNats(
         val message: String = "Connecting to secure vault..."
     ) : WizardState() {
-        override val phase = WizardPhase.ATTESTATION
+        override val phase = WizardPhase.START
     }
 
     /** Requesting attestation from enclave */
@@ -78,26 +93,63 @@ sealed class WizardState {
         val message: String = "Verifying enclave security...",
         val progress: Float = 0f
     ) : WizardState() {
-        override val phase = WizardPhase.ATTESTATION
+        override val phase = WizardPhase.START
     }
 
     /** Attestation verified - brief display */
     data class AttestationVerified(
         val attestationInfo: AttestationInfo
     ) : WizardState() {
-        override val phase = WizardPhase.ATTESTATION
+        override val phase = WizardPhase.START
     }
 
-    // ============== PHASE 3: CONFIRM IDENTITY ==============
+    // ============== PHASE 2: REVIEW ==============
+    //
+    // Merged from the earlier CONFIRM_IDENTITY + CONFIRM_PROFILE
+    // phases. Shows name + email and previews what connections will
+    // see (for now just those fields). No editing — if the user
+    // spots something wrong, they abort and fix in the account
+    // portal via the IdentityRejected state.
 
-    /** Confirm identity from registration */
+    /**
+     * Review name/email + default public profile preview. Optional
+     * profile-photo capture is offered inline: `photoBytes` holds
+     * the confirmed photo (null = none), `isCapturingPhoto` drives
+     * the fullscreen capture dialog at the screen layer.
+     */
     data class ConfirmIdentity(
         val firstName: String,
         val lastName: String,
         val email: String,
-        val attestationInfo: AttestationInfo? = null
+        val attestationInfo: AttestationInfo? = null,
+        val photoBytes: ByteArray? = null,
+        val isCapturingPhoto: Boolean = false
     ) : WizardState() {
-        override val phase = WizardPhase.CONFIRM_IDENTITY
+        override val phase = WizardPhase.REVIEW
+
+        override fun equals(other: Any?): Boolean {
+            if (this === other) return true
+            if (other !is ConfirmIdentity) return false
+            return firstName == other.firstName &&
+                lastName == other.lastName &&
+                email == other.email &&
+                attestationInfo == other.attestationInfo &&
+                photoBytes.contentEqualsOrBothNull(other.photoBytes) &&
+                isCapturingPhoto == other.isCapturingPhoto
+        }
+
+        override fun hashCode(): Int {
+            var result = firstName.hashCode()
+            result = 31 * result + lastName.hashCode()
+            result = 31 * result + email.hashCode()
+            result = 31 * result + (attestationInfo?.hashCode() ?: 0)
+            result = 31 * result + (photoBytes?.contentHashCode() ?: 0)
+            result = 31 * result + isCapturingPhoto.hashCode()
+            return result
+        }
+
+        private fun ByteArray?.contentEqualsOrBothNull(other: ByteArray?): Boolean =
+            (this == null && other == null) || (this != null && other != null && this.contentEquals(other))
     }
 
     /** Identity mismatch reported - showing confirmation to user */
@@ -105,7 +157,7 @@ sealed class WizardState {
         val message: String = "The problem has been reported. Please request a new enrollment link from your account page.",
         val isReporting: Boolean = false
     ) : WizardState() {
-        override val phase = WizardPhase.CONFIRM_IDENTITY
+        override val phase = WizardPhase.REVIEW
     }
 
     // ============== PHASE 4: PIN SETUP ==============
@@ -171,9 +223,17 @@ sealed class WizardState {
         override val phase = WizardPhase.VERIFY_CREDENTIAL
     }
 
-    // ============== PHASE 7: CONFIRM PROFILE ==============
+    // ============== TRANSIENT: silent default-profile publish ==============
 
-    /** Confirm default public profile - read-only preview with confirm/skip */
+    /**
+     * Silent default-profile publish after verify succeeds. This
+     * state is no longer a user-visible step — the screen simply
+     * renders the verify-success checkmark while the publish runs
+     * in the background, then auto-advances to Permissions. Kept
+     * as a distinct state so the VM can surface publish errors if
+     * the publish fails. Mapped to VERIFY_CREDENTIAL in the step
+     * indicator so the bar doesn't move backwards.
+     */
     data class ConfirmProfile(
         val firstName: String = "",
         val lastName: String = "",
@@ -181,7 +241,7 @@ sealed class WizardState {
         val isPublishing: Boolean = false,
         val error: String? = null
     ) : WizardState() {
-        override val phase = WizardPhase.CONFIRM_PROFILE
+        override val phase = WizardPhase.VERIFY_CREDENTIAL
     }
 
     // ============== PHASE 8: PERMISSIONS ==============

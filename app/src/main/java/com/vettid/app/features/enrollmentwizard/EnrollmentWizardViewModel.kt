@@ -45,9 +45,13 @@ import javax.inject.Inject
 /**
  * ViewModel for the unified enrollment wizard.
  *
- * Manages state transitions through all 8 steps:
- * 1. Start (QR/Manual) → 2. Attestation → 3. Confirm Identity → 4. PIN Setup →
- * 5. Password Setup → 6. Verify Credential → 7. Confirm Profile → 8. Complete
+ * Manages state transitions through 7 user-visible steps:
+ *   1. Start (QR/Manual, attestation folded in) → 2. Review →
+ *   3. PIN → 4. Password → 5. Verify → 6. Permissions → 7. Done
+ *
+ * Default public-profile publish runs silently after Verify
+ * succeeds — the step indicator stays on Verify while it runs,
+ * then auto-advances to Permissions.
  */
 @HiltViewModel
 class EnrollmentWizardViewModel @Inject constructor(
@@ -90,6 +94,10 @@ class EnrollmentWizardViewModel @Inject constructor(
     private var storedAttestationInfo: AttestationInfo? = null
     // Registration profile to send to vault during PIN setup
     private var pendingRegistrationProfile: RegistrationProfile? = null
+    // Optional profile photo captured during Review; uploaded after
+    // the vault is initialized (first opportunity the enclave is
+    // ready to accept profile.photo.update).
+    private var pendingProfilePhoto: ByteArray? = null
 
     /**
      * Get unique device identifier for enrollment.
@@ -148,6 +156,10 @@ class EnrollmentWizardViewModel @Inject constructor(
                 // Confirm identity phase events
                 is WizardEvent.ConfirmIdentity -> confirmIdentityAndContinue()
                 is WizardEvent.RejectIdentity -> handleRejectIdentity()
+                is WizardEvent.AddProfilePhoto -> openPhotoCapture()
+                is WizardEvent.ProfilePhotoCaptured -> applyCapturedPhoto(event.bytes)
+                is WizardEvent.DismissProfilePhoto -> closePhotoCapture()
+                is WizardEvent.RemoveProfilePhoto -> removePhoto()
 
                 // PIN phase events
                 is WizardEvent.PinChanged -> updatePin(event.pin)
@@ -165,8 +177,9 @@ class EnrollmentWizardViewModel @Inject constructor(
                 is WizardEvent.SubmitVerifyPassword -> submitVerifyPassword()
                 is WizardEvent.ContinueAfterVerification -> continueToConfirmProfile()
 
-                // Confirm profile phase events
-                is WizardEvent.ConfirmProfile -> confirmProfile()
+                // Confirm profile phase events (silent auto-publish,
+                // kept for ABI stability; screen no longer emits)
+                is WizardEvent.ConfirmProfile -> { /* no-op */ }
                 is WizardEvent.DismissError -> dismissError()
 
                 // Permissions phase events
@@ -192,7 +205,6 @@ class EnrollmentWizardViewModel @Inject constructor(
     private suspend fun handleNextStep() {
         when (val current = _state.value) {
             is WizardState.VerificationSuccess -> continueToConfirmProfile()
-            is WizardState.ConfirmProfile -> confirmProfile()
             is WizardState.RequestingPermissions -> completeWizard()
             is WizardState.Complete -> navigateToMain()
             else -> { /* No-op for states with specific submit actions */ }
@@ -219,14 +231,9 @@ class EnrollmentWizardViewModel @Inject constructor(
     private suspend fun handleSkip() {
         when (val current = _state.value) {
             is WizardState.VerifyingPassword -> {
-                // Skip verification and go directly to confirm profile
+                // Skip verification and run the silent profile publish
                 Log.i(TAG, "User skipped credential verification")
                 continueToConfirmProfile()
-            }
-            is WizardState.ConfirmProfile -> {
-                // Skip profile confirmation and complete
-                Log.i(TAG, "User skipped profile confirmation")
-                completeWizard()
             }
             else -> { /* No-op */ }
         }
@@ -237,17 +244,18 @@ class EnrollmentWizardViewModel @Inject constructor(
         if (current is WizardState.Error) {
             // Return to appropriate state based on previous phase
             when (current.previousPhase) {
-                WizardPhase.START -> _state.value = WizardState.ScanningQR()
-                WizardPhase.ATTESTATION -> {
-                    // Retry attestation directly (NATS is already connected)
+                WizardPhase.START -> {
+                    // Start phase covers QR scan, NATS connect, and attestation.
+                    // If NATS is still connected we can retry attestation directly;
+                    // otherwise start over from the QR scanner.
                     if (nitroEnrollmentClient.isConnected) {
                         requestNitroAttestation()
                     } else {
                         _state.value = WizardState.ScanningQR()
                     }
                 }
-                WizardPhase.CONFIRM_IDENTITY -> {
-                    // Return to confirm identity with stored data
+                WizardPhase.REVIEW -> {
+                    // Return to review with stored data
                     val systemFields = personalDataStore.getSystemFields()
                     if (systemFields != null) {
                         _state.value = WizardState.ConfirmIdentity(
@@ -263,7 +271,6 @@ class EnrollmentWizardViewModel @Inject constructor(
                 WizardPhase.PIN_SETUP -> _state.value = WizardState.SettingPin(attestationInfo = storedAttestationInfo)
                 WizardPhase.PASSWORD_SETUP -> _state.value = WizardState.SettingPassword(utks = nitroUtks)
                 WizardPhase.VERIFY_CREDENTIAL -> _state.value = WizardState.VerifyingPassword()
-                WizardPhase.CONFIRM_PROFILE -> continueToConfirmProfile()
                 WizardPhase.PERMISSIONS -> _state.value = WizardState.RequestingPermissions()
                 WizardPhase.COMPLETE -> completeWizard()
             }
@@ -304,10 +311,79 @@ class EnrollmentWizardViewModel @Inject constructor(
             lastName = current.lastName,
             email = current.email
         )
+        pendingProfilePhoto = current.photoBytes
         Log.d(TAG, "Registration profile cached for PIN setup: ${current.firstName} ${current.email}")
+        if (current.photoBytes != null) {
+            Log.d(TAG, "Profile photo queued for upload (${current.photoBytes.size} bytes)")
+        }
 
         // Proceed to PIN setup
         _state.value = WizardState.SettingPin(attestationInfo = current.attestationInfo)
+    }
+
+    // ============== REVIEW: OPTIONAL PROFILE PHOTO ==============
+
+    private fun openPhotoCapture() {
+        val current = _state.value
+        if (current is WizardState.ConfirmIdentity) {
+            _state.value = current.copy(isCapturingPhoto = true)
+        }
+    }
+
+    private fun closePhotoCapture() {
+        val current = _state.value
+        if (current is WizardState.ConfirmIdentity) {
+            _state.value = current.copy(isCapturingPhoto = false)
+        }
+    }
+
+    private fun applyCapturedPhoto(bytes: ByteArray) {
+        val current = _state.value
+        if (current is WizardState.ConfirmIdentity) {
+            _state.value = current.copy(photoBytes = bytes, isCapturingPhoto = false)
+        }
+    }
+
+    private fun removePhoto() {
+        val current = _state.value
+        if (current is WizardState.ConfirmIdentity) {
+            _state.value = current.copy(photoBytes = null)
+        }
+    }
+
+    /**
+     * Upload the optional profile photo captured during Review.
+     * Runs best-effort after the vault is live; failures log but do
+     * not block enrollment. Photo is cached locally too so the app
+     * renders it immediately after enrollment finishes.
+     */
+    private suspend fun uploadPendingProfilePhoto() {
+        val photo = pendingProfilePhoto ?: return
+        val base64 = android.util.Base64.encodeToString(photo, android.util.Base64.NO_WRAP)
+
+        personalDataStore.saveProfilePhoto(base64)
+
+        try {
+            val payload = com.google.gson.JsonObject().apply {
+                addProperty("photo", base64)
+            }
+            if (nitroEnrollmentClient.isConnected) {
+                val result = nitroEnrollmentClient.sendToVault("profile.photo.update", payload)
+                result.fold(
+                    onSuccess = {
+                        Log.i(TAG, "Profile photo uploaded via enrollment client")
+                        pendingProfilePhoto = null
+                    },
+                    onFailure = { error ->
+                        Log.w(TAG, "Profile photo upload failed (cached locally): ${error.message}")
+                    }
+                )
+            } else {
+                Log.w(TAG, "Enrollment client not connected; photo cached locally")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Profile photo upload error (non-blocking)", e)
+        }
     }
 
     /**
@@ -685,7 +761,7 @@ class EnrollmentWizardViewModel @Inject constructor(
                     _state.value = WizardState.Error(
                         message = "Security verification failed: ${error.message}",
                         canRetry = true,
-                        previousPhase = WizardPhase.ATTESTATION
+                        previousPhase = WizardPhase.START
                     )
                 }
             )
@@ -694,7 +770,7 @@ class EnrollmentWizardViewModel @Inject constructor(
             _state.value = WizardState.Error(
                 message = "Attestation error: ${e.message}",
                 canRetry = true,
-                previousPhase = WizardPhase.ATTESTATION
+                previousPhase = WizardPhase.START
             )
         }
     }
@@ -1201,35 +1277,44 @@ class EnrollmentWizardViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Silently publish the default public profile after successful
+     * verify, then advance to Permissions. Runs without a separate
+     * user-visible screen — the VerificationSuccess checkmark stays
+     * on screen (phase indicator unchanged) while the publish
+     * request flies. Best-effort: publish failures do not block the
+     * user from completing enrollment.
+     */
     private suspend fun continueToConfirmProfile() {
         val systemFields = personalDataStore.getSystemFields()
         _state.value = WizardState.ConfirmProfile(
             firstName = systemFields?.firstName ?: pendingRegistrationProfile?.firstName ?: "",
             lastName = systemFields?.lastName ?: pendingRegistrationProfile?.lastName ?: "",
-            email = systemFields?.email ?: pendingRegistrationProfile?.email ?: ""
+            email = systemFields?.email ?: pendingRegistrationProfile?.email ?: "",
+            isPublishing = true
         )
+        uploadPendingProfilePhoto()
+        publishDefaultProfile()
     }
 
-    // ============== CONFIRM PROFILE PHASE ==============
+    // ============== SILENT DEFAULT-PROFILE PUBLISH ==============
 
-    private suspend fun confirmProfile() {
-        val current = _state.value
-        if (current !is WizardState.ConfirmProfile) return
-
-        _state.value = current.copy(isPublishing = true, error = null)
-
+    /**
+     * Publishes the default public profile (first name, last name,
+     * email) to the vault and advances to Permissions. Errors are
+     * logged but not surfaced — the user already verified their
+     * credential; a publish hiccup shouldn't block enrollment.
+     */
+    private suspend fun publishDefaultProfile() {
         try {
-            // Auto-publish default public profile with system fields (first name, last name, email)
             val defaultFields = listOf(
                 "_system_first_name",
                 "_system_last_name",
                 "_system_email"
             )
 
-            // Save selected fields locally
             personalDataStore.updatePublicProfileFields(defaultFields)
 
-            // Build payload with default fields
             val payload = com.google.gson.JsonObject().apply {
                 val fieldsArray = com.google.gson.JsonArray()
                 defaultFields.forEach { fieldsArray.add(it) }
@@ -1238,7 +1323,6 @@ class EnrollmentWizardViewModel @Inject constructor(
 
             Log.d(TAG, "Publishing default profile with system fields")
 
-            // Use enrollment client if connected (during enrollment), otherwise use ownerSpaceClient
             val useEnrollmentClient = nitroEnrollmentClient.isConnected
             val useConnectionManager = connectionManager.isConnected()
 
@@ -1265,24 +1349,16 @@ class EnrollmentWizardViewModel @Inject constructor(
             } else {
                 Log.w(TAG, "Not connected to vault - profile settings saved locally only")
             }
-
-            _effects.emit(WizardEffect.ShowToast("Profile confirmed"))
-            _state.value = WizardState.RequestingPermissions()
         } catch (e: Exception) {
-            Log.e(TAG, "Error confirming profile", e)
-            _state.value = current.copy(
-                isPublishing = false,
-                error = "Failed to confirm profile: ${e.message}"
-            )
+            Log.e(TAG, "Error publishing default profile (non-blocking)", e)
         }
+
+        _state.value = WizardState.RequestingPermissions()
     }
 
     private fun dismissError() {
-        val current = _state.value
-        when (current) {
-            is WizardState.ConfirmProfile -> _state.value = current.copy(error = null)
-            else -> { /* No-op */ }
-        }
+        // No user-visible error surfaces remain post-collapse; kept
+        // as a no-op so the WizardEvent contract stays stable.
     }
 
     // ============== COMPLETE PHASE ==============

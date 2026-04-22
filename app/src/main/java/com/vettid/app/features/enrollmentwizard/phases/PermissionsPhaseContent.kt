@@ -28,8 +28,11 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 
 /**
- * Permissions phase content - requests app permissions after enrollment.
- * Permissions are optional and never block the user from continuing.
+ * Permissions phase content — focused on the one thing we really
+ * need: notifications, so we can reach the user when something
+ * important happens. Battery-optimization exemption is offered
+ * too (keeps the notification channel alive in the background).
+ * All permissions are optional; the user can always continue.
  */
 @Composable
 fun PermissionsPhaseContent(
@@ -83,7 +86,7 @@ fun PermissionsPhaseContent(
             Spacer(modifier = Modifier.height(24.dp))
 
             Text(
-                text = "App Permissions",
+                text = "Stay reachable",
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
@@ -92,10 +95,10 @@ fun PermissionsPhaseContent(
             Spacer(modifier = Modifier.height(12.dp))
 
             Text(
-                text = "VettID needs a few permissions to keep your vault secure and notify you of important events.",
+                text = "VettID uses notifications to reach you when:\n\n• Someone calls you\n• You receive a message\n• A connection request arrives\n• Your vault needs attention",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
+                textAlign = TextAlign.Start
             )
 
             Spacer(modifier = Modifier.height(32.dp))

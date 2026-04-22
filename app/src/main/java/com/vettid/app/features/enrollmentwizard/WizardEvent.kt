@@ -50,6 +50,23 @@ sealed class WizardEvent {
     /** User reports identity mismatch - "This is not my account" */
     object RejectIdentity : WizardEvent()
 
+    /** Open fullscreen camera for profile photo */
+    object AddProfilePhoto : WizardEvent()
+
+    /** User confirmed a captured/picked photo */
+    data class ProfilePhotoCaptured(val bytes: ByteArray) : WizardEvent() {
+        override fun equals(other: Any?): Boolean =
+            other is ProfilePhotoCaptured && bytes.contentEquals(other.bytes)
+
+        override fun hashCode(): Int = bytes.contentHashCode()
+    }
+
+    /** Close the photo capture dialog without a photo */
+    object DismissProfilePhoto : WizardEvent()
+
+    /** Remove a previously captured photo */
+    object RemoveProfilePhoto : WizardEvent()
+
     // ============== PIN PHASE EVENTS ==============
 
     /** PIN field changed */
