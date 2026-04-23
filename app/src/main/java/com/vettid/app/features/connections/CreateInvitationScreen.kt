@@ -123,6 +123,8 @@ fun CreateInvitationScreen(
                         peerFields = currentState.peerFields,
                         peerPublicKey = currentState.peerPublicKey,
                         peerWallets = currentState.peerWallets,
+                        peerHandlers = currentState.peerHandlers,
+                        peerPublicSecrets = currentState.peerPublicSecrets,
                         onAccept = {
                             viewModel.respondToConnection(true)
                             onBack()
@@ -404,6 +406,8 @@ private fun PeerAcceptedContent(
     peerFields: Map<String, Map<String, String>>?,
     peerPublicKey: String?,
     peerWallets: List<com.vettid.app.core.nats.PeerWalletInfo>,
+    peerHandlers: List<com.vettid.app.core.nats.PeerHandlerInfo>,
+    peerPublicSecrets: List<com.vettid.app.core.nats.PeerPublicSecretMetadata>,
     onAccept: () -> Unit,
     onDecline: () -> Unit
 ) {
@@ -454,6 +458,8 @@ private fun PeerAcceptedContent(
         com.vettid.app.features.personaldata.PeerProfileView(
             profile = published,
             modifier = Modifier.fillMaxWidth(),
+            peerHandlers = peerHandlers,
+            peerPublicSecrets = peerPublicSecrets,
         )
 
         Spacer(modifier = Modifier.height(24.dp))

@@ -44,6 +44,7 @@ import com.vettid.app.features.applock.PinSetupScreen
 import com.vettid.app.features.calling.ActiveCallScreen
 import com.vettid.app.features.calling.CallHistoryScreen
 import com.vettid.app.features.calling.CallManager
+import com.vettid.app.features.calling.CallState
 import com.vettid.app.features.calling.CallUIEvent
 import com.vettid.app.features.calling.IncomingCallScreen
 import com.vettid.app.features.calling.OutgoingCallScreen
@@ -456,11 +457,26 @@ fun VettIDApp(
                         navController.navigate(Screen.ScanInvitation.createRoute(data))
                     }
                 } else {
-                    // Only navigate to Main from auth screens (Welcome, Authentication)
-                    // Do NOT navigate if user is already past auth — any appState change
-                    // (photo, UTKs, NATS reconnect) would wipe their current screen
-                    if (currentRoute == Screen.Authentication.route ||
+                    // If an incoming call rang while the app was locked,
+                    // land the user on the IncomingCall screen instead of
+                    // Main once they PIN-unlock — otherwise the foreground
+                    // service's notification is the only surface for
+                    // Answer/Decline, and tapping Answer from the
+                    // notification (which happens before nav has settled)
+                    // silently failed because CallManager's state was
+                    // still Idle.
+                    val hasIncomingCall = callManager?.callState?.value is CallState.Incoming
+                    if (hasIncomingCall) {
+                        if (currentRoute != Screen.IncomingCall.route) {
+                            navController.navigate(Screen.IncomingCall.route) {
+                                popUpTo(0) { inclusive = true }
+                            }
+                        }
+                    } else if (currentRoute == Screen.Authentication.route ||
                         currentRoute == Screen.Welcome.route) {
+                        // Only navigate to Main from auth screens (Welcome, Authentication)
+                        // Do NOT navigate if user is already past auth — any appState change
+                        // (photo, UTKs, NATS reconnect) would wipe their current screen
                         navController.navigate(Screen.Main.route) {
                             popUpTo(0) { inclusive = true }
                         }

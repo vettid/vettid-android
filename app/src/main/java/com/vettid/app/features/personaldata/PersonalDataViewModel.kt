@@ -859,7 +859,22 @@ class PersonalDataViewModel @Inject constructor(
                 }
 
                 payload.add("fields", fieldsArray)
-                Log.d(TAG, "Publishing profile with ${fieldsArray.size()} fields: $fieldsArray")
+
+                // Secret metadata (name/type/category — never value)
+                // for secrets the user has marked as public. Peers
+                // receive this list and render a "Secrets" badge row
+                // on the profile view matching what the user sees
+                // for their own public-profile preview.
+                val secretsArray = JsonArray()
+                publicKeySecrets.forEach { secret ->
+                    val obj = JsonObject()
+                    obj.addProperty("name", secret.name)
+                    obj.addProperty("type", secret.type.name)
+                    obj.addProperty("category", secret.category.displayName)
+                    secretsArray.add(obj)
+                }
+                payload.add("public_secrets", secretsArray)
+                Log.d(TAG, "Publishing profile with ${fieldsArray.size()} fields and ${secretsArray.size()} public secrets")
 
                 val response = ownerSpaceClient.sendAndAwaitResponse(
                     messageType = "profile.publish",

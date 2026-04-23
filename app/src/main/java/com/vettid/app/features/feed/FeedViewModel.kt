@@ -373,6 +373,7 @@ class FeedViewModel @Inject constructor(
                             "missed" -> "Missed call"
                             "completed" -> "Call ended"
                             "rejected" -> "Call declined"
+                            "cancelled" -> "Call cancelled"
                             else -> "Call"
                         }
                         "message" -> if (activityDirection == "outgoing") "You sent a message" else "Received a message"

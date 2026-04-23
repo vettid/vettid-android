@@ -370,6 +370,8 @@ private fun EnhancedPreviewContent(
         com.vettid.app.features.personaldata.PeerProfileView(
             profile = published,
             modifier = Modifier.fillMaxWidth(),
+            peerHandlers = state.peerHandlers,
+            peerPublicSecrets = state.peerPublicSecrets,
         )
 
         Spacer(modifier = Modifier.height(24.dp))

@@ -53,6 +53,8 @@ fun ConnectionDetailScreen(
     val peerIdentityKey by viewModel.peerIdentityKey.collectAsState()
     val peerWallets by viewModel.peerWallets.collectAsState()
     val peerPublishedProfile by viewModel.peerPublishedProfile.collectAsState()
+    val peerHandlers by viewModel.peerHandlers.collectAsState()
+    val peerPublicSecrets by viewModel.peerPublicSecrets.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -162,6 +164,8 @@ fun ConnectionDetailScreen(
                     peerIdentityKey = peerIdentityKey,
                     peerWallets = peerWallets,
                     peerPublishedProfile = peerPublishedProfile,
+                    peerHandlers = peerHandlers,
+                    peerPublicSecrets = peerPublicSecrets,
                     isRevoking = currentState.isRevoking,
                     isRotating = currentState.isRotating,
                     isLocationSharingEnabled = currentState.isLocationSharingEnabled,
@@ -220,6 +224,8 @@ private fun LoadedContent(
     peerWallets: List<com.vettid.app.core.nats.PeerWalletInfo> = emptyList(),
     peerPublishedProfile: com.vettid.app.features.personaldata.PublishedProfileData =
         com.vettid.app.features.personaldata.PublishedProfileData(emptyList(), false),
+    peerHandlers: List<com.vettid.app.core.nats.PeerHandlerInfo> = emptyList(),
+    peerPublicSecrets: List<com.vettid.app.core.nats.PeerPublicSecretMetadata> = emptyList(),
     isRevoking: Boolean,
     isRotating: Boolean = false,
     isLocationSharingEnabled: Boolean = false,
@@ -253,6 +259,8 @@ private fun LoadedContent(
         com.vettid.app.features.personaldata.PeerProfileView(
             profile = peerPublishedProfile,
             modifier = Modifier.fillMaxWidth(),
+            peerHandlers = peerHandlers,
+            peerPublicSecrets = peerPublicSecrets,
         )
 
         // Action buttons + detail sections below the profile use the

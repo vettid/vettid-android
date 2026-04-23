@@ -99,6 +99,8 @@ class ConnectionReviewViewModel @Inject constructor(
                         _state.value = ConnectionReviewState.Loaded(
                             peerProfile = peerPreview,
                             publishedProfile = publishedProfile,
+                            peerHandlers = profile?.handlers ?: emptyList(),
+                            peerPublicSecrets = profile?.publicSecrets ?: emptyList(),
                             connectionId = connectionId,
                             status = record.status,
                             direction = record.direction,
@@ -173,6 +175,8 @@ sealed class ConnectionReviewState {
     data class Loaded(
         val peerProfile: PeerProfilePreview,
         val publishedProfile: PublishedProfileData,
+        val peerHandlers: List<com.vettid.app.core.nats.PeerHandlerInfo> = emptyList(),
+        val peerPublicSecrets: List<com.vettid.app.core.nats.PeerPublicSecretMetadata> = emptyList(),
         val connectionId: String,
         val status: String,
         val direction: String,

@@ -494,14 +494,30 @@ class OwnerSpaceClient @Inject constructor(
      * 3. Publish to {ownerSpace}.profile.public topic
      *
      * @param selectedFields List of field namespaces to include (e.g., "contact.phone.mobile")
+     * @param publicSecrets Metadata (name/type/category — never value)
+     *        for secrets the user has opted to publish. Pass an empty
+     *        list to explicitly clear previously-published secrets;
+     *        pass null to leave the vault's stored metadata untouched.
      * @return Request ID for correlating response
      */
-    suspend fun publishProfile(selectedFields: List<String>? = null): Result<String> {
+    suspend fun publishProfile(
+        selectedFields: List<String>? = null,
+        publicSecrets: List<Map<String, String>>? = null,
+    ): Result<String> {
         val payload = JsonObject()
         if (selectedFields != null) {
             val fieldsArray = com.google.gson.JsonArray()
             selectedFields.forEach { fieldsArray.add(it) }
             payload.add("fields", fieldsArray)
+        }
+        if (publicSecrets != null) {
+            val secretsArray = com.google.gson.JsonArray()
+            publicSecrets.forEach { entry ->
+                val obj = JsonObject()
+                entry.forEach { (k, v) -> obj.addProperty(k, v) }
+                secretsArray.add(obj)
+            }
+            payload.add("public_secrets", secretsArray)
         }
         return sendToVault("profile.publish", payload)
     }

@@ -75,6 +75,18 @@ class ConnectionDetailViewModel @Inject constructor(
     private val _peerWallets = MutableStateFlow<List<com.vettid.app.core.nats.PeerWalletInfo>>(emptyList())
     val peerWallets: StateFlow<List<com.vettid.app.core.nats.PeerWalletInfo>> = _peerWallets.asStateFlow()
 
+    // Peer's published handler catalog (vault capabilities). Fuels
+    // the "Handlers" badge on the profile view; empty for older
+    // vaults that don't publish their catalog.
+    private val _peerHandlers = MutableStateFlow<List<com.vettid.app.core.nats.PeerHandlerInfo>>(emptyList())
+    val peerHandlers: StateFlow<List<com.vettid.app.core.nats.PeerHandlerInfo>> = _peerHandlers.asStateFlow()
+
+    // Peer's public-secret metadata (name/type/category — never
+    // values). Fuels the "Secrets" badge on the profile view; empty
+    // when the peer hasn't opted anything into public sharing.
+    private val _peerPublicSecrets = MutableStateFlow<List<com.vettid.app.core.nats.PeerPublicSecretMetadata>>(emptyList())
+    val peerPublicSecrets: StateFlow<List<com.vettid.app.core.nats.PeerPublicSecretMetadata>> = _peerPublicSecrets.asStateFlow()
+
     // Peer profile rendered through the same BusinessCardView the user
     // sees for their own public-profile preview — gives one canonical
     // layout across scanner review, inviter review, and this detail
@@ -140,6 +152,8 @@ class ConnectionDetailViewModel @Inject constructor(
                         _peerUserGuid.value = record.peerProfile?.userGuid ?: record.peerGuid
                         _peerIdentityKey.value = record.peerProfile?.publicKey
                         _peerWallets.value = record.peerProfile?.wallets ?: emptyList()
+                        _peerHandlers.value = record.peerProfile?.handlers ?: emptyList()
+                        _peerPublicSecrets.value = record.peerProfile?.publicSecrets ?: emptyList()
                         _peerPublishedProfile.value = record.peerProfile?.let { peer ->
                             peerProfileToPublishedProfileData(
                                 peer = peer,

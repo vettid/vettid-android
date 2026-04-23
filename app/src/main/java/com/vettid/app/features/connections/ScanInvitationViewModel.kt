@@ -111,7 +111,14 @@ class ScanInvitationViewModel @Inject constructor(
                 if (!profile.isNullOrEmpty()) {
                     android.util.Log.d("ScanInvitationVM", "Using profile from broker: ${profile.keys}, fields: ${invitation.inviterFields?.keys}")
                     fetchedPeerProfile = profile
-                    showProfilePreview(profile, invitation.label, invitation.inviterFields, invitation.inviterWallets)
+                    showProfilePreview(
+                        profile,
+                        invitation.label,
+                        invitation.inviterFields,
+                        invitation.inviterWallets,
+                        invitation.inviterHandlers ?: emptyList(),
+                        invitation.inviterPublicSecrets ?: emptyList(),
+                    )
                 } else {
                     // No profile in broker — show preview with label immediately,
                     // then try async JetStream fetch as enhancement
@@ -143,7 +150,14 @@ class ScanInvitationViewModel @Inject constructor(
     /**
      * Show profile preview from a profile map (e.g., from broker payload).
      */
-    private fun showProfilePreview(profile: Map<String, String>, fallbackLabel: String, fields: Map<String, Map<String, String>>? = null, wallets: List<Map<String, String>> = emptyList()) {
+    private fun showProfilePreview(
+        profile: Map<String, String>,
+        fallbackLabel: String,
+        fields: Map<String, Map<String, String>>? = null,
+        wallets: List<Map<String, String>> = emptyList(),
+        handlers: List<com.vettid.app.core.nats.PeerHandlerInfo> = emptyList(),
+        publicSecrets: List<com.vettid.app.core.nats.PeerPublicSecretMetadata> = emptyList(),
+    ) {
         val displayName = listOfNotNull(
             profile["_system_first_name"],
             profile["_system_last_name"]
@@ -179,7 +193,9 @@ class ScanInvitationViewModel @Inject constructor(
             creatorPhoto = profile["photo"],
             publicKey = profile["public_key"],
             profileFields = profileFields.ifEmpty { null },
-            wallets = wallets
+            wallets = wallets,
+            peerHandlers = handlers,
+            peerPublicSecrets = publicSecrets,
         )
     }
 
@@ -597,7 +613,9 @@ sealed class ScanInvitationState {
         val capabilities: List<String> = emptyList(),
         val sharedDataCategories: List<String> = emptyList(),
         val profileFields: Map<String, Map<String, String>>? = null,
-        val wallets: List<Map<String, String>> = emptyList()
+        val wallets: List<Map<String, String>> = emptyList(),
+        val peerHandlers: List<com.vettid.app.core.nats.PeerHandlerInfo> = emptyList(),
+        val peerPublicSecrets: List<com.vettid.app.core.nats.PeerPublicSecretMetadata> = emptyList(),
     ) : ScanInvitationState()
 
     data class Success(

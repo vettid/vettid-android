@@ -79,7 +79,11 @@ fun ConnectionReviewScreen(
                             .weight(1f)
                             .verticalScroll(rememberScrollState())
                     ) {
-                        PeerProfileView(profile = currentState.publishedProfile)
+                        PeerProfileView(
+                            profile = currentState.publishedProfile,
+                            peerHandlers = currentState.peerHandlers,
+                            peerPublicSecrets = currentState.peerPublicSecrets,
+                        )
                     }
                     // Accept / Decline action strip — always rendered
                     // below the profile so the user reviews first.

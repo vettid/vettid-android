@@ -173,6 +173,8 @@ class CreateInvitationViewModel @Inject constructor(
                                                 peerLastName = pp.lastName,
                                                 peerPublicKey = pp.publicKey,
                                                 peerWallets = pp.wallets ?: emptyList(),
+                                                peerHandlers = pp.handlers ?: emptyList(),
+                                                peerPublicSecrets = pp.publicSecrets ?: emptyList(),
                                             )
                                         }
                                     },
@@ -445,6 +447,8 @@ sealed class CreateInvitationState {
         val peerLastName: String? = null,
         val peerPublicKey: String? = null,
         val peerWallets: List<com.vettid.app.core.nats.PeerWalletInfo> = emptyList(),
+        val peerHandlers: List<com.vettid.app.core.nats.PeerHandlerInfo> = emptyList(),
+        val peerPublicSecrets: List<com.vettid.app.core.nats.PeerPublicSecretMetadata> = emptyList(),
     ) : CreateInvitationState()
 
     object Expired : CreateInvitationState()
