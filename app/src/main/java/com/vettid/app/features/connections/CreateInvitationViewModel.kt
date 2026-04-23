@@ -168,7 +168,11 @@ class CreateInvitationViewModel @Inject constructor(
                                                 peerPhoto = pp.photo ?: accepted.peerPhoto,
                                                 peerEmail = pp.email
                                                     ?: accepted.peerProfile?.get("_system_email"),
-                                                peerFields = pp.fields ?: accepted.peerFields
+                                                peerFields = pp.fields ?: accepted.peerFields,
+                                                peerFirstName = pp.firstName,
+                                                peerLastName = pp.lastName,
+                                                peerPublicKey = pp.publicKey,
+                                                peerWallets = pp.wallets ?: emptyList(),
                                             )
                                         }
                                     },
@@ -430,7 +434,17 @@ sealed class CreateInvitationState {
         val connectionId: String,
         val peerPhoto: String? = null,
         val peerEmail: String? = null,
-        val peerFields: Map<String, Map<String, String>>? = null
+        val peerFields: Map<String, Map<String, String>>? = null,
+        // Full peer profile data from our own connection record so
+        // the BusinessCardView can render identity keys and wallets
+        // just like the scanner's side — without these, the inviter's
+        // "peer accepted" preview looked thinner than the invitee's
+        // "scanner preview" side, even though both are supposed to be
+        // the same "about to form a connection" screen.
+        val peerFirstName: String? = null,
+        val peerLastName: String? = null,
+        val peerPublicKey: String? = null,
+        val peerWallets: List<com.vettid.app.core.nats.PeerWalletInfo> = emptyList(),
     ) : CreateInvitationState()
 
     object Expired : CreateInvitationState()

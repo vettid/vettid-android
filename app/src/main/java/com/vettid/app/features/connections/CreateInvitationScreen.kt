@@ -116,9 +116,13 @@ fun CreateInvitationScreen(
                 is CreateInvitationState.PeerAccepted -> {
                     PeerAcceptedContent(
                         peerAlias = currentState.peerAlias,
+                        peerFirstName = currentState.peerFirstName,
+                        peerLastName = currentState.peerLastName,
                         peerPhoto = currentState.peerPhoto,
                         peerEmail = currentState.peerEmail,
                         peerFields = currentState.peerFields,
+                        peerPublicKey = currentState.peerPublicKey,
+                        peerWallets = currentState.peerWallets,
                         onAccept = {
                             viewModel.respondToConnection(true)
                             onBack()
@@ -393,9 +397,13 @@ private fun ExpirationTimer(expiresInSeconds: Int) {
 @Composable
 private fun PeerAcceptedContent(
     peerAlias: String,
+    peerFirstName: String?,
+    peerLastName: String?,
     peerPhoto: String?,
     peerEmail: String?,
     peerFields: Map<String, Map<String, String>>?,
+    peerPublicKey: String?,
+    peerWallets: List<com.vettid.app.core.nats.PeerWalletInfo>,
     onAccept: () -> Unit,
     onDecline: () -> Unit
 ) {
@@ -405,15 +413,23 @@ private fun PeerAcceptedContent(
     // one canonical layout across every "this is what's shared"
     // surface. Public profiles are meant to be shared with
     // connections with consent, so they all look identical.
-    val firstName = peerAlias.substringBefore(' ').takeIf { it.isNotBlank() }
-    val lastName = peerAlias.substringAfter(' ', missingDelimiterValue = "")
-        .takeIf { it.isNotBlank() }
+    //
+    // Prefer structured first/last name from the vault record over
+    // parsing peerAlias. The alias is a legacy label and may
+    // collapse "Al Liebl" vs "Al Liebl Sr." into the wrong halves;
+    // the vault record has them separated authoritatively.
+    val firstName = peerFirstName?.takeIf { it.isNotBlank() }
+        ?: peerAlias.substringBefore(' ').takeIf { it.isNotBlank() }
+    val lastName = peerLastName?.takeIf { it.isNotBlank() }
+        ?: peerAlias.substringAfter(' ', missingDelimiterValue = "").takeIf { it.isNotBlank() }
     val peer = com.vettid.app.core.nats.PeerProfileData(
         firstName = firstName,
         lastName = lastName,
         email = peerEmail,
         photo = peerPhoto,
         fields = peerFields,
+        publicKey = peerPublicKey,
+        wallets = peerWallets,
     )
     val published = com.vettid.app.features.personaldata.peerProfileToPublishedProfileData(
         peer,

@@ -125,10 +125,15 @@ fun ConnectionDetailScreen(
         )
     }
 
+    val titleText = when (val s = state) {
+        is ConnectionDetailState.Loaded ->
+            s.connection.peerDisplayName.takeIf { it.isNotBlank() } ?: "Connection"
+        else -> "Connection"
+    }
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Connection") },
+                title = { Text(titleText) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
