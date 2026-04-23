@@ -9,6 +9,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -40,19 +41,35 @@ fun ScanInvitationScreen(
     val state by viewModel.state.collectAsState()
     val manualCode by viewModel.manualCode.collectAsState()
 
-    // Process initial data from deep link
+    // Process initial data from deep link. The data field arrives in
+    // one of two shapes depending on the link MainActivity produced:
+    //
+    //   - Bare broker codes from share links (vettid.dev/connect?c=CODE)
+    //     are wrapped as plain JSON `{"c":"CODE"}` before being passed
+    //     as the route arg. Pass it straight through.
+    //   - Legacy inline invitations (vettid.dev/connect?data=<base64>)
+    //     arrive base64-encoded. Decode first.
+    //
+    // Previously we always tried to base64-decode, which silently
+    // failed on the JSON form and dropped the user into the scanner.
     LaunchedEffect(initialData) {
         if (initialData != null) {
-            // Decode base64 and process as QR data
-            try {
-                val decoded = android.util.Base64.decode(
-                    initialData.replace('-', '+').replace('_', '/'),
-                    android.util.Base64.DEFAULT
-                ).toString(Charsets.UTF_8)
-                android.util.Log.d("ScanInvitation", "Processing deep link data: ${decoded.take(100)}...")
-                viewModel.onQrCodeScanned(decoded)
-            } catch (e: Exception) {
-                android.util.Log.e("ScanInvitation", "Failed to decode deep link data", e)
+            val payload = if (initialData.trimStart().startsWith("{")) {
+                initialData
+            } else {
+                try {
+                    android.util.Base64.decode(
+                        initialData.replace('-', '+').replace('_', '/'),
+                        android.util.Base64.DEFAULT
+                    ).toString(Charsets.UTF_8)
+                } catch (e: Exception) {
+                    android.util.Log.e("ScanInvitation", "Failed to decode deep link data", e)
+                    null
+                }
+            }
+            if (payload != null) {
+                android.util.Log.d("ScanInvitation", "Processing deep link data: ${payload.take(100)}...")
+                viewModel.onQrCodeScanned(payload)
             }
         }
     }
@@ -143,10 +160,14 @@ fun ScanInvitationScreen(
                 }
 
                 is ScanInvitationState.Success -> {
-                    PendingApprovalContent(
-                        connectionName = currentState.connection.peerDisplayName,
-                        onBack = onBack
-                    )
+                    // Acceptance always emits NavigateToConnection, which
+                    // pops us back to the Connections list immediately.
+                    // The old PendingApprovalContent screen with its
+                    // "Return to connections" button was redundant — the
+                    // user already acted, and they're already on their
+                    // way back. Render a spinner for the couple of
+                    // frames before navigation lands.
+                    ProcessingContent()
                 }
 
                 is ScanInvitationState.Error -> {
@@ -198,8 +219,29 @@ private fun ScanningContent(
             text = "Position the QR code within the frame",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(16.dp)
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
         )
+
+        // Manual-entry escape hatch — the icon in the top bar is
+        // easy to miss when the camera fills the screen. A full-
+        // width text button below the viewfinder makes it obvious
+        // that typing the code is a supported path too.
+        TextButton(
+            onClick = onManualEntry,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 32.dp, vertical = 8.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Default.Keyboard,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Type the code instead")
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
     }
 }
 

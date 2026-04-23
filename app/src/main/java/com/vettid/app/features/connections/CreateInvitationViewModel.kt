@@ -127,7 +127,8 @@ class CreateInvitationViewModel @Inject constructor(
                         expiresAt = expiresAtMillis,
                         creatorDisplayName = vaultDisplayName,
                         qrCodeData = qrData,
-                        deepLinkUrl = deepLink
+                        deepLinkUrl = deepLink,
+                        inviteCode = natsInvitation.inviteCode
                     )
 
                     _state.value = CreateInvitationState.Created(
@@ -296,6 +297,24 @@ class CreateInvitationViewModel @Inject constructor(
     }
 
     /**
+     * Copy just the raw broker code (e.g. "ABCD-EFGH") to the
+     * clipboard so the peer can paste it into the manual-entry
+     * field. Separate from copyLink() because users who want to
+     * dictate or type the code don't need the full URL.
+     */
+    fun copyInviteCode() {
+        val currentState = _state.value
+        if (currentState is CreateInvitationState.Created) {
+            val code = currentState.invitation.inviteCode
+            if (code.isEmpty()) return
+            secureClipboard.copyText(text = code, isSensitive = false)
+            viewModelScope.launch {
+                _effects.emit(CreateInvitationEffect.LinkCopied)
+            }
+        }
+    }
+
+    /**
      * Get QR code data for display.
      */
     fun getQrCodeData(): String? {
@@ -430,7 +449,12 @@ data class VaultConnectionInvitation(
     val expiresAt: Long,
     val creatorDisplayName: String?,
     val qrCodeData: String,
-    val deepLinkUrl: String
+    val deepLinkUrl: String,
+    // Short broker code (e.g. "ABCD-EFGH") from the vault. Displayed
+    // alongside the QR/link so the peer can type it manually if the
+    // share-link path doesn't work (email filtering, paper-sharing,
+    // etc.). Empty when the invitation fell back to inline creds.
+    val inviteCode: String = ""
 )
 
 /**

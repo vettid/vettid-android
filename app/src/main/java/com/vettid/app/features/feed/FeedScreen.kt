@@ -668,7 +668,11 @@ private fun InactiveConnectionCard(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = if (item.connectionStatus == "rejected") "Declined" else "Connection revoked",
+                    text = when (item.connectionStatus) {
+                        "rejected" -> "Declined"
+                        "expired" -> "Invitation expired"
+                        else -> "Connection revoked"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error
                 )

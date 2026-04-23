@@ -17,6 +17,7 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.vettid.app.MainActivity
 import com.vettid.app.R
+import com.vettid.app.core.nats.ConnectionPeerAccepted
 import com.vettid.app.core.nats.FeedNotification
 import com.vettid.app.core.nats.IncomingMessage
 import com.vettid.app.core.nats.NotificationImportance
@@ -209,6 +210,17 @@ class FeedNotificationService @Inject constructor(
             ownerSpaceClient.incomingMessages.collect { message ->
                 if (!isInForeground) {
                     showMessageNotification(message)
+                }
+            }
+        }
+        // Peer accepted an invitation we sent — surface an OS
+        // notification so the inviter knows to review the peer's
+        // profile without having to navigate into the Connections
+        // tab on their own.
+        scope.launch {
+            ownerSpaceClient.connectionAcceptances.collect { acceptance ->
+                if (!isInForeground) {
+                    showPeerAcceptedNotification(acceptance)
                 }
             }
         }
@@ -478,6 +490,55 @@ class FeedNotificationService @Inject constructor(
             Log.d(TAG, "Showed message notification for connection ${message.connectionId}")
         } catch (e: SecurityException) {
             Log.w(TAG, "Notification permission not granted for message", e)
+        }
+    }
+
+    /**
+     * Show an OS notification when a peer accepts an invitation we
+     * sent. Tapping opens the app and deep-links to the connections
+     * screen (the review card lives there). Keyed by connection_id
+     * so if the peer sends multiple signals during the handshake
+     * we collapse into a single notification.
+     */
+    private fun showPeerAcceptedNotification(acceptance: ConnectionPeerAccepted) {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(EXTRA_OPEN_FEED, true)
+            putExtra(EXTRA_EVENT_TYPE, "connection.peer-accepted")
+            putExtra(EXTRA_SOURCE_ID, acceptance.connectionId)
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            acceptance.connectionId.hashCode(),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val peerName = acceptance.peerAlias?.takeIf { it.isNotBlank() } ?: "Someone"
+        val title = "$peerName wants to connect"
+        val text = "Review their profile to accept or decline."
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID_DEFAULT)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .setGroup("vettid_connections")
+            .setCategory(NotificationCompat.CATEGORY_SOCIAL)
+            .build()
+
+        val notifManager = NotificationManagerCompat.from(context)
+        if (!notifManager.areNotificationsEnabled()) return
+        try {
+            notifManager.notify(
+                ("connection-accepted:" + acceptance.connectionId).hashCode(),
+                notification,
+            )
+            Log.d(TAG, "Showed peer-accepted notification for connection ${acceptance.connectionId}")
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Notification permission not granted for peer-accepted", e)
         }
     }
 

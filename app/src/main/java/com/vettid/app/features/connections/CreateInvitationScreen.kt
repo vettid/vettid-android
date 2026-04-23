@@ -31,6 +31,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
@@ -104,9 +105,11 @@ fun CreateInvitationScreen(
                 is CreateInvitationState.Created -> {
                     CreatedContent(
                         qrCodeData = currentState.invitation.qrCodeData,
+                        inviteCode = currentState.invitation.inviteCode,
                         expiresInSeconds = currentState.expiresInSeconds,
                         onShare = { viewModel.shareInvitation() },
-                        onCopyLink = { viewModel.copyLink() }
+                        onCopyLink = { viewModel.copyLink() },
+                        onCopyCode = { viewModel.copyInviteCode() }
                     )
                 }
 
@@ -224,9 +227,11 @@ private fun CreatingContent() {
 @Composable
 private fun CreatedContent(
     qrCodeData: String,
+    inviteCode: String,
     expiresInSeconds: Int,
     onShare: () -> Unit,
-    onCopyLink: () -> Unit
+    onCopyLink: () -> Unit,
+    onCopyCode: () -> Unit
 ) {
     val qrBitmap = remember(qrCodeData) {
         generateQrCode(qrCodeData, 300)
@@ -242,7 +247,7 @@ private fun CreatedContent(
     Spacer(modifier = Modifier.height(8.dp))
 
     Text(
-        text = "Scan this QR code or share the link to connect.",
+        text = "Scan the QR, share the link, or give them this code to type in manually.",
         style = MaterialTheme.typography.bodyMedium,
         textAlign = TextAlign.Center,
         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -274,6 +279,51 @@ private fun CreatedContent(
     }
 
     Spacer(modifier = Modifier.height(16.dp))
+
+    // Invite code — shown prominently so the peer can type it
+    // manually if the QR/link path doesn't work (email link not
+    // linkified, sharing over phone, etc.).
+    if (inviteCode.isNotEmpty()) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            )
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Or type this code",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = inviteCode,
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                        letterSpacing = 2.sp
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    IconButton(onClick = onCopyCode) {
+                        Icon(
+                            imageVector = Icons.Default.ContentCopy,
+                            contentDescription = "Copy code",
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+    }
 
     // Expiration timer
     ExpirationTimer(expiresInSeconds = expiresInSeconds)
@@ -349,143 +399,23 @@ private fun PeerAcceptedContent(
     onAccept: () -> Unit,
     onDecline: () -> Unit
 ) {
-    val photoBitmap = remember(peerPhoto) {
-        peerPhoto?.let { base64 ->
-            try {
-                val bytes = Base64.decode(base64, Base64.DEFAULT)
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-            } catch (e: Exception) { null }
-        }
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState()),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = "Connection Request",
-            style = MaterialTheme.typography.titleLarge
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Photo or initials
-        if (photoBitmap != null) {
-            Image(
-                bitmap = photoBitmap.asImageBitmap(),
-                contentDescription = "Profile photo",
-                modifier = Modifier
-                    .size(96.dp)
-                    .clip(CircleShape),
-                contentScale = ContentScale.Crop
-            )
-        } else {
-            Surface(
-                modifier = Modifier.size(96.dp),
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.primaryContainer
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        text = peerAlias.take(2).uppercase(),
-                        style = MaterialTheme.typography.headlineLarge,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = peerAlias,
-            style = MaterialTheme.typography.headlineSmall,
-            textAlign = TextAlign.Center
-        )
-
-        peerEmail?.let {
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = it,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = "wants to connect with you",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        // Profile fields
-        if (!peerFields.isNullOrEmpty()) {
-            val customFields = peerFields.entries
-                .filter { !it.key.startsWith("_system_") }
-                .filter { (it.value["value"] ?: "").isNotBlank() }
-
-            if (customFields.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(16.dp))
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                ) {
-                    Column(modifier = Modifier.padding(16.dp)) {
-                        Text(
-                            text = "PUBLIC PROFILE",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        )
-                        customFields.forEachIndexed { index, (_, fieldData) ->
-                            if (index > 0) {
-                                HorizontalDivider(
-                                    modifier = Modifier.padding(vertical = 4.dp),
-                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
-                                )
-                            }
-                            Text(
-                                text = (fieldData["display_name"] ?: "").trim(),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = fieldData["value"] ?: "",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        // Accept / Decline buttons
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            OutlinedButton(
-                onClick = onDecline,
-                modifier = Modifier.weight(1f)
-            ) {
-                Text("Decline")
-            }
-            Button(
-                onClick = onAccept,
-                modifier = Modifier.weight(1f)
-            ) {
-                Text("Accept")
-            }
-        }
-    }
+    // Share the same preview card the invitee sees during scan flow
+    // so both sides of a connection see an identical "should I accept
+    // this person?" screen. Previously this site had its own custom
+    // layout that drifted (different photo size, different field
+    // styling, missing capabilities/wallets section).
+    val profile = com.vettid.app.features.connections.components.PeerProfilePreview(
+        displayName = peerAlias,
+        email = peerEmail,
+        photoBase64 = peerPhoto,
+        profileFields = peerFields,
+    )
+    com.vettid.app.features.connections.components.ConnectionPreviewCard(
+        profile = profile,
+        onAccept = onAccept,
+        onDecline = onDecline,
+        modifier = Modifier.padding(16.dp),
+    )
 }
 
 @Composable
