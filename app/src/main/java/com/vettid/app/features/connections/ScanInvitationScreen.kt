@@ -1,9 +1,11 @@
 package com.vettid.app.features.connections
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CameraAlt
@@ -18,11 +20,6 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.vettid.app.features.connections.components.ConnectionPreviewCard
-import com.vettid.app.features.connections.components.WalletPreview
-import com.vettid.app.features.connections.components.PeerProfilePreview
-import com.vettid.app.features.connections.components.CapabilityInfo
-import com.vettid.app.features.connections.components.SharedDataType
 import com.vettid.app.ui.components.QrCodeScanner
 
 /**
@@ -327,65 +324,74 @@ private fun EnhancedPreviewContent(
     onAccept: () -> Unit,
     onDecline: () -> Unit
 ) {
-    Box(
+    // Render the inviter's published profile through the same
+    // BusinessCardView the user sees for their own profile preview
+    // and on an established connection's detail screen. One layout
+    // across every "this is what gets shared" surface.
+    val firstName = state.creatorName.substringBefore(' ').takeIf { it.isNotBlank() }
+    val lastName = state.creatorName.substringAfter(' ', missingDelimiterValue = "")
+        .takeIf { it.isNotBlank() }
+    val peer = com.vettid.app.core.nats.PeerProfileData(
+        firstName = firstName,
+        lastName = lastName,
+        email = state.creatorEmail,
+        photo = state.creatorPhoto,
+        fields = state.profileFields,
+        publicKey = state.publicKey,
+        wallets = state.wallets.map { w ->
+            com.vettid.app.core.nats.PeerWalletInfo(
+                walletId = w["id"] ?: "",
+                label = w["label"] ?: "Wallet",
+                address = w["address"] ?: "",
+                network = w["network"] ?: "mainnet",
+            )
+        },
+    )
+    val published = com.vettid.app.features.personaldata.peerProfileToPublishedProfileData(
+        peer,
+        fallbackDisplayName = state.creatorName,
+        fallbackEmail = state.creatorEmail,
+    )
+
+    Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(16.dp),
-        contentAlignment = Alignment.Center
     ) {
-        ConnectionPreviewCard(
-            profile = PeerProfilePreview(
-                displayName = state.creatorName,
-                email = state.creatorEmail,
-                avatarUrl = state.creatorAvatarUrl,
-                photoBase64 = state.creatorPhoto,
-                publicKeyFingerprint = state.publicKeyFingerprint,
-                publicKey = state.publicKey,
-                isEmailVerified = state.isEmailVerified,
-                trustLevel = state.trustLevel,
-                capabilities = state.capabilities.map { capability ->
-                    CapabilityInfo(
-                        name = capability,
-                        description = getCapabilityDescription(capability),
-                        icon = getCapabilityIcon(capability)
-                    )
-                },
-                sharedDataTypes = state.sharedDataCategories.map { category ->
-                    SharedDataType(category = category)
-                },
-                profileFields = state.profileFields,
-                wallets = state.wallets.map { w ->
-                    WalletPreview(
-                        label = w["label"] ?: "Wallet",
-                        address = w["address"] ?: "",
-                        network = w["network"] ?: "mainnet"
-                    )
-                }
-            ),
-            onAccept = onAccept,
-            onDecline = onDecline,
-            isProcessing = false
+        Text(
+            text = "${state.creatorName} invited you to connect",
+            style = MaterialTheme.typography.titleLarge,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
         )
-    }
-}
+        Spacer(modifier = Modifier.height(16.dp))
 
-private fun getCapabilityDescription(capability: String): String {
-    return when (capability.lowercase()) {
-        "messaging" -> "Send and receive secure messages"
-        "file_sharing" -> "Share documents and files"
-        "credential_sharing" -> "Share verifiable credentials"
-        "payment" -> "Send and receive payments"
-        else -> "Additional capability"
-    }
-}
+        com.vettid.app.features.personaldata.PeerProfileView(
+            profile = published,
+            modifier = Modifier.fillMaxWidth(),
+        )
 
-private fun getCapabilityIcon(capability: String): String {
-    return when (capability.lowercase()) {
-        "messaging" -> "messaging"
-        "file_sharing" -> "sharing"
-        "credential_sharing" -> "credentials"
-        "payment" -> "payments"
-        else -> "default"
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            OutlinedButton(
+                onClick = onDecline,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Decline")
+            }
+            Button(
+                onClick = onAccept,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Accept")
+            }
+        }
+        Spacer(modifier = Modifier.height(16.dp))
     }
 }
 

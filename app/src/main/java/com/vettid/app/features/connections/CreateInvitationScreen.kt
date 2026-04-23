@@ -399,23 +399,68 @@ private fun PeerAcceptedContent(
     onAccept: () -> Unit,
     onDecline: () -> Unit
 ) {
-    // Share the same preview card the invitee sees during scan flow
-    // so both sides of a connection see an identical "should I accept
-    // this person?" screen. Previously this site had its own custom
-    // layout that drifted (different photo size, different field
-    // styling, missing capabilities/wallets section).
-    val profile = com.vettid.app.features.connections.components.PeerProfilePreview(
-        displayName = peerAlias,
+    // Render the peer's published profile through the same
+    // BusinessCardView that the user sees for their own profile
+    // preview and on an established connection's detail screen —
+    // one canonical layout across every "this is what's shared"
+    // surface. Public profiles are meant to be shared with
+    // connections with consent, so they all look identical.
+    val firstName = peerAlias.substringBefore(' ').takeIf { it.isNotBlank() }
+    val lastName = peerAlias.substringAfter(' ', missingDelimiterValue = "")
+        .takeIf { it.isNotBlank() }
+    val peer = com.vettid.app.core.nats.PeerProfileData(
+        firstName = firstName,
+        lastName = lastName,
         email = peerEmail,
-        photoBase64 = peerPhoto,
-        profileFields = peerFields,
+        photo = peerPhoto,
+        fields = peerFields,
     )
-    com.vettid.app.features.connections.components.ConnectionPreviewCard(
-        profile = profile,
-        onAccept = onAccept,
-        onDecline = onDecline,
-        modifier = Modifier.padding(16.dp),
+    val published = com.vettid.app.features.personaldata.peerProfileToPublishedProfileData(
+        peer,
+        fallbackDisplayName = peerAlias,
+        fallbackEmail = peerEmail,
     )
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
+    ) {
+        Text(
+            text = "$peerAlias wants to connect",
+            style = MaterialTheme.typography.titleLarge,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+
+        com.vettid.app.features.personaldata.PeerProfileView(
+            profile = published,
+            modifier = Modifier.fillMaxWidth(),
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            OutlinedButton(
+                onClick = onDecline,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Decline")
+            }
+            Button(
+                onClick = onAccept,
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Accept")
+            }
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+    }
 }
 
 @Composable
