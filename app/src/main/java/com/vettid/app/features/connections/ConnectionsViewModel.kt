@@ -573,9 +573,15 @@ class ConnectionsViewModel @Inject constructor(
 
         var filtered = allEnhancedConnections.filter { currentFilter.matches(it) }
 
-        // Sort
+        // Sort. RECENT_ACTIVITY now floats unread connections to the top
+        // (newest unread first) and orders the rest by last interaction —
+        // unread items are louder than reads regardless of when they
+        // arrived, so they shouldn't get buried under chatty reads.
         filtered = when (currentFilter.sortOrder) {
-            SortOrder.RECENT_ACTIVITY -> filtered.sortedByDescending { it.lastActiveAt ?: it.createdAt }
+            SortOrder.RECENT_ACTIVITY -> filtered.sortedWith(
+                compareByDescending<com.vettid.app.features.connections.models.ConnectionListItem> { it.unreadCount > 0 }
+                    .thenByDescending { it.lastActiveAt ?: it.createdAt }
+            )
             SortOrder.ALPHABETICAL -> filtered.sortedBy { it.peerName.lowercase() }
             SortOrder.CONNECTION_DATE -> filtered.sortedByDescending { it.createdAt }
         }

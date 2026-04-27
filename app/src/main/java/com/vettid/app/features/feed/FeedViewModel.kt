@@ -34,6 +34,7 @@ class FeedViewModel @Inject constructor(
     private val callManager: com.vettid.app.features.calling.CallManager,
     private val guideReadTracker: GuideReadTracker,
     private val presenceAggregator: com.vettid.app.core.nats.PresenceAggregator,
+    private val votingRepository: com.vettid.app.features.voting.VotingRepository,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<FeedState>(FeedState.Loading)
@@ -99,6 +100,58 @@ class FeedViewModel @Inject constructor(
         observeFilterChanges()
         observeGuideReadState()
         observePresence()
+        refreshProposalsCacheForBadge()
+    }
+
+    /**
+     * Pull active governance proposals into the local cache so the
+     * "Votes" badge on the VettID system card lights up without
+     * requiring the user to open the Proposals screen first. Best
+     * effort: any failure leaves the cached count alone.
+     */
+    private fun refreshProposalsCacheForBadge() {
+        viewModelScope.launch {
+            try {
+                if (!natsAutoConnector.isConnected()) {
+                    // Try once when NATS comes up
+                    natsAutoConnector.connectionState
+                        .filter { it is com.vettid.app.core.nats.NatsAutoConnector.AutoConnectState.Connected }
+                        .first()
+                }
+                val response = ownerSpaceClient.sendAndAwaitResponse(
+                    "vote.list", com.google.gson.JsonObject(), 15000L,
+                )
+                val result = (response as? com.vettid.app.core.nats.VaultResponse.HandlerResult)
+                    ?.takeIf { it.success }
+                    ?.result ?: return@launch
+                val arr = result.getAsJsonArray("proposals") ?: return@launch
+                // Mirror ProposalsViewModel's full parse so the cache
+                // is consistent for the votes screen too.
+                val proposals = arr.mapNotNull { el ->
+                    runCatching {
+                        com.vettid.app.features.voting.parseProposalFromJsonForBadge(el.asJsonObject)
+                    }.getOrNull()
+                }
+                if (proposals.isNotEmpty()) {
+                    votingRepository.cacheProposals(proposals)
+                    rebuildConnectionCardsForBadgeRefresh()
+                    val openCount = votingRepository.getOpenUnvotedProposalsCount()
+                    if (openCount > 0) {
+                        feedNotificationService.showOpenVotesNotification(openCount)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Proposals badge refresh skipped: ${e.message}")
+            }
+        }
+    }
+
+    private fun rebuildConnectionCardsForBadgeRefresh() {
+        val current = _state.value
+        if (current is FeedState.Loaded) {
+            val events = feedRepository.getCachedEvents()
+            _state.value = current.copy(items = buildDisplayItems(events))
+        }
     }
 
     /**
@@ -240,11 +293,27 @@ class FeedViewModel @Inject constructor(
             val needsReview = conn.status == "pending" && conn.needsAttention
             val hasAccepted = conn.status == "pending" && !conn.needsAttention
 
-            // Preview comes from vault's connection.list (no event dependency)
+            // Preview comes from vault's connection.list (no event
+            // dependency). When the latest activity is a call, ignore
+            // the (stale) lastMessagePreview and synthesize a
+            // call-shaped label from subtype + direction + outcome,
+            // otherwise the card would still say "You sent a message"
+            // from an older message even though the most recent
+            // activity is a call.
             val preview = when {
                 needsReview -> "Wants to connect"
                 isOutboundPending -> "Tap to view invitation"
                 hasAccepted -> "Waiting for response"
+                conn.lastActivityType == "call" -> {
+                    val verb = when (conn.lastActivityOutcome) {
+                        "missed" -> if (conn.lastActivityDirection == "outgoing") "Unanswered" else "Missed"
+                        "rejected" -> "Declined"
+                        "cancelled" -> "Cancelled"
+                        else -> if (conn.lastActivityDirection == "outgoing") "You called" else "Called you"
+                    }
+                    val kind = if (conn.lastActivitySubtype == "video") "video call" else "voice call"
+                    "$verb · $kind"
+                }
                 conn.lastMessagePreview != null -> conn.lastMessagePreview
                 conn.status == "active" -> "Connected"
                 conn.status == "revoked" -> "Connection revoked"
@@ -279,6 +348,15 @@ class FeedViewModel @Inject constructor(
                 preview = preview,
             )
 
+            // Open governance proposals the user hasn't voted on.
+            // Drives both the per-action "Votes" badge AND the
+            // system-card unread highlight so peer-less notifications
+            // (votes, guides) get the same gold border treatment as
+            // unread messages.
+            val systemVotesBadge = if (conn.connectionType == "system") {
+                votingRepository.getOpenUnvotedProposalsCount()
+            } else 0
+
             FeedDisplayItem.ConnectionCard(
                 connectionId = conn.connectionId,
                 peerName = peerName,
@@ -300,6 +378,11 @@ class FeedViewModel @Inject constructor(
                 unreadCount = conn.unreadMessageCount,
                 pendingRows = pendingRows,
                 systemGuidesBadge = unreadGuidesCount,
+                // "Votes" badge on the system card: count of active
+                // proposals the user hasn't voted on. Only the system
+                // connection surfaces this — peer cards leave the
+                // default 0.
+                systemVotesBadge = systemVotesBadge,
                 // Presence: "online" when the aggregator has seen a
                 // fresh peer heartbeat, null otherwise. The system
                 // card never gets a presence ring.
@@ -309,10 +392,25 @@ class FeedViewModel @Inject constructor(
                 // Unread badges the card if: pending review, unread
                 // messages exist, or there's an unacknowledged missed
                 // incoming call.
-                isUnread = needsReview || conn.unreadMessageCount > 0 || conn.missedCallCount > 0
+                // Unread badges the card if: pending review, unread
+                // messages, missed call, or — for the system card —
+                // open guides or open votes the user hasn't seen yet.
+                isUnread = needsReview ||
+                    conn.unreadMessageCount > 0 ||
+                    conn.missedCallCount > 0 ||
+                    (conn.connectionType == "system" &&
+                        (unreadGuidesCount > 0 || systemVotesBadge > 0))
             )
         }.sortedWith(
+            // 1) Pending review goes first regardless of timestamp.
+            // 2) Cards with active notifications (isUnread) ranked by
+            //    their last-activity timestamp.
+            // 3) Cards with no active notifications, ranked by their
+            //    last-activity timestamp.
+            // The two groups are separated by the boolean comparator so
+            // a stale unread card always sits above a fresh read one.
             compareByDescending<FeedDisplayItem.ConnectionCard> { if (it.needsReview) 1 else 0 }
+                .thenByDescending { if (it.isUnread) 1 else 0 }
                 .thenByDescending { it.sortTimestamp }
         )
     }
@@ -369,12 +467,14 @@ class FeedViewModel @Inject constructor(
             rows += PendingRow.LastActivity(
                 text = preview.ifEmpty {
                     when (activityType) {
-                        "call" -> when (conn.lastActivityOutcome) {
-                            "missed" -> "Missed call"
-                            "completed" -> "Call ended"
-                            "rejected" -> "Call declined"
-                            "cancelled" -> "Call cancelled"
-                            else -> "Call"
+                        "call" -> {
+                            val kind = if (conn.lastActivitySubtype == "video") "video call" else "voice call"
+                            when (conn.lastActivityOutcome) {
+                                "missed" -> if (activityDirection == "outgoing") "Unanswered $kind" else "Missed $kind"
+                                "rejected" -> "Declined $kind"
+                                "cancelled" -> "Cancelled $kind"
+                                else -> if (activityDirection == "outgoing") "You called · $kind" else "Called you · $kind"
+                            }
                         }
                         "message" -> if (activityDirection == "outgoing") "You sent a message" else "Received a message"
                         else -> ""

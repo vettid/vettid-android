@@ -251,15 +251,7 @@ private fun DrawerNavigationItem(
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (badgeCount > 0) {
-                BadgedBox(
-                    badge = {
-                        Badge {
-                            Text(
-                                text = if (badgeCount > 99) "99+" else badgeCount.toString()
-                            )
-                        }
-                    }
-                ) {
+                com.vettid.app.ui.components.VettidBadgedIcon(count = badgeCount) {
                     Icon(
                         imageVector = icon,
                         contentDescription = null,

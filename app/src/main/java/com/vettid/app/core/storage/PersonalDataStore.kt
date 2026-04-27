@@ -80,6 +80,7 @@ class PersonalDataStore @Inject constructor(
 
         // Public profile settings (which fields to share)
         private const val KEY_PUBLIC_PROFILE_FIELDS = "public_profile_fields"
+        private const val KEY_HIDDEN_FROM_CATALOG_FIELDS = "hidden_from_catalog_fields"
         private const val KEY_PUBLIC_PROFILE_VERSION = "public_profile_version"
 
         // Profile photo (local cache)
@@ -748,6 +749,32 @@ class PersonalDataStore @Inject constructor(
         encryptedPrefs.edit()
             .putString(KEY_PUBLIC_PROFILE_FIELDS, json)
             .putInt(KEY_PUBLIC_PROFILE_VERSION, getPublicProfileVersion() + 1)
+            .apply()
+        markPendingSync()
+    }
+
+    /**
+     * Get the set of personal-data field ids the user has flipped to
+     * "hide from catalog" (Discoverability=Private). Default empty —
+     * all items are cataloged.
+     */
+    fun getHiddenFromCatalogFields(): Set<String> {
+        val json = encryptedPrefs.getString(KEY_HIDDEN_FROM_CATALOG_FIELDS, null) ?: return emptySet()
+        return try {
+            val type = object : TypeToken<List<String>>() {}.type
+            gson.fromJson<List<String>>(json, type).toSet()
+        } catch (e: Exception) {
+            emptySet()
+        }
+    }
+
+    /**
+     * Persist the set of items flagged as hidden from the catalog.
+     */
+    fun updateHiddenFromCatalogFields(fields: Set<String>) {
+        val json = gson.toJson(fields.toList())
+        encryptedPrefs.edit()
+            .putString(KEY_HIDDEN_FROM_CATALOG_FIELDS, json)
             .apply()
         markPendingSync()
     }

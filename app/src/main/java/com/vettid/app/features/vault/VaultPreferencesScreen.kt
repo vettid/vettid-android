@@ -54,7 +54,8 @@ fun VaultPreferencesContent(
     onNavigateToLocationSettings: () -> Unit = {},
     onNavigateToAgents: () -> Unit = {},
     onNavigateToVaultStatus: () -> Unit = {},
-    onNavigateToSecurityAuditLog: () -> Unit = {}
+    onNavigateToSecurityAuditLog: () -> Unit = {},
+    onNavigateToHandlerAuthorization: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -228,6 +229,13 @@ fun VaultPreferencesContent(
                 )
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                 PreferencesItem(
+                    icon = Icons.Default.Tune,
+                    title = "Capabilities",
+                    subtitle = "Choose which vault capabilities run and which are shared with peers",
+                    onClick = onNavigateToHandlerAuthorization
+                )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                PreferencesItem(
                     icon = Icons.Default.List,
                     title = "View Audit Logs",
                     onClick = onNavigateToSecurityAuditLog
@@ -273,6 +281,36 @@ fun VaultPreferencesContent(
                     title = "Vault Status",
                     onClick = onNavigateToVaultStatus
                 )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                val isResettingCache by viewModel.isResettingCache.collectAsState()
+                var showResetConfirm by remember { mutableStateOf(false) }
+                PreferencesItem(
+                    icon = Icons.Default.Refresh,
+                    title = "Reset Cache",
+                    subtitle = if (isResettingCache) "Clearing…" else "Wipe local caches and rebuild from the vault",
+                    onClick = { if (!isResettingCache) showResetConfirm = true }
+                )
+                if (showResetConfirm) {
+                    AlertDialog(
+                        onDismissRequest = { showResetConfirm = false },
+                        icon = { Icon(Icons.Default.Refresh, contentDescription = null) },
+                        title = { Text("Reset cache?") },
+                        text = {
+                            Text(
+                                "This clears the local feed cache and image cache. Your account stays logged in — the next refresh will rebuild what's needed from the vault. Use this if local data looks stale or corrupt."
+                            )
+                        },
+                        confirmButton = {
+                            Button(onClick = {
+                                showResetConfirm = false
+                                viewModel.resetCache()
+                            }) { Text("Reset") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showResetConfirm = false }) { Text("Cancel") }
+                        }
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -1091,7 +1129,8 @@ fun VaultPreferencesScreenFull(
     onNavigateToAppDetails: () -> Unit = {},
     onNavigateToLocationHistory: () -> Unit = {},
     onNavigateToSharedLocations: () -> Unit = {},
-    onNavigateToLocationSettings: () -> Unit = {}
+    onNavigateToLocationSettings: () -> Unit = {},
+    onNavigateToHandlerAuthorization: () -> Unit = {}
 ) {
     Scaffold(
         topBar = {
@@ -1111,7 +1150,8 @@ fun VaultPreferencesScreenFull(
                 onNavigateToAppDetails = onNavigateToAppDetails,
                 onNavigateToLocationHistory = onNavigateToLocationHistory,
                 onNavigateToSharedLocations = onNavigateToSharedLocations,
-                onNavigateToLocationSettings = onNavigateToLocationSettings
+                onNavigateToLocationSettings = onNavigateToLocationSettings,
+                onNavigateToHandlerAuthorization = onNavigateToHandlerAuthorization
             )
         }
     }

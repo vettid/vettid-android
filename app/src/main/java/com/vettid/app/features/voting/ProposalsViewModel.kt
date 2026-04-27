@@ -46,6 +46,16 @@ class ProposalsViewModel @Inject constructor(
 
     init {
         loadProposals()
+        // VotingViewModel/ProposalDetailScreen casts votes through a
+        // sibling VM. After it lands a vote, the repository tick
+        // fires and we re-stamp `userHasVoted` on the matching item
+        // so the list flips from "Vote Now" to "You voted" without
+        // forcing the user to leave and return.
+        viewModelScope.launch {
+            votingRepository.votesDirtyTick.drop(1).collect {
+                refreshVotedFlags()
+            }
+        }
     }
 
     fun onEvent(event: ProposalsEvent) {

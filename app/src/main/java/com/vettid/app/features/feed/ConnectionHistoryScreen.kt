@@ -105,12 +105,8 @@ fun ConnectionHistoryScreen(
                 },
                 actions = {
                     IconButton(onClick = { showTimeFilterSheet = true }) {
-                        BadgedBox(
-                            badge = {
-                                if (timeFilter != null) {
-                                    Badge(containerColor = MaterialTheme.colorScheme.primary)
-                                }
-                            }
+                        com.vettid.app.ui.components.VettidBadgedIcon(
+                            count = if (timeFilter != null) null else 0,
                         ) {
                             Icon(
                                 imageVector = Icons.Default.DateRange,

@@ -22,7 +22,15 @@ data class PersonalDataItem(
     val category: DataCategory? = null,
     val fieldType: FieldType = FieldType.TEXT,
     val isSystemField: Boolean = false,
-    val isInPublicProfile: Boolean = false,  // Whether to include in public profile
+    val isInPublicProfile: Boolean = false,  // Promotes the value onto the calling card (public profile)
+    /**
+     * Hide this entry from the public-profile catalog. Default false
+     * (cataloged) so peers see "Al has a Mobile Phone" by default and
+     * can request the value. Flip to true for items the user wants
+     * fully invisible to connections (e.g. medical conditions, very
+     * personal IDs).
+     */
+    val hideFromCatalog: Boolean = false,
     val isSensitive: Boolean = false,  // Whether to mask value (PASSWORD type fields)
     val sortOrder: Int = 0,  // Order within category (lower = higher up)
     val createdAt: Instant,
@@ -631,6 +639,8 @@ sealed class PersonalDataEvent {
     object AddItem : PersonalDataEvent()
     data class DeleteItem(val itemId: String) : PersonalDataEvent()
     data class TogglePublicProfile(val itemId: String) : PersonalDataEvent()
+    /** Flip the per-item discoverability flag. */
+    data class ToggleHideFromCatalog(val itemId: String) : PersonalDataEvent()
     data class MoveItemUp(val itemId: String) : PersonalDataEvent()
     data class MoveItemDown(val itemId: String) : PersonalDataEvent()
     object Refresh : PersonalDataEvent()

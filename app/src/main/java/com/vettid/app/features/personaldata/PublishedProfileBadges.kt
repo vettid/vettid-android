@@ -1,5 +1,7 @@
 package com.vettid.app.features.personaldata
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -50,8 +52,8 @@ import com.vettid.app.core.nats.PeerPublicSecretMetadata
  */
 @Composable
 fun PublishedProfileBadges(
-    dataItems: List<PersonalDataItem>,
-    publicSecrets: List<PeerPublicSecretMetadata>,
+    dataCatalog: List<PublicMetadataItem>,
+    secretCatalog: List<PublicMetadataItem>,
     handlers: List<PeerHandlerInfo>,
     modifier: Modifier = Modifier,
 ) {
@@ -69,16 +71,16 @@ fun PublishedProfileBadges(
         BadgeIcon(
             icon = Icons.Default.Person,
             label = "Data",
-            count = dataItems.size,
-            contentDescription = "Public personal data",
+            count = dataCatalog.size,
+            contentDescription = "Personal data catalog",
             onClick = { showDataDialog = true },
         )
         Spacer(modifier = Modifier.width(24.dp))
         BadgeIcon(
             icon = Icons.Default.Key,
             label = "Secrets",
-            count = publicSecrets.size,
-            contentDescription = "Public secret metadata",
+            count = secretCatalog.size,
+            contentDescription = "Secret catalog",
             onClick = { showSecretsDialog = true },
         )
         Spacer(modifier = Modifier.width(24.dp))
@@ -91,40 +93,29 @@ fun PublishedProfileBadges(
         )
     }
 
+    // Reuse the same dialogs the user sees on their own public-profile
+    // preview so the peer-side view matches the self-side view exactly.
     if (showDataDialog) {
-        PublicItemsDialog(
-            title = "Public Data",
-            emptyMessage = "No personal data is shared on this profile yet.",
-            itemCount = dataItems.size,
-            rows = dataItems.map { item ->
-                Triple(item.name, item.type.name, item.category?.displayName ?: "Other")
-            },
+        PublicMetadataDialog(
+            title = "Personal Data Catalog",
+            subtitle = "Metadata only — values are never shared without consent. Items the user has marked private don't appear here.",
+            items = dataCatalog,
+            emptyMessage = "No personal data has been cataloged yet.",
             onDismiss = { showDataDialog = false },
         )
     }
     if (showSecretsDialog) {
-        PublicItemsDialog(
-            title = "Public Secrets",
-            emptyMessage = "No secret metadata is shared on this profile yet.",
-            itemCount = publicSecrets.size,
-            rows = publicSecrets.map { s ->
-                Triple(s.name, s.type.ifBlank { "SECRET" }, s.category.ifBlank { "Other" })
-            },
+        PublicMetadataDialog(
+            title = "Secret Catalog",
+            subtitle = "Metadata only — values are never shared without consent. Items the user has marked private don't appear here.",
+            items = secretCatalog,
+            emptyMessage = "No secrets have been cataloged yet.",
             onDismiss = { showSecretsDialog = false },
         )
     }
     if (showHandlersDialog) {
-        PublicItemsDialog(
-            title = "Vault Capabilities",
-            emptyMessage = "This vault didn't publish its capability catalog.",
-            itemCount = handlers.size,
-            rows = handlers.map { h ->
-                Triple(
-                    h.name,
-                    if (h.operations.isEmpty()) "0 operations" else "${h.operations.size} operations",
-                    h.description.ifBlank { "" },
-                )
-            },
+        PeerHandlersDialog(
+            handlers = handlers,
             onDismiss = { showHandlersDialog = false },
         )
     }
@@ -149,51 +140,64 @@ private fun BadgeIcon(
     }
 }
 
+/**
+ * Handler-catalog dialog for a peer's published profile. Mirrors the
+ * styling of the user's own public-profile preview so peer and self
+ * sides render identically. Each row expands to show the description
+ * and operations chips.
+ */
 @Composable
-private fun PublicItemsDialog(
-    title: String,
-    emptyMessage: String,
-    itemCount: Int,
-    rows: List<Triple<String, String, String>>,
+private fun PeerHandlersDialog(
+    handlers: List<PeerHandlerInfo>,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = {
-            Column {
-                if (rows.isEmpty()) {
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Extension, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Available Handlers")
+                Spacer(modifier = Modifier.width(8.dp))
+                androidx.compose.material3.Surface(
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                ) {
                     Text(
-                        text = emptyMessage,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    Text(
-                        text = "$itemCount item${if (itemCount == 1) "" else "s"}",
+                        "${handlers.size}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    rows.forEachIndexed { index, (name, type, category) ->
-                        if (index > 0) {
-                            HorizontalDivider(
-                                modifier = Modifier.padding(vertical = 6.dp),
-                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
-                            )
-                        }
-                        Text(
-                            text = name,
-                            style = MaterialTheme.typography.bodyMedium,
+                }
+            }
+        },
+        text = {
+            if (handlers.isEmpty()) {
+                Text(
+                    "This vault didn't publish its capability catalog.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                ) {
+                    handlers.forEach { handler ->
+                        // Convert PeerHandlerInfo to VaultHandler so the
+                        // shared row composable can render it. Defaults
+                        // for enabled/share_globally are fine — peer side
+                        // doesn't see toggle state.
+                        val vh = com.vettid.app.core.nats.VaultHandler(
+                            id = handler.id,
+                            name = handler.name,
+                            description = handler.description,
+                            operations = handler.operations,
+                            category = handler.category,
+                            required = handler.required,
+                            shareable = handler.shareable,
                         )
-                        val meta = listOf(type, category).filter { it.isNotBlank() }.joinToString(" · ")
-                        if (meta.isNotBlank()) {
-                            Text(
-                                text = meta,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
+                        ProfileHandlerRow(handler = vh)
                     }
                 }
             }

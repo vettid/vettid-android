@@ -95,14 +95,8 @@ fun ServiceConnectionsScreen(
                 actions = {
                     // Contract updates badge
                     if (pendingContractUpdates > 0) {
-                        BadgedBox(
-                            badge = {
-                                Badge(containerColor = MaterialTheme.colorScheme.error) {
-                                    Text("$pendingContractUpdates")
-                                }
-                            }
-                        ) {
-                            IconButton(onClick = { /* Navigate to contract updates */ }) {
+                        IconButton(onClick = { /* Navigate to contract updates */ }) {
+                            com.vettid.app.ui.components.VettidBadgedIcon(count = pendingContractUpdates) {
                                 Icon(
                                     imageVector = Icons.Outlined.Description,
                                     contentDescription = "Contract updates"

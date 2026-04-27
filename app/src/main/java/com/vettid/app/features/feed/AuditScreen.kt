@@ -68,7 +68,7 @@ fun AuditScreen(
                     BadgedBox(
                         badge = {
                             if (filters.hasActiveFilters) {
-                                Badge { Text("!") }
+                                com.vettid.app.ui.components.VettidAlertBadge()
                             }
                         }
                     ) {

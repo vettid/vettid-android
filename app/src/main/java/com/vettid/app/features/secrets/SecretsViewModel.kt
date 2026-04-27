@@ -57,6 +57,15 @@ class SecretsViewModel @Inject constructor(
     init {
         Log.i(TAG, "SecretsViewModel initialized")
         loadSecrets()
+        // Observe publish-state ticks from the store so this VM
+        // refreshes when a sibling VM (PersonalDataViewModel) calls
+        // markSyncComplete() after a successful publish — otherwise
+        // the unpublished-changes banner stays stuck.
+        viewModelScope.launch {
+            minorSecretsStore.publishDirtyTick.drop(1).collect {
+                loadSecrets()
+            }
+        }
     }
 
     fun onEvent(event: SecretsEvent) {
@@ -68,6 +77,7 @@ class SecretsViewModel @Inject constructor(
             is SecretsEvent.AddSecret -> showAddSecretDialog()
             is SecretsEvent.DeleteSecret -> confirmDeleteSecret(event.secretId)
             is SecretsEvent.TogglePublicProfile -> togglePublicProfile(event.secretId)
+            is SecretsEvent.ToggleHideFromCatalog -> toggleHideFromCatalog(event.secretId)
             is SecretsEvent.MoveSecretUp -> moveSecretUp(event.secretId)
             is SecretsEvent.MoveSecretDown -> moveSecretDown(event.secretId)
             is SecretsEvent.Refresh -> loadSecrets()
@@ -410,6 +420,22 @@ class SecretsViewModel @Inject constructor(
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to toggle public profile", e)
+                _effects.emit(SecretsEffect.ShowError(e.message ?: "Failed to update"))
+            }
+        }
+    }
+
+    private fun toggleHideFromCatalog(secretId: String) {
+        viewModelScope.launch {
+            try {
+                val result = minorSecretsStore.toggleHideFromCatalog(secretId)
+                if (result) {
+                    loadSecrets()
+                } else {
+                    _effects.emit(SecretsEffect.ShowError("Could not update catalog visibility"))
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to toggle catalog visibility", e)
                 _effects.emit(SecretsEffect.ShowError(e.message ?: "Failed to update"))
             }
         }

@@ -34,22 +34,50 @@ fun PeerProfileView(
     modifier: Modifier = Modifier,
     peerHandlers: List<PeerHandlerInfo>? = null,
     peerPublicSecrets: List<PeerPublicSecretMetadata>? = null,
+    peerDataCatalog: List<com.vettid.app.core.nats.PeerDataCatalogEntry>? = null,
+    peerSecretCatalog: List<PeerPublicSecretMetadata>? = null,
+    isPeerOnline: Boolean = false,
 ) {
     var qrItem by remember { mutableStateOf<PersonalDataItem?>(null) }
 
-    val publicDataItems = remember(profile) {
-        // What the peer has published as regular personal-data
-        // fields. Wallets and identity keys live in the same items
-        // list under different types, so filter on type to keep
-        // the badge's "Data" count aligned with what the user
-        // expects in the peer's categorized sections.
-        profile.items.filter { it.type == DataType.PUBLIC && it.isInPublicProfile }
+    // Data badge shows the FULL data catalog (every personal-data
+    // entry the peer hasn't marked private) — metadata only. Falls
+    // back to the published-fields when the peer is on an older
+    // enclave that doesn't emit data_catalog.
+    val dataCatalog = remember(peerDataCatalog, profile) {
+        peerDataCatalog?.map { d ->
+            PublicMetadataItem(
+                name = d.displayName.ifBlank { d.name },
+                type = d.fieldType.ifBlank { "TEXT" },
+                category = d.category.ifBlank { "Other" },
+            )
+        } ?: profile.items
+            .filter { it.type == DataType.PUBLIC && it.isInPublicProfile }
+            .map { item ->
+                PublicMetadataItem(
+                    name = item.name,
+                    type = item.type.name,
+                    category = item.category?.displayName ?: "Other",
+                )
+            }
+    }
+
+    // Secrets badge shows the secret catalog. Falls back to the
+    // legacy public_secrets array for older enclaves.
+    val secretCatalog = remember(peerSecretCatalog, peerPublicSecrets) {
+        (peerSecretCatalog ?: peerPublicSecrets).orEmpty().map { s ->
+            PublicMetadataItem(
+                name = s.name,
+                type = s.type.ifBlank { "SECRET" },
+                category = s.category.ifBlank { "Other" },
+            )
+        }
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
         PublishedProfileBadges(
-            dataItems = publicDataItems,
-            publicSecrets = peerPublicSecrets.orEmpty(),
+            dataCatalog = dataCatalog,
+            secretCatalog = secretCatalog,
             handlers = peerHandlers.orEmpty(),
         )
         Spacer(modifier = Modifier.height(8.dp))
@@ -57,6 +85,7 @@ fun PeerProfileView(
             profile = profile,
             isReadOnly = true,
             onShowQR = { qrItem = it },
+            isOnline = isPeerOnline,
         )
     }
 

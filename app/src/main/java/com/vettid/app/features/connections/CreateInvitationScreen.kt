@@ -51,6 +51,10 @@ fun CreateInvitationScreen(
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
 
+    // Tracks an in-flight respond so the screen can show a spinner and
+    // block double-taps. Cleared when ResponseComplete arrives.
+    var responding by remember { mutableStateOf(false) }
+
     // Handle effects
     LaunchedEffect(Unit) {
         viewModel.effects.collect { effect ->
@@ -60,6 +64,10 @@ fun CreateInvitationScreen(
                 }
                 is CreateInvitationEffect.LinkCopied -> {
                     snackbarHostState.showSnackbar("Link copied (auto-clears in 30s)")
+                }
+                is CreateInvitationEffect.ResponseComplete -> {
+                    responding = false
+                    onBack()
                 }
             }
         }
@@ -125,13 +133,20 @@ fun CreateInvitationScreen(
                         peerWallets = currentState.peerWallets,
                         peerHandlers = currentState.peerHandlers,
                         peerPublicSecrets = currentState.peerPublicSecrets,
+                        peerDataCatalog = currentState.peerDataCatalog,
+                        peerSecretCatalog = currentState.peerSecretCatalog,
+                        responding = responding,
                         onAccept = {
-                            viewModel.respondToConnection(true)
-                            onBack()
+                            if (!responding) {
+                                responding = true
+                                viewModel.respondToConnection(true)
+                            }
                         },
                         onDecline = {
-                            viewModel.respondToConnection(false)
-                            onBack()
+                            if (!responding) {
+                                responding = true
+                                viewModel.respondToConnection(false)
+                            }
                         }
                     )
                 }
@@ -408,6 +423,9 @@ private fun PeerAcceptedContent(
     peerWallets: List<com.vettid.app.core.nats.PeerWalletInfo>,
     peerHandlers: List<com.vettid.app.core.nats.PeerHandlerInfo>,
     peerPublicSecrets: List<com.vettid.app.core.nats.PeerPublicSecretMetadata>,
+    peerDataCatalog: List<com.vettid.app.core.nats.PeerDataCatalogEntry>?,
+    peerSecretCatalog: List<com.vettid.app.core.nats.PeerPublicSecretMetadata>?,
+    responding: Boolean,
     onAccept: () -> Unit,
     onDecline: () -> Unit
 ) {
@@ -460,6 +478,8 @@ private fun PeerAcceptedContent(
             modifier = Modifier.fillMaxWidth(),
             peerHandlers = peerHandlers,
             peerPublicSecrets = peerPublicSecrets,
+            peerDataCatalog = peerDataCatalog,
+            peerSecretCatalog = peerSecretCatalog,
         )
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -470,15 +490,27 @@ private fun PeerAcceptedContent(
         ) {
             OutlinedButton(
                 onClick = onDecline,
+                enabled = !responding,
                 modifier = Modifier.weight(1f),
             ) {
                 Text("Decline")
             }
             Button(
                 onClick = onAccept,
+                enabled = !responding,
                 modifier = Modifier.weight(1f),
             ) {
-                Text("Accept")
+                if (responding) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Accepting...")
+                } else {
+                    Text("Accept")
+                }
             }
         }
         Spacer(modifier = Modifier.height(16.dp))

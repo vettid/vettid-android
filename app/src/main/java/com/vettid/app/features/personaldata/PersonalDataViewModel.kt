@@ -94,10 +94,18 @@ class PersonalDataViewModel @Inject constructor(
     private val _installedHandlers = MutableStateFlow<List<com.vettid.app.core.nats.VaultHandler>>(emptyList())
     val installedHandlers: StateFlow<List<com.vettid.app.core.nats.VaultHandler>> = _installedHandlers.asStateFlow()
 
+    /**
+     * Drives the "Data" badge on the public-profile preview. Shows the
+     * full catalog — every personal-data entry the user has stored
+     * (regardless of whether they've promoted it to the public profile)
+     * EXCEPT items the user has marked private. Default is "cataloged"
+     * so a brand-new entry shows here automatically; the "hide from
+     * catalog" toggle on a row flips an item to private.
+     */
     val publicPersonalData: StateFlow<List<PublicMetadataItem>> = _state.map { state ->
         when (state) {
             is PersonalDataState.Loaded -> state.items
-                .filter { it.isInPublicProfile }
+                .filter { !it.hideFromCatalog }
                 .map { item ->
                     PublicMetadataItem(
                         name = item.name,
@@ -114,12 +122,49 @@ class PersonalDataViewModel @Inject constructor(
 
     // Public profile fields set (namespaces that are shared)
     private var publicProfileFields = mutableSetOf<String>()
+    private var hiddenFromCatalogFields = mutableSetOf<String>()
+
+    /**
+     * Mirror of `MinorSecretsStore`'s "any public-key secret in the
+     * profile is still PENDING" predicate, recomputed every time the
+     * store fires a dirty tick. The vault's profile section reads
+     * this so the unpublished-changes banner reflects the same state
+     * regardless of which Hilt-scoped SecretsViewModel happens to be
+     * alive (the two-tier embedded view and the legacy SecretsScreen
+     * sometimes resolve to different VM instances).
+     */
+    private val _hasUnpublishedSecrets = MutableStateFlow(false)
+    val hasUnpublishedSecrets: StateFlow<Boolean> = _hasUnpublishedSecrets.asStateFlow()
+
+    private fun recomputeUnpublishedSecrets() {
+        _hasUnpublishedSecrets.value = minorSecretsStore.getAllSecrets().any {
+            it.type == com.vettid.app.core.storage.SecretType.PUBLIC_KEY &&
+                it.isInPublicProfile &&
+                it.syncStatus == com.vettid.app.core.storage.SyncStatus.PENDING
+        }
+    }
 
     init {
         Log.i(TAG, "PersonalDataViewModel created - starting load")
         loadPersonalData()
         loadCustomCategories()
         loadPublicMetadata()
+        recomputeUnpublishedSecrets()
+        // Watch the store-level dirty tick. The tick bumps on both
+        // mutations (toggle/add/update — leaves PENDING entries
+        // behind) and on markSyncComplete (clears PENDING). Only the
+        // recompute is unconditional; we avoid touching
+        // `_hasUnpublishedChanges` here because the publish flow
+        // explicitly sets that to false on success — and a tick
+        // fired by markSyncComplete used to re-flip it true,
+        // leaving the banner stuck. The unpublished-secrets flag is
+        // now its own source of truth for the secrets-side banner.
+        viewModelScope.launch {
+            minorSecretsStore.publishDirtyTick.drop(1).collect {
+                recomputeUnpublishedSecrets()
+                loadPublicMetadata()
+            }
+        }
     }
 
     /**
@@ -137,6 +182,7 @@ class PersonalDataViewModel @Inject constructor(
             is PersonalDataEvent.AddItem -> showAddDialog()
             is PersonalDataEvent.DeleteItem -> deleteItem(event.itemId)
             is PersonalDataEvent.TogglePublicProfile -> togglePublicProfile(event.itemId)
+            is PersonalDataEvent.ToggleHideFromCatalog -> toggleHideFromCatalog(event.itemId)
             is PersonalDataEvent.MoveItemUp -> moveItemUp(event.itemId)
             is PersonalDataEvent.MoveItemDown -> moveItemDown(event.itemId)
             is PersonalDataEvent.Refresh -> loadPersonalData()
@@ -381,6 +427,7 @@ class PersonalDataViewModel @Inject constructor(
                     val displayName = displayNameFromNamespace(namespace)
                     val dataType = dataTypeFromNamespace(namespace)
                     val isInPublicProfile = publicProfileFields.contains(namespace)
+                    val hiddenFromCatalog = hiddenFromCatalogFields.contains(namespace)
 
                     items.add(PersonalDataItem(
                         id = namespace,
@@ -390,6 +437,7 @@ class PersonalDataViewModel @Inject constructor(
                         category = category,
                         isSystemField = false,
                         isInPublicProfile = isInPublicProfile,
+                        hideFromCatalog = hiddenFromCatalog,
                         sortOrder = savedSortOrder[namespace] ?: 0,
                         createdAt = updatedAt,
                         updatedAt = updatedAt
@@ -460,6 +508,8 @@ class PersonalDataViewModel @Inject constructor(
     private fun loadPublicProfileSettings() {
         publicProfileFields.clear()
         publicProfileFields.addAll(personalDataStore.getPublicProfileFields())
+        hiddenFromCatalogFields.clear()
+        hiddenFromCatalogFields.addAll(personalDataStore.getHiddenFromCatalogFields())
 
         // Check if there are unpublished changes based on local settings
         // This is a heuristic - if there are public profile fields selected but
@@ -838,8 +888,20 @@ class PersonalDataViewModel @Inject constructor(
     /**
      * Publish public profile to NATS.
      * Uses sendAndAwaitResponse to ensure publish completes before returning.
+     *
+     * Re-entry guard: a duplicate tap (or one tap during slow vault
+     * response) used to fire two requests in parallel. The first one
+     * was sometimes still in flight when the second arrived, causing
+     * a confusing "Request timed out" error even though the publish
+     * eventually succeeded. We now ignore taps while a publish is
+     * already running.
      */
+    private val isPublishing = java.util.concurrent.atomic.AtomicBoolean(false)
     fun publishProfile() {
+        if (!isPublishing.compareAndSet(false, true)) {
+            Log.d(TAG, "publishProfile() ignored — a publish is already in flight")
+            return
+        }
         viewModelScope.launch {
             try {
                 Log.i(TAG, "Publishing public profile...")
@@ -860,13 +922,14 @@ class PersonalDataViewModel @Inject constructor(
 
                 payload.add("fields", fieldsArray)
 
-                // Secret metadata (name/type/category — never value)
-                // for secrets the user has marked as public. Peers
-                // receive this list and render a "Secrets" badge row
-                // on the profile view matching what the user sees
-                // for their own public-profile preview.
+                // Secret catalog metadata (name/type/category — never
+                // value) for every secret the user hasn't marked
+                // private. Peers receive this list and render a
+                // "Secrets" badge row matching the user's own preview.
+                val catalogedSecrets = minorSecretsStore.getAllSecrets()
+                    .filter { !it.hideFromCatalog }
                 val secretsArray = JsonArray()
-                publicKeySecrets.forEach { secret ->
+                catalogedSecrets.forEach { secret ->
                     val obj = JsonObject()
                     obj.addProperty("name", secret.name)
                     obj.addProperty("type", secret.type.name)
@@ -874,12 +937,12 @@ class PersonalDataViewModel @Inject constructor(
                     secretsArray.add(obj)
                 }
                 payload.add("public_secrets", secretsArray)
-                Log.d(TAG, "Publishing profile with ${fieldsArray.size()} fields and ${secretsArray.size()} public secrets")
+                Log.d(TAG, "Publishing profile with ${fieldsArray.size()} fields and ${secretsArray.size()} cataloged secrets")
 
                 val response = ownerSpaceClient.sendAndAwaitResponse(
                     messageType = "profile.publish",
                     payload = payload,
-                    timeoutMs = 15000L
+                    timeoutMs = 30000L,
                 )
 
                 when (response) {
@@ -887,6 +950,12 @@ class PersonalDataViewModel @Inject constructor(
                         if (response.success) {
                             Log.i(TAG, "Profile published successfully")
                             _hasUnpublishedChanges.value = false
+                            // Mark public-key secrets as SYNCED so the
+                            // "Unpublished Public Keys" sync flag in
+                            // MinorSecretsStore.hasPendingSync clears
+                            // (otherwise the secrets-tab still thinks
+                            // there are pending changes).
+                            minorSecretsStore.markSyncComplete()
                             loadPublicMetadata()
                             _effects.emit(PersonalDataEffect.ShowSuccess("Public profile published"))
                         } else {
@@ -913,6 +982,8 @@ class PersonalDataViewModel @Inject constructor(
             } catch (e: Exception) {
                 Log.e(TAG, "Error publishing profile", e)
                 _effects.emit(PersonalDataEffect.ShowError(e.message ?: "Failed to publish"))
+            } finally {
+                isPublishing.set(false)
             }
         }
     }
@@ -1420,6 +1491,43 @@ class PersonalDataViewModel @Inject constructor(
     }
 
     /**
+     * Toggle whether a personal-data item is hidden from the public
+     * catalog (Discoverability=Private). Default state is cataloged
+     * — peers see metadata, can request the value. Flipping the flag
+     * removes the entry from the data catalog so peers can't even
+     * see it exists.
+     */
+    private fun toggleHideFromCatalog(itemId: String) {
+        viewModelScope.launch {
+            try {
+                val index = dataItems.indexOfFirst { it.id == itemId }
+                if (index < 0) return@launch
+                val item = dataItems[index]
+                if (item.isSystemField) {
+                    _effects.emit(PersonalDataEffect.ShowError("System fields can't be hidden from the catalog"))
+                    return@launch
+                }
+                val newValue = !item.hideFromCatalog
+                dataItems[index] = item.copy(hideFromCatalog = newValue)
+
+                if (newValue) hiddenFromCatalogFields.add(itemId)
+                else hiddenFromCatalogFields.remove(itemId)
+                personalDataStore.updateHiddenFromCatalogFields(hiddenFromCatalogFields)
+
+                _hasUnpublishedChanges.value = true
+                _state.value = PersonalDataState.Loaded(items = dataItems.toList())
+
+                val statusText = if (newValue) "hidden from your catalog" else "back in your catalog"
+                _effects.emit(PersonalDataEffect.ShowSuccess("${item.name} $statusText"))
+                loadPublicMetadata()
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to toggle hide-from-catalog", e)
+                _effects.emit(PersonalDataEffect.ShowError("Failed to update catalog visibility"))
+            }
+        }
+    }
+
+    /**
      * Move an item up within its category (decrease sort order).
      */
     private fun moveItemUp(itemId: String) {
@@ -1594,6 +1702,7 @@ class PersonalDataViewModel @Inject constructor(
      * Fetches the actual published profile from the vault/NATS.
      */
     fun showPublicProfilePreview() {
+        Log.i(TAG, "showPublicProfilePreview() called — current published items=${_publishedProfile.value?.items?.size ?: -1}")
         // Set loading state BEFORE opening dialog to avoid flash of "no profile" state
         _isLoadingPublishedProfile.value = true
         _showPublicProfilePreview.value = true
@@ -1605,7 +1714,11 @@ class PersonalDataViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val handlers = ownerSpaceClient.listHandlers()
-                _installedHandlers.value = handlers
+                // Self-view "Handlers" badge in PublicProfileFullScreen
+                // shows the discovery surface — same set peers see.
+                // That set is just the shareable handlers; the full
+                // catalog (system + non-shareable defaults) is internal.
+                _installedHandlers.value = handlers.filter { it.shareable }
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to load handlers", e)
             }
@@ -1653,7 +1766,14 @@ class PersonalDataViewModel @Inject constructor(
                     }
                     // If not successful and not the last attempt, loop will continue
                     if (attempt >= maxRetries - 1) {
-                        // All retries exhausted
+                        // Retries exhausted — the enrollment-wizard's
+                        // fire-and-forget publishDefaultProfile() may
+                        // have silently dropped, leaving the vault in
+                        // an unpublished state. Try a self-heal: push
+                        // the default system fields and refetch once.
+                        if (selfHealDefaultPublish()) {
+                            return@launch
+                        }
                         showLocalPreview()
                     }
                 }
@@ -1663,6 +1783,57 @@ class PersonalDataViewModel @Inject constructor(
             } finally {
                 _isLoadingPublishedProfile.value = false
             }
+        }
+    }
+
+    /**
+     * Recover from a missing published profile by republishing system
+     * defaults and re-fetching. Returns true if the heal succeeded
+     * and `_publishedProfile` is now populated.
+     *
+     * Why: the enrollment wizard publishes via fire-and-forget
+     * `sendToVault` and does not wait for an ack. If that publish was
+     * dropped (network blip, vault not yet ready, race with
+     * personal-data writes), the user sees "No Published Profile"
+     * forever even though enrollment looked successful.
+     */
+    private suspend fun selfHealDefaultPublish(): Boolean {
+        return try {
+            Log.w(TAG, "Self-heal: profile not published, republishing system defaults")
+            val defaultFields = listOf(
+                "_system_first_name",
+                "_system_last_name",
+                "_system_email",
+            )
+            val payload = JsonObject().apply {
+                val fieldsArray = JsonArray()
+                defaultFields.forEach { fieldsArray.add(it) }
+                add("fields", fieldsArray)
+            }
+            val publishResp = ownerSpaceClient.sendAndAwaitResponse(
+                messageType = "profile.publish",
+                payload = payload,
+                timeoutMs = 15000L,
+            )
+            val ok = (publishResp as? VaultResponse.HandlerResult)?.success == true
+            if (!ok) {
+                Log.w(TAG, "Self-heal publish did not return success: $publishResp")
+                return false
+            }
+            // Brief settle before refetching — the published profile
+            // doc isn't always readable on the same tick.
+            kotlinx.coroutines.delay(400L)
+            val refetch = ownerSpaceClient.sendAndAwaitResponse("profile.get-published", JsonObject(), 30000L)
+            val parsed = handlePublishedProfileResponse(refetch, attempt = 0, maxRetries = 1)
+            if (parsed) {
+                Log.i(TAG, "Self-heal succeeded — profile now published")
+            } else {
+                Log.w(TAG, "Self-heal refetch still not published")
+            }
+            parsed
+        } catch (e: Exception) {
+            Log.e(TAG, "Self-heal publish failed", e)
+            false
         }
     }
 
@@ -1755,6 +1926,19 @@ class PersonalDataViewModel @Inject constructor(
                 Log.d(TAG, "Fetching published profile status...")
                 val response = ownerSpaceClient.sendAndAwaitResponse("profile.get-published", JsonObject())
 
+                // Don't let a stale/empty status response clobber a
+                // populated profile that another fetch (e.g.
+                // showPublicProfilePreview's fetchPublishedProfile)
+                // already parsed. Status fetch is best-effort cache
+                // refresh — only positive results should mutate state.
+                fun maybeShowEmpty() {
+                    if (_publishedProfile.value?.items?.isNotEmpty() == true) {
+                        Log.d(TAG, "Status fetch saw empty result but populated profile already loaded — keeping it")
+                        return
+                    }
+                    showLocalPreview()
+                }
+
                 when (response) {
                     is VaultResponse.HandlerResult -> {
                         if (response.success && response.result != null) {
@@ -1771,19 +1955,19 @@ class PersonalDataViewModel @Inject constructor(
                                 parsePublishedProfile(response.result)
                                 Log.i(TAG, "Published profile status loaded: isPublished=true")
                             } else {
-                                showLocalPreview()
+                                maybeShowEmpty()
                                 Log.d(TAG, "Published profile status: not yet published")
                             }
                         } else {
-                            showLocalPreview()
+                            maybeShowEmpty()
                         }
                     }
                     is VaultResponse.Error -> {
                         Log.e(TAG, "Error fetching published profile status: ${response.message}")
-                        showLocalPreview()
+                        maybeShowEmpty()
                     }
                     else -> {
-                        showLocalPreview()
+                        maybeShowEmpty()
                     }
                 }
             } catch (e: Exception) {
@@ -1902,8 +2086,11 @@ class PersonalDataViewModel @Inject constructor(
             }
         }
 
-        // Parse public wallet addresses — displayed like public keys (clickable, QR, copy)
-        result.getAsJsonArray("wallets")?.forEach { element ->
+        // Parse public wallet addresses — displayed like public keys (clickable, QR, copy).
+        // The enclave returns `wallets: null` when the user has no
+        // wallets yet; getAsJsonArray would throw, so guard against
+        // JsonNull explicitly.
+        result.get("wallets")?.takeIf { it.isJsonArray }?.asJsonArray?.forEach { element ->
             try {
                 val walletObj = element?.asJsonObject ?: return@forEach
                 val label = walletObj.get("label")?.asString ?: "Wallet"
@@ -1983,6 +2170,10 @@ class PersonalDataViewModel @Inject constructor(
             updatedAt = updatedAt,
             photo = photo
         )
+
+        // Refresh the secrets-catalog so any newly-published wallets
+        // show up — loadPublicMetadata reads _publishedProfile.value.
+        loadPublicMetadata()
     }
 
     // MARK: - Profile Photo Methods
@@ -2040,20 +2231,37 @@ class PersonalDataViewModel @Inject constructor(
     }
 
     /**
-     * Load metadata visible to agents, services, and connections.
-     * Shows names and types only - never actual values.
+     * Load metadata visible to connections. Drives the "Secrets"
+     * badge on the public-profile preview. Shows the full catalog of
+     * every secret the user has stored EXCEPT those marked private.
+     * Default is "cataloged" — peers see the metadata, can request
+     * the value through the capability flow.
      */
     private fun loadPublicMetadata() {
         viewModelScope.launch {
-            // Public secrets (keys in public profile)
-            val secrets = minorSecretsStore.getPublicProfileSecrets()
-            _publicSecrets.value = secrets.map { secret ->
+            val secrets = minorSecretsStore.getAllSecrets()
+                .filter { !it.hideFromCatalog }
+            val secretItems = secrets.map { secret ->
                 PublicMetadataItem(
                     name = secret.name,
                     type = secret.type.name,
-                    category = secret.category.displayName
+                    category = secret.category.displayName,
                 )
             }
+            // Public wallets live on the published profile (vault
+            // emits `wallets[]`), not in MinorSecretsStore, so merge
+            // them in so the Secrets badge matches what peers see.
+            val walletItems = _publishedProfile.value?.items
+                ?.filter { it.category == DataCategory.WALLET }
+                ?.map { wallet ->
+                    PublicMetadataItem(
+                        name = wallet.name,
+                        type = "PUBLIC_KEY",
+                        category = DataCategory.WALLET.displayName,
+                    )
+                }
+                .orEmpty()
+            _publicSecrets.value = secretItems + walletItems
             // Personal data metadata is derived directly from _state via publicPersonalData flow
         }
     }

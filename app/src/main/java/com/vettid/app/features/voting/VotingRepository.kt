@@ -44,6 +44,19 @@ class VotingRepository @Inject constructor(
         private const val CACHE_DURATION_MS = 5 * 60 * 1000L // 5 minutes
     }
 
+    /**
+     * Tick that bumps every time a vote-related mutation lands in
+     * the store. ProposalsViewModel observes this so the list flips
+     * the just-voted item from "Vote Now" to "You voted" without
+     * needing to leave + return to the screen.
+     */
+    private val _votesDirtyTick = kotlinx.coroutines.flow.MutableStateFlow(0L)
+    val votesDirtyTick: kotlinx.coroutines.flow.StateFlow<Long> = _votesDirtyTick
+
+    private fun bumpVotesDirty() {
+        _votesDirtyTick.value = _votesDirtyTick.value + 1
+    }
+
     // MARK: - Vote Storage
 
     /**
@@ -57,6 +70,7 @@ class VotingRepository @Inject constructor(
         encryptedPrefs.edit()
             .putString(KEY_VOTES, gson.toJson(votes))
             .apply()
+        bumpVotesDirty()
     }
 
     /**
@@ -189,6 +203,19 @@ class VotingRepository @Inject constructor(
     fun isProposalsCacheValid(): Boolean {
         val cacheTime = encryptedPrefs.getLong(KEY_PROPOSALS_CACHE_TIME, 0)
         return System.currentTimeMillis() - cacheTime < CACHE_DURATION_MS
+    }
+
+    /**
+     * Count of currently-active proposals the user hasn't voted on
+     * yet. Drives the "Votes" badge on the VettID system connection
+     * card so the user knows there's something to act on without
+     * navigating into the proposals screen.
+     */
+    fun getOpenUnvotedProposalsCount(): Int {
+        val proposals = getCachedProposals() ?: return 0
+        return proposals.count { p ->
+            p.status == ProposalStatus.ACTIVE && !hasVotedOnProposal(p.id)
+        }
     }
 
     // MARK: - Vote Verification Helpers

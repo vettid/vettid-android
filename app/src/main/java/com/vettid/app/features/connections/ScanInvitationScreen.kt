@@ -157,13 +157,20 @@ fun ScanInvitationScreen(
                 }
 
                 is ScanInvitationState.Success -> {
-                    // Acceptance always emits NavigateToConnection, which
-                    // pops us back to the Connections list immediately.
-                    // The old PendingApprovalContent screen with its
-                    // "Return to connections" button was redundant — the
-                    // user already acted, and they're already on their
-                    // way back. Render a spinner for the couple of
-                    // frames before navigation lands.
+                    // Drive navigation off STATE, not the effects flow.
+                    // _effects is a SharedFlow(replay=0); if the
+                    // composition's collect coroutine is torn down (screen
+                    // lock, background, recomposition race) the emit is
+                    // dropped and the spinner gets stuck forever. State,
+                    // by contrast, is replayed when the screen resumes,
+                    // so this LaunchedEffect always lands.
+                    LaunchedEffect(currentState.connection.connectionId) {
+                        android.util.Log.i(
+                            "ScanInvitationVM",
+                            "Success state — invoking onConnectionEstablished for ${currentState.connection.connectionId}"
+                        )
+                        onConnectionEstablished(currentState.connection.connectionId)
+                    }
                     ProcessingContent()
                 }
 
@@ -372,6 +379,8 @@ private fun EnhancedPreviewContent(
             modifier = Modifier.fillMaxWidth(),
             peerHandlers = state.peerHandlers,
             peerPublicSecrets = state.peerPublicSecrets,
+            peerDataCatalog = state.peerDataCatalog,
+            peerSecretCatalog = state.peerSecretCatalog,
         )
 
         Spacer(modifier = Modifier.height(24.dp))

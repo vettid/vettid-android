@@ -118,6 +118,8 @@ class ScanInvitationViewModel @Inject constructor(
                         invitation.inviterWallets,
                         invitation.inviterHandlers ?: emptyList(),
                         invitation.inviterPublicSecrets ?: emptyList(),
+                        invitation.inviterDataCatalog,
+                        invitation.inviterSecretCatalog,
                     )
                 } else {
                     // No profile in broker — show preview with label immediately,
@@ -157,6 +159,8 @@ class ScanInvitationViewModel @Inject constructor(
         wallets: List<Map<String, String>> = emptyList(),
         handlers: List<com.vettid.app.core.nats.PeerHandlerInfo> = emptyList(),
         publicSecrets: List<com.vettid.app.core.nats.PeerPublicSecretMetadata> = emptyList(),
+        dataCatalog: List<com.vettid.app.core.nats.PeerDataCatalogEntry>? = null,
+        secretCatalog: List<com.vettid.app.core.nats.PeerPublicSecretMetadata>? = null,
     ) {
         val displayName = listOfNotNull(
             profile["_system_first_name"],
@@ -196,6 +200,8 @@ class ScanInvitationViewModel @Inject constructor(
             wallets = wallets,
             peerHandlers = handlers,
             peerPublicSecrets = publicSecrets,
+            peerDataCatalog = dataCatalog,
+            peerSecretCatalog = secretCatalog,
         )
     }
 
@@ -390,18 +396,24 @@ class ScanInvitationViewModel @Inject constructor(
             android.util.Log.d("ScanInvitationVM", "NATS connected and E2E enabled, checking for duplicates...")
             _state.value = ScanInvitationState.Processing
 
-            // Check for duplicate connections before storing
+            // Duplicate-detection. The parallel-review flow makes the
+            // vault create an inbound record at status `peer_reviewing`
+            // during resolve-invite — that's THIS connection mid-review,
+            // not a stale duplicate. Skip records that match the
+            // current connection_id, and only flag a peer-guid match
+            // when it points at an already-active or completed
+            // connection. Anything mid-flow is the current invitation
+            // being processed.
+            val inFlightStatuses = setOf(
+                "peer_reviewing", "our_accept_pending", "peer_accept_pending", "invited", "pending"
+            )
             connectionsClient.list().fold(
                 onSuccess = { listResult ->
-                    val existingById = listResult.items.find { it.connectionId == invitation.connectionId }
-                    if (existingById != null) {
-                        _state.value = ScanInvitationState.Error(
-                            message = "This invitation has already been accepted"
-                        )
-                        return@launch
-                    }
                     val existingByPeer = listResult.items.find {
-                        it.peerGuid == invitation.peerGuid && it.status != "revoked" && it.status != "rejected"
+                        it.connectionId != invitation.connectionId &&
+                            it.peerGuid == invitation.peerGuid &&
+                            it.status !in setOf("revoked", "rejected", "expired", "declined_by_us", "declined_by_peer") &&
+                            it.status !in inFlightStatuses
                     }
                     if (existingByPeer != null) {
                         _state.value = ScanInvitationState.Error(
@@ -412,36 +424,36 @@ class ScanInvitationViewModel @Inject constructor(
                 },
                 onFailure = { error ->
                     android.util.Log.w("ScanInvitationVM", "Could not check for duplicates: ${error.message}")
-                    // Continue anyway - vault will reject duplicates server-side
+                    // Continue anyway — vault enforces idempotency.
                 }
             )
 
-            // Store the peer's credentials via vault handler
-            connectionsClient.storeCredentials(
-                connectionId = invitation.connectionId,
-                peerGuid = invitation.peerGuid,
-                label = invitation.label,
-                natsCredentials = invitation.natsCredentials,
-                peerOwnerSpaceId = invitation.ownerSpaceId,
-                peerMessageSpaceId = invitation.messageSpaceId,
-                peerProfile = fetchedPeerProfile
-            ).fold(
+            // Parallel-review handshake: the inbound record was already
+            // created on the vault side during connection.resolve-invite
+            // (along with the response invite). Accepting here is just
+            // a connection.respond("accept") which sets LocalDecision
+            // and runs tryActivate. The vault notifies the peer via the
+            // signal=peer-accepted ping.
+            connectionsClient.respond(invitation.connectionId, "accept").fold(
                 onSuccess = { connectionRecord ->
-                    // Acceptance notification is handled by the vault in HandleStoreCredentials
-                    android.util.Log.i("ScanInvitationVM", "Connection stored, vault will notify peer")
+                    android.util.Log.i("ScanInvitationVM", "Accept recorded for ${invitation.connectionId}, status=${connectionRecord.status}")
 
+                    val status = when (connectionRecord.status) {
+                        "active" -> ConnectionStatus.ACTIVE
+                        "declined_by_us", "declined_by_peer", "rejected" -> ConnectionStatus.REVOKED
+                        else -> ConnectionStatus.PENDING
+                    }
                     val connection = Connection(
                         connectionId = connectionRecord.connectionId,
                         peerGuid = connectionRecord.peerGuid,
                         peerDisplayName = connectionRecord.label,
                         peerAvatarUrl = null,
-                        status = ConnectionStatus.PENDING,
+                        status = status,
                         createdAt = System.currentTimeMillis(),
                         lastMessageAt = null,
                         unreadCount = 0
                     )
                     _state.value = ScanInvitationState.Success(connection = connection)
-                    // Auto-navigate back after brief display
                     _effects.emit(ScanInvitationEffect.NavigateToConnection(connectionRecord.connectionId))
                 },
                 onFailure = { error ->
@@ -616,6 +628,8 @@ sealed class ScanInvitationState {
         val wallets: List<Map<String, String>> = emptyList(),
         val peerHandlers: List<com.vettid.app.core.nats.PeerHandlerInfo> = emptyList(),
         val peerPublicSecrets: List<com.vettid.app.core.nats.PeerPublicSecretMetadata> = emptyList(),
+        val peerDataCatalog: List<com.vettid.app.core.nats.PeerDataCatalogEntry>? = null,
+        val peerSecretCatalog: List<com.vettid.app.core.nats.PeerPublicSecretMetadata>? = null,
     ) : ScanInvitationState()
 
     data class Success(

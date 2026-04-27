@@ -1,6 +1,7 @@
 package com.vettid.app.features.feed
 
 import android.content.pm.PackageManager
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -719,7 +720,13 @@ private fun ActiveConnectionCard(
             } else {
                 MaterialTheme.colorScheme.surface
             }
-        )
+        ),
+        // Gold border on unread cards so they pop in both themes —
+        // matches the gold notification badges. Null border on read
+        // cards keeps the feed visually quiet once handled.
+        border = if (item.isUnread) {
+            BorderStroke(2.dp, com.vettid.app.ui.theme.VettidGold)
+        } else null,
     ) {
         val isSystem = item.connectionType == "system"
 
@@ -828,13 +835,12 @@ private fun ActiveConnectionCard(
                                     Icon(Icons.Default.CallReceived, contentDescription = null, modifier = Modifier.size(20.dp))
                                 },
                             )
-                            DropdownMenuItem(
-                                text = { Text("History") },
-                                onClick = { showMoreMenu = false; onHistoryClick() },
-                                leadingIcon = {
-                                    Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(20.dp))
-                                },
-                            )
+                            // History moved to the connection detail
+                            // screen's 3-dot menu — see
+                            // ConnectionDetailScreen.kt. Keep
+                            // onHistoryClick available for the
+                            // pending-row taps below (they navigate
+                            // straight to history without a menu).
                         }
                     }
                 }
@@ -1139,20 +1145,8 @@ private fun ConnectionActionButton(
         // Badge rides on the icon so the user's eye is drawn to the
         // action they need to take — Text button lights up for unread
         // messages, Voice for a missed call, etc.
-        BadgedBox(
-            badge = {
-                if (badgeCount > 0) {
-                    Badge(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    ) {
-                        Text(
-                            text = badgeCount.toString(),
-                            style = MaterialTheme.typography.labelSmall
-                        )
-                    }
-                }
-            }
+        com.vettid.app.ui.components.VettidBadgedIcon(
+            count = if (badgeCount > 0) badgeCount else 0,
         ) {
             Icon(
                 imageVector = icon,

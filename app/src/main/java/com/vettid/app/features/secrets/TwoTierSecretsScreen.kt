@@ -11,6 +11,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.PlaylistAddCheck
 import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.automirrored.filled.ReceiptLong
@@ -210,6 +211,8 @@ fun TwoTierSecretsScreen(
                     SecretsTab.MINOR -> MinorSecretsContent(
                         secrets = state.filteredMinorSecrets,
                         onSecretClick = { viewModel.onEvent(TwoTierSecretsEvent.MinorSecretClicked(it.id)) },
+                        onToggleHideFromCatalog = { viewModel.onEvent(TwoTierSecretsEvent.ToggleHideFromCatalog(it.id)) },
+                        onTogglePublic = { viewModel.onEvent(TwoTierSecretsEvent.TogglePublicProfile(it.id)) },
                         onAddClick = { viewModel.onEvent(TwoTierSecretsEvent.NavigateToAdd(false)) }
                     )
                     SecretsTab.CRITICAL -> CriticalSecretsContent(
@@ -302,6 +305,8 @@ fun TwoTierSecretsScreen(
 private fun MinorSecretsContent(
     secrets: List<MinorSecret>,
     onSecretClick: (MinorSecret) -> Unit,
+    onToggleHideFromCatalog: (MinorSecret) -> Unit,
+    onTogglePublic: (MinorSecret) -> Unit,
     onAddClick: () -> Unit
 ) {
     if (secrets.isEmpty()) {
@@ -318,7 +323,9 @@ private fun MinorSecretsContent(
             items(secrets, key = { it.id }) { secret ->
                 MinorSecretListItem(
                     secret = secret,
-                    onClick = { onSecretClick(secret) }
+                    onClick = { onSecretClick(secret) },
+                    onToggleHideFromCatalog = { onToggleHideFromCatalog(secret) },
+                    onTogglePublic = { onTogglePublic(secret) },
                 )
             }
         }
@@ -389,55 +396,94 @@ private fun CriticalSecretsContent(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MinorSecretListItem(
     secret: MinorSecret,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onToggleHideFromCatalog: () -> Unit,
+    onTogglePublic: () -> Unit,
 ) {
-    ListItem(
+    // Custom Row instead of Material3 ListItem because ListItem's
+    // trailingContent slot constrains width to ~80dp and would clip
+    // the 3-pill VisibilitySegmented control. Same layout shape as
+    // the personal-data row for visual consistency.
+    Surface(
         modifier = Modifier
+            .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 8.dp),
-        headlineContent = {
-            Text(
-                text = secret.name,
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        },
-        supportingContent = {
-            Text(
-                text = secret.category.displayName + (secret.notes?.let { " • $it" } ?: ""),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        },
-        leadingContent = {
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        color = MaterialTheme.colorScheme.surface,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Surface(
-                modifier = Modifier.size(48.dp),
+                modifier = Modifier.size(40.dp),
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.secondaryContainer
+                color = MaterialTheme.colorScheme.secondaryContainer,
             ) {
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         imageVector = getMinorCategoryIcon(secret.category),
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSecondaryContainer
+                        tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.size(22.dp),
                     )
                 }
             }
-        },
-        trailingContent = {
-            Icon(
-                imageVector = Icons.Default.Lock,
-                contentDescription = "Locked",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
+
+            Spacer(modifier = Modifier.width(10.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = secret.name,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    text = secret.category.displayName + (secret.notes?.let { " • $it" } ?: ""),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // 3-state visibility selector. PROFILE is only valid for
+            // PUBLIC_KEY-typed secrets — never put a password value
+            // on the calling card.
+            val current = when {
+                secret.hideFromCatalog -> com.vettid.app.ui.components.FieldVisibility.PRIVATE
+                secret.isInPublicProfile -> com.vettid.app.ui.components.FieldVisibility.PROFILE
+                else -> com.vettid.app.ui.components.FieldVisibility.CATALOG
+            }
+            com.vettid.app.ui.components.VisibilitySegmented(
+                visibility = current,
+                allowProfile = secret.type == com.vettid.app.core.storage.SecretType.PUBLIC_KEY,
+                onVisibilityChange = { next ->
+                    when (next) {
+                        com.vettid.app.ui.components.FieldVisibility.PROFILE -> {
+                            if (secret.hideFromCatalog) onToggleHideFromCatalog()
+                            if (!secret.isInPublicProfile) onTogglePublic()
+                        }
+                        com.vettid.app.ui.components.FieldVisibility.CATALOG -> {
+                            if (secret.hideFromCatalog) onToggleHideFromCatalog()
+                            if (secret.isInPublicProfile) onTogglePublic()
+                        }
+                        com.vettid.app.ui.components.FieldVisibility.PRIVATE -> {
+                            if (secret.isInPublicProfile) onTogglePublic()
+                            if (!secret.hideFromCatalog) onToggleHideFromCatalog()
+                        }
+                    }
+                },
             )
         }
-    )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

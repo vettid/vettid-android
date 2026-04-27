@@ -124,6 +124,7 @@ class MinorSecretsStore @Inject constructor(
         secrets.add(secret)
         saveSecrets(secrets)
         markPendingSync()
+        bumpPublishDirty()
 
         return secret
     }
@@ -143,6 +144,7 @@ class MinorSecretsStore @Inject constructor(
             )
             saveSecrets(secrets)
             markPendingSync()
+            bumpPublishDirty()
         }
     }
 
@@ -154,6 +156,7 @@ class MinorSecretsStore @Inject constructor(
         secrets.removeAll { it.id == id }
         saveSecrets(secrets)
         markPendingSync()
+        bumpPublishDirty()
     }
 
     /**
@@ -208,6 +211,10 @@ class MinorSecretsStore @Inject constructor(
         // Update sync status for all secrets
         val secrets = getAllSecrets().map { it.copy(syncStatus = SyncStatus.SYNCED) }
         saveSecrets(secrets)
+        // Notify observers that publish state changed (now clean) so
+        // SecretsViewModel / PersonalDataViewModel re-read state and
+        // clear their unpublished-changes banners.
+        bumpPublishDirty()
     }
 
     /**
@@ -263,6 +270,7 @@ class MinorSecretsStore @Inject constructor(
                     "notes" to secret.notes,
                     "isShareable" to secret.isShareable,
                     "isInPublicProfile" to secret.isInPublicProfile,
+                    "hideFromCatalog" to secret.hideFromCatalog,
                     "isSystemField" to secret.isSystemField,
                     "sortOrder" to secret.sortOrder,
                     "createdAt" to secret.createdAt,
@@ -294,6 +302,7 @@ class MinorSecretsStore @Inject constructor(
                     notes = data["notes"] as? String,
                     isShareable = data["isShareable"] as? Boolean ?: true,
                     isInPublicProfile = data["isInPublicProfile"] as? Boolean ?: false,
+                    hideFromCatalog = data["hideFromCatalog"] as? Boolean ?: false,
                     isSystemField = data["isSystemField"] as? Boolean ?: false,
                     sortOrder = (data["sortOrder"] as? Number)?.toInt() ?: 0,
                     syncStatus = SyncStatus.SYNCED,
@@ -330,6 +339,20 @@ class MinorSecretsStore @Inject constructor(
     }
 
     /**
+     * Tick that increments every time a publish-affecting field
+     * changes (visibility, catalog, public-key inclusion). Observed
+     * by PersonalDataViewModel to flip its unpublished-changes
+     * banner so the user knows they need to republish their public
+     * profile after toggling secret visibility from the Secrets tab.
+     */
+    private val _publishDirtyTick = kotlinx.coroutines.flow.MutableStateFlow(0L)
+    val publishDirtyTick: kotlinx.coroutines.flow.StateFlow<Long> = _publishDirtyTick
+
+    private fun bumpPublishDirty() {
+        _publishDirtyTick.value = _publishDirtyTick.value + 1
+    }
+
+    /**
      * Toggle whether a secret is in the public profile.
      * Only PUBLIC_KEY types can be toggled.
      */
@@ -348,6 +371,29 @@ class MinorSecretsStore @Inject constructor(
             )
             saveSecrets(secrets)
             markPendingSync()
+            bumpPublishDirty()
+            return true
+        }
+        return false
+    }
+
+    /**
+     * Toggle whether a secret is hidden from the public-profile catalog.
+     * When hidden, peers cannot see the metadata at all (Private).
+     */
+    fun toggleHideFromCatalog(secretId: String): Boolean {
+        val secrets = getAllSecrets().toMutableList()
+        val index = secrets.indexOfFirst { it.id == secretId }
+        if (index >= 0) {
+            val secret = secrets[index]
+            secrets[index] = secret.copy(
+                hideFromCatalog = !secret.hideFromCatalog,
+                updatedAt = System.currentTimeMillis(),
+                syncStatus = SyncStatus.PENDING
+            )
+            saveSecrets(secrets)
+            markPendingSync()
+            bumpPublishDirty()
             return true
         }
         return false
@@ -562,6 +608,12 @@ data class MinorSecret(
     val notes: String? = null,
     val isShareable: Boolean = true,
     val isInPublicProfile: Boolean = false,          // For PUBLIC_KEY types only
+    /**
+     * Hide this secret from the public-profile catalog. Default false
+     * (cataloged) — peers see metadata by default and can request the
+     * value. Flip true to make this secret invisible to connections.
+     */
+    val hideFromCatalog: Boolean = false,
     val isSystemField: Boolean = false,              // For enrollment key (not deletable)
     val sortOrder: Int = 0,                          // Order within category
     val groupId: String? = null,                     // Links template fields together

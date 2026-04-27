@@ -62,7 +62,7 @@ object GuideContentProvider {
             ),
             GuideSection.Heading("Connections"),
             GuideSection.Paragraph(
-                "Your home screen lists your connections, sorted by recent activity. The pinned card at the top is VettID itself — your system connection. The + button creates an invitation for a new connection."
+                "Your home screen lists your connections. The VettID card is your system connection — everything that comes from the platform (rather than from another person) lives there. The + button creates an invitation for a new connection."
             ),
             GuideSection.Heading("Your Vault"),
             GuideSection.Paragraph(
@@ -70,7 +70,7 @@ object GuideContentProvider {
             ),
             GuideSection.Heading("Settings"),
             GuideSection.Paragraph(
-                "Tap the status icon in the top-right to open settings — PIN and password, session timeout, appearance, location sharing, backup status, and audit logs. Tap the icon again to close settings and go back to what you were looking at."
+                "Tap the cloud icon in the top-right — it shows your live connection status — to open settings. PIN and password, session timeout, appearance, location sharing, backup status, capabilities, and audit logs all live there. Tap the icon again to close settings and go back to what you were looking at."
             ),
             GuideSection.Paragraph(
                 "When you're ready, open the VettID card's Guides button to read the rest of these guides in order."
@@ -83,7 +83,7 @@ object GuideContentProvider {
         icon = Icons.Default.Campaign,
         sections = listOf(
             GuideSection.Paragraph(
-                "The VettID card is pinned at the top of your Connections screen. It's your system connection — everything that comes from the platform (rather than from another person) lives here."
+                "The VettID card sits at the top of your Connections screen. It's your system connection — everything that comes from the platform (rather than from another person) lives here."
             ),
             GuideSection.Heading("Four actions"),
             GuideSection.BulletList(
@@ -121,11 +121,17 @@ object GuideContentProvider {
             ),
             GuideSection.Heading("Data tab"),
             GuideSection.Paragraph(
-                "Personal information — name, contact details, addresses, IDs, medical info, and more. Use templates for common groups (family contact, government ID, home address) or add custom fields. See the Public Profile guide for sharing."
+                "Personal information — name, contact details, addresses, IDs, medical info, and more. Use templates for common groups (family contact, government ID, home address) or add custom fields."
+            ),
+            GuideSection.Paragraph(
+                "Each item has a discoverability setting that controls how it appears to connections:\n" +
+                "• Public — shown on your public profile with the value visible. Use for the calling-card stuff: a friendly name, a public email.\n" +
+                "• Cataloged (default) — connections can see that you have an item by name (e.g. \"Mobile Phone\"), but the value is private until they ask and you approve.\n" +
+                "• Private — connections don't see it at all; the vault holds it for you alone. Use for genuinely sensitive items you don't want a connection to know exist."
             ),
             GuideSection.Heading("Secrets tab"),
             GuideSection.Paragraph(
-                "Passwords, PINs, bank accounts, API keys, public keys, and anything else you need to keep safe. Templates cover common secret types. Public keys you flag for sharing show up on your public profile as QR codes connections can scan."
+                "Passwords, PINs, bank accounts, API keys, public keys, and anything else you need to keep safe. Templates cover common secret types. The same Public / Cataloged / Private discoverability applies — by default a connection sees that you have a Visa card on file (and can request to use it for a transaction), but never sees the number until you grant access."
             ),
             GuideSection.Heading("Critical Secrets"),
             GuideSection.Paragraph(
@@ -134,6 +140,10 @@ object GuideContentProvider {
             GuideSection.Heading("Wallets tab"),
             GuideSection.Paragraph(
                 "Bitcoin wallets with BIP84 HD key derivation. Private keys never leave the enclave. Create multiple wallets, send BTC to any address or connection, and optionally mark a wallet address as public so it appears on your profile."
+            ),
+            GuideSection.Heading("Reordering items"),
+            GuideSection.Paragraph(
+                "Each row on the Data and Secrets tabs has a drag handle (≡) on the left. Long-press the handle, then drag up or down — the item walks past its neighbors as you go. Lift your finger to drop. The new order is saved automatically and reflected on your published profile after you publish."
             ),
             GuideSection.NavigationLink("Open Personal Data", NavigationTarget.DrawerNav(DrawerItem.PERSONAL_DATA)),
             GuideSection.NavigationLink("Open Secrets", NavigationTarget.DrawerNav(DrawerItem.SECRETS)),
@@ -146,22 +156,34 @@ object GuideContentProvider {
         icon = Icons.Default.Person,
         sections = listOf(
             GuideSection.Paragraph(
-                "Your public profile is the subset of vault data that connections see when they connect with you. Everything else stays private."
+                "Your public profile is what connections see when they connect with you. Think of it as four layers stacked together:"
             ),
-            GuideSection.Heading("Picking what to share"),
+            GuideSection.BulletList(
+                listOf(
+                    "Calling card — the data fields you've marked Public. Values are visible: name, email, anything you want to volunteer.",
+                    "Data catalog — every other personal-data item you have, by name only. A connection can see you have a Mobile Phone or a Home Address without seeing the values, then ask for them when they need to.",
+                    "Secret catalog — same idea for credential secrets. A connection can see you have a Visa on file and ask to charge it.",
+                    "Handler catalog — the shareable capabilities your vault supports (messaging, calls, BTC, etc.) so connections know what they can do with you."
+                )
+            ),
+            GuideSection.Heading("Picking what's where"),
             GuideSection.Paragraph(
-                "Each item in the Data and Secrets tabs has a visibility toggle. Flip it on to include that field in your public profile. Public keys and public wallet addresses work the same way — a toggle per item."
+                "Each data and secret item has a discoverability setting:\n" +
+                "• Public — value goes on the calling card.\n" +
+                "• Cataloged (default) — only the name appears in the catalog. The value stays private until a connection requests it and you approve.\n" +
+                "• Private — invisible to connections. The vault holds it for you alone."
+            ),
+            GuideSection.Heading("Ordering"),
+            GuideSection.Paragraph(
+                "The order items appear on your calling card and in the catalogs is the order you see them on the Data and Secrets tabs. To reorder, long-press the drag handle (≡) on the left of any row and drag up or down. Useful for putting your most important fields at the top."
             ),
             GuideSection.Heading("Publishing"),
             GuideSection.Paragraph(
-                "Changes aren't visible to connections until you publish. Whenever you have unpublished changes, a banner appears above the vault tabs — tap Publish to update your public profile. The same banner covers both personal data and public-key changes."
+                "Changes aren't visible to connections until you publish. Whenever you have unpublished changes, a banner appears above the vault tabs — tap Publish to push the update."
             ),
             GuideSection.Heading("Previewing"),
             GuideSection.Paragraph(
-                "Tap your name in the vault profile strip (\"Tap to preview\") to see exactly how connections will see you — hero photo and name, a clickable contact card, categorized fields, and QR codes for any public keys or wallet addresses."
-            ),
-            GuideSection.Paragraph(
-                "Connections always see the most recently published version. Changes you make after publishing stay staged until you publish again."
+                "Tap your name in the vault profile strip (\"Tap to preview\") to see exactly what your connections see — calling card up top, the three catalog badges (Data, Secrets, Handlers) right below it. Tap any badge to inspect the catalog."
             ),
             GuideSection.NavigationLink("Go to Personal Data", NavigationTarget.DrawerNav(DrawerItem.PERSONAL_DATA))
         )
@@ -235,7 +257,7 @@ object GuideContentProvider {
         icon = Icons.Default.Settings,
         sections = listOf(
             GuideSection.Paragraph(
-                "Tap the status icon in the top-right corner to open settings."
+                "Tap the cloud icon in the top-right — it shows your live connection status — to open settings."
             ),
             GuideSection.Heading("Account"),
             GuideSection.BulletList(

@@ -76,14 +76,6 @@ fun GuideDetailScreen(
                         .padding(16.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.End)
                 ) {
-                    OutlinedButton(
-                        onClick = {
-                            onArchive()
-                            onBack()
-                        }
-                    ) {
-                        Text("Archive")
-                    }
                     Button(
                         onClick = {
                             onMarkAsRead()

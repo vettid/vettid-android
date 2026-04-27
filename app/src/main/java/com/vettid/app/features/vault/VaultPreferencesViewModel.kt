@@ -97,8 +97,32 @@ class VaultPreferencesViewModel @Inject constructor(
     private val ownerSpaceClient: OwnerSpaceClient,
     private val connectionManager: NatsConnectionManager,
     private val appPreferencesStore: AppPreferencesStore,
-    private val cryptoManager: CryptoManager
+    private val cryptoManager: CryptoManager,
+    private val cacheManager: com.vettid.app.core.cache.CacheManager,
 ) : ViewModel() {
+
+    private val _isResettingCache = MutableStateFlow(false)
+    val isResettingCache: StateFlow<Boolean> = _isResettingCache.asStateFlow()
+
+    /**
+     * Wipe regenerable local caches (feed, image cache) so the next
+     * vault round-trip rebuilds them. Identity stays intact, no
+     * re-enrollment needed. Surfaces success/failure via effects.
+     */
+    fun resetCache() {
+        viewModelScope.launch {
+            _isResettingCache.value = true
+            try {
+                cacheManager.resetCache()
+                _effects.emit(VaultPreferencesEffect.ShowSuccess("Cache cleared. Refresh to rebuild."))
+            } catch (e: Exception) {
+                Log.e(TAG, "Reset cache failed", e)
+                _effects.emit(VaultPreferencesEffect.ShowError("Cache reset failed: ${e.message ?: "unknown error"}"))
+            } finally {
+                _isResettingCache.value = false
+            }
+        }
+    }
 
     private val _state = MutableStateFlow(VaultPreferencesState())
     val state: StateFlow<VaultPreferencesState> = _state.asStateFlow()
@@ -114,6 +138,14 @@ class VaultPreferencesViewModel @Inject constructor(
         loadBackupSettings()
         // Load location preferences
         loadLocationPreferences()
+        // Observe location-tracking flag so updates from a sibling
+        // VM instance (e.g. LocationSettingsScreen's hiltViewModel)
+        // propagate back to the main settings screen.
+        viewModelScope.launch {
+            appPreferencesStore.locationTrackingFlow.collect { enabled ->
+                _state.update { it.copy(locationTrackingEnabled = enabled) }
+            }
+        }
         // Load presence share default from vault
         loadPresenceSettings()
         // Load credential settings from vault

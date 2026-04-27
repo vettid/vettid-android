@@ -5,6 +5,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Base64
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -20,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.automirrored.filled.PlaylistAddCheck
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
@@ -163,6 +165,7 @@ fun PersonalDataContent(
                         onItemClick = { viewModel.onEvent(PersonalDataEvent.ItemClicked(it)) },
                         onDeleteClick = { viewModel.onEvent(PersonalDataEvent.DeleteItem(it)) },
                         onTogglePublicProfile = { viewModel.onEvent(PersonalDataEvent.TogglePublicProfile(it)) },
+                        onToggleHideFromCatalog = { viewModel.onEvent(PersonalDataEvent.ToggleHideFromCatalog(it)) },
                         onMoveUp = { viewModel.onEvent(PersonalDataEvent.MoveItemUp(it)) },
                         onMoveDown = { viewModel.onEvent(PersonalDataEvent.MoveItemDown(it)) },
                         onPublishClick = { viewModel.publishProfile() },
@@ -268,6 +271,7 @@ private fun PersonalDataList(
     onItemClick: (String) -> Unit,
     onDeleteClick: (String) -> Unit,
     onTogglePublicProfile: (String) -> Unit,
+    onToggleHideFromCatalog: (String) -> Unit,
     onMoveUp: (String) -> Unit,
     onMoveDown: (String) -> Unit,
     onPublishClick: () -> Unit,
@@ -339,6 +343,7 @@ private fun PersonalDataList(
                         onClick = { onItemClick(item.id) },
                         onDelete = { onDeleteClick(item.id) },
                         onTogglePublic = { onTogglePublicProfile(item.id) },
+                        onToggleHideFromCatalog = { onToggleHideFromCatalog(item.id) },
                         onMoveUp = { onMoveUp(item.id) },
                         onMoveDown = { onMoveDown(item.id) }
                     )
@@ -736,6 +741,7 @@ private fun CompactDataRow(
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onTogglePublic: () -> Unit,
+    onToggleHideFromCatalog: () -> Unit,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit
 ) {
@@ -751,74 +757,15 @@ private fun CompactDataRow(
                 .padding(vertical = 4.dp, horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Up/Down reorder buttons
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                IconButton(
-                    onClick = onMoveUp,
-                    enabled = !isFirst,
-                    modifier = Modifier.size(28.dp)
-                ) {
-                    Icon(
-                        Icons.Default.KeyboardArrowUp,
-                        contentDescription = "Move up",
-                        modifier = Modifier.size(20.dp),
-                        tint = if (!isFirst)
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        else
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f)
-                    )
-                }
-                IconButton(
-                    onClick = onMoveDown,
-                    enabled = !isLast,
-                    modifier = Modifier.size(28.dp)
-                ) {
-                    Icon(
-                        Icons.Default.KeyboardArrowDown,
-                        contentDescription = "Move down",
-                        modifier = Modifier.size(20.dp),
-                        tint = if (!isLast)
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        else
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f)
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.width(4.dp))
-
-            // Visibility toggle (clickable) or lock icon for system fields
-            if (item.isSystemField) {
-                // Gold lock icon for system fields (always shared)
-                Box(
-                    modifier = Modifier.size(36.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Lock,
-                        contentDescription = "Required field (always shared)",
-                        modifier = Modifier.size(22.dp),
-                        tint = androidx.compose.ui.graphics.Color(0xFFD4A017) // Gold color
-                    )
-                }
-            } else {
-                IconButton(
-                    onClick = onTogglePublic,
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Icon(
-                        imageVector = if (item.isInPublicProfile) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                        contentDescription = if (item.isInPublicProfile) "Visible in profile (tap to hide)" else "Hidden from profile (tap to show)",
-                        modifier = Modifier.size(22.dp),
-                        tint = if (item.isInPublicProfile)
-                            MaterialTheme.colorScheme.primary
-                        else
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                    )
-                }
-            }
+            // Drag-to-reorder handle (long-press, then drag).
+            // Replaces the up/down arrow column for a less cluttered
+            // row and a single, more direct gesture.
+            com.vettid.app.ui.components.DragReorderHandle(
+                canMoveUp = !isFirst,
+                canMoveDown = !isLast,
+                onMoveUp = onMoveUp,
+                onMoveDown = onMoveDown,
+            )
 
             Spacer(modifier = Modifier.width(8.dp))
 
@@ -840,6 +787,49 @@ private fun CompactDataRow(
                     text = if (item.isSensitive) maskString(item.value) else item.value,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Visibility selector (3-state) or lock icon for system
+            // fields. Placed on the right to match the secrets row.
+            if (item.isSystemField) {
+                Box(
+                    modifier = Modifier.size(36.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = "Required field (always shared)",
+                        modifier = Modifier.size(22.dp),
+                        tint = androidx.compose.ui.graphics.Color(0xFFD4A017) // Gold color
+                    )
+                }
+            } else {
+                val current = when {
+                    item.hideFromCatalog -> com.vettid.app.ui.components.FieldVisibility.PRIVATE
+                    item.isInPublicProfile -> com.vettid.app.ui.components.FieldVisibility.PROFILE
+                    else -> com.vettid.app.ui.components.FieldVisibility.CATALOG
+                }
+                com.vettid.app.ui.components.VisibilitySegmented(
+                    visibility = current,
+                    onVisibilityChange = { next ->
+                        when (next) {
+                            com.vettid.app.ui.components.FieldVisibility.PROFILE -> {
+                                if (item.hideFromCatalog) onToggleHideFromCatalog()
+                                if (!item.isInPublicProfile) onTogglePublic()
+                            }
+                            com.vettid.app.ui.components.FieldVisibility.CATALOG -> {
+                                if (item.hideFromCatalog) onToggleHideFromCatalog()
+                                if (item.isInPublicProfile) onTogglePublic()
+                            }
+                            com.vettid.app.ui.components.FieldVisibility.PRIVATE -> {
+                                if (item.isInPublicProfile) onTogglePublic()
+                                if (!item.hideFromCatalog) onToggleHideFromCatalog()
+                            }
+                        }
+                    },
                 )
             }
         }
@@ -1580,7 +1570,7 @@ internal fun PublicProfileFullScreen(
 }
 
 @Composable
-private fun PublicMetadataDialog(
+internal fun PublicMetadataDialog(
     title: String,
     subtitle: String,
     items: List<PublicMetadataItem>,
@@ -1698,7 +1688,10 @@ internal fun BusinessCardView(
     profile: PublishedProfileData,
     isReadOnly: Boolean = false,
     onEditPhoto: () -> Unit = {},
-    onShowQR: (PersonalDataItem) -> Unit = {}
+    onShowQR: (PersonalDataItem) -> Unit = {},
+    // When true, paint a green presence ring + dot on the hero
+    // avatar. Only meaningful for peer profiles (read-only view).
+    isOnline: Boolean = false,
 ) {
     val context = LocalContext.current
 
@@ -1760,10 +1753,24 @@ internal fun BusinessCardView(
             contentAlignment = Alignment.Center
         ) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                // Large avatar - show photo if available, otherwise initials
+                // Large avatar - show photo if available, otherwise initials.
+                // When the peer is online, draw a 3dp presence ring
+                // around the photo + a small filled dot at the
+                // bottom-right (the ring alone is ambiguous to users
+                // with color-vision deficiencies).
+                val avatarSize = if (isOnline) 108.dp else 100.dp
                 Box(
                     modifier = Modifier
-                        .size(100.dp)
+                        .size(avatarSize)
+                        .then(
+                            if (isOnline) {
+                                Modifier.border(
+                                    width = 3.dp,
+                                    color = androidx.compose.ui.graphics.Color(0xFF22C55E),
+                                    shape = CircleShape,
+                                ).padding(4.dp)
+                            } else Modifier,
+                        )
                         .clip(CircleShape)
                         .then(if (!isReadOnly) Modifier.clickable { onEditPhoto() } else Modifier)
                 ) {
@@ -2799,7 +2806,7 @@ private fun PersonalDataTemplateFormDialog(
 }
 
 @Composable
-private fun ProfileHandlerRow(handler: com.vettid.app.core.nats.VaultHandler) {
+internal fun ProfileHandlerRow(handler: com.vettid.app.core.nats.VaultHandler) {
     var expanded by remember { mutableStateOf(false) }
 
     Column(
@@ -2875,7 +2882,7 @@ private fun ProfileHandlerRow(handler: com.vettid.app.core.nats.VaultHandler) {
     }
 }
 
-private fun getProfileHandlerIcon(handlerId: String): androidx.compose.ui.graphics.vector.ImageVector {
+internal fun getProfileHandlerIcon(handlerId: String): androidx.compose.ui.graphics.vector.ImageVector {
     return when (handlerId) {
         "profile" -> Icons.Default.Person
         "personal-data" -> Icons.Default.Badge

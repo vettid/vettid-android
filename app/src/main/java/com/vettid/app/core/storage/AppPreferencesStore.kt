@@ -23,6 +23,11 @@ class AppPreferencesStore(context: Context) {
     private val _themeFlow = MutableStateFlow(getTheme())
     val themeFlow: StateFlow<AppTheme> = _themeFlow.asStateFlow()
 
+    private val _locationTrackingFlow = MutableStateFlow(
+        prefs.getBoolean(KEY_LOCATION_ENABLED, false)
+    )
+    val locationTrackingFlow: StateFlow<Boolean> = _locationTrackingFlow.asStateFlow()
+
     fun getTheme(): AppTheme {
         val name = prefs.getString(KEY_THEME, AppTheme.AUTO.name) ?: AppTheme.AUTO.name
         return try {
@@ -44,6 +49,7 @@ class AppPreferencesStore(context: Context) {
 
     fun setLocationTrackingEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_LOCATION_ENABLED, enabled).apply()
+        _locationTrackingFlow.value = enabled
     }
 
     fun getLocationPrecision(): LocationPrecision {

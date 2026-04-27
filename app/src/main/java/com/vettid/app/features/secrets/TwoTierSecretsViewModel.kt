@@ -80,6 +80,8 @@ class TwoTierSecretsViewModel @Inject constructor(
                 is TwoTierSecretsEvent.RevealMinorSecret -> revealMinorSecret(event.secretId, event.password)
                 is TwoTierSecretsEvent.AddMinorSecret -> addMinorSecret(event.name, event.value, event.category, event.notes)
                 is TwoTierSecretsEvent.DeleteMinorSecret -> deleteMinorSecret(event.secretId)
+                is TwoTierSecretsEvent.ToggleHideFromCatalog -> toggleHideFromCatalog(event.secretId)
+                is TwoTierSecretsEvent.TogglePublicProfile -> togglePublicProfile(event.secretId)
 
                 // Critical secrets
                 is TwoTierSecretsEvent.CriticalSecretClicked -> selectCriticalSecret(event.secretId)
@@ -191,6 +193,34 @@ class TwoTierSecretsViewModel @Inject constructor(
         } catch (e: Exception) {
             Log.e(TAG, "Failed to add minor secret", e)
             _effects.emit(TwoTierSecretsEffect.ShowError("Failed to add secret: ${e.message}"))
+        }
+    }
+
+    private suspend fun togglePublicProfile(secretId: String) {
+        try {
+            val ok = minorSecretsStore.togglePublicProfile(secretId)
+            if (ok) {
+                loadAllSecrets()
+            } else {
+                _effects.emit(TwoTierSecretsEffect.ShowError("Only public-key secrets can go on the calling card"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to toggle public profile", e)
+            _effects.emit(TwoTierSecretsEffect.ShowError("Failed: ${e.message}"))
+        }
+    }
+
+    private suspend fun toggleHideFromCatalog(secretId: String) {
+        try {
+            val ok = minorSecretsStore.toggleHideFromCatalog(secretId)
+            if (ok) {
+                loadAllSecrets()
+            } else {
+                _effects.emit(TwoTierSecretsEffect.ShowError("Could not update catalog visibility"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to toggle catalog visibility", e)
+            _effects.emit(TwoTierSecretsEffect.ShowError("Failed: ${e.message}"))
         }
     }
 
@@ -547,7 +577,7 @@ class TwoTierSecretsViewModel @Inject constructor(
 // MARK: - State
 
 data class TwoTierSecretsState(
-    val isLoading: Boolean = false,
+    val isLoading: Boolean = true,
     val selectedTab: SecretsTab = SecretsTab.MINOR,
     val searchQuery: String = "",
     val error: String? = null,
@@ -605,6 +635,8 @@ sealed class TwoTierSecretsEvent {
     data class RevealMinorSecret(val secretId: String, val password: String) : TwoTierSecretsEvent()
     data class AddMinorSecret(val name: String, val value: String, val category: SecretCategory, val notes: String?) : TwoTierSecretsEvent()
     data class DeleteMinorSecret(val secretId: String) : TwoTierSecretsEvent()
+    data class ToggleHideFromCatalog(val secretId: String) : TwoTierSecretsEvent()
+    data class TogglePublicProfile(val secretId: String) : TwoTierSecretsEvent()
 
     // Critical secrets
     data class CriticalSecretClicked(val secretId: String) : TwoTierSecretsEvent()

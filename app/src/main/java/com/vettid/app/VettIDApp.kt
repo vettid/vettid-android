@@ -240,6 +240,7 @@ sealed class Screen(val route: String) {
     object SharedLocations : Screen("shared-locations")
     object LocationSettings : Screen("location-settings")
     object VaultStatus : Screen("vault-status")
+    object HandlerAuthorization : Screen("handler-authorization")
     // Agent connections
     object AgentManagement : Screen("agents")
     object AgentApproval : Screen("agents/approval/{requestId}") {
@@ -732,6 +733,9 @@ fun VettIDApp(
                 onNavigateToVaultStatus = {
                     navController.navigate(Screen.VaultStatus.route)
                 },
+                onNavigateToHandlerAuthorization = {
+                    navController.navigate(Screen.HandlerAuthorization.route)
+                },
                 appViewModel = appViewModel
             )
         }
@@ -831,9 +835,19 @@ fun VettIDApp(
             }
             ScanInvitationScreen(
                 initialData = data,
-                onConnectionEstablished = { _ ->
-                    // Navigate back to connections list after successful scan
-                    navController.popBackStack(Screen.Connections.route, false)
+                onConnectionEstablished = { connectionId ->
+                    // Try to land on the Connections list. If it isn't on
+                    // the back stack (deep-link entry path) fall back to
+                    // popping the scan screen and explicitly navigating
+                    // to Connections so the user always ends up there.
+                    val popped = navController.popBackStack(Screen.Connections.route, false)
+                    if (!popped) {
+                        navController.safePopBackStack()
+                        navController.navigate(Screen.Connections.route) {
+                            popUpTo(navController.graph.startDestinationId) { inclusive = false }
+                            launchSingleTop = true
+                        }
+                    }
                 },
                 onBack = { navController.safePopBackStack() }
             )
@@ -872,6 +886,9 @@ fun VettIDApp(
                 },
                 onSendBtc = { connId ->
                     navController.navigate(Screen.SendBtc.createRoute(walletId = "", connectionId = connId))
+                },
+                onShowHistory = {
+                    navController.navigate(Screen.ConnectionHistory.createRoute(connectionId))
                 },
                 onBack = { navController.safePopBackStack() }
             )
@@ -1000,7 +1017,13 @@ fun VettIDApp(
                 onNavigateToAppDetails = { navController.navigate(Screen.AppDetails.route) },
                 onNavigateToLocationHistory = { navController.navigate(Screen.LocationHistory.route) },
                 onNavigateToSharedLocations = { navController.navigate(Screen.SharedLocations.route) },
-                onNavigateToLocationSettings = { navController.navigate(Screen.LocationSettings.route) }
+                onNavigateToLocationSettings = { navController.navigate(Screen.LocationSettings.route) },
+                onNavigateToHandlerAuthorization = { navController.navigate(Screen.HandlerAuthorization.route) }
+            )
+        }
+        composable(Screen.HandlerAuthorization.route) {
+            com.vettid.app.features.settings.handlers.HandlerAuthorizationScreen(
+                onBack = { navController.safePopBackStack() }
             )
         }
         composable(Screen.LocationHistory.route) {
@@ -1166,7 +1189,8 @@ fun VettIDApp(
                         onNavigateToLocationSettings = { navController.navigate(Screen.LocationSettings.route) },
                         onNavigateToAgents = { navController.navigate(Screen.AgentManagement.route) },
                         onNavigateToVaultStatus = { navController.navigate(Screen.VaultStatus.route) },
-                        onNavigateToSecurityAuditLog = { navController.navigate(Screen.SecurityAuditLog.route) }
+                        onNavigateToSecurityAuditLog = { navController.navigate(Screen.SecurityAuditLog.route) },
+                        onNavigateToHandlerAuthorization = { navController.navigate(Screen.HandlerAuthorization.route) }
                     )
                 },
                 onFabClick = {
@@ -1824,6 +1848,7 @@ fun MainScreen(
     onNavigateToConnectDesktop: () -> Unit = {},
     onNavigateToVaultStatus: () -> Unit = {},
     onNavigateToVaultHome: () -> Unit = {},
+    onNavigateToHandlerAuthorization: () -> Unit = {},
     appViewModel: AppViewModel = hiltViewModel(),
     badgeCountsViewModel: BadgeCountsViewModel = hiltViewModel(),
     vaultUpdateViewModel: VaultUpdateViewModel = hiltViewModel()
@@ -1974,7 +1999,8 @@ fun MainScreen(
                 onNavigateToLocationSettings = onNavigateToLocationSettings,
                 onNavigateToAgents = onNavigateToAgents,
                 onNavigateToVaultStatus = onNavigateToVaultStatus,
-                onNavigateToSecurityAuditLog = onNavigateToSecurityAuditLog
+                onNavigateToSecurityAuditLog = onNavigateToSecurityAuditLog,
+                onNavigateToHandlerAuthorization = onNavigateToHandlerAuthorization
             )
         },
         snackbarHostState = snackbarHostState
@@ -2515,14 +2541,16 @@ private fun SettingsContent(
     onNavigateToLocationSettings: () -> Unit = {},
     onNavigateToAgents: () -> Unit = {},
     onNavigateToVaultStatus: () -> Unit = {},
-    onNavigateToSecurityAuditLog: () -> Unit = {}
+    onNavigateToSecurityAuditLog: () -> Unit = {},
+    onNavigateToHandlerAuthorization: () -> Unit = {}
 ) {
     VaultPreferencesContent(
         onNavigateToAppDetails = onNavigateToAppDetails,
         onNavigateToLocationSettings = onNavigateToLocationSettings,
         onNavigateToAgents = onNavigateToAgents,
         onNavigateToVaultStatus = onNavigateToVaultStatus,
-        onNavigateToSecurityAuditLog = onNavigateToSecurityAuditLog
+        onNavigateToSecurityAuditLog = onNavigateToSecurityAuditLog,
+        onNavigateToHandlerAuthorization = onNavigateToHandlerAuthorization
     )
 }
 

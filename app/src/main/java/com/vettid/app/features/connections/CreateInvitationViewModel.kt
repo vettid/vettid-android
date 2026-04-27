@@ -175,6 +175,8 @@ class CreateInvitationViewModel @Inject constructor(
                                                 peerWallets = pp.wallets ?: emptyList(),
                                                 peerHandlers = pp.handlers ?: emptyList(),
                                                 peerPublicSecrets = pp.publicSecrets ?: emptyList(),
+                                                peerDataCatalog = pp.dataCatalog,
+                                                peerSecretCatalog = pp.secretCatalog,
                                             )
                                         }
                                     },
@@ -345,19 +347,32 @@ class CreateInvitationViewModel @Inject constructor(
 
     /**
      * Accept or reject the peer's connection from the QR screen.
+     *
+     * The screen MUST wait for ResponseComplete before popping back —
+     * otherwise viewModelScope is cancelled mid-respond, severing the
+     * vault response listener (request still completes server-side, but
+     * we leak a noisy "Job was cancelled" and don't see the response).
      */
     fun respondToConnection(accept: Boolean) {
         val currentState = _state.value as? CreateInvitationState.PeerAccepted ?: return
         viewModelScope.launch {
             val response = if (accept) "accept" else "reject"
-            connectionsClient.respond(currentState.connectionId, response).fold(
-                onSuccess = {
-                    Log.i(TAG, "Connection ${if (accept) "accepted" else "rejected"}")
-                },
-                onFailure = { error ->
-                    Log.e(TAG, "Failed to respond: ${error.message}")
-                }
-            )
+            // Use NonCancellable so a transient lifecycle event (rotation,
+            // brief background) can't kill the in-flight respond before
+            // the vault answers. NonCancellable lets the existing parent
+            // scope still propagate exceptions but blocks cancellation
+            // of this child block specifically.
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                connectionsClient.respond(currentState.connectionId, response).fold(
+                    onSuccess = {
+                        Log.i(TAG, "Connection ${if (accept) "accepted" else "rejected"}")
+                    },
+                    onFailure = { error ->
+                        Log.e(TAG, "Failed to respond: ${error.message}")
+                    }
+                )
+            }
+            _effects.emit(CreateInvitationEffect.ResponseComplete)
         }
     }
 
@@ -449,6 +464,8 @@ sealed class CreateInvitationState {
         val peerWallets: List<com.vettid.app.core.nats.PeerWalletInfo> = emptyList(),
         val peerHandlers: List<com.vettid.app.core.nats.PeerHandlerInfo> = emptyList(),
         val peerPublicSecrets: List<com.vettid.app.core.nats.PeerPublicSecretMetadata> = emptyList(),
+        val peerDataCatalog: List<com.vettid.app.core.nats.PeerDataCatalogEntry>? = null,
+        val peerSecretCatalog: List<com.vettid.app.core.nats.PeerPublicSecretMetadata>? = null,
     ) : CreateInvitationState()
 
     object Expired : CreateInvitationState()
@@ -496,4 +513,12 @@ sealed class CreateInvitationEffect {
 
     /** Link was copied to clipboard (auto-clears after 30 seconds) */
     object LinkCopied : CreateInvitationEffect()
+
+    /**
+     * Vault has finished processing connection.respond. Emitted exactly
+     * once per accept/decline. The screen waits for this before
+     * navigating away — popping the screen mid-respond cancels the
+     * viewModelScope and severs the response listener.
+     */
+    object ResponseComplete : CreateInvitationEffect()
 }

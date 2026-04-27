@@ -41,6 +41,7 @@ class ConnectionDetailViewModel @Inject constructor(
     private val natsAutoConnector: NatsAutoConnector,
     private val connectionCryptoManager: ConnectionCryptoManager,
     private val callManager: CallManager,
+    private val presenceAggregator: com.vettid.app.core.nats.PresenceAggregator,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -52,6 +53,17 @@ class ConnectionDetailViewModel @Inject constructor(
 
     private val _effects = MutableSharedFlow<ConnectionDetailEffect>()
     val effects: SharedFlow<ConnectionDetailEffect> = _effects.asSharedFlow()
+
+    /**
+     * Live online/offline indicator for this connection — derived
+     * from the presence aggregator's heartbeat map and recomputed
+     * whenever it changes. Drives the green ring on the peer's hero
+     * avatar so the same signal that paints the connections list
+     * card is visible inside the detail screen.
+     */
+    val isPeerOnline: StateFlow<Boolean> = presenceAggregator.online
+        .map { it.containsKey(connectionId) && presenceAggregator.isOnline(connectionId) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
 
     // Peer profile data from cached vault storage
     private val _peerPhoto = MutableStateFlow<String?>(null)
@@ -87,6 +99,12 @@ class ConnectionDetailViewModel @Inject constructor(
     private val _peerPublicSecrets = MutableStateFlow<List<com.vettid.app.core.nats.PeerPublicSecretMetadata>>(emptyList())
     val peerPublicSecrets: StateFlow<List<com.vettid.app.core.nats.PeerPublicSecretMetadata>> = _peerPublicSecrets.asStateFlow()
 
+    private val _peerDataCatalog = MutableStateFlow<List<com.vettid.app.core.nats.PeerDataCatalogEntry>?>(null)
+    val peerDataCatalog: StateFlow<List<com.vettid.app.core.nats.PeerDataCatalogEntry>?> = _peerDataCatalog.asStateFlow()
+
+    private val _peerSecretCatalog = MutableStateFlow<List<com.vettid.app.core.nats.PeerPublicSecretMetadata>?>(null)
+    val peerSecretCatalog: StateFlow<List<com.vettid.app.core.nats.PeerPublicSecretMetadata>?> = _peerSecretCatalog.asStateFlow()
+
     // Peer profile rendered through the same BusinessCardView the user
     // sees for their own public-profile preview — gives one canonical
     // layout across scanner review, inviter review, and this detail
@@ -99,6 +117,31 @@ class ConnectionDetailViewModel @Inject constructor(
     // Dialog state for revoke confirmation
     private val _showRevokeDialog = MutableStateFlow(false)
     val showRevokeDialog: StateFlow<Boolean> = _showRevokeDialog.asStateFlow()
+
+    // Shared-capabilities state. shareableHandlers is the user's globally-shared
+    // catalog (loaded once); grants is which of those are exposed to THIS peer.
+    private val _shareableHandlers = MutableStateFlow<List<com.vettid.app.core.nats.VaultHandler>>(emptyList())
+    val shareableHandlers: StateFlow<List<com.vettid.app.core.nats.VaultHandler>> = _shareableHandlers.asStateFlow()
+
+    private val _connectionGrants = MutableStateFlow<Map<String, Boolean>>(emptyMap())
+    val connectionGrants: StateFlow<Map<String, Boolean>> = _connectionGrants.asStateFlow()
+
+    private val _grantPendingId = MutableStateFlow<String?>(null)
+    val grantPendingId: StateFlow<String?> = _grantPendingId.asStateFlow()
+
+    /**
+     * Per-connection presence override:
+     *   null = follow the user-wide default (set in Vault Preferences)
+     *   true = always share online presence with this peer
+     *   false = never share with this peer regardless of default
+     * Loaded from the connection record via connection.list and
+     * mutated via OwnerSpaceClient.setPresenceOverride.
+     */
+    private val _presenceOverride = MutableStateFlow<Boolean?>(null)
+    val presenceOverride: StateFlow<Boolean?> = _presenceOverride.asStateFlow()
+
+    private val _presenceOverrideInFlight = MutableStateFlow(false)
+    val presenceOverrideInFlight: StateFlow<Boolean> = _presenceOverrideInFlight.asStateFlow()
 
     init {
         loadConnection()
@@ -154,6 +197,9 @@ class ConnectionDetailViewModel @Inject constructor(
                         _peerWallets.value = record.peerProfile?.wallets ?: emptyList()
                         _peerHandlers.value = record.peerProfile?.handlers ?: emptyList()
                         _peerPublicSecrets.value = record.peerProfile?.publicSecrets ?: emptyList()
+                        _peerDataCatalog.value = record.peerProfile?.dataCatalog
+                        _peerSecretCatalog.value = record.peerProfile?.secretCatalog
+                        _presenceOverride.value = record.presenceShareOverride
                         _peerPublishedProfile.value = record.peerProfile?.let { peer ->
                             peerProfileToPublishedProfileData(
                                 peer = peer,
@@ -171,6 +217,9 @@ class ConnectionDetailViewModel @Inject constructor(
                         )
                         // Load location sharing status after connection loads
                         loadLocationSharingStatus()
+                        // Load handler grants for this peer + the catalog so
+                        // the Shared Capabilities section has its data.
+                        loadShareHandlers()
                     } else {
                         _state.value = ConnectionDetailState.Error(
                             message = "Connection not found"
@@ -326,6 +375,76 @@ class ConnectionDetailViewModel @Inject constructor(
     /**
      * Load the current location sharing status for this connection.
      */
+    /**
+     * Apply a tri-state presence override for this connection.
+     *   null  → follow user-wide default
+     *   true  → always share with this peer
+     *   false → never share with this peer
+     * Optimistic update; reverts on vault failure.
+     */
+    fun setPresenceOverride(override: Boolean?) {
+        val previous = _presenceOverride.value
+        if (previous == override) return
+        _presenceOverride.value = override
+        viewModelScope.launch {
+            _presenceOverrideInFlight.value = true
+            try {
+                ownerSpaceClient.setPresenceOverride(connectionId, override).onFailure { err ->
+                    _presenceOverride.value = previous
+                    _effects.emit(ConnectionDetailEffect.ShowError(err.message ?: "Failed to update presence sharing"))
+                }
+            } finally {
+                _presenceOverrideInFlight.value = false
+            }
+        }
+    }
+
+    /**
+     * Load the user's globally-shared handlers and the per-connection
+     * grant blob in parallel. Refreshes whenever the connection screen
+     * re-enters loadConnection() so any toggles flipped on the
+     * Capabilities screen propagate.
+     */
+    private fun loadShareHandlers() {
+        viewModelScope.launch {
+            try {
+                val all = ownerSpaceClient.listHandlers()
+                val shareable = all.filter { it.shareable && it.enabled && it.shareGlobally }
+                _shareableHandlers.value = shareable
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to load shareable handlers", e)
+                _shareableHandlers.value = emptyList()
+            }
+            ownerSpaceClient.getConnectionShareHandlers(connectionId).fold(
+                onSuccess = { _connectionGrants.value = it },
+                onFailure = { Log.w(TAG, "Failed to load connection grants: ${it.message}") },
+            )
+        }
+    }
+
+    /**
+     * Flip a per-connection grant. Optimistic update; reverts on
+     * vault failure so the UI never lies about persisted state.
+     */
+    fun setShareHandlerForConnection(handlerId: String, granted: Boolean) {
+        viewModelScope.launch {
+            val previous = _connectionGrants.value
+            _grantPendingId.value = handlerId
+            _connectionGrants.value = previous + (handlerId to granted)
+            val nextMap = _connectionGrants.value.toMutableMap().apply {
+                if (!granted) remove(handlerId) else this[handlerId] = true
+            }
+            ownerSpaceClient.setConnectionShareHandlers(connectionId, nextMap).fold(
+                onSuccess = { _grantPendingId.value = null },
+                onFailure = { err ->
+                    _connectionGrants.value = previous
+                    _grantPendingId.value = null
+                    _effects.emit(ConnectionDetailEffect.ShowError(err.message ?: "Failed to update sharing"))
+                },
+            )
+        }
+    }
+
     private fun loadLocationSharingStatus() {
         viewModelScope.launch {
             try {

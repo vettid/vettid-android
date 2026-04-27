@@ -145,6 +145,7 @@ fun SecretsContent(
                         searchQuery = currentState.searchQuery,
                         onSecretClick = { viewModel.onEvent(SecretsEvent.SecretClicked(it)) },
                         onTogglePublicProfile = { viewModel.onEvent(SecretsEvent.TogglePublicProfile(it)) },
+                        onToggleHideFromCatalog = { viewModel.onEvent(SecretsEvent.ToggleHideFromCatalog(it)) },
                         onMoveUp = { viewModel.onEvent(SecretsEvent.MoveSecretUp(it)) },
                         onMoveDown = { viewModel.onEvent(SecretsEvent.MoveSecretDown(it)) },
                         onRenameGroup = { groupId, newLabel -> viewModel.renameGroup(groupId, newLabel) },
@@ -284,6 +285,7 @@ private fun SecretsList(
     searchQuery: String,
     onSecretClick: (String) -> Unit,
     onTogglePublicProfile: (String) -> Unit,
+    onToggleHideFromCatalog: (String) -> Unit,
     onMoveUp: (String) -> Unit,
     onMoveDown: (String) -> Unit,
     onRenameGroup: (String, String) -> Unit,
@@ -380,6 +382,7 @@ private fun SecretsList(
                             isInGroup = group.label != null,
                             onClick = { onSecretClick(secret.id) },
                             onTogglePublic = { onTogglePublicProfile(secret.id) },
+                            onToggleHideFromCatalog = { onToggleHideFromCatalog(secret.id) },
                             onMoveUp = { onMoveUp(secret.id) },
                             onMoveDown = { onMoveDown(secret.id) }
                         )
@@ -713,6 +716,7 @@ private fun SecretRow(
     isInGroup: Boolean = false,
     onClick: () -> Unit,
     onTogglePublic: () -> Unit,
+    onToggleHideFromCatalog: () -> Unit,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit
 ) {
@@ -728,47 +732,22 @@ private fun SecretRow(
                 .padding(vertical = 4.dp, horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Up/Down reorder buttons (hidden for grouped items — group header handles reorder)
+            // Drag-to-reorder handle (long-press, then drag).
+            // Hidden for grouped items — the group header is the
+            // reorder unit for the whole group.
             if (!isInGroup) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                IconButton(
-                    onClick = onMoveUp,
-                    enabled = !isFirst,
-                    modifier = Modifier.size(28.dp)
-                ) {
-                    Icon(
-                        Icons.Default.KeyboardArrowUp,
-                        contentDescription = "Move up",
-                        modifier = Modifier.size(20.dp),
-                        tint = if (!isFirst)
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        else
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f)
-                    )
-                }
-                IconButton(
-                    onClick = onMoveDown,
-                    enabled = !isLast,
-                    modifier = Modifier.size(28.dp)
-                ) {
-                    Icon(
-                        Icons.Default.KeyboardArrowDown,
-                        contentDescription = "Move down",
-                        modifier = Modifier.size(20.dp),
-                        tint = if (!isLast)
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        else
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f)
-                    )
-                }
+                com.vettid.app.ui.components.DragReorderHandle(
+                    canMoveUp = !isFirst,
+                    canMoveDown = !isLast,
+                    onMoveUp = onMoveUp,
+                    onMoveDown = onMoveDown,
+                )
             }
-            } // end if (!isInGroup)
 
             Spacer(modifier = Modifier.width(4.dp))
 
-            // Visibility toggle or lock icon for system fields
+            // Visibility selector (3-state) or lock icon for system fields.
+            // Placed after the name+value column on the right (see end of Row).
             if (secret.isSystemField) {
                 Box(
                     modifier = Modifier.size(36.dp),
@@ -779,33 +758,6 @@ private fun SecretRow(
                         contentDescription = "System field (always shared)",
                         modifier = Modifier.size(22.dp),
                         tint = androidx.compose.ui.graphics.Color(0xFFD4A017) // Gold
-                    )
-                }
-            } else if (secret.type == SecretType.PUBLIC_KEY) {
-                IconButton(
-                    onClick = onTogglePublic,
-                    modifier = Modifier.size(36.dp)
-                ) {
-                    Icon(
-                        imageVector = if (secret.isInPublicProfile) Icons.Default.Visibility else Icons.Default.VisibilityOff,
-                        contentDescription = if (secret.isInPublicProfile) "In profile (tap to hide)" else "Hidden (tap to show)",
-                        modifier = Modifier.size(22.dp),
-                        tint = if (secret.isInPublicProfile)
-                            MaterialTheme.colorScheme.primary
-                        else
-                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                    )
-                }
-            } else {
-                Box(
-                    modifier = Modifier.size(36.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.VisibilityOff,
-                        contentDescription = "Private secret",
-                        modifier = Modifier.size(22.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                     )
                 }
             }
@@ -830,6 +782,38 @@ private fun SecretRow(
                     text = truncateValue(secret.value),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // 3-state visibility selector. Hidden for system fields
+            // (gold lock above) and shown otherwise. PROFILE pill is
+            // only enabled for PUBLIC_KEY-typed secrets.
+            if (!secret.isSystemField) {
+                Spacer(modifier = Modifier.width(8.dp))
+                val current = when {
+                    secret.hideFromCatalog -> com.vettid.app.ui.components.FieldVisibility.PRIVATE
+                    secret.isInPublicProfile -> com.vettid.app.ui.components.FieldVisibility.PROFILE
+                    else -> com.vettid.app.ui.components.FieldVisibility.CATALOG
+                }
+                com.vettid.app.ui.components.VisibilitySegmented(
+                    visibility = current,
+                    allowProfile = secret.type == SecretType.PUBLIC_KEY,
+                    onVisibilityChange = { next ->
+                        when (next) {
+                            com.vettid.app.ui.components.FieldVisibility.PROFILE -> {
+                                if (secret.hideFromCatalog) onToggleHideFromCatalog()
+                                if (!secret.isInPublicProfile) onTogglePublic()
+                            }
+                            com.vettid.app.ui.components.FieldVisibility.CATALOG -> {
+                                if (secret.hideFromCatalog) onToggleHideFromCatalog()
+                                if (secret.isInPublicProfile) onTogglePublic()
+                            }
+                            com.vettid.app.ui.components.FieldVisibility.PRIVATE -> {
+                                if (secret.isInPublicProfile) onTogglePublic()
+                                if (!secret.hideFromCatalog) onToggleHideFromCatalog()
+                            }
+                        }
+                    },
                 )
             }
         }
@@ -989,6 +973,9 @@ private fun AddSecretDialog(
                     onValueChange = { newName = it },
                     label = { Text("Category Name") },
                     singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Words,
+                    ),
                     modifier = Modifier.fillMaxWidth()
                 )
             },
@@ -1077,6 +1064,9 @@ private fun AddSecretDialog(
                     isError = state.nameError != null,
                     supportingText = state.nameError?.let { { Text(it) } },
                     singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Words,
+                    ),
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -1132,6 +1122,9 @@ private fun AddSecretDialog(
                     label = { Text("Notes (optional)") },
                     placeholder = { Text("Additional notes...") },
                     singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Sentences,
+                    ),
                     modifier = Modifier.fillMaxWidth()
                 )
 

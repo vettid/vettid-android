@@ -73,6 +73,7 @@ class FeedNotificationService @Inject constructor(
         const val EXTRA_EVENT_TYPE = "feed_event_type"
         const val EXTRA_SOURCE_ID = "feed_source_id"
         const val EXTRA_OPEN_FEED = "open_feed"
+        const val EXTRA_OPEN_VOTES = "open_votes"
     }
 
     init {
@@ -490,6 +491,53 @@ class FeedNotificationService @Inject constructor(
             Log.d(TAG, "Showed message notification for connection ${message.connectionId}")
         } catch (e: SecurityException) {
             Log.w(TAG, "Notification permission not granted for message", e)
+        }
+    }
+
+    /**
+     * Show a notification when there are governance proposals open
+     * for the user's vote. Tapping opens the app and deep-links to
+     * the proposals screen. Idempotent on the count: if we've
+     * already shown a notification for the same count, we don't
+     * spam the user — only fire when the count grows.
+     */
+    private val lastVotesNotificationCount = java.util.concurrent.atomic.AtomicInteger(0)
+    fun showOpenVotesNotification(openCount: Int) {
+        val previous = lastVotesNotificationCount.getAndSet(openCount)
+        if (openCount <= 0 || openCount <= previous) return
+
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(EXTRA_OPEN_VOTES, true)
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            "open-votes".hashCode(),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+
+        val title = if (openCount == 1) "1 open vote" else "$openCount open votes"
+        val text = "Tap to review and cast your vote."
+
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID_DEFAULT)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .setGroup("vettid_votes")
+            .setCategory(NotificationCompat.CATEGORY_SOCIAL)
+            .build()
+
+        val notifManager = NotificationManagerCompat.from(context)
+        if (!notifManager.areNotificationsEnabled()) return
+        try {
+            notifManager.notify("open-votes".hashCode(), notification)
+            Log.d(TAG, "Showed open-votes notification: $openCount")
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Notification permission not granted for open-votes", e)
         }
     }
 

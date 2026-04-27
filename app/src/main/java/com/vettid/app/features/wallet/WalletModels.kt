@@ -11,7 +11,19 @@ data class WalletInfo(
     val cachedBalanceSats: Long = 0,
     val balanceUpdatedAt: Long = 0,
     val isPublic: Boolean = false,
-    val isArchived: Boolean = false
+    val isArchived: Boolean = false,
+    /**
+     * Unix-second timestamp of when the user last opted this wallet's
+     * BIP39 seed phrase into Critical Secrets. Zero means "not backed
+     * up" — the toggle on the detail screen reads/writes this.
+     */
+    val seedBackedUpAt: Long = 0,
+    /**
+     * Reference to the CredentialSecretEntry holding the seed phrase
+     * once backed up. Used by the detail screen to deep-link the user
+     * into the matching Critical Secret reveal flow.
+     */
+    val seedBackupSecretId: String? = null,
 )
 
 /**

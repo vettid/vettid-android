@@ -56,6 +56,7 @@ sealed class SecretsEvent {
     object AddSecret : SecretsEvent()
     data class DeleteSecret(val secretId: String) : SecretsEvent()
     data class TogglePublicProfile(val secretId: String) : SecretsEvent()
+    data class ToggleHideFromCatalog(val secretId: String) : SecretsEvent()
     data class MoveSecretUp(val secretId: String) : SecretsEvent()
     data class MoveSecretDown(val secretId: String) : SecretsEvent()
     object Refresh : SecretsEvent()

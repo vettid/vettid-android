@@ -83,6 +83,8 @@ fun ConnectionReviewScreen(
                             profile = currentState.publishedProfile,
                             peerHandlers = currentState.peerHandlers,
                             peerPublicSecrets = currentState.peerPublicSecrets,
+                            peerDataCatalog = currentState.peerDataCatalog,
+                            peerSecretCatalog = currentState.peerSecretCatalog,
                         )
                     }
                     // Accept / Decline action strip — always rendered

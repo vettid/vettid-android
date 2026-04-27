@@ -43,6 +43,8 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.foundation.text.ClickableText
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import com.google.gson.Gson
 import com.vettid.app.core.network.Message
 import com.vettid.app.core.network.MessageContentType
@@ -709,6 +711,9 @@ private fun MessageInput(
                 modifier = Modifier.weight(1f),
                 maxLines = 4,
                 shape = RoundedCornerShape(24.dp),
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Sentences,
+                ),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedTextColor = MaterialTheme.colorScheme.onSurface,
                     unfocusedTextColor = MaterialTheme.colorScheme.onSurface,

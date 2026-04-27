@@ -124,6 +124,11 @@ class MainActivity : ComponentActivity() {
      */
     private fun extractDeepLinkData(intent: Intent?): DeepLinkData {
         // Check for notification tap extras (from FeedNotificationService)
+        if (intent?.getBooleanExtra(FeedNotificationService.EXTRA_OPEN_VOTES, false) == true) {
+            // Open-votes notification → land on the proposals list
+            intent.removeExtra(FeedNotificationService.EXTRA_OPEN_VOTES)
+            return DeepLinkData(type = DeepLinkType.VOTE)
+        }
         if (intent?.getBooleanExtra(FeedNotificationService.EXTRA_OPEN_FEED, false) == true) {
             val eventType = intent.getStringExtra(FeedNotificationService.EXTRA_EVENT_TYPE)
             val sourceId = intent.getStringExtra(FeedNotificationService.EXTRA_SOURCE_ID)

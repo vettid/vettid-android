@@ -573,10 +573,34 @@ class ConnectionsClient @Inject constructor(
                     operations = obj.getAsJsonArray("operations")
                         ?.mapNotNull { it?.asString }
                         ?: emptyList(),
+                    category = obj.get("category")?.asString ?: "",
+                    required = obj.get("required")?.asBoolean ?: false,
+                    shareable = obj.get("shareable")?.asBoolean ?: false,
                 )
             }.orEmpty()
 
             val publicSecrets = profileObj.getAsJsonArray("public_secrets")?.mapNotNull { element ->
+                val obj = element?.asJsonObject ?: return@mapNotNull null
+                val name = obj.get("name")?.asString ?: return@mapNotNull null
+                PeerPublicSecretMetadata(
+                    name = name,
+                    type = obj.get("type")?.asString ?: "",
+                    category = obj.get("category")?.asString ?: "",
+                )
+            }.orEmpty()
+
+            val dataCatalog = profileObj.getAsJsonArray("data_catalog")?.mapNotNull { element ->
+                val obj = element?.asJsonObject ?: return@mapNotNull null
+                val name = obj.get("name")?.asString ?: return@mapNotNull null
+                PeerDataCatalogEntry(
+                    name = name,
+                    displayName = obj.get("display_name")?.asString ?: name,
+                    fieldType = obj.get("field_type")?.asString ?: "",
+                    category = obj.get("category")?.asString ?: "",
+                )
+            }.orEmpty()
+
+            val secretCatalog = profileObj.getAsJsonArray("secret_catalog")?.mapNotNull { element ->
                 val obj = element?.asJsonObject ?: return@mapNotNull null
                 val name = obj.get("name")?.asString ?: return@mapNotNull null
                 PeerPublicSecretMetadata(
@@ -597,6 +621,8 @@ class ConnectionsClient @Inject constructor(
                 wallets = wallets?.takeIf { it.isNotEmpty() },
                 handlers = handlers.takeIf { it.isNotEmpty() },
                 publicSecrets = publicSecrets.takeIf { it.isNotEmpty() },
+                dataCatalog = dataCatalog.takeIf { it.isNotEmpty() },
+                secretCatalog = secretCatalog.takeIf { it.isNotEmpty() },
             )
         }
 
@@ -623,7 +649,8 @@ class ConnectionsClient @Inject constructor(
             lastActivitySubtype = json.get("last_activity_subtype")?.takeIf { !it.isJsonNull }?.asString,
             lastActivityOutcome = json.get("last_activity_outcome")?.takeIf { !it.isJsonNull }?.asString,
             missedCallCount = json.get("missed_call_count")?.asInt ?: 0,
-            peerProfile = peerProfile
+            peerProfile = peerProfile,
+            presenceShareOverride = json.get("presence_share_override")?.takeIf { !it.isJsonNull }?.asBoolean,
         )
     }
 
@@ -665,6 +692,8 @@ class ConnectionsClient @Inject constructor(
             val inviterWallets = mutableListOf<Map<String, String>>()
             val inviterHandlers = mutableListOf<PeerHandlerInfo>()
             val inviterPublicSecrets = mutableListOf<PeerPublicSecretMetadata>()
+            val inviterDataCatalog = mutableListOf<PeerDataCatalogEntry>()
+            val inviterSecretCatalog = mutableListOf<PeerPublicSecretMetadata>()
             result.getAsJsonObject("inviter_profile")?.let { profileObj ->
                 profileObj.entrySet().forEach { (key, value) ->
                     when {
@@ -705,6 +734,9 @@ class ConnectionsClient @Inject constructor(
                                         operations = obj.getAsJsonArray("operations")
                                             ?.mapNotNull { it?.asString }
                                             ?: emptyList(),
+                                        category = obj.get("category")?.asString ?: "",
+                                        required = obj.get("required")?.asBoolean ?: false,
+                                        shareable = obj.get("shareable")?.asBoolean ?: false,
                                     )
                                 )
                             }
@@ -714,6 +746,33 @@ class ConnectionsClient @Inject constructor(
                                 val obj = el?.asJsonObject ?: return@forEach
                                 val name = obj.get("name")?.asString ?: return@forEach
                                 inviterPublicSecrets.add(
+                                    PeerPublicSecretMetadata(
+                                        name = name,
+                                        type = obj.get("type")?.asString ?: "",
+                                        category = obj.get("category")?.asString ?: "",
+                                    )
+                                )
+                            }
+                        }
+                        key == "data_catalog" && value.isJsonArray -> {
+                            value.asJsonArray.forEach { el ->
+                                val obj = el?.asJsonObject ?: return@forEach
+                                val name = obj.get("name")?.asString ?: return@forEach
+                                inviterDataCatalog.add(
+                                    PeerDataCatalogEntry(
+                                        name = name,
+                                        displayName = obj.get("display_name")?.asString ?: name,
+                                        fieldType = obj.get("field_type")?.asString ?: "",
+                                        category = obj.get("category")?.asString ?: "",
+                                    )
+                                )
+                            }
+                        }
+                        key == "secret_catalog" && value.isJsonArray -> {
+                            value.asJsonArray.forEach { el ->
+                                val obj = el?.asJsonObject ?: return@forEach
+                                val name = obj.get("name")?.asString ?: return@forEach
+                                inviterSecretCatalog.add(
                                     PeerPublicSecretMetadata(
                                         name = name,
                                         type = obj.get("type")?.asString ?: "",
@@ -741,6 +800,8 @@ class ConnectionsClient @Inject constructor(
                 inviterWallets = inviterWallets,
                 inviterHandlers = inviterHandlers.takeIf { it.isNotEmpty() },
                 inviterPublicSecrets = inviterPublicSecrets.takeIf { it.isNotEmpty() },
+                inviterDataCatalog = inviterDataCatalog.takeIf { it.isNotEmpty() },
+                inviterSecretCatalog = inviterSecretCatalog.takeIf { it.isNotEmpty() },
             )
         }
     }
@@ -765,6 +826,8 @@ data class ResolvedInvitation(
     val inviterWallets: List<Map<String, String>> = emptyList(),
     val inviterHandlers: List<PeerHandlerInfo>? = null,
     val inviterPublicSecrets: List<PeerPublicSecretMetadata>? = null,
+    val inviterDataCatalog: List<PeerDataCatalogEntry>? = null,
+    val inviterSecretCatalog: List<PeerPublicSecretMetadata>? = null,
 )
 
 // MARK: - Data Models
@@ -812,7 +875,14 @@ data class ConnectionRecord(
     val lastActivitySubtype: String? = null,    // calls: "voice" | "video"
     val lastActivityOutcome: String? = null,    // calls: "completed" | "missed" | "rejected"
     val missedCallCount: Int = 0,
-    val peerProfile: PeerProfileData? = null
+    val peerProfile: PeerProfileData? = null,
+    /**
+     * Per-connection presence override. null = follow user-wide
+     * default; true/false = explicit override. Surfaced on the
+     * connection-detail screen so the user can override their
+     * global presence setting per peer.
+     */
+    val presenceShareOverride: Boolean? = null,
 )
 
 /**
@@ -828,14 +898,37 @@ data class PeerProfileData(
     val userGuid: String? = null,
     val wallets: List<PeerWalletInfo>? = null,
     // Vault capability catalog from the peer's published profile.
-    // Surfaces as the "Handlers" badge row on peer-profile views so
-    // the user can see what operations the peer's vault supports —
-    // the same row they see on their own profile preview.
     val handlers: List<PeerHandlerInfo>? = null,
-    // Metadata (name/type/category — never values) for secrets the
-    // peer has opted into publishing. Surfaces as the "Secrets"
-    // badge row on peer-profile views.
+    /**
+     * Legacy: secrets the peer flagged as public via profile.publish.
+     * Newer enclaves carry the same content (and more) in [secretCatalog];
+     * kept for backwards compat with older vault builds.
+     */
     val publicSecrets: List<PeerPublicSecretMetadata>? = null,
+    /**
+     * Full data catalog — every personal-data entry the peer has
+     * cataloged or made public. Metadata only — peers can see "Al
+     * has a Mobile Phone" without seeing the value, then request
+     * access through the capability flow.
+     */
+    val dataCatalog: List<PeerDataCatalogEntry>? = null,
+    /**
+     * Full secret catalog — every credential secret the peer has
+     * cataloged or made public. Same metadata-only model as
+     * [dataCatalog].
+     */
+    val secretCatalog: List<PeerPublicSecretMetadata>? = null,
+)
+
+/**
+ * One personal-data catalog entry on a peer's published profile.
+ * Metadata only — never the value.
+ */
+data class PeerDataCatalogEntry(
+    val name: String,
+    val displayName: String,
+    val fieldType: String,
+    val category: String,
 )
 
 /**
@@ -847,6 +940,12 @@ data class PeerHandlerInfo(
     val name: String,
     val description: String,
     val operations: List<String>,
+    // Classification badges shown alongside the handler row. Empty
+    // strings / false defaults preserve compatibility with vaults
+    // running pre-classification enclave versions.
+    val category: String = "",
+    val required: Boolean = false,
+    val shareable: Boolean = false,
 )
 
 /**

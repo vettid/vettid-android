@@ -1075,9 +1075,14 @@ class OwnerSpaceClient @Inject constructor(
                                 VaultHandler(
                                     id = obj.get("id").asString,
                                     name = obj.get("name").asString,
-                                    description = obj.get("description").asString,
+                                    description = obj.get("description")?.asString ?: "",
                                     operations = obj.getAsJsonArray("operations")
-                                        .map { it.asString }
+                                        ?.map { it.asString } ?: emptyList(),
+                                    category = obj.get("category")?.asString ?: "",
+                                    required = obj.get("required")?.asBoolean ?: false,
+                                    shareable = obj.get("shareable")?.asBoolean ?: false,
+                                    enabled = obj.get("enabled")?.asBoolean ?: true,
+                                    shareGlobally = obj.get("share_globally")?.asBoolean ?: false,
                                 )
                             } catch (e: Exception) {
                                 Log.w(TAG, "Failed to parse handler entry", e)
@@ -1100,6 +1105,106 @@ class OwnerSpaceClient @Inject constructor(
         }
     }
 
+    // MARK: - Handler authorization (enable/share toggles + per-connection grants)
+
+    /**
+     * Toggle whether a non-required handler runs at all. Disabling a
+     * handler also clears its share_globally flag in the vault. Required
+     * handlers cannot be disabled — the vault returns handler_required.
+     */
+    suspend fun setHandlerEnabled(handlerId: String, enabled: Boolean): Result<Unit> {
+        val payload = JsonObject().apply {
+            addProperty("handler_id", handlerId)
+            addProperty("enabled", enabled)
+        }
+        return when (val response = sendAndAwaitResponse("handlers.set-enabled", payload, 8000L)) {
+            is VaultResponse.HandlerResult ->
+                if (response.success) Result.success(Unit)
+                else Result.failure(Exception(response.error ?: "Unknown vault error"))
+            is VaultResponse.Error ->
+                Result.failure(Exception("${response.code}: ${response.message}"))
+            else ->
+                Result.failure(Exception("Unexpected vault response"))
+        }
+    }
+
+    /**
+     * Toggle whether a shareable handler appears in the user's public
+     * profile. Only meaningful for handlers where shareable=true. The
+     * vault rejects with handler_disabled if the handler is currently
+     * off; enable it first.
+     */
+    suspend fun setHandlerShareGlobally(handlerId: String, share: Boolean): Result<Unit> {
+        val payload = JsonObject().apply {
+            addProperty("handler_id", handlerId)
+            addProperty("share_globally", share)
+        }
+        return when (val response = sendAndAwaitResponse("handlers.set-share-global", payload, 8000L)) {
+            is VaultResponse.HandlerResult ->
+                if (response.success) Result.success(Unit)
+                else Result.failure(Exception(response.error ?: "Unknown vault error"))
+            is VaultResponse.Error ->
+                Result.failure(Exception("${response.code}: ${response.message}"))
+            else ->
+                Result.failure(Exception("Unexpected vault response"))
+        }
+    }
+
+    /**
+     * Read the per-connection share grant. Returns the map of
+     * handler_id -> granted. Missing entries mean "not granted". Vault
+     * lazy-seeds the blob from the user's globally-shared set on first
+     * access, so a freshly-activated connection sees every handler the
+     * owner publishes globally until the user narrows.
+     */
+    suspend fun getConnectionShareHandlers(connectionId: String): Result<Map<String, Boolean>> {
+        val payload = JsonObject().apply { addProperty("connection_id", connectionId) }
+        return when (val response = sendAndAwaitResponse("connection.share-handlers.get", payload, 8000L)) {
+            is VaultResponse.HandlerResult -> {
+                if (!response.success) {
+                    Result.failure(Exception(response.error ?: "Unknown vault error"))
+                } else {
+                    val granted = response.result?.getAsJsonObject("granted")
+                    val out = mutableMapOf<String, Boolean>()
+                    granted?.entrySet()?.forEach { (k, v) ->
+                        if (v.isJsonPrimitive) out[k] = v.asBoolean
+                    }
+                    Result.success(out)
+                }
+            }
+            is VaultResponse.Error ->
+                Result.failure(Exception("${response.code}: ${response.message}"))
+            else ->
+                Result.failure(Exception("Unexpected vault response"))
+        }
+    }
+
+    /**
+     * Replace the per-connection share grant. Each granted=true entry
+     * must reference a handler currently in the user's globally-shared
+     * set; the vault rejects otherwise.
+     */
+    suspend fun setConnectionShareHandlers(
+        connectionId: String,
+        granted: Map<String, Boolean>,
+    ): Result<Unit> {
+        val payload = JsonObject().apply {
+            addProperty("connection_id", connectionId)
+            val grants = JsonObject()
+            granted.forEach { (k, v) -> grants.addProperty(k, v) }
+            add("granted", grants)
+        }
+        return when (val response = sendAndAwaitResponse("connection.share-handlers.set", payload, 8000L)) {
+            is VaultResponse.HandlerResult ->
+                if (response.success) Result.success(Unit)
+                else Result.failure(Exception(response.error ?: "Unknown vault error"))
+            is VaultResponse.Error ->
+                Result.failure(Exception("${response.code}: ${response.message}"))
+            else ->
+                Result.failure(Exception("Unexpected vault response"))
+        }
+    }
+
     // MARK: - Presence (opt-in online signal)
 
     /**
@@ -1119,6 +1224,19 @@ class OwnerSpaceClient @Inject constructor(
             Log.w(TAG, "presence.get failed: ${e.message}")
             false
         }
+    }
+
+    /**
+     * Tell the vault whether the app is currently active. The vault's
+     * heartbeat broadcast loop is gated on this — without a recent
+     * `active=true` signal, peers stop seeing us online. Call on app
+     * resume (active=true) and graceful pause (active=false), plus a
+     * periodic refresh while foregrounded.
+     */
+    suspend fun setAppActive(active: Boolean) {
+        val payload = JsonObject().apply { addProperty("active", active) }
+        // Fire-and-forget — no need to block UI on the response.
+        sendToVault("presence.app-active", payload)
     }
 
     /** Update the user-wide presence share default. */
@@ -1507,13 +1625,22 @@ class OwnerSpaceClient @Inject constructor(
                     handleReadReceipt(message); return
                 }
 
-                // Connection lifecycle
+                // Connection lifecycle. The parallel-review flow uses
+                // `peer-reviewing` as the trigger event (replaces the
+                // older `peer-accepted` semantic) so the inviter sees
+                // the scanner's profile the moment the scanner pulls
+                // theirs. We keep handling `peer-accepted` for backward
+                // compatibility during the rollout.
+                subject.contains(".forApp.connection.peer-reviewing") -> {
+                    handleConnectionPeerAccepted(message); return
+                }
                 subject.contains(".forApp.connection.peer-accepted") -> {
                     handleConnectionPeerAccepted(message); return
                 }
                 subject.contains(".forApp.connection.activated") ||
                 subject.contains(".forApp.connection.key-exchanged") ||
-                subject.contains(".forApp.connection.rejected") -> {
+                subject.contains(".forApp.connection.rejected") ||
+                subject.contains(".forApp.connection.expired") -> {
                     handleConnectionStatusUpdate(message); return
                 }
                 subject.contains(".forApp.connection-revoked") -> {
@@ -2369,6 +2496,37 @@ class OwnerSpaceClient @Inject constructor(
 
     companion object {
         private const val TAG = "OwnerSpaceClient"
+
+        // Handler-authorization error codes returned by the vault gate.
+        // Stable strings — feature view-models can match these to route to
+        // friendly UI ("Bitcoin is turned off — enable it in Settings").
+        const val ERR_HANDLER_DISABLED = "handler_disabled"
+        const val ERR_HANDLER_REQUIRED = "handler_required"
+        const val ERR_HANDLER_NOT_SHAREABLE = "handler_not_shareable"
+        const val ERR_HANDLER_NOT_SHARED_WITH_PEER = "handler_not_shared_with_peer"
+        const val ERR_HANDLER_UNKNOWN = "handler_unknown"
+
+        /**
+         * Produce a user-facing message for handler-authorization errors,
+         * or null if the error doesn't match any of the known codes
+         * (caller should fall back to its default error handling).
+         */
+        fun friendlyHandlerError(message: String?): String? {
+            if (message.isNullOrEmpty()) return null
+            return when {
+                message.contains(ERR_HANDLER_DISABLED) ->
+                    "This capability is turned off in your vault. Enable it in Settings → Capabilities."
+                message.contains(ERR_HANDLER_REQUIRED) ->
+                    "This capability is required and can't be disabled."
+                message.contains(ERR_HANDLER_NOT_SHARED_WITH_PEER) ->
+                    "You haven't shared this capability with this connection."
+                message.contains(ERR_HANDLER_NOT_SHAREABLE) ->
+                    "This capability can't be shared."
+                message.contains(ERR_HANDLER_UNKNOWN) ->
+                    "Unknown capability."
+                else -> null
+            }
+        }
     }
 }
 
@@ -2887,7 +3045,15 @@ data class VaultHandler(
     val id: String,
     val name: String,
     val description: String,
-    val operations: List<String>
+    val operations: List<String>,
+    // Classification declared by the enclave's catalog. Immutable per
+    // PCR0; toggles below are user state.
+    val category: String = "",       // "system" | "default" | "optional"
+    val required: Boolean = false,    // owner cannot disable
+    val shareable: Boolean = false,   // may appear in published profile
+    // User toggles persisted in vault state.
+    val enabled: Boolean = true,
+    val shareGlobally: Boolean = false,
 )
 
 /**
