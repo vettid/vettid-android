@@ -95,49 +95,83 @@ data class VoteChoice(
 )
 
 /**
- * Proposal status.
+ * Proposal status. Canonical wire vocabulary that matches the backend's
+ * `closeExpiredProposals.ts` and the parent process's `ListProposals` filter.
+ *
+ * The legacy `ended` / `finalized` strings have been retired; existing rows
+ * are rewritten by `migrateProposalStatus` Lambda. The parser still maps
+ * those legacy strings to CLOSED defensively in case a stale row slips
+ * through.
  */
 enum class ProposalStatus {
-    /** Voting has not yet started */
     @SerializedName("upcoming")
     UPCOMING,
 
-    /** Voting is currently active */
     @SerializedName("active")
     ACTIVE,
 
-    /** Voting has ended, results pending */
-    @SerializedName("ended")
-    ENDED,
+    /** Voting has closed; results may already be published. */
+    @SerializedName("closed")
+    CLOSED,
 
-    /** Results have been published */
-    @SerializedName("finalized")
-    FINALIZED,
-
-    /** Proposal was cancelled */
     @SerializedName("cancelled")
     CANCELLED
 }
 
 /**
- * Vote results for a finalized proposal.
+ * Vote results for a closed proposal. Mirrors the fields written by
+ * `closeExpiredProposals.ts` and the Merkle artifacts published to S3.
  */
 data class VoteResults(
-    /** Total number of votes cast */
     @SerializedName("total_votes")
     val totalVotes: Int,
 
-    /** Votes per choice */
+    /** Votes per choice ID — matches the proposal's choices list. */
     @SerializedName("choice_counts")
     val choiceCounts: Map<String, Int>,
 
-    /** Merkle root of the bulletin board */
+    /** Merkle root of the published vote list. Empty until publish completes. */
     @SerializedName("merkle_root")
-    val merkleRoot: String,
+    val merkleRoot: String = "",
 
-    /** When results were finalized */
-    @SerializedName("finalized_at")
-    val finalizedAt: String = ""
+    /** When close-time tally was sealed (proposal.closed_at). */
+    @SerializedName("closed_at")
+    val closedAt: String = "",
+
+    /** When the Merkle tree + anonymized votes hit S3. */
+    @SerializedName("results_published_at")
+    val resultsPublishedAt: String = "",
+
+    /** True when proposal passed (yes > no AND quorum met). */
+    val passed: Boolean = false,
+
+    /** True when quorum requirement was satisfied at close. */
+    @SerializedName("quorum_met")
+    val quorumMet: Boolean = false,
+
+    /** Eligible voter count at close (for percentage quorums). */
+    @SerializedName("eligible_voters")
+    val eligibleVoters: Int = 0
+)
+
+/**
+ * Result returned by the vault's `vote.verify` operation. The vault
+ * recomputes the leaf hash and walks the published Merkle path itself —
+ * the app just renders the boolean + position.
+ */
+data class VoteVerification(
+    val verified: Boolean,
+    @SerializedName("proposal_id")
+    val proposalId: String,
+    @SerializedName("voting_public_key")
+    val votingPublicKey: String? = null,
+    @SerializedName("leaf_index")
+    val leafIndex: Int = 0,
+    val total: Int = 0,
+    @SerializedName("merkle_root")
+    val merkleRoot: String = "",
+    val vote: String = "",
+    val error: String? = null
 )
 
 // MARK: - Vote Models
@@ -371,7 +405,9 @@ sealed class ProposalsState {
  * Filter options for proposals.
  */
 data class ProposalFilter(
-    val status: Set<ProposalStatus> = setOf(ProposalStatus.ACTIVE),
+    val status: Set<ProposalStatus> = setOf(
+        ProposalStatus.UPCOMING, ProposalStatus.ACTIVE, ProposalStatus.CLOSED
+    ),
     val organizationId: String? = null
 )
 

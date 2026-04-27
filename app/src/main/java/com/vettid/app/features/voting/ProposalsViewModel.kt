@@ -249,9 +249,8 @@ class ProposalsViewModel @Inject constructor(
     }
 
     /**
-     * Sort proposals by priority: active unvoted first, then active voted,
-     * then upcoming, then ended/finalized/cancelled. Within each group,
-     * sort newest first.
+     * Sort proposals: active unvoted → active voted → upcoming → closed → cancelled.
+     * Within each group, newest first.
      */
     private fun sortProposals(proposals: List<Proposal>): List<Proposal> {
         return proposals.sortedWith(
@@ -260,53 +259,10 @@ class ProposalsViewModel @Inject constructor(
                     it.status == ProposalStatus.ACTIVE && !it.userHasVoted -> 0
                     it.status == ProposalStatus.ACTIVE && it.userHasVoted -> 1
                     it.status == ProposalStatus.UPCOMING -> 2
-                    else -> 3 // ENDED, FINALIZED, CANCELLED
+                    it.status == ProposalStatus.CLOSED -> 3
+                    else -> 4 // CANCELLED
                 }
             }.thenByDescending { it.createdAt }
-        )
-    }
-
-    /**
-     * Parse a proposal from the DynamoDB JSON format returned by the vault.
-     * Maps field names: proposal_id→id, proposal_title→title, opens_at→votingStartsAt, etc.
-     */
-    private fun parseProposalFromJson(json: JsonObject): Proposal {
-        val choices = json.getAsJsonArray("choices")?.map { choiceEl ->
-            val c = choiceEl.asJsonObject
-            VoteChoice(
-                id = c.get("id")?.asString ?: "",
-                label = c.get("label")?.asString ?: "",
-                description = c.get("description")?.asString
-            )
-        } ?: emptyList()
-
-        val statusStr = json.get("status")?.asString ?: "upcoming"
-        val status = when (statusStr) {
-            "active" -> ProposalStatus.ACTIVE
-            "upcoming" -> ProposalStatus.UPCOMING
-            "ended" -> ProposalStatus.ENDED
-            "finalized" -> ProposalStatus.FINALIZED
-            "cancelled" -> ProposalStatus.CANCELLED
-            else -> ProposalStatus.UPCOMING
-        }
-
-        return Proposal(
-            id = json.get("proposal_id")?.asString ?: json.get("id")?.asString ?: "",
-            organizationId = json.get("organization_id")?.asString ?: "",
-            title = json.get("proposal_title")?.asString ?: json.get("title")?.asString ?: "",
-            description = json.get("proposal_text")?.asString ?: json.get("description")?.asString ?: "",
-            choices = choices,
-            votingStartsAt = json.get("opens_at")?.asString ?: json.get("voting_starts_at")?.asString ?: "",
-            votingEndsAt = json.get("closes_at")?.asString ?: json.get("voting_ends_at")?.asString ?: "",
-            status = status,
-            signature = json.get("signature")?.asString ?: "",
-            signatureKeyId = json.get("signature_key_id")?.asString ?: "",
-            createdAt = json.get("created_at")?.asString ?: "",
-            userHasVoted = json.get("user_has_voted")?.asBoolean ?: false,
-            proposalNumber = json.get("proposal_number")?.asString,
-            category = json.get("category")?.asString,
-            quorumType = json.get("quorum_type")?.asString,
-            quorumValue = json.get("quorum_value")?.asString
         )
     }
 

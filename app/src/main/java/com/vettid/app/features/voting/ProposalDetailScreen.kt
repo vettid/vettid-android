@@ -45,6 +45,8 @@ fun ProposalDetailScreen(
     val error by viewModel.error.collectAsState()
     val votingState by viewModel.state.collectAsState()
     val userVote by viewModel.userVote.collectAsState()
+    val verifying by viewModel.verifying.collectAsState()
+    val verification by viewModel.verification.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
     // Set proposal ID
@@ -93,6 +95,8 @@ fun ProposalDetailScreen(
                         is VotingState.Idle -> ProposalContent(
                             proposal = proposal!!,
                             userVote = userVote,
+                            verifying = verifying,
+                            onVerify = { viewModel.verifyVote(proposalId) },
                             onSelectChoice = { choice ->
                                 viewModel.onEvent(VotingEvent.SelectChoice(choice))
                             }
@@ -126,13 +130,68 @@ fun ProposalDetailScreen(
                 }
             }
         }
+
+        verification?.let { result ->
+            VerificationResultDialog(
+                result = result,
+                onDismiss = { viewModel.clearVerification() }
+            )
+        }
     }
+}
+
+@Composable
+private fun VerificationResultDialog(
+    result: VoteVerification,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = {
+            Icon(
+                imageVector = if (result.verified) Icons.Default.Verified else Icons.Default.ErrorOutline,
+                contentDescription = null,
+                tint = if (result.verified) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.error
+            )
+        },
+        title = {
+            Text(if (result.verified) "Vote verified" else "Verification failed")
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (result.verified) {
+                    Text(
+                        "Your vote (${result.vote}) was counted at position ${result.leafIndex + 1} of ${result.total}.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    if (result.merkleRoot.isNotBlank()) {
+                        Text(
+                            "Merkle root: ${result.merkleRoot.take(16)}…",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    Text(
+                        result.error ?: "The vault could not confirm this vote was included in the published tally.",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        }
+    )
 }
 
 @Composable
 private fun ProposalContent(
     proposal: Proposal,
     userVote: Vote? = null,
+    verifying: Boolean = false,
+    onVerify: () -> Unit = {},
     onSelectChoice: (VoteChoice) -> Unit
 ) {
     var selectedChoice by remember { mutableStateOf<VoteChoice?>(null) }
@@ -275,7 +334,7 @@ private fun ProposalContent(
 
         // Show results if finalized, otherwise show voting options
         val results = proposal.results
-        if (proposal.status == ProposalStatus.FINALIZED && results != null) {
+        if (proposal.status == ProposalStatus.CLOSED && results != null) {
             Text(
                 text = "Results",
                 style = MaterialTheme.typography.titleMedium,
@@ -283,6 +342,27 @@ private fun ProposalContent(
                 color = MaterialTheme.colorScheme.onSurface
             )
             ResultsContent(proposal = proposal, results = results)
+            if (proposal.userHasVoted && results.merkleRoot.isNotBlank()) {
+                Button(
+                    onClick = onVerify,
+                    enabled = !verifying,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (verifying) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onPrimary
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Verifying…")
+                    } else {
+                        Icon(Icons.Default.Verified, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Verify my vote")
+                    }
+                }
+            }
         } else if (proposal.userHasVoted) {
             Text(
                 text = "Your Vote",
@@ -779,9 +859,15 @@ private fun ResultsContent(
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                if (results.finalizedAt.isNotBlank()) {
+                if (results.resultsPublishedAt.isNotBlank()) {
                     Text(
-                        text = "Finalized: ${formatTimestamp(results.finalizedAt)}",
+                        text = "Published: ${formatTimestamp(results.resultsPublishedAt)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                } else if (results.closedAt.isNotBlank()) {
+                    Text(
+                        text = "Closed: ${formatTimestamp(results.closedAt)}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -881,7 +967,7 @@ private fun VotingNotActiveContent(status: ProposalStatus) {
             Icon(
                 imageVector = when (status) {
                     ProposalStatus.UPCOMING -> Icons.Default.Schedule
-                    ProposalStatus.ENDED -> Icons.Default.EventBusy
+                    ProposalStatus.CLOSED -> Icons.Default.EventBusy
                     ProposalStatus.CANCELLED -> Icons.Default.Cancel
                     else -> Icons.Default.Info
                 },
@@ -893,7 +979,7 @@ private fun VotingNotActiveContent(status: ProposalStatus) {
                 Text(
                     text = when (status) {
                         ProposalStatus.UPCOMING -> "Voting has not started yet"
-                        ProposalStatus.ENDED -> "Voting has ended"
+                        ProposalStatus.CLOSED -> "Voting has closed"
                         ProposalStatus.CANCELLED -> "This proposal was cancelled"
                         else -> "Voting is not available"
                     },
@@ -904,7 +990,7 @@ private fun VotingNotActiveContent(status: ProposalStatus) {
                 Text(
                     text = when (status) {
                         ProposalStatus.UPCOMING -> "Check back when the voting period opens"
-                        ProposalStatus.ENDED -> "Results will be available after finalization"
+                        ProposalStatus.CLOSED -> "Final results are shown above"
                         ProposalStatus.CANCELLED -> "This proposal is no longer accepting votes"
                         else -> ""
                     },
@@ -929,15 +1015,10 @@ private fun StatusChip(status: ProposalStatus) {
             MaterialTheme.colorScheme.onPrimaryContainer,
             "Active"
         )
-        ProposalStatus.ENDED -> Triple(
-            MaterialTheme.colorScheme.surfaceVariant,
-            MaterialTheme.colorScheme.onSurfaceVariant,
-            "Ended"
-        )
-        ProposalStatus.FINALIZED -> Triple(
+        ProposalStatus.CLOSED -> Triple(
             MaterialTheme.colorScheme.tertiaryContainer,
             MaterialTheme.colorScheme.onTertiaryContainer,
-            "Finalized"
+            "Closed"
         )
         ProposalStatus.CANCELLED -> Triple(
             MaterialTheme.colorScheme.errorContainer,

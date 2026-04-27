@@ -300,8 +300,7 @@ private fun StatusChip(status: ProposalStatus) {
     val (color, text) = when (status) {
         ProposalStatus.UPCOMING -> MaterialTheme.colorScheme.secondaryContainer to "Upcoming"
         ProposalStatus.ACTIVE -> MaterialTheme.colorScheme.primaryContainer to "Active"
-        ProposalStatus.ENDED -> MaterialTheme.colorScheme.surfaceVariant to "Ended"
-        ProposalStatus.FINALIZED -> MaterialTheme.colorScheme.tertiaryContainer to "Finalized"
+        ProposalStatus.CLOSED -> MaterialTheme.colorScheme.tertiaryContainer to "Closed"
         ProposalStatus.CANCELLED -> MaterialTheme.colorScheme.errorContainer to "Cancelled"
     }
 
@@ -331,10 +330,10 @@ private fun formatVotingTime(proposal: Proposal): String {
                 val duration = Duration.between(now, endsAt)
                 "Ends in ${formatDuration(duration)}"
             }
-            ProposalStatus.ENDED, ProposalStatus.FINALIZED -> {
+            ProposalStatus.CLOSED -> {
                 val endsAt = Instant.parse(proposal.votingEndsAt)
                 val formatter = DateTimeFormatter.ofPattern("MMM d, yyyy")
-                "Ended ${endsAt.atZone(ZoneId.systemDefault()).format(formatter)}"
+                "Closed ${endsAt.atZone(ZoneId.systemDefault()).format(formatter)}"
             }
             ProposalStatus.CANCELLED -> "Cancelled"
         }
@@ -435,8 +434,7 @@ private fun FilterDialog(
                             text = when (status) {
                                 ProposalStatus.UPCOMING -> "Upcoming"
                                 ProposalStatus.ACTIVE -> "Active"
-                                ProposalStatus.ENDED -> "Ended"
-                                ProposalStatus.FINALIZED -> "Finalized"
+                                ProposalStatus.CLOSED -> "Closed"
                                 ProposalStatus.CANCELLED -> "Cancelled"
                             }
                         )

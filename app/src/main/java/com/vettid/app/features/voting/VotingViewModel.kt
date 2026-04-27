@@ -67,6 +67,12 @@ class VotingViewModel @Inject constructor(
     private val _userVote = MutableStateFlow<Vote?>(null)
     val userVote: StateFlow<Vote?> = _userVote.asStateFlow()
 
+    private val _verifying = MutableStateFlow(false)
+    val verifying: StateFlow<Boolean> = _verifying.asStateFlow()
+
+    private val _verification = MutableStateFlow<VoteVerification?>(null)
+    val verification: StateFlow<VoteVerification?> = _verification.asStateFlow()
+
     init {
         if (proposalId.isNotBlank()) {
             loadProposal()
@@ -348,6 +354,88 @@ class VotingViewModel @Inject constructor(
         viewModelScope.launch {
             _state.value = VotingState.Idle
             _effects.emit(VotingEffect.NavigateBack)
+        }
+    }
+
+    /**
+     * Ask the vault to verify our recorded vote on this proposal against the
+     * published Merkle tree. The vault re-derives the voting public key from
+     * the user's identity, fetches the inclusion proof through the parent,
+     * and re-walks the tree inside the enclave. The app just renders the
+     * verified flag — the bool is the truth.
+     */
+    fun verifyVote(proposalId: String) {
+        viewModelScope.launch {
+            _verifying.value = true
+            _verification.value = null
+            try {
+                val payload = JsonObject().apply { addProperty("proposal_id", proposalId) }
+                val response = ownerSpaceClient.sendAndAwaitResponse("vote.verify", payload, 15000L)
+                _verification.value = when (response) {
+                    is VaultResponse.HandlerResult -> {
+                        if (response.success && response.result != null) {
+                            val r = response.result
+                            VoteVerification(
+                                verified = r.get("verified")?.asBoolean ?: false,
+                                proposalId = r.get("proposal_id")?.asString ?: proposalId,
+                                votingPublicKey = r.get("voting_public_key")?.asString,
+                                leafIndex = r.get("leaf_index")?.asInt ?: 0,
+                                total = r.get("total")?.asInt ?: 0,
+                                merkleRoot = r.get("merkle_root")?.asString ?: "",
+                                vote = r.get("vote")?.asString ?: "",
+                                error = r.get("error")?.asString
+                            )
+                        } else {
+                            VoteVerification(
+                                verified = false, proposalId = proposalId,
+                                error = response.error ?: "verification failed"
+                            )
+                        }
+                    }
+                    is VaultResponse.Error -> VoteVerification(
+                        verified = false, proposalId = proposalId,
+                        error = response.message ?: "verification error"
+                    )
+                    null -> VoteVerification(
+                        verified = false, proposalId = proposalId,
+                        error = "vault timeout"
+                    )
+                    else -> VoteVerification(
+                        verified = false, proposalId = proposalId,
+                        error = "unexpected response"
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "verifyVote failed", e)
+                _verification.value = VoteVerification(
+                    verified = false, proposalId = proposalId,
+                    error = e.message ?: "verification exception"
+                )
+            } finally {
+                _verifying.value = false
+            }
+        }
+    }
+
+    fun clearVerification() {
+        _verification.value = null
+    }
+
+    /**
+     * Drain the vault's pending-vote queue. Used by the recovery flow when
+     * the app comes back online and there might be receipts that were
+     * signed but not yet shipped to DynamoDB.
+     */
+    fun resubmitPendingVotes() {
+        viewModelScope.launch {
+            try {
+                val response = ownerSpaceClient.sendAndAwaitResponse(
+                    "vote.resubmit-pending", JsonObject(), 30000L
+                )
+                Log.i(TAG, "resubmit-pending response: $response")
+            } catch (e: Exception) {
+                Log.e(TAG, "resubmitPendingVotes failed", e)
+            }
         }
     }
 }
