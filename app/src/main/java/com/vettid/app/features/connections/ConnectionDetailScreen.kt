@@ -135,7 +135,27 @@ fun ConnectionDetailScreen(
         else -> "Connection"
     }
     var menuExpanded by remember { mutableStateOf(false) }
+    var actionsMenuExpanded by remember { mutableStateOf(false) }
     val isActiveConnection = (state as? ConnectionDetailState.Loaded)?.connection?.status == ConnectionStatus.ACTIVE
+    val connectionId = (state as? ConnectionDetailState.Loaded)?.connection?.connectionId
+
+    // Wire the shared-action layer. The action ViewModel is its own
+    // injected singleton so the same data can drive ⋮-menu listing,
+    // invoke sheet, and approval inbox without prop-drilling.
+    val actionsVm: com.vettid.app.features.actions.ActionsViewModel = androidx.hilt.navigation.compose.hiltViewModel()
+    val peerActions by actionsVm.peerActions.collectAsState()
+    var pickedAction by remember { mutableStateOf<com.vettid.app.core.actions.PublishedAction?>(null) }
+    var lastInvocationStatus by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(connectionId) {
+        if (connectionId != null) actionsVm.loadPeerActions(connectionId)
+    }
+    LaunchedEffect(Unit) {
+        actionsVm.results.collect { r ->
+            lastInvocationStatus = "Action ${r.actionId}: ${r.status}" +
+                (r.error?.let { " ($it)" } ?: "")
+        }
+    }
     val isRotating = (state as? ConnectionDetailState.Loaded)?.isRotating == true
     val isRevoking = (state as? ConnectionDetailState.Loaded)?.isRevoking == true
     Scaffold(
@@ -167,6 +187,19 @@ fun ConnectionDetailScreen(
                                     onShowHistory()
                                 }
                             )
+                            // Available actions submenu — surfaces the
+                            // shared-action layer the peer has enabled
+                            // for me. Tapping an entry opens the invoke
+                            // sheet (param form + schema validation).
+                            DropdownMenuItem(
+                                text = { Text("Available actions") },
+                                leadingIcon = { Icon(Icons.Default.PlayArrow, null) },
+                                trailingIcon = { Icon(Icons.Default.ChevronRight, null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    actionsMenuExpanded = true
+                                }
+                            )
                             DropdownMenuItem(
                                 text = { Text("Rotate keys") },
                                 enabled = !isRotating,
@@ -194,6 +227,20 @@ fun ConnectionDetailScreen(
                                 onClick = {
                                     menuExpanded = false
                                     viewModel.onRevokeClick()
+                                }
+                            )
+                        }
+                        // Actions submenu (sibling DropdownMenu so it
+                        // can stay open after the parent dismisses).
+                        DropdownMenu(
+                            expanded = actionsMenuExpanded,
+                            onDismissRequest = { actionsMenuExpanded = false }
+                        ) {
+                            com.vettid.app.features.actions.ActionsAvailableMenu(
+                                actions = peerActions,
+                                onPick = { picked ->
+                                    actionsMenuExpanded = false
+                                    pickedAction = picked
                                 }
                             )
                         }
@@ -269,6 +316,55 @@ fun ConnectionDetailScreen(
                     onRetry = { viewModel.loadConnection() },
                     modifier = Modifier.padding(padding)
                 )
+            }
+        }
+
+        // Invoke sheet — only present when the user has tapped an entry
+        // in the actions submenu. Vault re-validates params; this is for
+        // UX so a typo never reaches the wire.
+        pickedAction?.let { picked ->
+            if (connectionId != null) {
+                com.vettid.app.features.actions.ActionInvokeSheet(
+                    action = picked,
+                    onDismiss = { pickedAction = null },
+                    onSubmit = { params ->
+                        actionsVm.invokeOnPeer(
+                            connectionId = connectionId,
+                            action = picked,
+                            params = params,
+                            onSent = { lastInvocationStatus = "Request sent — awaiting peer" }
+                        )
+                        pickedAction = null
+                    }
+                )
+            }
+        }
+
+        // Async result toast. Replace with a richer panel once the per-
+        // action result renderer is wired (Phase 1 fast-follow).
+        lastInvocationStatus?.let { status ->
+            LaunchedEffect(status) {
+                kotlinx.coroutines.delay(4000)
+                lastInvocationStatus = null
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+                contentAlignment = Alignment.BottomCenter
+            ) {
+                Surface(
+                    modifier = Modifier.padding(16.dp),
+                    color = MaterialTheme.colorScheme.inverseSurface,
+                    shape = MaterialTheme.shapes.small
+                ) {
+                    Text(
+                        status,
+                        modifier = Modifier.padding(12.dp),
+                        color = MaterialTheme.colorScheme.inverseOnSurface,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
             }
         }
     }
