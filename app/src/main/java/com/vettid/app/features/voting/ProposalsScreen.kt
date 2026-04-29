@@ -223,13 +223,22 @@ private fun ProposalCard(
         Column(
             modifier = Modifier.padding(16.dp)
         ) {
-            // Header: Status + Time
+            // Header: Status + Time. For closed proposals we promote
+            // the outcome (Passed / Failed / No quorum) into the chip
+            // so the row is glance-readable without opening the
+            // detail screen.
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                StatusChip(status = proposal.status)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    StatusChip(status = proposal.status)
+                    if (proposal.status == ProposalStatus.CLOSED && proposal.results != null) {
+                        Spacer(modifier = Modifier.width(6.dp))
+                        OutcomeChip(results = proposal.results)
+                    }
+                }
                 Text(
                     text = formatVotingTime(proposal),
                     style = MaterialTheme.typography.bodySmall,
@@ -292,6 +301,23 @@ private fun ProposalCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun OutcomeChip(results: VoteResults) {
+    val (color, text) = when {
+        !results.quorumMet -> MaterialTheme.colorScheme.errorContainer to "No quorum"
+        results.passed -> MaterialTheme.colorScheme.primaryContainer to "Passed"
+        else -> MaterialTheme.colorScheme.errorContainer to "Failed"
+    }
+    Surface(color = color, shape = RoundedCornerShape(4.dp)) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+        )
     }
 }
 
