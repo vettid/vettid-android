@@ -995,14 +995,14 @@ private fun SeedBackupCard(
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "Back up seed phrase",
+                    text = "Move seed to credential",
                     style = MaterialTheme.typography.titleSmall,
                 )
                 Text(
                     text = if (backedUp)
-                        "Visible in Critical Secrets. Tap to remove."
+                        "Seed lives in your credential. Every send requires your password. Toggle off to move it back into the wallet."
                     else
-                        "Add the wallet's 12-word recovery phrase to your Critical Secrets.",
+                        "Move the wallet's 12-word seed into your credential. Once moved, every send requires your password to unlock the credential.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -1029,11 +1029,11 @@ private fun SeedBackupPasswordDialog(
     onCancel: () -> Unit,
 ) {
     var password by remember { mutableStateOf("") }
-    val title = if (mode == "enable") "Add Seed to Critical Secrets" else "Remove Seed from Critical Secrets"
+    val title = if (mode == "enable") "Move Seed to Credential" else "Move Seed Back to Wallet"
     val body = if (mode == "enable")
-        "Enter your account password to copy this wallet's 12-word seed phrase into your Critical Secrets list. The seed never leaves your enclave; this only changes whether you can reveal it."
+        "Enter your account password to move this wallet's 12-word seed into your credential. The seed will be wiped from the wallet record — every BTC send afterwards will require your password."
     else
-        "Enter your account password to remove the seed phrase from Critical Secrets. The wallet keeps working — only the user-visible Critical Secret entry is removed."
+        "Enter your account password to move the seed back into the wallet record. After this, sends won't require a password again."
     AlertDialog(
         onDismissRequest = onCancel,
         icon = { Icon(Icons.Default.VpnKey, contentDescription = null) },
