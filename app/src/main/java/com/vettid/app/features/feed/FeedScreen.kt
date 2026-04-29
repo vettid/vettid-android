@@ -65,6 +65,7 @@ fun FeedContent(
     onNavigateToHandler: (String) -> Unit = {},
     onNavigateToBackup: (String) -> Unit = {},
     onNavigateToGuide: (guideId: String, eventId: String, userName: String) -> Unit = { _, _, _ -> },
+    onNavigateToProposalDetail: (proposalId: String) -> Unit = {},
     onNavigateToAgentApproval: (requestId: String) -> Unit = {},
     onNavigateToConnectionReview: (connectionId: String, eventId: String) -> Unit = { _, _ -> },
     onNavigateToCreateInvitation: () -> Unit = {},
@@ -257,6 +258,7 @@ fun FeedContent(
                         viewModel.markGuideRead(guideId)
                         onNavigateToGuide(guideId, "", "")
                     },
+                    onOpenProposalById = onNavigateToProposalDetail,
                 )
                 is FeedState.Error -> {
                     // If in offline mode, show friendly offline content instead of error
@@ -397,6 +399,7 @@ private fun FeedList(
     onSystemVotes: () -> Unit = {},
     onSystemGuides: () -> Unit = {},
     onOpenGuideById: (guideId: String) -> Unit = {},
+    onOpenProposalById: (proposalId: String) -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
@@ -486,6 +489,7 @@ private fun FeedList(
                         onSystemVotesClick = onSystemVotes,
                         onSystemGuidesClick = onSystemGuides,
                         onOpenGuide = onOpenGuideById,
+                        onOpenProposal = onOpenProposalById,
                     )
             }
         }
@@ -512,6 +516,7 @@ private fun StatusAwareConnectionCard(
     onSystemVotesClick: () -> Unit = {},
     onSystemGuidesClick: () -> Unit = {},
     onOpenGuide: (guideId: String) -> Unit = {},
+    onOpenProposal: (proposalId: String) -> Unit = {},
 ) {
     // Render different card variants based on connection status
     when {
@@ -522,7 +527,7 @@ private fun StatusAwareConnectionCard(
             onCallClick, onVideoCallClick, onBtcClick, onBtcRequestClick,
             onNavigateToConnectionReview, onOpenMigration,
             onSystemVaultMessagesClick, onSystemVotesClick, onSystemGuidesClick,
-            onOpenGuide,
+            onOpenGuide, onOpenProposal,
         )
         item.connectionStatus == "revoked"
             || item.connectionStatus == "rejected"
@@ -532,7 +537,7 @@ private fun StatusAwareConnectionCard(
             onCallClick, onVideoCallClick, onBtcClick, onBtcRequestClick,
             onNavigateToConnectionReview, onOpenMigration,
             onSystemVaultMessagesClick, onSystemVotesClick, onSystemGuidesClick,
-            onOpenGuide,
+            onOpenGuide, onOpenProposal,
         )
     }
 }
@@ -700,6 +705,7 @@ private fun ActiveConnectionCard(
     onSystemVotesClick: () -> Unit = {},
     onSystemGuidesClick: () -> Unit = {},
     onOpenGuide: (guideId: String) -> Unit = {},
+    onOpenProposal: (proposalId: String) -> Unit = {},
 ) {
     val haptic = LocalHapticFeedback.current
 
@@ -883,6 +889,9 @@ private fun ActiveConnectionCard(
                                 is PendingRow.GuideUnread -> {
                                     onOpenGuide(row.guideId)
                                 }
+                                is PendingRow.ProposalUnvoted -> {
+                                    onOpenProposal(row.proposalId)
+                                }
                             }
                         }
                     )
@@ -984,6 +993,8 @@ private fun pendingRowIcon(row: PendingRow): Pair<ImageVector?, Color> {
             Icons.Default.Lock to MaterialTheme.colorScheme.secondary
         is PendingRow.GuideUnread ->
             Icons.Default.MenuBook to MaterialTheme.colorScheme.secondary
+        is PendingRow.ProposalUnvoted ->
+            Icons.Default.HowToVote to MaterialTheme.colorScheme.primary
         is PendingRow.LastActivity -> lastActivityIcon(
             activityType = row.activityType,
             direction = row.direction,
@@ -1003,6 +1014,7 @@ private fun pendingRowLabel(row: PendingRow): String = when (row) {
     is PendingRow.PendingReview -> "Wants to connect"
     is PendingRow.PendingMigration -> "Vault security update available"
     is PendingRow.GuideUnread -> "Guide: ${row.title}"
+    is PendingRow.ProposalUnvoted -> "Vote: ${row.title}"
     is PendingRow.LastActivity -> row.text.ifEmpty { "Connected" }
 }
 

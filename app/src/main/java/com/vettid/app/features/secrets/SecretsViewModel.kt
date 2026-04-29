@@ -78,6 +78,7 @@ class SecretsViewModel @Inject constructor(
             is SecretsEvent.DeleteSecret -> confirmDeleteSecret(event.secretId)
             is SecretsEvent.TogglePublicProfile -> togglePublicProfile(event.secretId)
             is SecretsEvent.ToggleHideFromCatalog -> toggleHideFromCatalog(event.secretId)
+            is SecretsEvent.SetCriticalDiscoverability -> setCriticalDiscoverability(event.secretId, event.discoverability)
             is SecretsEvent.MoveSecretUp -> moveSecretUp(event.secretId)
             is SecretsEvent.MoveSecretDown -> moveSecretDown(event.secretId)
             is SecretsEvent.Refresh -> loadSecrets()
@@ -100,17 +101,23 @@ class SecretsViewModel @Inject constructor(
             try {
                 val secrets = minorSecretsStore.getAllSecrets()
                 val hasUnpublished = checkForUnpublishedChanges(secrets)
+                // Critical secrets ride on the same screen so the user
+                // has one place to manage what's published/cataloged.
+                // Failure to fetch is non-fatal — minor secrets still
+                // render.
+                val criticalSecrets = loadCriticalSecretsMetadata()
 
-                if (secrets.isEmpty()) {
+                if (secrets.isEmpty() && criticalSecrets.isEmpty()) {
                     _state.value = SecretsState.Empty
                 } else {
                     _state.value = SecretsState.Loaded(
                         items = secrets,
+                        criticalSecrets = criticalSecrets,
                         hasUnpublishedChanges = hasUnpublished
                     )
                 }
 
-                Log.d(TAG, "Loaded ${secrets.size} secrets")
+                Log.d(TAG, "Loaded ${secrets.size} minor + ${criticalSecrets.size} critical secrets")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load secrets", e)
                 _state.value = SecretsState.Error(e.message ?: "Failed to load secrets")
@@ -118,6 +125,81 @@ class SecretsViewModel @Inject constructor(
                 // Brief delay ensures PullToRefreshBox indicator animates properly
                 kotlinx.coroutines.delay(300)
                 _isRefreshing.value = false
+            }
+        }
+    }
+
+    /**
+     * Pulls credential.secret.list (no password — server returns
+     * metadata-only when none provided) so the catalog can show
+     * critical secret rows alongside minor secrets. Each row carries
+     * the discoverability flag the user can toggle inline.
+     */
+    private suspend fun loadCriticalSecretsMetadata(): List<CriticalSecretItem> {
+        return try {
+            val resp = ownerSpaceClient.sendAndAwaitResponse(
+                "credential.secret.list",
+                JsonObject(),
+                10_000L,
+            )
+            if (resp is VaultResponse.HandlerResult && resp.success && resp.result != null) {
+                val out = mutableListOf<CriticalSecretItem>()
+                resp.result.getAsJsonArray("secrets")?.forEach { el ->
+                    try {
+                        val o = el.asJsonObject
+                        out += CriticalSecretItem(
+                            id = o.get("id").asString,
+                            name = o.get("name").asString,
+                            category = o.get("category")?.asString ?: "OTHER",
+                            description = o.get("description")?.asString,
+                            owner = o.get("owner")?.asString,
+                            createdAt = o.get("created_at")?.asString ?: "",
+                            discoverability = o.get("discoverability")?.asString
+                                ?.takeIf { it.isNotEmpty() } ?: "cataloged",
+                        )
+                    } catch (_: Exception) { /* skip malformed */ }
+                }
+                out
+            } else {
+                emptyList()
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "loadCriticalSecretsMetadata failed: ${e.message}")
+            emptyList()
+        }
+    }
+
+    /**
+     * Flip a critical secret's discoverability via vault-side metadata
+     * update — the credential blob (and thus the value) is not touched.
+     */
+    private fun setCriticalDiscoverability(secretId: String, discoverability: String) {
+        viewModelScope.launch {
+            try {
+                val req = JsonObject().apply {
+                    addProperty("id", secretId)
+                    addProperty("discoverability", discoverability)
+                }
+                val resp = ownerSpaceClient.sendAndAwaitResponse(
+                    "credential.secret.set-discoverability",
+                    req,
+                    10_000L,
+                )
+                if (resp is VaultResponse.HandlerResult && resp.success) {
+                    val current = _state.value
+                    if (current is SecretsState.Loaded) {
+                        _state.value = current.copy(
+                            criticalSecrets = current.criticalSecrets.map {
+                                if (it.id == secretId) it.copy(discoverability = discoverability) else it
+                            }
+                        )
+                    }
+                } else {
+                    _effects.emit(SecretsEffect.ShowError("Failed to update visibility"))
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "setCriticalDiscoverability", e)
+                _effects.emit(SecretsEffect.ShowError("Failed to update visibility: ${e.message}"))
             }
         }
     }

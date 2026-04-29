@@ -141,11 +141,15 @@ fun SecretsContent(
                 ) {
                     SecretsList(
                         groupedByCategory = groupedByCategory,
+                        criticalSecrets = currentState.criticalSecrets,
                         hasUnpublishedChanges = currentState.hasUnpublishedChanges,
                         searchQuery = currentState.searchQuery,
                         onSecretClick = { viewModel.onEvent(SecretsEvent.SecretClicked(it)) },
                         onTogglePublicProfile = { viewModel.onEvent(SecretsEvent.TogglePublicProfile(it)) },
                         onToggleHideFromCatalog = { viewModel.onEvent(SecretsEvent.ToggleHideFromCatalog(it)) },
+                        onSetCriticalDiscoverability = { id, d ->
+                            viewModel.onEvent(SecretsEvent.SetCriticalDiscoverability(id, d))
+                        },
                         onMoveUp = { viewModel.onEvent(SecretsEvent.MoveSecretUp(it)) },
                         onMoveDown = { viewModel.onEvent(SecretsEvent.MoveSecretDown(it)) },
                         onRenameGroup = { groupId, newLabel -> viewModel.renameGroup(groupId, newLabel) },
@@ -281,11 +285,13 @@ fun SecretsContent(
 @Composable
 private fun SecretsList(
     groupedByCategory: GroupedByCategory,
+    criticalSecrets: List<CriticalSecretItem> = emptyList(),
     hasUnpublishedChanges: Boolean,
     searchQuery: String,
     onSecretClick: (String) -> Unit,
     onTogglePublicProfile: (String) -> Unit,
     onToggleHideFromCatalog: (String) -> Unit,
+    onSetCriticalDiscoverability: (String, String) -> Unit = { _, _ -> },
     onMoveUp: (String) -> Unit,
     onMoveDown: (String) -> Unit,
     onRenameGroup: (String, String) -> Unit,
@@ -328,6 +334,30 @@ private fun SecretsList(
         item {
             CriticalSecretsCard(onClick = onCriticalSecretsTap)
             Spacer(modifier = Modifier.height(12.dp))
+        }
+
+        // Critical-secret catalog rows. Same 3-state visibility control
+        // as minor secrets — values stay sealed in the credential blob;
+        // tapping a row routes to the existing CriticalSecretsScreen
+        // for the password-gated reveal flow.
+        if (criticalSecrets.isNotEmpty()) {
+            item(key = "critical_header") {
+                CollapsibleCategoryHeader(
+                    title = "Critical Secrets",
+                    icon = Icons.Default.Lock,
+                    itemCount = criticalSecrets.size,
+                    isCollapsed = false,
+                    onToggle = {},
+                )
+            }
+            items(criticalSecrets, key = { "critical_${it.id}" }) { item ->
+                CriticalSecretCatalogRow(
+                    item = item,
+                    onTap = onCriticalSecretsTap,
+                    onSetDiscoverability = { d -> onSetCriticalDiscoverability(item.id, d) },
+                )
+            }
+            item { Spacer(modifier = Modifier.height(12.dp)) }
         }
 
         // Category sections
@@ -1701,6 +1731,75 @@ fun SecretsScreenFull(
     ) { padding ->
         Box(modifier = Modifier.padding(padding)) {
             SecretsContent(viewModel = viewModel)
+        }
+    }
+}
+
+/**
+ * Catalog row for a critical (credential-embedded) secret. Shows the
+ * name + category, a 3-state visibility selector that maps to the
+ * vault's discoverability enum, and routes to CriticalSecretsScreen on
+ * tap so the value can be revealed under the existing password gate.
+ */
+@Composable
+private fun CriticalSecretCatalogRow(
+    item: CriticalSecretItem,
+    onTap: () -> Unit,
+    onSetDiscoverability: (String) -> Unit,
+) {
+    val current = when (item.discoverability) {
+        "public" -> com.vettid.app.ui.components.FieldVisibility.PROFILE
+        "private" -> com.vettid.app.ui.components.FieldVisibility.PRIVATE
+        else -> com.vettid.app.ui.components.FieldVisibility.CATALOG
+    }
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp)
+            .clickable(onClick = onTap),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Default.Lock,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.tertiary,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = item.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = item.category,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            com.vettid.app.ui.components.VisibilitySegmented(
+                visibility = current,
+                allowProfile = true,
+                onVisibilityChange = { next ->
+                    val wire = when (next) {
+                        com.vettid.app.ui.components.FieldVisibility.PROFILE -> "public"
+                        com.vettid.app.ui.components.FieldVisibility.CATALOG -> "cataloged"
+                        com.vettid.app.ui.components.FieldVisibility.PRIVATE -> "private"
+                    }
+                    onSetDiscoverability(wire)
+                },
+            )
         }
     }
 }

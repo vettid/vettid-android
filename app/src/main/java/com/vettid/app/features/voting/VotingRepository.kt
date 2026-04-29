@@ -218,6 +218,18 @@ class VotingRepository @Inject constructor(
         }
     }
 
+    /**
+     * The actual list of currently-active proposals the user hasn't
+     * voted on. Used to render one PendingRow per proposal under the
+     * VettID system card so the user sees titles, not just a count.
+     */
+    fun getOpenUnvotedProposals(): List<Proposal> {
+        val proposals = getCachedProposals() ?: return emptyList()
+        return proposals.filter { p ->
+            p.status == ProposalStatus.ACTIVE && !hasVotedOnProposal(p.id)
+        }
+    }
+
     // MARK: - Vote Verification Helpers
 
     /**

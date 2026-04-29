@@ -121,6 +121,13 @@ sealed class PendingRow {
         override val timestamp: Long,
     ) : PendingRow()
 
+    /** Active proposal the user hasn't voted on (system connection). One row per proposal. */
+    data class ProposalUnvoted(
+        val proposalId: String,
+        val title: String,
+        override val timestamp: Long,
+    ) : PendingRow()
+
     /**
      * Passive last-activity row shown when nothing is pending. Not
      * interactive beyond opening the default card destination.

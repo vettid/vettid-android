@@ -444,6 +444,13 @@ class FeedViewModel @Inject constructor(
                     timestamp = 0L,
                 )
             }
+            votingRepository.getOpenUnvotedProposals().forEach { p ->
+                rows += PendingRow.ProposalUnvoted(
+                    proposalId = p.id,
+                    title = p.title,
+                    timestamp = 0L,
+                )
+            }
         }
 
         if (needsReview) {

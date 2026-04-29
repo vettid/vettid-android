@@ -1979,6 +1979,7 @@ fun MainScreen(
                 onNavigateToHandler = onNavigateToHandlerDetail,
                 onNavigateToBackup = { onNavigateToBackups() },
                 onNavigateToGuide = onNavigateToGuide,
+                onNavigateToProposalDetail = onNavigateToProposalDetail,
                 onNavigateToAgentApproval = onNavigateToAgentApproval,
                 onNavigateToConnectionReview = onNavigateToConnectionReview,
                 onNavigateToCreateInvitation = onNavigateToCreateInvitation,

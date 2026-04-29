@@ -301,7 +301,8 @@ class CriticalSecretsViewModel @Inject constructor(
                     category = obj.get("category")?.asString ?: "OTHER",
                     description = obj.get("description")?.asString,
                     owner = obj.get("owner")?.asString,
-                    createdAt = obj.get("created_at")?.asString ?: ""
+                    createdAt = obj.get("created_at")?.asString ?: "",
+                    discoverability = obj.get("discoverability")?.asString?.takeIf { it.isNotEmpty() } ?: "cataloged",
                 ))
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to parse critical secret", e)

@@ -11,6 +11,7 @@ sealed class SecretsState {
     object Loading : SecretsState()
     data class Loaded(
         val items: List<MinorSecret>,
+        val criticalSecrets: List<CriticalSecretItem> = emptyList(),
         val searchQuery: String = "",
         val hasUnpublishedChanges: Boolean = false
     ) : SecretsState()
@@ -57,6 +58,8 @@ sealed class SecretsEvent {
     data class DeleteSecret(val secretId: String) : SecretsEvent()
     data class TogglePublicProfile(val secretId: String) : SecretsEvent()
     data class ToggleHideFromCatalog(val secretId: String) : SecretsEvent()
+    /** Set discoverability on a critical (credential-embedded) secret. */
+    data class SetCriticalDiscoverability(val secretId: String, val discoverability: String) : SecretsEvent()
     data class MoveSecretUp(val secretId: String) : SecretsEvent()
     data class MoveSecretDown(val secretId: String) : SecretsEvent()
     object Refresh : SecretsEvent()
@@ -479,7 +482,13 @@ data class CriticalSecretItem(
     val category: String,
     val description: String?,
     val owner: String?,
-    val createdAt: String
+    val createdAt: String,
+    /**
+     * "public" | "cataloged" | "private". Mirrors the vault enum;
+     * drives the same 3-state segmented control as minor secrets.
+     * Empty/absent is treated as "cataloged".
+     */
+    val discoverability: String = "cataloged",
 )
 
 /** A crypto key item for display in the metadata list. */
