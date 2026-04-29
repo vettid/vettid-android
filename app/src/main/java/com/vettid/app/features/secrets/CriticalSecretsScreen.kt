@@ -114,6 +114,9 @@ fun CriticalSecretsScreen(
                         searchQuery = currentState.searchQuery,
                         onSecretTap = { id, name ->
                             viewModel.onEvent(CriticalSecretsScreenEvent.RevealSecret(id, name))
+                        },
+                        onSetDiscoverability = { id, value ->
+                            viewModel.onEvent(CriticalSecretsScreenEvent.SetDiscoverability(id, value))
                         }
                     )
                 }
@@ -289,7 +292,8 @@ private fun MetadataListContent(
     cryptoKeys: List<CryptoKeyItem>,
     credentialInfo: CredentialInfoItem?,
     searchQuery: String,
-    onSecretTap: (String, String) -> Unit
+    onSecretTap: (String, String) -> Unit,
+    onSetDiscoverability: (String, String) -> Unit = { _, _ -> },
 ) {
     // Filter items based on search query
     val filteredSecrets = if (searchQuery.isBlank()) secrets else {
@@ -342,7 +346,8 @@ private fun MetadataListContent(
             items(filteredSecrets, key = { it.id }) { secret ->
                 SecretMetadataCard(
                     secret = secret,
-                    onClick = { onSecretTap(secret.id, secret.name) }
+                    onClick = { onSecretTap(secret.id, secret.name) },
+                    onSetDiscoverability = { d -> onSetDiscoverability(secret.id, d) },
                 )
             }
         }
@@ -439,54 +444,89 @@ private fun CryptoKeyCard(key: CryptoKeyItem) {
 @Composable
 private fun SecretMetadataCard(
     secret: CriticalSecretItem,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    onSetDiscoverability: (String) -> Unit = {},
 ) {
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
         ),
         shape = RoundedCornerShape(12.dp)
     ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                getCriticalSecretCategoryIcon(secret.category),
-                contentDescription = null,
-                modifier = Modifier.size(24.dp),
-                tint = MaterialTheme.colorScheme.error
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = secret.name,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Medium
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onClick),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    getCriticalSecretCategoryIcon(secret.category),
+                    contentDescription = null,
+                    modifier = Modifier.size(24.dp),
+                    tint = MaterialTheme.colorScheme.error
                 )
-                secret.description?.let {
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        text = secret.name,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Medium
+                    )
+                    secret.description?.let {
+                        Text(
+                            text = it,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Text(
+                        text = formatCategory(secret.category),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Text(
-                    text = formatCategory(secret.category),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                Icon(
+                    Icons.Default.ChevronRight,
+                    contentDescription = "Reveal",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Icon(
-                Icons.Default.ChevronRight,
-                contentDescription = "Reveal",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Spacer(modifier = Modifier.height(12.dp))
+            // Critical-secret values must NEVER appear on the published
+            // profile. Only metadata-presence is shareable, so the
+            // selector offers two states: "Catalog" (peers see this
+            // secret exists) or "Hide" (peers see nothing).
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Visibility",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                val current = if (secret.discoverability == "private") {
+                    com.vettid.app.ui.components.FieldVisibility.PRIVATE
+                } else {
+                    com.vettid.app.ui.components.FieldVisibility.CATALOG
+                }
+                com.vettid.app.ui.components.VisibilitySegmented(
+                    visibility = current,
+                    allowProfile = false,
+                    onVisibilityChange = { next ->
+                        val wire = when (next) {
+                            com.vettid.app.ui.components.FieldVisibility.PRIVATE -> "private"
+                            else -> "cataloged"
+                        }
+                        onSetDiscoverability(wire)
+                    },
+                )
+            }
         }
     }
 }

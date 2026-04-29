@@ -90,6 +90,50 @@ class CriticalSecretsViewModel @Inject constructor(
                     _state.value = current.copy(searchQuery = event.query)
                 }
             }
+            is CriticalSecretsScreenEvent.SetDiscoverability -> {
+                setDiscoverability(event.secretId, event.discoverability)
+            }
+        }
+    }
+
+    /**
+     * Hits credential.secret.set-discoverability. The vault clamps the
+     * value to "cataloged" or "private" — critical secret values never
+     * surface on the published profile, only their metadata if the
+     * user wants peers to know they have it. On success we update the
+     * cached MetadataList in place so the row's selector reflects the
+     * new state without forcing a full re-auth.
+     */
+    private fun setDiscoverability(secretId: String, discoverability: String) {
+        viewModelScope.launch {
+            try {
+                val req = JsonObject().apply {
+                    addProperty("id", secretId)
+                    addProperty("discoverability", discoverability)
+                }
+                val resp = ownerSpaceClient.sendAndAwaitResponse(
+                    "credential.secret.set-discoverability",
+                    req,
+                    10_000L,
+                )
+                if (resp is VaultResponse.HandlerResult && resp.success) {
+                    val current = _state.value
+                    val cached = cachedMetadataList
+                    val update: (CriticalSecretsState.MetadataList) -> CriticalSecretsState.MetadataList = { m ->
+                        m.copy(secrets = m.secrets.map {
+                            if (it.id == secretId) it.copy(discoverability = discoverability) else it
+                        })
+                    }
+                    if (cached != null) cachedMetadataList = update(cached)
+                    if (current is CriticalSecretsState.MetadataList) {
+                        _state.value = update(current)
+                    }
+                } else {
+                    Log.w(TAG, "set-discoverability failed: ${(resp as? VaultResponse.Error)?.message}")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "setDiscoverability", e)
+            }
         }
     }
 

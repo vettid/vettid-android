@@ -39,6 +39,8 @@ sealed interface SendState {
 class SendBtcViewModel @Inject constructor(
     private val ownerSpaceClient: OwnerSpaceClient,
     private val natsAutoConnector: NatsAutoConnector,
+    private val credentialStore: com.vettid.app.core.storage.CredentialStore,
+    private val cryptoManager: com.vettid.app.core.crypto.CryptoManager,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -131,7 +133,20 @@ class SendBtcViewModel @Inject constructor(
      * The transaction is signed inside the enclave and broadcast from the vault.
      * The app never sees the private key.
      */
-    fun send(walletId: String, toAddress: String, amountSats: Long, feeRate: Int) {
+    /**
+     * Send Bitcoin. When the chosen wallet's seed has been moved into
+     * the credential, [password] must be provided so the enclave can
+     * decrypt the credential to retrieve the seed for signing — every
+     * such send re-prompts for the password (no caching). Otherwise
+     * the password is ignored.
+     */
+    fun send(
+        walletId: String,
+        toAddress: String,
+        amountSats: Long,
+        feeRate: Int,
+        password: String? = null,
+    ) {
         viewModelScope.launch {
             try {
                 _sendState.value = SendState.Loading
@@ -141,6 +156,14 @@ class SendBtcViewModel @Inject constructor(
                     addProperty("to_address", toAddress)
                     addProperty("amount_sats", amountSats)
                     addProperty("fee_rate", feeRate)
+                }
+
+                if (!password.isNullOrEmpty()) {
+                    val authed = attachCredentialAuth(payload, password)
+                    if (!authed) {
+                        _sendState.value = SendState.Error("Could not unlock credential — try again")
+                        return@launch
+                    }
                 }
 
                 val result = sendAndAwait("wallet.send", payload) { json ->
@@ -163,6 +186,32 @@ class SendBtcViewModel @Inject constructor(
 
     fun resetSendState() {
         _sendState.value = SendState.Idle
+    }
+
+    /**
+     * Build the {encrypted_credential, encrypted_password_hash, ...}
+     * envelope and merge it into [payload]. Mirrors WalletDetailScreen's
+     * helper for credential.secret.* mutations. Returns false if any
+     * prerequisite (salt, UTKs, blob) is missing.
+     */
+    private fun attachCredentialAuth(payload: JsonObject, password: String): Boolean {
+        return try {
+            val saltBytes = credentialStore.getPasswordSaltBytes() ?: return false
+            val utkPool = credentialStore.getUtkPool()
+            if (utkPool.isEmpty()) return false
+            val utk = utkPool.first()
+            val encryptedBlob = credentialStore.getEncryptedBlob() ?: return false
+            val encryptedPassword = cryptoManager.encryptPasswordForServer(password, saltBytes, utk.publicKey)
+            payload.addProperty("encrypted_credential", encryptedBlob)
+            payload.addProperty("encrypted_password_hash", encryptedPassword.encryptedPasswordHash)
+            payload.addProperty("ephemeral_public_key", encryptedPassword.ephemeralPublicKey)
+            payload.addProperty("nonce", encryptedPassword.nonce)
+            payload.addProperty("key_id", utk.keyId)
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "attachCredentialAuth failed: ${e.message}", e)
+            false
+        }
     }
 
     /**

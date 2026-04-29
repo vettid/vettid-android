@@ -49,10 +49,13 @@ fun SendBtcScreen(
     var amountBtc by remember { mutableStateOf("") }
     var selectedFeeTier by remember { mutableStateOf(FeeTier.STANDARD) }
     var showConfirmation by remember { mutableStateOf(false) }
+    var passwordPrompt by remember { mutableStateOf<String?>(null) }
+    var passwordInput by remember { mutableStateOf("") }
 
     val selectedWallet = wallets.find { it.walletId == selectedWalletId }
     val amountSats = btcToSats(amountBtc)
     val feeRate = selectedFeeTier.getRate(feeEstimates)
+    val seedInCredential = selectedWallet?.seedBackupSecretId != null
 
     Scaffold(
         topBar = {
@@ -92,12 +95,18 @@ fun SendBtcScreen(
                         isLoading = sendState is SendState.Loading,
                         error = (sendState as? SendState.Error)?.message,
                         onConfirm = {
-                            viewModel.send(
-                                walletId = selectedWalletId,
-                                toAddress = recipientAddress,
-                                amountSats = amountSats,
-                                feeRate = feeRate
-                            )
+                            if (seedInCredential) {
+                                // Seed lives in the credential — every send needs
+                                // the password so the enclave can decrypt it.
+                                passwordPrompt = "send"
+                            } else {
+                                viewModel.send(
+                                    walletId = selectedWalletId,
+                                    toAddress = recipientAddress,
+                                    amountSats = amountSats,
+                                    feeRate = feeRate,
+                                )
+                            }
                         },
                         onBack = { showConfirmation = false },
                         modifier = Modifier.padding(padding)
@@ -123,6 +132,60 @@ fun SendBtcScreen(
                 }
             }
         }
+    }
+
+    if (passwordPrompt != null) {
+        AlertDialog(
+            onDismissRequest = {
+                passwordPrompt = null
+                passwordInput = ""
+            },
+            icon = { Icon(Icons.Default.Lock, contentDescription = null) },
+            title = { Text("Confirm with password") },
+            text = {
+                Column {
+                    Text(
+                        "This wallet's seed lives in your credential. Enter your password so the enclave can sign this transaction.",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = passwordInput,
+                        onValueChange = { passwordInput = it },
+                        label = { Text("Password") },
+                        singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Password,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = passwordInput.isNotBlank(),
+                    onClick = {
+                        val pwd = passwordInput
+                        passwordInput = ""
+                        passwordPrompt = null
+                        viewModel.send(
+                            walletId = selectedWalletId,
+                            toAddress = recipientAddress,
+                            amountSats = amountSats,
+                            feeRate = feeRate,
+                            password = pwd,
+                        )
+                    },
+                ) { Text("Sign and send") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    passwordPrompt = null
+                    passwordInput = ""
+                }) { Text("Cancel") }
+            },
+        )
     }
 }
 

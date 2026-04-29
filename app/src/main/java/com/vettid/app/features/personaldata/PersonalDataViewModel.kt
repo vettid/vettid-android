@@ -90,6 +90,10 @@ class PersonalDataViewModel @Inject constructor(
     private val _publicSecrets = MutableStateFlow<List<PublicMetadataItem>>(emptyList())
     val publicSecrets: StateFlow<List<PublicMetadataItem>> = _publicSecrets.asStateFlow()
 
+    // Critical-secret metadata as emitted by the vault's secret_catalog.
+    // Populated from the published-profile fetch; values are never here.
+    private val _criticalSecretCatalog = MutableStateFlow<List<PublicMetadataItem>>(emptyList())
+
     // Installed vault handlers
     private val _installedHandlers = MutableStateFlow<List<com.vettid.app.core.nats.VaultHandler>>(emptyList())
     val installedHandlers: StateFlow<List<com.vettid.app.core.nats.VaultHandler>> = _installedHandlers.asStateFlow()
@@ -2171,6 +2175,25 @@ class PersonalDataViewModel @Inject constructor(
             photo = photo
         )
 
+        // secret_catalog (vault profile_builder.go) carries metadata
+        // for every credential-embedded secret whose discoverability
+        // is "cataloged" — values never appear here. Surface them on
+        // the user's own profile preview so the Secrets badge matches
+        // what peers will see.
+        val criticalCatalog = mutableListOf<PublicMetadataItem>()
+        result.getAsJsonArray("secret_catalog")?.forEach { el ->
+            try {
+                val o = el.asJsonObject
+                criticalCatalog += PublicMetadataItem(
+                    name = o.get("name")?.asString ?: "Critical secret",
+                    type = o.get("type")?.asString ?: "",
+                    category = o.get("category")?.asString?.takeIf { it.isNotBlank() }
+                        ?: DataCategory.OTHER.displayName,
+                )
+            } catch (_: Exception) { /* skip malformed */ }
+        }
+        _criticalSecretCatalog.value = criticalCatalog
+
         // Refresh the secrets-catalog so any newly-published wallets
         // show up — loadPublicMetadata reads _publishedProfile.value.
         loadPublicMetadata()
@@ -2261,7 +2284,12 @@ class PersonalDataViewModel @Inject constructor(
                     )
                 }
                 .orEmpty()
-            _publicSecrets.value = secretItems + walletItems
+            // Critical-secret metadata: vault emits `secret_catalog`
+            // when discoverability is "cataloged". Values never appear
+            // here — only that the user has the secret. The published-
+            // profile JSON is cached on parsePublishedProfile.
+            val criticalItems = _criticalSecretCatalog.value
+            _publicSecrets.value = secretItems + walletItems + criticalItems
             // Personal data metadata is derived directly from _state via publicPersonalData flow
         }
     }

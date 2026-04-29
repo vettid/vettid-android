@@ -293,15 +293,15 @@ class WalletDetailViewModel @Inject constructor(
     private suspend fun backupSeed(password: String) {
         val payload = buildCredentialAuthPayload(password) ?: return
         payload.addProperty("wallet_id", walletId)
-        val response = ownerSpaceClient.sendAndAwaitResponse("wallet.backup-seed", payload)
+        val response = ownerSpaceClient.sendAndAwaitResponse("wallet.move-seed-to-credential", payload)
         when (response) {
             is VaultResponse.HandlerResult -> {
                 if (!response.success) {
-                    _effects.emit(WalletDetailEffect.ShowError(response.error ?: "Backup failed"))
+                    _effects.emit(WalletDetailEffect.ShowError(response.error ?: "Move failed"))
                     return
                 }
                 applyBackupResponse(response.result, backedUp = true)
-                _effects.emit(WalletDetailEffect.ShowSuccess("Seed phrase backed up to Critical Secrets"))
+                _effects.emit(WalletDetailEffect.ShowSuccess("Seed moved to credential — every send now requires your password"))
             }
             is VaultResponse.Error -> _effects.emit(WalletDetailEffect.ShowError(response.message))
             else -> _effects.emit(WalletDetailEffect.ShowError("Unexpected response from vault"))
@@ -311,15 +311,15 @@ class WalletDetailViewModel @Inject constructor(
     private suspend fun revokeSeedBackup(password: String) {
         val payload = buildCredentialAuthPayload(password) ?: return
         payload.addProperty("wallet_id", walletId)
-        val response = ownerSpaceClient.sendAndAwaitResponse("wallet.revoke-backup", payload)
+        val response = ownerSpaceClient.sendAndAwaitResponse("wallet.move-seed-to-wallet", payload)
         when (response) {
             is VaultResponse.HandlerResult -> {
                 if (!response.success) {
-                    _effects.emit(WalletDetailEffect.ShowError(response.error ?: "Revoke failed"))
+                    _effects.emit(WalletDetailEffect.ShowError(response.error ?: "Move failed"))
                     return
                 }
                 applyBackupResponse(response.result, backedUp = false)
-                _effects.emit(WalletDetailEffect.ShowSuccess("Seed phrase removed from Critical Secrets"))
+                _effects.emit(WalletDetailEffect.ShowSuccess("Seed moved back into the wallet"))
             }
             is VaultResponse.Error -> _effects.emit(WalletDetailEffect.ShowError(response.message))
             else -> _effects.emit(WalletDetailEffect.ShowError("Unexpected response from vault"))

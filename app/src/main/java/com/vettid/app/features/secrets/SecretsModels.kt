@@ -11,7 +11,6 @@ sealed class SecretsState {
     object Loading : SecretsState()
     data class Loaded(
         val items: List<MinorSecret>,
-        val criticalSecrets: List<CriticalSecretItem> = emptyList(),
         val searchQuery: String = "",
         val hasUnpublishedChanges: Boolean = false
     ) : SecretsState()
@@ -58,8 +57,6 @@ sealed class SecretsEvent {
     data class DeleteSecret(val secretId: String) : SecretsEvent()
     data class TogglePublicProfile(val secretId: String) : SecretsEvent()
     data class ToggleHideFromCatalog(val secretId: String) : SecretsEvent()
-    /** Set discoverability on a critical (credential-embedded) secret. */
-    data class SetCriticalDiscoverability(val secretId: String, val discoverability: String) : SecretsEvent()
     data class MoveSecretUp(val secretId: String) : SecretsEvent()
     data class MoveSecretDown(val secretId: String) : SecretsEvent()
     object Refresh : SecretsEvent()

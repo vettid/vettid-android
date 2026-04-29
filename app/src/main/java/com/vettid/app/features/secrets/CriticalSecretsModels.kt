@@ -61,4 +61,11 @@ sealed class CriticalSecretsScreenEvent {
 
     /** Search query changed. */
     data class SearchQueryChanged(val query: String) : CriticalSecretsScreenEvent()
+
+    /**
+     * Flip the discoverability of a critical secret. Only "cataloged"
+     * (peers see metadata) and "private" (hidden) are valid — critical
+     * secret VALUES never reach the published profile.
+     */
+    data class SetDiscoverability(val secretId: String, val discoverability: String) : CriticalSecretsScreenEvent()
 }
