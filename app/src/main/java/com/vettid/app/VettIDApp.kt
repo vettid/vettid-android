@@ -173,6 +173,7 @@ sealed class Screen(val route: String) {
     object ConnectionHistory : Screen("connections/{connectionId}/history") {
         fun createRoute(connectionId: String) = "connections/${encodeId(connectionId)}/history"
     }
+    object ArchivedConnections : Screen("connections/archived")
     companion object {
         // Connection IDs historically were UUIDs with no special chars,
         // but the VettID system connection shipped briefly under
@@ -667,6 +668,9 @@ fun VettIDApp(
                 onNavigateToGuidesList = {
                     navController.navigate(Screen.GuidesList.route)
                 },
+                onNavigateToArchivedConnections = {
+                    navController.navigate(Screen.ArchivedConnections.route)
+                },
                 onNavigateToHandlerDetail = { handlerId ->
                     navController.navigate(Screen.HandlerDetail.createRoute(handlerId))
                 },
@@ -922,6 +926,11 @@ fun VettIDApp(
                     // event; Screen.Guide accepts empty for this arg.
                     navController.navigate(Screen.Guide.createRoute(guideId, "", userName))
                 }
+            )
+        }
+        composable(Screen.ArchivedConnections.route) {
+            com.vettid.app.features.connections.ArchivedConnectionsScreen(
+                onBack = { navController.safePopBackStack() },
             )
         }
         // Profile route
@@ -1825,6 +1834,7 @@ fun MainScreen(
     onNavigateToVaultMessages: () -> Unit = {},
     onNavigateToVotes: () -> Unit = {},
     onNavigateToGuidesList: () -> Unit = {},
+    onNavigateToArchivedConnections: () -> Unit = {},
     onNavigateToHandlerDetail: (String) -> Unit = {},
     onNavigateToPersonalData: () -> Unit = {},
     onNavigateToSecrets: () -> Unit = {},
@@ -1992,6 +2002,7 @@ fun MainScreen(
                 onNavigateToVaultMessages = onNavigateToVaultMessages,
                 onNavigateToVotes = onNavigateToVotes,
                 onNavigateToGuidesList = onNavigateToGuidesList,
+                onNavigateToArchivedConnections = onNavigateToArchivedConnections,
             )
         },
         settingsContent = {

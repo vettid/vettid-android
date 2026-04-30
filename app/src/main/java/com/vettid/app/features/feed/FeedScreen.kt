@@ -77,6 +77,7 @@ fun FeedContent(
     onNavigateToVaultMessages: () -> Unit = {},
     onNavigateToVotes: () -> Unit = {},
     onNavigateToGuidesList: () -> Unit = {},
+    onNavigateToArchivedConnections: () -> Unit = {},
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
 
@@ -259,6 +260,7 @@ fun FeedContent(
                         onNavigateToGuide(guideId, "", "")
                     },
                     onOpenProposalById = onNavigateToProposalDetail,
+                    onNavigateToArchivedConnections = onNavigateToArchivedConnections,
                 )
                 is FeedState.Error -> {
                     // If in offline mode, show friendly offline content instead of error
@@ -400,6 +402,7 @@ private fun FeedList(
     onSystemGuides: () -> Unit = {},
     onOpenGuideById: (guideId: String) -> Unit = {},
     onOpenProposalById: (proposalId: String) -> Unit = {},
+    onNavigateToArchivedConnections: () -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
@@ -411,6 +414,7 @@ private fun FeedList(
             when (it) {
                 is FeedDisplayItem.ConnectionCard -> "conn-${it.connectionId}"
                 is FeedDisplayItem.EventItem -> it.event.eventId
+                is FeedDisplayItem.ArchivedConnectionsCard -> "archived"
             }
         }
         if (previousFirstItemId != null && currentFirstId != previousFirstItemId) {
@@ -439,6 +443,7 @@ private fun FeedList(
             // separate activity rows. See
             // plans/luminous-unifying-manatee.md.
             val connectionCards = items.filterIsInstance<FeedDisplayItem.ConnectionCard>()
+            val archivedFooter = items.filterIsInstance<FeedDisplayItem.ArchivedConnectionsCard>().firstOrNull()
 
             items(
                 items = connectionCards,
@@ -492,6 +497,58 @@ private fun FeedList(
                         onOpenProposal = onOpenProposalById,
                     )
             }
+
+            archivedFooter?.let { footer ->
+                item(key = "archived-connections") {
+                    ArchivedConnectionsFooterCard(
+                        count = footer.count,
+                        onClick = onNavigateToArchivedConnections,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ArchivedConnectionsFooterCard(count: Int, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp)
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        ),
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Default.History,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Connection History",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    text = if (count == 1) "1 archived connection" else "$count archived connections",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Icon(
+                Icons.Default.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -531,6 +588,8 @@ private fun StatusAwareConnectionCard(
         )
         item.connectionStatus == "revoked"
             || item.connectionStatus == "rejected"
+            || item.connectionStatus == "declined_by_us"
+            || item.connectionStatus == "declined_by_peer"
             || item.connectionStatus == "expired" -> InactiveConnectionCard(item, onClick)
         else -> ActiveConnectionCard(
             item, onClick, onLongClick, onMessageClick, onHistoryClick,

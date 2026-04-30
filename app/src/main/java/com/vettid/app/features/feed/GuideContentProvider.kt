@@ -223,6 +223,10 @@ object GuideContentProvider {
             GuideSection.Heading("Managing connections"),
             GuideSection.Paragraph(
                 "Tap any card to open the peer's public profile and the connection detail screen. From there you can review the audit trail, rotate session keys, toggle location sharing, or revoke the connection."
+            ),
+            GuideSection.Heading("Connection History"),
+            GuideSection.Paragraph(
+                "Declined, revoked, and expired connections leave the live feed but aren't deleted — your vault keeps the record. A \"Connection History\" card appears at the bottom of the feed when there's at least one archived connection. Tap it to see who you declined and when."
             )
         )
     )

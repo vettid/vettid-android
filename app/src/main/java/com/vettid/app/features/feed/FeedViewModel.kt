@@ -21,6 +21,17 @@ import javax.inject.Inject
 
 private const val TAG = "FeedViewModel"
 
+// Connection statuses that should not appear in the live feed. The
+// vault keeps the record (so a future "Connection History" view can
+// surface them); the active list stays focused on usable peers.
+private val TERMINAL_HIDDEN_STATUSES = setOf(
+    "rejected",
+    "revoked",
+    "expired",
+    "declined_by_us",
+    "declined_by_peer",
+)
+
 @HiltViewModel
 class FeedViewModel @Inject constructor(
     private val feedClient: FeedClient,
@@ -246,7 +257,16 @@ class FeedViewModel @Inject constructor(
      * These two sections are INDEPENDENT — no timing dependencies.
      */
     private fun buildDisplayItems(events: List<FeedEvent>): List<FeedDisplayItem> {
-        return buildConnectionCards() + buildActivityItems(events)
+        val cards = buildConnectionCards()
+        val activity = buildActivityItems(events)
+        // Footer card surfaces archived (declined/revoked/expired)
+        // connections so the user can navigate to history without
+        // them cluttering the live feed.
+        val archivedCount = cachedConnections.count { it.status in TERMINAL_HIDDEN_STATUSES }
+        val footer = if (archivedCount > 0) {
+            listOf(FeedDisplayItem.ArchivedConnectionsCard(count = archivedCount))
+        } else emptyList()
+        return cards + activity + footer
     }
 
     /**
@@ -264,6 +284,13 @@ class FeedViewModel @Inject constructor(
             // it and cleans up the orphan, but caches sometimes linger.
             // Skip any such row rather than rendering an untappable card.
             if (conn.connectionId.contains('/')) {
+                return@mapNotNull null
+            }
+            // Hide terminal-declined / revoked / expired connections
+            // from the live feed. The vault retains the record so a
+            // future "Connection History" surface can surface them;
+            // they shouldn't clutter the active list.
+            if (conn.status in TERMINAL_HIDDEN_STATUSES) {
                 return@mapNotNull null
             }
             // Outbound pending invites don't have a peer profile yet —
@@ -317,7 +344,9 @@ class FeedViewModel @Inject constructor(
                 conn.lastMessagePreview != null -> conn.lastMessagePreview
                 conn.status == "active" -> "Connected"
                 conn.status == "revoked" -> "Connection revoked"
-                conn.status == "rejected" -> "Declined"
+                conn.status == "rejected"
+                    || conn.status == "declined_by_us"
+                    || conn.status == "declined_by_peer" -> "Declined"
                 conn.status == "expired" -> "Invitation expired"
                 else -> ""
             }
@@ -1101,6 +1130,10 @@ class FeedViewModel @Inject constructor(
                 }
                 is FeedDisplayItem.EventItem -> {
                     onEventClick(item.event)
+                }
+                is FeedDisplayItem.ArchivedConnectionsCard -> {
+                    // Footer card has its own dedicated tap handler in
+                    // the screen — nothing to do here.
                 }
             }
         }

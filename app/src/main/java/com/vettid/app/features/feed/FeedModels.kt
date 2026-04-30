@@ -76,6 +76,19 @@ sealed class FeedDisplayItem {
         override val sortTimestamp: Long,
         override val isUnread: Boolean
     ) : FeedDisplayItem()
+
+    /**
+     * Footer card listing the count of archived connections (declined,
+     * revoked, expired). Tap → ArchivedConnectionsScreen. Only emitted
+     * when at least one archived connection exists; sorts to the
+     * bottom by carrying timestamp 0.
+     */
+    data class ArchivedConnectionsCard(
+        val count: Int,
+    ) : FeedDisplayItem() {
+        override val sortTimestamp: Long = 0L
+        override val isUnread: Boolean = false
+    }
 }
 
 /**

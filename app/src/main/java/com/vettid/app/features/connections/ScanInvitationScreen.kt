@@ -81,6 +81,11 @@ fun ScanInvitationScreen(
                 is ScanInvitationEffect.NavigateToConnection -> {
                     onConnectionEstablished(effect.connectionId)
                 }
+                ScanInvitationEffect.NavigateToConnectionsAfterDecline -> {
+                    // Decline returns to the connections feed instead of
+                    // looping back to the QR scanner.
+                    onBack()
+                }
             }
         }
     }

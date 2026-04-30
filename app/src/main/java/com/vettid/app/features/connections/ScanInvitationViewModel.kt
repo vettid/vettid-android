@@ -480,7 +480,9 @@ class ScanInvitationViewModel @Inject constructor(
      */
     fun declineInvitation() {
         parsedInvitation = null
-        _state.value = ScanInvitationState.Scanning
+        viewModelScope.launch {
+            _effects.emit(ScanInvitationEffect.NavigateToConnectionsAfterDecline)
+        }
     }
 
     /**
@@ -647,4 +649,6 @@ sealed class ScanInvitationState {
 sealed class ScanInvitationEffect {
     data class ShowError(val message: String) : ScanInvitationEffect()
     data class NavigateToConnection(val connectionId: String) : ScanInvitationEffect()
+    /** User declined the preview — return to the connections feed rather than restarting the scanner. */
+    object NavigateToConnectionsAfterDecline : ScanInvitationEffect()
 }
