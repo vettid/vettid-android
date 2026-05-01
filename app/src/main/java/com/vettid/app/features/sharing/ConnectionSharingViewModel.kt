@@ -209,6 +209,22 @@ class ConnectionSharingViewModel @Inject constructor(
      * a VM change.
      */
     private suspend fun loadSharePolicy(): List<SharePolicyRow> {
+        // Two sources combine here:
+        //   1. The vault's stored policy (explicit user decisions)
+        //   2. The user's shareable inventory (handlers today; data /
+        //      secrets / actions in Phase 3) — these surface as
+        //      default-deny rows so the editor has something to toggle
+        //      even before the user has changed anything.
+        val stored = fetchStoredPolicy()
+        val seeded = fetchShareableInventory()
+        // stored decisions win on collision (key match).
+        val merged = LinkedHashMap<String, SharePolicyRow>()
+        seeded.forEach { merged[it.key] = it }
+        stored.forEach { merged[it.key] = it }
+        return merged.values.sortedWith(compareBy({ it.category }, { it.displayName }))
+    }
+
+    private suspend fun fetchStoredPolicy(): List<SharePolicyRow> {
         return try {
             val payload = JsonObject().apply { addProperty("connection_id", connectionId) }
             val resp = ownerSpaceClient.sendAndAwaitResponse("connection.share-policy.get", payload, 10_000L)
@@ -225,7 +241,7 @@ class ConnectionSharingViewModel @Inject constructor(
                         out += SharePolicyRow(
                             key = key,
                             displayName = displayNameFor(kind, id),
-                            category = kind.replaceFirstChar { it.uppercase() },
+                            category = kindLabel(kind),
                             allowed = o.get("allowed")?.asBoolean ?: false,
                             tier = o.get("tier")?.asString ?: "consent",
                             retention = o.get("retention")?.asString ?: "session",
@@ -234,12 +250,52 @@ class ConnectionSharingViewModel @Inject constructor(
                         )
                     } catch (_: Exception) { /* skip malformed */ }
                 }
-                out.sortedWith(compareBy({ it.category }, { it.displayName }))
+                out
             } else emptyList()
         } catch (e: Exception) {
-            Log.w(TAG, "loadSharePolicy failed: ${e.message}")
+            Log.w(TAG, "fetchStoredPolicy failed: ${e.message}")
             emptyList()
         }
+    }
+
+    /**
+     * Surface the owner's shareable handler catalog as default-deny
+     * rows. This gives the user something to toggle even when the
+     * vault's policy items map is empty. Toggling sends the row
+     * through connection.share-policy.set; the same key lands in the
+     * stored policy on the next reload and overrides this default.
+     */
+    private suspend fun fetchShareableInventory(): List<SharePolicyRow> {
+        return try {
+            val handlers = ownerSpaceClient.listHandlers()
+            handlers
+                .filter { it.shareable && it.enabled && it.shareGlobally }
+                .map { h ->
+                    SharePolicyRow(
+                        key = "handler:${h.id}",
+                        displayName = h.name.ifEmpty { h.id },
+                        category = "Handler",
+                        allowed = false,         // default-deny until user toggles
+                        tier = "on_demand",
+                        retention = "until_revoked",
+                        rateLimitPerHour = 0,
+                        expiresAt = 0L,
+                    )
+                }
+        } catch (e: Exception) {
+            Log.w(TAG, "fetchShareableInventory failed: ${e.message}")
+            emptyList()
+        }
+    }
+
+    private fun kindLabel(kind: String): String = when (kind) {
+        "data" -> "Personal data"
+        "secret" -> "Secret"
+        "wallet" -> "Wallet"
+        "handler" -> "Handler"
+        "action" -> "Action"
+        "setting" -> "Setting"
+        else -> kind.replaceFirstChar { it.uppercase() }
     }
 
     /**
