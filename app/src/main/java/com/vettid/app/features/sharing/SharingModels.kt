@@ -50,18 +50,31 @@ enum class RequestStatus {
 }
 
 /**
- * Phase 2 placeholder shape — keeping it here so the Loaded state's
- * type stays stable when Phase 2 lands.
+ * One row in the "Shared with this connection" editor — represents
+ * one decision the user has made about what THIS peer can request.
+ *
+ * Phase 2 implements the handler kind end-to-end and seeds
+ * placeholders for data/secret/wallet/action so the editor is
+ * structurally complete; Phase 3 unifies the rest.
  */
 data class SharePolicyRow(
-    val key: String,
+    val key: String,             // "<kind>:<id>" matching the vault store
     val displayName: String,
     val category: String,
     val allowed: Boolean,
+    val tier: String,            // "required" | "optional" | "on_demand" | "consent"
+    val retention: String,       // "session" | "time_limited" | "until_revoked"
+    val rateLimitPerHour: Int,   // 0 = unlimited
+    val expiresAt: Long,         // unix; 0 = never
 )
 
 sealed class SharingEvent {
     data class RequestItem(val key: String) : SharingEvent()
     data class CancelRequest(val requestId: String) : SharingEvent()
+    /**
+     * Persist a per-item policy change. The vault merges into the
+     * existing policy; only the keys present in [items] are changed.
+     */
+    data class UpdatePolicy(val items: Map<String, SharePolicyRow>) : SharingEvent()
     object Refresh : SharingEvent()
 }

@@ -1,5 +1,6 @@
 package com.vettid.app.features.sharing
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -64,6 +65,9 @@ fun ConnectionSharingScreen(
                 is SharingState.Loaded -> LoadedSharing(
                     state = s,
                     onRequest = { viewModel.onEvent(SharingEvent.RequestItem(it)) },
+                    onUpdatePolicy = { rows ->
+                        viewModel.onEvent(SharingEvent.UpdatePolicy(rows))
+                    },
                 )
             }
         }
@@ -74,16 +78,35 @@ fun ConnectionSharingScreen(
 private fun LoadedSharing(
     state: SharingState.Loaded,
     onRequest: (String) -> Unit,
+    onUpdatePolicy: (Map<String, SharePolicyRow>) -> Unit,
 ) {
+    var editingRow by remember { mutableStateOf<SharePolicyRow?>(null) }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         item { SharedWithMeSection(items = state.sharedWithMe, onRequest = onRequest) }
-        item { SharedWithConnectionSection() }
+        item {
+            SharedWithConnectionSection(
+                rows = state.sharedWithConnection,
+                onEdit = { editingRow = it },
+            )
+        }
         item { SandboxSection() }
         item { ContractSection(connectionType = state.connectionType) }
+    }
+
+    editingRow?.let { row ->
+        PolicyItemEditorSheet(
+            row = row,
+            onDismiss = { editingRow = null },
+            onSave = { updated ->
+                onUpdatePolicy(mapOf(updated.key to updated))
+                editingRow = null
+            },
+        )
     }
 }
 
@@ -160,12 +183,154 @@ private fun StatusPill(label: String, container: androidx.compose.ui.graphics.Co
 }
 
 @Composable
-private fun SharedWithConnectionSection() {
+private fun SharedWithConnectionSection(
+    rows: List<SharePolicyRow>,
+    onEdit: (SharePolicyRow) -> Unit,
+) {
+    val allowed = rows.count { it.allowed }
     SectionCard(
         title = "Shared with this connection",
-        subtitle = "What you've offered to this connection. Per-item allow/deny + rate limits land in Phase 2.",
+        subtitle = "Per-item rules for what this connection can request. Tap a row to edit.",
+        count = if (rows.isNotEmpty()) allowed else null,
     ) {
-        EmptyHint("Currently driven by Handlers / Discoverability controls on the connection detail and personal-data screens. Unified editor coming in Phase 2.")
+        if (rows.isEmpty()) {
+            EmptyHint("Default policy in effect: only your published-profile fields (name, email, photo, public key) are shared. Add explicit items via the Handlers control on the connection detail; the unified editor will populate this section as you make decisions.")
+        } else {
+            rows.forEachIndexed { idx, row ->
+                if (idx > 0) {
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onEdit(row) }
+                        .padding(vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(row.displayName, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                        Text(
+                            text = buildString {
+                                append(row.category)
+                                append(" · ")
+                                append(if (row.allowed) "Allowed" else "Denied")
+                                if (row.allowed) {
+                                    append(" · ")
+                                    append(row.tier)
+                                    append(" · ")
+                                    append(row.retention)
+                                    if (row.rateLimitPerHour > 0) {
+                                        append(" · ${row.rateLimitPerHour}/hr")
+                                    }
+                                }
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Icon(
+                        if (row.allowed) Icons.Default.Check else Icons.Default.Block,
+                        contentDescription = null,
+                        tint = if (row.allowed) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PolicyItemEditorSheet(
+    row: SharePolicyRow,
+    onDismiss: () -> Unit,
+    onSave: (SharePolicyRow) -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var allowed by remember(row.key) { mutableStateOf(row.allowed) }
+    var tier by remember(row.key) { mutableStateOf(row.tier) }
+    var retention by remember(row.key) { mutableStateOf(row.retention) }
+    var rateLimit by remember(row.key) { mutableStateOf(row.rateLimitPerHour) }
+
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(row.displayName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(row.category, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            // Allow / deny
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Allow this connection to request", modifier = Modifier.weight(1f))
+                Switch(checked = allowed, onCheckedChange = { allowed = it })
+            }
+
+            if (allowed) {
+                // Tier
+                Text("Tier", style = MaterialTheme.typography.labelMedium)
+                SegmentedRow(
+                    options = listOf("on_demand" to "On demand", "consent" to "Consent"),
+                    selected = tier,
+                    onSelect = { tier = it },
+                )
+                // Retention
+                Text("Retention", style = MaterialTheme.typography.labelMedium)
+                SegmentedRow(
+                    options = listOf("session" to "Session", "time_limited" to "Time-limited", "until_revoked" to "Until revoked"),
+                    selected = retention,
+                    onSelect = { retention = it },
+                )
+                // Rate limit
+                Text(
+                    text = "Rate limit · ${if (rateLimit == 0) "unlimited" else "$rateLimit/hr"}",
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                SegmentedRow(
+                    options = listOf("0" to "Unlimited", "5" to "5/hr", "30" to "30/hr", "100" to "100/hr"),
+                    selected = rateLimit.toString(),
+                    onSelect = { rateLimit = it.toIntOrNull() ?: 0 },
+                )
+            }
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+                Spacer(Modifier.width(8.dp))
+                Button(
+                    onClick = {
+                        onSave(row.copy(
+                            allowed = allowed,
+                            tier = tier,
+                            retention = retention,
+                            rateLimitPerHour = rateLimit,
+                        ))
+                    },
+                ) { Text("Save") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SegmentedRow(
+    options: List<Pair<String, String>>,
+    selected: String,
+    onSelect: (String) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        options.forEach { (value, label) ->
+            FilterChip(
+                selected = selected == value,
+                onClick = { onSelect(value) },
+                label = { Text(label, style = MaterialTheme.typography.labelSmall) },
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 

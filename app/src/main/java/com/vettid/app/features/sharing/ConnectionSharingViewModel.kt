@@ -48,9 +48,10 @@ class ConnectionSharingViewModel @Inject constructor(
         when (event) {
             is SharingEvent.RequestItem -> requestItem(event.key)
             is SharingEvent.CancelRequest -> {
-                // Capability cancel is Phase 2 — for now the request
+                // Capability cancel is Phase 3 — for now the request
                 // sits as pending until peer acts or it expires.
             }
+            is SharingEvent.UpdatePolicy -> updatePolicy(event.items)
             SharingEvent.Refresh -> load()
         }
     }
@@ -75,11 +76,13 @@ class ConnectionSharingViewModel @Inject constructor(
 
                 val outstanding = loadOutstandingCapabilityRequests()
                 val items = buildSharedWithMe(conn, outstanding)
+                val sharePolicy = loadSharePolicy()
 
                 _state.value = SharingState.Loaded(
                     peerName = peerName,
                     connectionType = conn.connectionType,
                     sharedWithMe = items,
+                    sharedWithConnection = sharePolicy,
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "load failed", e)
@@ -194,6 +197,92 @@ class ConnectionSharingViewModel @Inject constructor(
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "requestItem", e)
+            }
+        }
+    }
+
+    /**
+     * Pull the per-connection share policy from the vault and project
+     * it into the row shape the editor renders. Today this surfaces
+     * handler entries (the only kind Phase 2 wires); the rest of the
+     * Items map is forwarded as-is so future kinds light up without
+     * a VM change.
+     */
+    private suspend fun loadSharePolicy(): List<SharePolicyRow> {
+        return try {
+            val payload = JsonObject().apply { addProperty("connection_id", connectionId) }
+            val resp = ownerSpaceClient.sendAndAwaitResponse("connection.share-policy.get", payload, 10_000L)
+            if (resp is VaultResponse.HandlerResult && resp.success && resp.result != null) {
+                val policyObj = resp.result.getAsJsonObject("policy") ?: return emptyList()
+                val itemsObj = policyObj.getAsJsonObject("items") ?: return emptyList()
+                val out = mutableListOf<SharePolicyRow>()
+                itemsObj.entrySet().forEach { (key, valueJson) ->
+                    try {
+                        val o = valueJson.asJsonObject
+                        val (kind, id) = key.split(":", limit = 2).let {
+                            if (it.size == 2) it[0] to it[1] else "" to key
+                        }
+                        out += SharePolicyRow(
+                            key = key,
+                            displayName = displayNameFor(kind, id),
+                            category = kind.replaceFirstChar { it.uppercase() },
+                            allowed = o.get("allowed")?.asBoolean ?: false,
+                            tier = o.get("tier")?.asString ?: "consent",
+                            retention = o.get("retention")?.asString ?: "session",
+                            rateLimitPerHour = o.get("rate_limit_per_hour")?.asInt ?: 0,
+                            expiresAt = o.get("expires_at")?.asLong ?: 0L,
+                        )
+                    } catch (_: Exception) { /* skip malformed */ }
+                }
+                out.sortedWith(compareBy({ it.category }, { it.displayName }))
+            } else emptyList()
+        } catch (e: Exception) {
+            Log.w(TAG, "loadSharePolicy failed: ${e.message}")
+            emptyList()
+        }
+    }
+
+    /**
+     * "handler:wallet" → "Wallet" — not pretty for arbitrary IDs but
+     * good enough for v1; the catalog provides nicer names that we
+     * can wire in via a HandlerCatalog lookup in Phase 3.
+     */
+    private fun displayNameFor(kind: String, id: String): String =
+        id.split(".", "_", "-").joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } }
+
+    /**
+     * Persist a partial set of policy changes via
+     * connection.share-policy.set. The vault merges by key; we only
+     * send the rows the user actually changed.
+     */
+    private fun updatePolicy(rows: Map<String, SharePolicyRow>) {
+        viewModelScope.launch {
+            try {
+                val itemsJson = JsonObject()
+                rows.forEach { (key, row) ->
+                    val item = JsonObject().apply {
+                        addProperty("allowed", row.allowed)
+                        if (row.tier.isNotEmpty()) addProperty("tier", row.tier)
+                        if (row.retention.isNotEmpty()) addProperty("retention", row.retention)
+                        if (row.rateLimitPerHour > 0) addProperty("rate_limit_per_hour", row.rateLimitPerHour)
+                        if (row.expiresAt > 0) addProperty("expires_at", row.expiresAt)
+                    }
+                    itemsJson.add(key, item)
+                }
+                val payload = JsonObject().apply {
+                    addProperty("connection_id", connectionId)
+                    add("items", itemsJson)
+                }
+                val resp = ownerSpaceClient.sendAndAwaitResponse("connection.share-policy.set", payload, 10_000L)
+                if (resp is VaultResponse.HandlerResult && resp.success) {
+                    // Re-load so the UI reflects the post-merge state
+                    // (handler grants might trigger downstream flips).
+                    load()
+                } else {
+                    Log.w(TAG, "share-policy.set failed: ${(resp as? VaultResponse.Error)?.message}")
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "updatePolicy", e)
             }
         }
     }
