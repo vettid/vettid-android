@@ -404,6 +404,27 @@ private fun FeedList(
     onOpenProposalById: (proposalId: String) -> Unit = {},
     onNavigateToArchivedConnections: () -> Unit = {},
 ) {
+    // Shared-action layer state — one ActionsViewModel for the whole
+    // feed. When the user taps "Available actions" on a card's More
+    // menu, we set actionsConnectionId, load the peer's actions, and
+    // present them in a bottom sheet. Picking one opens the standard
+    // ActionInvokeSheet.
+    val actionsVm: com.vettid.app.features.actions.ActionsViewModel = androidx.hilt.navigation.compose.hiltViewModel()
+    val peerActions by actionsVm.peerActions.collectAsState()
+    var actionsConnectionId by remember { mutableStateOf<String?>(null) }
+    var pickedAction by remember { mutableStateOf<com.vettid.app.core.actions.PublishedAction?>(null) }
+    var lastInvocationStatus by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(actionsConnectionId) {
+        actionsConnectionId?.let { cid -> actionsVm.loadPeerActions(cid) }
+    }
+    LaunchedEffect(Unit) {
+        actionsVm.results.collect { r ->
+            lastInvocationStatus = "Action ${r.actionId}: ${r.status}" +
+                (r.error?.let { " ($it)" } ?: "")
+        }
+    }
+
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
@@ -451,6 +472,7 @@ private fun FeedList(
             ) { item ->
                 StatusAwareConnectionCard(
                         item = item,
+                        onShowAvailableActions = { actionsConnectionId = item.connectionId },
                         onClick = {
                             when {
                                 item.needsReview -> onNavigateToConnectionReview(item.connectionId, "")
@@ -506,6 +528,109 @@ private fun FeedList(
                     )
                 }
             }
+        }
+    }
+
+    // Available-actions picker. The card's More menu sets
+    // actionsConnectionId; we load the peer's actions and present
+    // them in a bottom sheet. Tapping an entry opens the standard
+    // ActionInvokeSheet.
+    if (actionsConnectionId != null && pickedAction == null) {
+        AvailableActionsSheet(
+            actions = peerActions,
+            onDismiss = { actionsConnectionId = null },
+            onPick = { picked ->
+                pickedAction = picked
+            },
+        )
+    }
+    pickedAction?.let { picked ->
+        actionsConnectionId?.let { connId ->
+            com.vettid.app.features.actions.ActionInvokeSheet(
+                action = picked,
+                onDismiss = { pickedAction = null; actionsConnectionId = null },
+                onSubmit = { params ->
+                    actionsVm.invokeOnPeer(
+                        connectionId = connId,
+                        action = picked,
+                        params = params,
+                        onSent = { lastInvocationStatus = "Request sent — awaiting peer" },
+                    )
+                    pickedAction = null
+                    actionsConnectionId = null
+                },
+            )
+        }
+    }
+    lastInvocationStatus?.let { status ->
+        LaunchedEffect(status) {
+            kotlinx.coroutines.delay(4000)
+            lastInvocationStatus = null
+        }
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.BottomCenter,
+        ) {
+            Surface(
+                modifier = Modifier.padding(bottom = 96.dp, start = 16.dp, end = 16.dp),
+                color = MaterialTheme.colorScheme.inverseSurface,
+                shape = MaterialTheme.shapes.small,
+            ) {
+                Text(
+                    status,
+                    modifier = Modifier.padding(12.dp),
+                    color = MaterialTheme.colorScheme.inverseOnSurface,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AvailableActionsSheet(
+    actions: List<com.vettid.app.core.actions.PublishedAction>,
+    onDismiss: () -> Unit,
+    onPick: (com.vettid.app.core.actions.PublishedAction) -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "Available actions",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            if (actions.isEmpty()) {
+                Text(
+                    text = "This peer hasn't enabled any actions for you yet.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                actions.forEach { a ->
+                    ListItem(
+                        modifier = Modifier.clickable { onPick(a) },
+                        headlineContent = { Text(a.label) },
+                        supportingContent = {
+                            Text(
+                                a.description.ifEmpty { "auth: ${a.authMode.wire}" },
+                                style = MaterialTheme.typography.labelSmall,
+                            )
+                        },
+                        trailingContent = {
+                            Icon(Icons.Default.ChevronRight, contentDescription = null)
+                        },
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
         }
     }
 }
@@ -574,6 +699,7 @@ private fun StatusAwareConnectionCard(
     onSystemGuidesClick: () -> Unit = {},
     onOpenGuide: (guideId: String) -> Unit = {},
     onOpenProposal: (proposalId: String) -> Unit = {},
+    onShowAvailableActions: () -> Unit = {},
 ) {
     // Render different card variants based on connection status
     when {
@@ -584,7 +710,7 @@ private fun StatusAwareConnectionCard(
             onCallClick, onVideoCallClick, onBtcClick, onBtcRequestClick,
             onNavigateToConnectionReview, onOpenMigration,
             onSystemVaultMessagesClick, onSystemVotesClick, onSystemGuidesClick,
-            onOpenGuide, onOpenProposal,
+            onOpenGuide, onOpenProposal, onShowAvailableActions,
         )
         item.connectionStatus == "revoked"
             || item.connectionStatus == "rejected"
@@ -596,7 +722,7 @@ private fun StatusAwareConnectionCard(
             onCallClick, onVideoCallClick, onBtcClick, onBtcRequestClick,
             onNavigateToConnectionReview, onOpenMigration,
             onSystemVaultMessagesClick, onSystemVotesClick, onSystemGuidesClick,
-            onOpenGuide, onOpenProposal,
+            onOpenGuide, onOpenProposal, onShowAvailableActions,
         )
     }
 }
@@ -765,6 +891,7 @@ private fun ActiveConnectionCard(
     onSystemGuidesClick: () -> Unit = {},
     onOpenGuide: (guideId: String) -> Unit = {},
     onOpenProposal: (proposalId: String) -> Unit = {},
+    onShowAvailableActions: () -> Unit = {},
 ) {
     val haptic = LocalHapticFeedback.current
 
@@ -898,6 +1025,13 @@ private fun ActiveConnectionCard(
                                 onClick = { showMoreMenu = false; onBtcRequestClick() },
                                 leadingIcon = {
                                     Icon(Icons.Default.CallReceived, contentDescription = null, modifier = Modifier.size(20.dp))
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Available actions") },
+                                onClick = { showMoreMenu = false; onShowAvailableActions() },
+                                leadingIcon = {
+                                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
                                 },
                             )
                             // History moved to the connection detail
