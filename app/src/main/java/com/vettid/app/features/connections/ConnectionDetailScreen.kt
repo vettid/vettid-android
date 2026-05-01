@@ -43,6 +43,7 @@ fun ConnectionDetailScreen(
     onMessageClick: () -> Unit = {},
     onSendBtc: (String) -> Unit = {},
     onShowHistory: () -> Unit = {},
+    onNavigateToSharing: (connectionId: String) -> Unit = {},
     onBack: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsState()
@@ -267,6 +268,7 @@ fun ConnectionDetailScreen(
                     onLocationSharingToggle = { viewModel.toggleLocationSharing(it) },
                     onShareHandlerToggle = { id, granted -> viewModel.setShareHandlerForConnection(id, granted) },
                     onPresenceOverrideChange = { viewModel.setPresenceOverride(it) },
+                    onNavigateToSharing = onNavigateToSharing,
                     modifier = Modifier.padding(padding)
                 )
             }
@@ -329,6 +331,7 @@ private fun LoadedContent(
     onLocationSharingToggle: (Boolean) -> Unit = {},
     onShareHandlerToggle: (String, Boolean) -> Unit = { _, _ -> },
     onPresenceOverrideChange: (Boolean?) -> Unit = {},
+    onNavigateToSharing: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val connectedDateFormatter = java.text.SimpleDateFormat("MMMM d, yyyy 'at' h:mm a", java.util.Locale.getDefault())
@@ -387,15 +390,13 @@ private fun LoadedContent(
         Card(modifier = Modifier.fillMaxWidth()) {
             Column {
                 ListItem(
-                    headlineContent = { Text("Shared Data") },
-                    supportingContent = { Text("No shared data") },
-                    leadingContent = { Icon(Icons.Default.FolderShared, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
-                )
-                HorizontalDivider()
-                ListItem(
-                    headlineContent = { Text("Shared Secrets") },
-                    supportingContent = { Text("No shared secrets") },
-                    leadingContent = { Icon(Icons.Default.Key, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    modifier = Modifier.clickable(enabled = connection.status == ConnectionStatus.ACTIVE) {
+                        onNavigateToSharing(connection.connectionId)
+                    },
+                    headlineContent = { Text("Sharing") },
+                    supportingContent = { Text("Catalog of what's shared with you and what you share with this connection") },
+                    leadingContent = { Icon(Icons.Default.FolderShared, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                    trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
                 )
                 HorizontalDivider()
                 ListItem(

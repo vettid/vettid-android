@@ -174,6 +174,9 @@ sealed class Screen(val route: String) {
         fun createRoute(connectionId: String) = "connections/${encodeId(connectionId)}/history"
     }
     object ArchivedConnections : Screen("connections/archived")
+    object Sharing : Screen("connections/{connectionId}/sharing") {
+        fun createRoute(connectionId: String) = "connections/${encodeId(connectionId)}/sharing"
+    }
     companion object {
         // Connection IDs historically were UUIDs with no special chars,
         // but the VettID system connection shipped briefly under
@@ -894,6 +897,9 @@ fun VettIDApp(
                 onShowHistory = {
                     navController.navigate(Screen.ConnectionHistory.createRoute(connectionId))
                 },
+                onNavigateToSharing = { id ->
+                    navController.navigate(Screen.Sharing.createRoute(id))
+                },
                 onBack = { navController.safePopBackStack() }
             )
         }
@@ -930,6 +936,14 @@ fun VettIDApp(
         }
         composable(Screen.ArchivedConnections.route) {
             com.vettid.app.features.connections.ArchivedConnectionsScreen(
+                onBack = { navController.safePopBackStack() },
+            )
+        }
+        composable(
+            route = Screen.Sharing.route,
+            arguments = listOf(navArgument("connectionId") { type = NavType.StringType })
+        ) {
+            com.vettid.app.features.sharing.ConnectionSharingScreen(
                 onBack = { navController.safePopBackStack() },
             )
         }
