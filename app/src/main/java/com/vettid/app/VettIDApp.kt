@@ -843,14 +843,14 @@ fun VettIDApp(
             ScanInvitationScreen(
                 initialData = data,
                 onConnectionEstablished = { connectionId ->
-                    // Try to land on the Connections list. If it isn't on
-                    // the back stack (deep-link entry path) fall back to
-                    // popping the scan screen and explicitly navigating
-                    // to Connections so the user always ends up there.
-                    val popped = navController.popBackStack(Screen.Connections.route, false)
+                    // Land on the home feed where the new connection's
+                    // card will appear. The standalone Connections
+                    // screen route exists for deep-links but is no
+                    // longer the primary surface — Main is.
+                    val popped = navController.popBackStack(Screen.Main.route, false)
                     if (!popped) {
                         navController.safePopBackStack()
-                        navController.navigate(Screen.Connections.route) {
+                        navController.navigate(Screen.Main.route) {
                             popUpTo(navController.graph.startDestinationId) { inclusive = false }
                             launchSingleTop = true
                         }
