@@ -597,6 +597,7 @@ class ConnectionsClient @Inject constructor(
                     displayName = obj.get("display_name")?.asString ?: name,
                     fieldType = obj.get("field_type")?.asString ?: "",
                     category = obj.get("category")?.asString ?: "",
+                    alias = obj.get("alias")?.asString ?: "",
                 )
             }.orEmpty()
 
@@ -657,6 +658,13 @@ class ConnectionsClient @Inject constructor(
     /**
      * Respond to a pending connection (accept or reject).
      * Used by the inviter to review and approve/decline the peer.
+     *
+     * Idempotent server-side (re-decisioning the same way is a
+     * no-op), so on a JetStream timeout we retry — early test runs
+     * surfaced "Connection failed" to the user when the underlying
+     * vault op had actually succeeded but the response was stuck on
+     * the parent reconnect. Two retries with exponential backoff
+     * cover the typical reconnect window.
      */
     suspend fun respond(connectionId: String, response: String): Result<ConnectionRecord> {
         val payload = JsonObject().apply {
@@ -664,9 +672,34 @@ class ConnectionsClient @Inject constructor(
             addProperty("response", response)
         }
 
-        return sendAndAwait("connection.respond", payload) { result ->
-            parseConnectionRecord(result)
+        var lastFailure: Throwable? = null
+        val backoffsMs = longArrayOf(0L, 1_000L, 3_000L)
+        for (attempt in backoffsMs.indices) {
+            if (backoffsMs[attempt] > 0L) {
+                kotlinx.coroutines.delay(backoffsMs[attempt])
+            }
+            val result = sendAndAwait("connection.respond", payload) { json ->
+                parseConnectionRecord(json)
+            }
+            if (result.isSuccess) return result
+            val err = result.exceptionOrNull()
+            lastFailure = err
+            val msg = err?.message.orEmpty()
+            // Only retry the transient-looking failures. A
+            // protocol-level error from the vault (e.g. "connection
+            // is already terminal", "invalid response") shouldn't
+            // get hammered.
+            val isTransient = msg.contains("timed out", ignoreCase = true) ||
+                msg.contains("TIMEOUT", ignoreCase = true) ||
+                msg.contains("Failed to create consumer", ignoreCase = true) ||
+                msg.contains("Failed to fetch", ignoreCase = true)
+            if (!isTransient) return result
+            android.util.Log.w(
+                "ConnectionsClient",
+                "connection.respond attempt ${attempt + 1} timed out; retrying. err=$msg",
+            )
         }
+        return Result.failure(lastFailure ?: Exception("connection.respond failed after retries"))
     }
 
     /**
@@ -764,6 +797,7 @@ class ConnectionsClient @Inject constructor(
                                         displayName = obj.get("display_name")?.asString ?: name,
                                         fieldType = obj.get("field_type")?.asString ?: "",
                                         category = obj.get("category")?.asString ?: "",
+                                        alias = obj.get("alias")?.asString ?: "",
                                     )
                                 )
                             }
@@ -929,6 +963,7 @@ data class PeerDataCatalogEntry(
     val displayName: String,
     val fieldType: String,
     val category: String,
+    val alias: String = "",
 )
 
 /**

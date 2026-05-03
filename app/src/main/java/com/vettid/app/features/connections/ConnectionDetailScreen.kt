@@ -41,9 +41,13 @@ import java.util.*
 fun ConnectionDetailScreen(
     viewModel: ConnectionDetailViewModel = hiltViewModel(),
     onMessageClick: () -> Unit = {},
-    onSendBtc: (String) -> Unit = {},
+    // Carries (connectionId, peerBtcAddress?) so the Send BTC screen
+    // pre-fills the recipient field with the peer's published wallet
+    // address — saves the user from copy-pasting it.
+    onSendBtc: (String, String?) -> Unit = { _, _ -> },
     onShowHistory: () -> Unit = {},
-    onNavigateToSharing: (connectionId: String) -> Unit = {},
+    onNavigateToPeerCatalog: (connectionId: String) -> Unit = {},
+    onNavigateToMySharing: (connectionId: String) -> Unit = {},
     onBack: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsState()
@@ -135,16 +139,12 @@ fun ConnectionDetailScreen(
             s.connection.peerDisplayName.takeIf { it.isNotBlank() } ?: "Connection"
         else -> "Connection"
     }
-    var menuExpanded by remember { mutableStateOf(false) }
     val isActiveConnection = (state as? ConnectionDetailState.Loaded)?.connection?.status == ConnectionStatus.ACTIVE
     val connectionId = (state as? ConnectionDetailState.Loaded)?.connection?.connectionId
 
-    // Wire the shared-action layer. The action ViewModel is its own
-    // injected singleton so the same data can drive ⋮-menu listing,
-    // invoke sheet, and approval inbox without prop-drilling.
-    // Available actions surface moved to the connection card's More
-    // menu in the feed (FeedScreen). The detail screen ⋮ keeps just
-    // History / Rotate keys / Revoke now.
+    // Manage Connection rows replaced the top-bar overflow menu.
+    // Rotate / History / Remove are inline buttons in that section
+    // so they stay discoverable without a kebab.
     val isRotating = (state as? ConnectionDetailState.Loaded)?.isRotating == true
     val isRevoking = (state as? ConnectionDetailState.Loaded)?.isRevoking == true
     Scaffold(
@@ -159,55 +159,6 @@ fun ConnectionDetailScreen(
                         )
                     }
                 },
-                actions = {
-                    if (isActiveConnection) {
-                        IconButton(onClick = { menuExpanded = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "More")
-                        }
-                        DropdownMenu(
-                            expanded = menuExpanded,
-                            onDismissRequest = { menuExpanded = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("History") },
-                                leadingIcon = { Icon(Icons.Default.History, null) },
-                                onClick = {
-                                    menuExpanded = false
-                                    onShowHistory()
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Rotate keys") },
-                                enabled = !isRotating,
-                                leadingIcon = { Icon(Icons.Default.Refresh, null) },
-                                onClick = {
-                                    menuExpanded = false
-                                    viewModel.rotateKeys()
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        "Revoke connection",
-                                        color = MaterialTheme.colorScheme.error
-                                    )
-                                },
-                                enabled = !isRevoking,
-                                leadingIcon = {
-                                    Icon(
-                                        Icons.Default.PersonRemove,
-                                        null,
-                                        tint = MaterialTheme.colorScheme.error
-                                    )
-                                },
-                                onClick = {
-                                    menuExpanded = false
-                                    viewModel.onRevokeClick()
-                                }
-                            )
-                        }
-                    }
-                }
             )
         }
     ) { padding ->
@@ -242,16 +193,14 @@ fun ConnectionDetailScreen(
                     peerSecretCatalog = peerSecretCatalog,
                     isRevoking = currentState.isRevoking,
                     isRotating = currentState.isRotating,
-                    isLocationSharingEnabled = currentState.isLocationSharingEnabled,
-                    isTogglingLocationSharing = currentState.isTogglingLocationSharing,
-                    shareableHandlers = shareableHandlers,
-                    connectionGrants = connectionGrants,
-                    grantPendingId = grantPendingId,
-                    presenceOverride = presenceOverride,
-                    presenceOverrideInFlight = presenceOverrideInFlight,
                     isPeerOnline = isPeerOnline,
                     onMessageClick = { viewModel.onMessageClick() },
-                    onSendBtcClick = { onSendBtc(currentState.connection.connectionId) },
+                    onSendBtcClick = {
+                        onSendBtc(
+                            currentState.connection.connectionId,
+                            peerWallets.firstOrNull()?.address?.takeIf { it.isNotBlank() },
+                        )
+                    },
                     onVoiceCallClick = {
                         pendingCallType = CallType.VOICE
                         callPermissionLauncher.launch(arrayOf(Manifest.permission.RECORD_AUDIO))
@@ -265,10 +214,9 @@ fun ConnectionDetailScreen(
                     },
                     onRotateKeysClick = { viewModel.rotateKeys() },
                     onRevokeClick = { viewModel.onRevokeClick() },
-                    onLocationSharingToggle = { viewModel.toggleLocationSharing(it) },
-                    onShareHandlerToggle = { id, granted -> viewModel.setShareHandlerForConnection(id, granted) },
-                    onPresenceOverrideChange = { viewModel.setPresenceOverride(it) },
-                    onNavigateToSharing = onNavigateToSharing,
+                    onShowHistory = onShowHistory,
+                    onNavigateToPeerCatalog = onNavigateToPeerCatalog,
+                    onNavigateToMySharing = onNavigateToMySharing,
                     modifier = Modifier.padding(padding)
                 )
             }
@@ -314,13 +262,6 @@ private fun LoadedContent(
     peerSecretCatalog: List<com.vettid.app.core.nats.PeerPublicSecretMetadata>? = null,
     isRevoking: Boolean,
     isRotating: Boolean = false,
-    isLocationSharingEnabled: Boolean = false,
-    isTogglingLocationSharing: Boolean = false,
-    shareableHandlers: List<com.vettid.app.core.nats.VaultHandler> = emptyList(),
-    connectionGrants: Map<String, Boolean> = emptyMap(),
-    grantPendingId: String? = null,
-    presenceOverride: Boolean? = null,
-    presenceOverrideInFlight: Boolean = false,
     isPeerOnline: Boolean = false,
     onMessageClick: () -> Unit,
     onSendBtcClick: () -> Unit = {},
@@ -328,10 +269,9 @@ private fun LoadedContent(
     onVideoCallClick: () -> Unit,
     onRotateKeysClick: () -> Unit = {},
     onRevokeClick: () -> Unit,
-    onLocationSharingToggle: (Boolean) -> Unit = {},
-    onShareHandlerToggle: (String, Boolean) -> Unit = { _, _ -> },
-    onPresenceOverrideChange: (Boolean?) -> Unit = {},
-    onNavigateToSharing: (String) -> Unit = {},
+    onShowHistory: () -> Unit = {},
+    onNavigateToPeerCatalog: (String) -> Unit = {},
+    onNavigateToMySharing: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val connectedDateFormatter = java.text.SimpleDateFormat("MMMM d, yyyy 'at' h:mm a", java.util.Locale.getDefault())
@@ -371,180 +311,44 @@ private fun LoadedContent(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
 
-        // Quick-actions for an active connection live on the connection
-        // list row (Message / Voice / Video). The detail screen focuses
-        // on inspection and per-connection settings — actions are added
-        // to the top-bar overflow menu as needed.
-
-        // === 2. SHARED WITH CONNECTION ===
+        // === 2. SHARING ===
+        // Two scoped entries: peer's catalog (request flow) and the
+        // user's outbound sharing settings (presence + location +
+        // policy editor). Each one navigates to its own focused
+        // screen so the actions on each side stay unambiguous.
         Spacer(modifier = Modifier.height(24.dp))
         Text(
-            text = "SHARED WITH CONNECTION",
+            text = "SHARING",
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
         )
-        var showHandlersDialog by remember { mutableStateOf(false) }
-        val grantedCount = shareableHandlers.count { connectionGrants[it.id] == true }
-
+        val peerShortName = connection.peerDisplayName.takeIf { it.isNotBlank() }?.substringBefore(' ') ?: "this connection"
         Card(modifier = Modifier.fillMaxWidth()) {
             Column {
                 ListItem(
                     modifier = Modifier.clickable(enabled = connection.status == ConnectionStatus.ACTIVE) {
-                        onNavigateToSharing(connection.connectionId)
+                        onNavigateToPeerCatalog(connection.connectionId)
                     },
-                    headlineContent = { Text("Sharing") },
-                    supportingContent = { Text("Catalog of what's shared with you and what you share with this connection") },
-                    leadingContent = { Icon(Icons.Default.FolderShared, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                    headlineContent = { Text("Their catalog") },
+                    supportingContent = { Text("Items $peerShortName has published — request access here") },
+                    leadingContent = { Icon(Icons.Default.Inbox, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
                     trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
                 )
                 HorizontalDivider()
                 ListItem(
-                    modifier = Modifier.clickable(
-                        enabled = shareableHandlers.isNotEmpty() && connection.status == ConnectionStatus.ACTIVE
-                    ) { showHandlersDialog = true },
-                    headlineContent = { Text("Handlers") },
-                    supportingContent = {
-                        Text(
-                            when {
-                                shareableHandlers.isEmpty() -> "No shareable capabilities"
-                                grantedCount == 0 -> "No capabilities shared with this peer"
-                                grantedCount == shareableHandlers.size -> "All ${shareableHandlers.size} capabilities shared"
-                                else -> "$grantedCount of ${shareableHandlers.size} capabilities shared"
-                            }
-                        )
+                    modifier = Modifier.clickable(enabled = connection.status == ConnectionStatus.ACTIVE) {
+                        onNavigateToMySharing(connection.connectionId)
                     },
-                    leadingContent = { Icon(Icons.Default.Extension, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                    trailingContent = if (shareableHandlers.isNotEmpty()) {
-                        { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    } else null
+                    headlineContent = { Text("My sharing") },
+                    supportingContent = { Text("Online presence, location, and what $peerShortName can request from you") },
+                    leadingContent = { Icon(Icons.Default.Outbox, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                    trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
                 )
-                HorizontalDivider()
-                ListItem(
-                    headlineContent = { Text("Location Sharing") },
-                    supportingContent = { Text(if (isLocationSharingEnabled) "Enabled" else "Disabled") },
-                    leadingContent = { Icon(Icons.Default.LocationOn, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                    trailingContent = {
-                        Switch(
-                            checked = isLocationSharingEnabled,
-                            onCheckedChange = onLocationSharingToggle,
-                            enabled = connection.status == ConnectionStatus.ACTIVE && !isTogglingLocationSharing
-                        )
-                    }
-                )
-                HorizontalDivider()
-                var showPresencePicker by remember { mutableStateOf(false) }
-                ListItem(
-                    modifier = Modifier.clickable(
-                        enabled = connection.status == ConnectionStatus.ACTIVE && !presenceOverrideInFlight
-                    ) { showPresencePicker = true },
-                    headlineContent = { Text("Online Presence") },
-                    supportingContent = {
-                        Text(
-                            when (presenceOverride) {
-                                null -> "Follow account default"
-                                true -> "Always shared with this connection"
-                                false -> "Never shared with this connection"
-                            }
-                        )
-                    },
-                    leadingContent = { Icon(Icons.Default.Circle, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                    trailingContent = {
-                        if (presenceOverrideInFlight) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        } else {
-                            Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                )
-                if (showPresencePicker) {
-                    PresenceOverrideDialog(
-                        current = presenceOverride,
-                        onPick = {
-                            showPresencePicker = false
-                            onPresenceOverrideChange(it)
-                        },
-                        onDismiss = { showPresencePicker = false },
-                    )
-                }
             }
         }
 
-        if (showHandlersDialog) {
-            SharedHandlersDialog(
-                shareableHandlers = shareableHandlers,
-                connectionGrants = connectionGrants,
-                grantPendingId = grantPendingId,
-                onToggle = onShareHandlerToggle,
-                onDismiss = { showHandlersDialog = false },
-            )
-        }
-
-        // === 3. SECURITY ===
-        Spacer(modifier = Modifier.height(24.dp))
-        Text(
-            text = "SECURITY",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
-        )
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Lock, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("End-to-End Encrypted", style = MaterialTheme.typography.bodyMedium)
-                }
-
-                if (!peerIdentityKey.isNullOrBlank()) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text("Identity Key", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = peerIdentityKey!!.chunked(8).joinToString(" "),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                if (!peerPublicKey.isNullOrBlank()) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text("E2E Session Key", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = peerPublicKey!!.chunked(8).joinToString(" "),
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                if (!peerUserGuid.isNullOrBlank()) {
-                    Spacer(modifier = Modifier.height(12.dp))
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text("User ID", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = peerUserGuid!!,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                // Rotate Keys + Revoke moved to top-bar overflow menu.
-            }
-        }
-
-        // === 4. MANAGE CONNECTION ===
+        // === 3. MANAGE CONNECTION ===
         Spacer(modifier = Modifier.height(24.dp))
         Text(
             text = "MANAGE CONNECTION",
@@ -555,14 +359,78 @@ private fun LoadedContent(
                 .padding(bottom = 8.dp)
         )
 
+        var showRotateInfo by remember { mutableStateOf(false) }
         Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(16.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Event, null, modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Connected $connectedDate", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+            Column {
+                // Connected date stays at the top — it's a passive
+                // info row and the natural mental anchor for the
+                // section.
+                ListItem(
+                    headlineContent = { Text("Connected") },
+                    supportingContent = { Text(connectedDate) },
+                    leadingContent = { Icon(Icons.Default.Event, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                )
+                HorizontalDivider()
+                ListItem(
+                    modifier = Modifier.clickable(enabled = connection.status == ConnectionStatus.ACTIVE) { onShowHistory() },
+                    headlineContent = { Text("History") },
+                    supportingContent = { Text("Calls, messages, and other interactions") },
+                    leadingContent = { Icon(Icons.Default.History, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                    trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                )
+                HorizontalDivider()
+                ListItem(
+                    modifier = Modifier.clickable(enabled = !isRotating && connection.status == ConnectionStatus.ACTIVE) {
+                        showRotateInfo = true
+                    },
+                    headlineContent = { Text("Rotate keys") },
+                    supportingContent = {
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Default.Lock, null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary)
+                                Spacer(Modifier.width(4.dp))
+                                Text("End-to-end encrypted", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                            }
+                            Text(
+                                "Generate a fresh shared encryption key with this peer",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    },
+                    leadingContent = {
+                        if (isRotating) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        else Icon(Icons.Default.Refresh, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    },
+                    trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                )
+                HorizontalDivider()
+                ListItem(
+                    modifier = Modifier.clickable(enabled = !isRevoking && connection.status == ConnectionStatus.ACTIVE) {
+                        onRevokeClick()
+                    },
+                    headlineContent = { Text("Remove connection", color = MaterialTheme.colorScheme.error) },
+                    supportingContent = { Text("Revoke this connection and zero out shared keys", color = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)) },
+                    leadingContent = {
+                        if (isRevoking) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.error)
+                        else Icon(Icons.Default.PersonRemove, null, tint = MaterialTheme.colorScheme.error)
+                    },
+                )
             }
+        }
+
+        if (showRotateInfo) {
+            RotateKeysDialog(
+                peerIdentityKey = peerIdentityKey,
+                peerPublicKey = peerPublicKey,
+                peerUserGuid = peerUserGuid,
+                isRotating = isRotating,
+                onConfirm = {
+                    showRotateInfo = false
+                    onRotateKeysClick()
+                },
+                onDismiss = { showRotateInfo = false },
+            )
         }
 
         Spacer(modifier = Modifier.height(32.dp))
@@ -571,202 +439,64 @@ private fun LoadedContent(
 }
 
 @Composable
-private fun LocationSharingCard(
-    isEnabled: Boolean,
-    isToggling: Boolean,
-    isActive: Boolean,
-    onToggle: (Boolean) -> Unit
+private fun RotateKeysDialog(
+    peerIdentityKey: String?,
+    peerPublicKey: String?,
+    peerUserGuid: String?,
+    isRotating: Boolean,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                imageVector = Icons.Default.LocationOn,
-                contentDescription = null,
-                modifier = Modifier.size(24.dp),
-                tint = if (isEnabled) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(modifier = Modifier.weight(1f)) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rotate keys") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Lock, null, modifier = Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(6.dp))
+                    Text("End-to-end encrypted", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                }
                 Text(
-                    text = "Share My Location",
-                    style = MaterialTheme.typography.titleSmall
-                )
-                Text(
-                    text = "Share your latest location with this connection",
+                    "Rotation generates a new shared encryption key with this peer. Past messages remain readable; future messages use the new key.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                if (!peerIdentityKey.isNullOrBlank()) {
+                    KeyFingerprint("Identity key", peerIdentityKey!!)
+                }
+                if (!peerPublicKey.isNullOrBlank()) {
+                    KeyFingerprint("E2E session key", peerPublicKey!!)
+                }
+                if (!peerUserGuid.isNullOrBlank()) {
+                    KeyFingerprint("User ID", peerUserGuid!!, mono = false)
+                }
             }
-            if (isToggling) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(24.dp),
-                    strokeWidth = 2.dp
-                )
-            } else {
-                Switch(
-                    checked = isEnabled,
-                    onCheckedChange = { onToggle(it) },
-                    enabled = isActive
-                )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm, enabled = !isRotating) {
+                Text(if (isRotating) "Rotating…" else "Rotate now")
             }
-        }
-    }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 @Composable
-private fun StatusBadge(status: ConnectionStatus) {
-    val (color, label) = when (status) {
-        ConnectionStatus.ACTIVE -> MaterialTheme.colorScheme.primary to "Connected"
-        ConnectionStatus.PENDING -> MaterialTheme.colorScheme.secondary to "Pending"
-        ConnectionStatus.REVOKED -> MaterialTheme.colorScheme.error to "Revoked"
-    }
-
-    Surface(
-        shape = MaterialTheme.shapes.small,
-        color = color.copy(alpha = 0.12f)
-    ) {
+private fun KeyFingerprint(label: String, value: String, mono: Boolean = true) {
+    Column {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(2.dp))
         Text(
-            text = label,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-            style = MaterialTheme.typography.labelMedium,
-            color = color
+            text = if (mono) value.chunked(8).joinToString(" ") else value,
+            style = MaterialTheme.typography.bodySmall,
+            fontFamily = if (mono) androidx.compose.ui.text.font.FontFamily.Monospace else androidx.compose.ui.text.font.FontFamily.Default,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
 
-@Composable
-private fun ProfileInfoCard(profile: Profile) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Text(
-                text = "Profile",
-                style = MaterialTheme.typography.titleMedium
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            if (profile.bio != null) {
-                ProfileInfoRow(
-                    icon = Icons.Default.Info,
-                    label = "Bio",
-                    value = profile.bio
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-
-            if (profile.location != null) {
-                ProfileInfoRow(
-                    icon = Icons.Default.LocationOn,
-                    label = "Location",
-                    value = profile.location
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ProfileInfoRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    value: String
-) {
-    Row(
-        verticalAlignment = Alignment.Top
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            modifier = Modifier.size(20.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-        Column {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = value,
-                style = MaterialTheme.typography.bodyMedium
-            )
-        }
-    }
-}
-
-@Composable
-private fun ConnectionInfoCard(connection: Connection) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Text(
-                text = "Connection Info",
-                style = MaterialTheme.typography.titleMedium
-            )
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            ConnectionInfoRow(
-                icon = Icons.Default.Event,
-                label = "Connected since",
-                value = formatDate(connection.createdAt)
-            )
-
-            connection.lastMessageAt?.let { timestamp ->
-                Spacer(modifier = Modifier.height(8.dp))
-                ConnectionInfoRow(
-                    icon = Icons.Default.Email,
-                    label = "Last message",
-                    value = formatDate(timestamp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun ConnectionInfoRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    value: String
-) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            modifier = Modifier.size(20.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(modifier = Modifier.width(12.dp))
-        Column {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = value,
-                style = MaterialTheme.typography.bodyMedium
-            )
-        }
-    }
-}
 
 @Composable
 private fun ErrorContent(
@@ -812,149 +542,3 @@ private fun formatDate(timestamp: Long): String {
     return sdf.format(Date(timestampMillis))
 }
 
-/**
- * Per-connection handler share toggles. Shown when the user taps the
- * Handlers row in the SHARED WITH CONNECTION section. One switch per
- * shareable+enabled+globally-shared handler — narrows what this peer
- * may invoke.
- */
-/**
- * Tri-state picker for the per-connection presence override.
- * Default = follow user-wide setting; Always = explicit on; Never =
- * explicit off. Stored on the vault's ConnectionRecord and consulted
- * by the presence heartbeat loop.
- */
-@Composable
-private fun PresenceOverrideDialog(
-    current: Boolean?,
-    onPick: (Boolean?) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Online Presence for this Connection") },
-        text = {
-            Column {
-                PresenceOverrideRow(
-                    label = "Follow account default",
-                    description = "Use the global Share online presence setting",
-                    selected = current == null,
-                    onClick = { onPick(null) },
-                )
-                PresenceOverrideRow(
-                    label = "Always share",
-                    description = "This peer sees you online regardless of the default",
-                    selected = current == true,
-                    onClick = { onPick(true) },
-                )
-                PresenceOverrideRow(
-                    label = "Never share",
-                    description = "This peer never sees you online",
-                    selected = current == false,
-                    onClick = { onPick(false) },
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Done") }
-        },
-    )
-}
-
-@Composable
-private fun PresenceOverrideRow(
-    label: String,
-    description: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        RadioButton(selected = selected, onClick = onClick)
-        Spacer(modifier = Modifier.width(8.dp))
-        Column {
-            Text(label, style = MaterialTheme.typography.bodyMedium)
-            Text(
-                description,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
-private fun SharedHandlersDialog(
-    shareableHandlers: List<com.vettid.app.core.nats.VaultHandler>,
-    connectionGrants: Map<String, Boolean>,
-    grantPendingId: String?,
-    onToggle: (String, Boolean) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Shared Capabilities") },
-        text = {
-            // Dialog content area is height-constrained by Material3
-            // and can't grow indefinitely — long handler lists were
-            // clipping. Wrap in a verticalScroll so every entry stays
-            // reachable.
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-            ) {
-                Text(
-                    text = "Choose which capabilities this peer can use. Only capabilities you've shared globally appear here.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                shareableHandlers.forEachIndexed { idx, handler ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = handler.name,
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                            if (handler.description.isNotEmpty()) {
-                                Text(
-                                    text = handler.description,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                        if (grantPendingId == handler.id) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp,
-                            )
-                        } else {
-                            Switch(
-                                checked = connectionGrants[handler.id] == true,
-                                onCheckedChange = { onToggle(handler.id, it) },
-                            )
-                        }
-                    }
-                    if (idx < shareableHandlers.lastIndex) {
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("Done") }
-        },
-    )
-}

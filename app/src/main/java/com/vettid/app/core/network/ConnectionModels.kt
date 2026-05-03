@@ -92,6 +92,9 @@ enum class MessageContentType {
     BTC_PAYMENT_REQUEST,
     @SerializedName("btc_payment_receipt")
     BTC_PAYMENT_RECEIPT,
+    /** Recipient declined a payment request. Content carries a JSON BtcPaymentDecline { request_id, reason }. */
+    @SerializedName("btc_payment_decline")
+    BTC_PAYMENT_DECLINE,
     @SerializedName("btc_address")
     BTC_ADDRESS
 }

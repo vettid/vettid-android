@@ -41,10 +41,33 @@ class SendBtcViewModel @Inject constructor(
     private val natsAutoConnector: NatsAutoConnector,
     private val credentialStore: com.vettid.app.core.storage.CredentialStore,
     private val cryptoManager: com.vettid.app.core.crypto.CryptoManager,
+    private val messagingClient: com.vettid.app.core.nats.NatsMessagingClient,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
     private val initialWalletId: String? = savedStateHandle["walletId"]
+    /**
+     * Pre-filled recipient address handed in via the SendBtc nav
+     * route. Set when the user reaches Send BTC from a connection
+     * card — the connection's published BTC address gets passed
+     * through so the recipient field doesn't start blank.
+     */
+    val initialToAddress: String = savedStateHandle.get<String>("toAddress").orEmpty()
+    /**
+     * Pre-filled amount in satoshis. Non-zero when the user reached
+     * Send BTC by approving a payment request — the request body's
+     * amount lands here so the user doesn't re-type it.
+     */
+    val initialAmountSats: Long = savedStateHandle.get<Long>("amountSats") ?: 0L
+    /**
+     * The originating payment request id, when the send is
+     * fulfilling a request. Empty string for free-form sends.
+     * Used to send a `btc_payment_receipt` back to the requester
+     * after a successful broadcast so both sides see the request
+     * close out with the txid.
+     */
+    private val originatingRequestId: String = savedStateHandle.get<String>("requestId").orEmpty()
+    private val originatingConnectionId: String = savedStateHandle.get<String>("connectionId").orEmpty()
 
     private val gson = Gson()
 
@@ -173,6 +196,19 @@ class SendBtcViewModel @Inject constructor(
                 result.onSuccess { txid ->
                     _sendState.value = SendState.Success(txid)
                     Log.i(TAG, "Transaction sent: $txid")
+                    // If this send was fulfilling a payment request,
+                    // close it out by messaging a receipt back to the
+                    // requester. Fire-and-forget — failure to deliver
+                    // doesn't undo the broadcast.
+                    if (originatingRequestId.isNotEmpty() && originatingConnectionId.isNotEmpty()) {
+                        sendReceiptForRequest(
+                            connectionId = originatingConnectionId,
+                            requestId = originatingRequestId,
+                            txid = txid,
+                            amountSats = amountSats,
+                            feeRate = feeRate,
+                        )
+                    }
                 }.onFailure { e ->
                     _sendState.value = SendState.Error(e.message ?: "Transaction failed")
                     Log.e(TAG, "Send failed: ${e.message}")
@@ -186,6 +222,43 @@ class SendBtcViewModel @Inject constructor(
 
     fun resetSendState() {
         _sendState.value = SendState.Idle
+    }
+
+    /**
+     * Fire a `btc_payment_receipt` message to the connection so the
+     * requester's conversation flips the original request from
+     * pending → completed (txid visible). Best-effort: a delivery
+     * failure here doesn't undo the broadcast, which is the
+     * canonical record of payment.
+     */
+    private fun sendReceiptForRequest(
+        connectionId: String,
+        requestId: String,
+        txid: String,
+        amountSats: Long,
+        feeRate: Int,
+    ) {
+        viewModelScope.launch {
+            try {
+                val body = JsonObject().apply {
+                    addProperty("requestId", requestId)
+                    addProperty("txid", txid)
+                    addProperty("amountSats", amountSats)
+                    addProperty("feeSats", 0L) // mempool fee not yet computed locally
+                    addProperty("feeRate", feeRate)
+                }.toString()
+                val result = messagingClient.sendMessage(
+                    connectionId = connectionId,
+                    content = body,
+                    contentType = "btc_payment_receipt",
+                )
+                result.onFailure { err ->
+                    Log.w(TAG, "btc_payment_receipt send failed: ${err.message}")
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to send payment receipt", e)
+            }
+        }
     }
 
     /**

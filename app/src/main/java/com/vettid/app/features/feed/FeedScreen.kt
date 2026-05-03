@@ -72,8 +72,8 @@ fun FeedContent(
     onNavigateToScanInvitation: () -> Unit = {},
     onNavigateToCreateAgentInvitation: () -> Unit = {},
     onNavigateToConnectDesktop: () -> Unit = {},
-    onBtcSend: (connectionId: String) -> Unit = {},
-    onBtcRequest: (connectionId: String) -> Unit = {},
+    onBtcSend: (connectionId: String, peerBtcAddress: String?) -> Unit = { _, _ -> },
+    onBtcRequest: (connectionId: String, peerBtcAddress: String?) -> Unit = { _, _ -> },
     onNavigateToVaultMessages: () -> Unit = {},
     onNavigateToVotes: () -> Unit = {},
     onNavigateToGuidesList: () -> Unit = {},
@@ -223,6 +223,7 @@ fun FeedContent(
                     onTogglePriority = { viewModel.togglePriority(it.eventId) },
                     onConnectionAccept = { connectionId -> viewModel.acceptConnection(connectionId) },
                     onConnectionDecline = { connectionId -> viewModel.declineConnection(connectionId) },
+                    onConnectionRevoke = { connectionId -> viewModel.cancelInvitation(connectionId) },
                     onNavigateToConnectionReview = onNavigateToConnectionReview,
                     onNavigateToCreateInvitation = onNavigateToCreateInvitation,
                     onVoiceCall = { connectionId ->
@@ -390,12 +391,13 @@ private fun FeedList(
     onTogglePriority: (FeedEvent) -> Unit = {},
     onConnectionAccept: (String) -> Unit = {},
     onConnectionDecline: (String) -> Unit = {},
+    onConnectionRevoke: (String) -> Unit = {},
     onNavigateToConnectionReview: (String, String) -> Unit = { _, _ -> },
     onNavigateToCreateInvitation: () -> Unit = {},
     onVoiceCall: (String) -> Unit = {},
     onVideoCall: (String) -> Unit = {},
-    onBtcSend: (String) -> Unit = {},
-    onBtcRequest: (String) -> Unit = {},
+    onBtcSend: (connectionId: String, peerBtcAddress: String?) -> Unit = { _, _ -> },
+    onBtcRequest: (connectionId: String, peerBtcAddress: String?) -> Unit = { _, _ -> },
     onResurfaceVaultUpdate: () -> Unit = {},
     onSystemVaultMessages: () -> Unit = {},
     onSystemVotes: () -> Unit = {},
@@ -504,12 +506,13 @@ private fun FeedList(
                         onLongClick = { onNavigateToConnectionDetail(item.connectionId) },
                         onAccept = { onConnectionAccept(item.connectionId) },
                         onDecline = { onConnectionDecline(item.connectionId) },
+                        onCancelInvitation = { onConnectionRevoke(item.connectionId) },
                         onMessageClick = { onNavigateToConversation(item.connectionId) },
                         onHistoryClick = { onNavigateToConnectionHistory(item.connectionId) },
                         onCallClick = { onVoiceCall(item.connectionId) },
                         onVideoCallClick = { onVideoCall(item.connectionId) },
-                        onBtcClick = { onBtcSend(item.connectionId) },
-                        onBtcRequestClick = { onBtcRequest(item.connectionId) },
+                        onBtcClick = { onBtcSend(item.connectionId, item.peerBtcAddress) },
+                        onBtcRequestClick = { onBtcRequest(item.connectionId, item.peerBtcAddress) },
                         onNavigateToConnectionReview = onNavigateToConnectionReview,
                         onOpenMigration = onResurfaceVaultUpdate,
                         onSystemVaultMessagesClick = onSystemVaultMessages,
@@ -686,6 +689,7 @@ private fun StatusAwareConnectionCard(
     onLongClick: () -> Unit = {},
     onAccept: () -> Unit = {},
     onDecline: () -> Unit = {},
+    onCancelInvitation: () -> Unit = {},
     onMessageClick: () -> Unit = {},
     onHistoryClick: () -> Unit = {},
     onCallClick: () -> Unit = {},
@@ -705,6 +709,11 @@ private fun StatusAwareConnectionCard(
     when {
         item.needsReview -> PendingReviewConnectionCard(item, onClick)
         item.hasAccepted -> WaitingConnectionCard(item, onClick)
+        item.hasOutstandingInvitation -> OutstandingInvitationCard(
+            item = item,
+            onClick = onClick,
+            onCancel = onCancelInvitation,
+        )
         item.connectionStatus == "active" -> ActiveConnectionCard(
             item, onClick, onLongClick, onMessageClick, onHistoryClick,
             onCallClick, onVideoCallClick, onBtcClick, onBtcRequestClick,
@@ -828,6 +837,81 @@ private fun WaitingConnectionCard(
                 )
             }
         }
+    }
+}
+
+/**
+ * Card variant for an outbound invitation the user created but the
+ * peer hasn't acted on yet. Shows a clear "Invitation pending" label
+ * and a Cancel button so abandoned invites don't sit on the
+ * Connections screen looking like broken cards.
+ */
+@Composable
+private fun OutstandingInvitationCard(
+    item: FeedDisplayItem.ConnectionCard,
+    onClick: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    var confirmingCancel by remember { mutableStateOf(false) }
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        ),
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.QrCode,
+                    contentDescription = null,
+                    modifier = Modifier.size(22.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Invitation pending",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Text(
+                    text = "Tap the card to share the QR code, or cancel below.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            TextButton(onClick = { confirmingCancel = true }) { Text("Cancel") }
+        }
+    }
+    if (confirmingCancel) {
+        AlertDialog(
+            onDismissRequest = { confirmingCancel = false },
+            title = { Text("Cancel invitation?") },
+            text = { Text("The QR code and invite link will stop working immediately.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmingCancel = false
+                        onCancel()
+                    },
+                ) { Text("Cancel invitation") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmingCancel = false }) { Text("Keep") }
+            },
+        )
     }
 }
 
@@ -1005,28 +1089,34 @@ private fun ActiveConnectionCard(
                     Box {
                         var showMoreMenu by remember { mutableStateOf(false) }
                         ConnectionActionButton(
-                            icon = Icons.Default.MoreVert,
-                            label = "More",
+                            icon = Icons.Default.PlayArrow,
+                            label = "Actions",
                             onClick = { showMoreMenu = true },
                         )
                         DropdownMenu(
                             expanded = showMoreMenu,
                             onDismissRequest = { showMoreMenu = false },
                         ) {
-                            DropdownMenuItem(
-                                text = { Text("Send BTC") },
-                                onClick = { showMoreMenu = false; onBtcClick() },
-                                leadingIcon = {
-                                    Icon(Icons.Default.CurrencyBitcoin, contentDescription = null, modifier = Modifier.size(20.dp))
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("Request BTC") },
-                                onClick = { showMoreMenu = false; onBtcRequestClick() },
-                                leadingIcon = {
-                                    Icon(Icons.Default.CallReceived, contentDescription = null, modifier = Modifier.size(20.dp))
-                                },
-                            )
+                            // Show BTC actions only when both peers have
+                            // a wallet — sending to a peer with no wallet
+                            // breaks; requesting from a peer who can't
+                            // sign confuses them. Keeps the menu honest.
+                            if (item.peerHasWallet && item.localHasWallet) {
+                                DropdownMenuItem(
+                                    text = { Text("Send BTC") },
+                                    onClick = { showMoreMenu = false; onBtcClick() },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.CurrencyBitcoin, contentDescription = null, modifier = Modifier.size(20.dp))
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Request BTC") },
+                                    onClick = { showMoreMenu = false; onBtcRequestClick() },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.CallReceived, contentDescription = null, modifier = Modifier.size(20.dp))
+                                    },
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("Available actions") },
                                 onClick = { showMoreMenu = false; onShowAvailableActions() },

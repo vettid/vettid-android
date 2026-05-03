@@ -15,7 +15,6 @@ import com.vettid.app.core.storage.OptionalField
 import com.vettid.app.core.storage.OptionalPersonalData
 import com.vettid.app.core.storage.PersonalDataStore
 import com.vettid.app.core.storage.SystemPersonalData
-import com.vettid.app.worker.PersonalDataSyncWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -73,8 +72,6 @@ class PersonalDataViewModel @Inject constructor(
                 val systemFields = personalDataStore.getSystemFields()
                 val optionalFields = personalDataStore.getOptionalFields()
                 val customFields = personalDataStore.getCustomFields()
-                val hasPendingSync = personalDataStore.hasPendingSync()
-                val lastSyncedAt = personalDataStore.getLastSyncedAt()
 
                 _state.update {
                     it.copy(
@@ -82,8 +79,8 @@ class PersonalDataViewModel @Inject constructor(
                         systemFields = systemFields,
                         optionalFields = optionalFields,
                         customFields = customFields,
-                        hasPendingSync = hasPendingSync,
-                        lastSyncedAt = lastSyncedAt
+                        hasPendingSync = false,
+                        lastSyncedAt = 0L
                     )
                 }
 
@@ -236,18 +233,43 @@ class PersonalDataViewModel @Inject constructor(
         _state.update { it.copy(isSyncing = true) }
 
         try {
-            val data = personalDataStore.exportForSync()
+            // Assemble personal-data.update payload directly from the
+            // current cache. The cache itself is in-memory and was
+            // populated by the form; the vault is the destination.
+            val optional = personalDataStore.getOptionalFields()
+            val customFields = personalDataStore.getCustomFields()
 
-            // Build payload for personal-data.update (wrapped in "fields" object)
             val fieldsObject = com.google.gson.JsonObject().apply {
-                data.forEach { (key, value) ->
-                    when (value) {
-                        is String -> addProperty(key, value)
-                        is Number -> addProperty(key, value.toString())
-                        is Boolean -> addProperty(key, value.toString())
-                        null -> {} // Skip null values
-                        else -> addProperty(key, value.toString())
+                optional.prefix?.let { addProperty("prefix", it) }
+                optional.middleName?.let { addProperty("middleName", it) }
+                optional.suffix?.let { addProperty("suffix", it) }
+                optional.phone?.let { addProperty("phone", it) }
+                optional.birthday?.let { addProperty("birthday", it) }
+                optional.street?.let { addProperty("street", it) }
+                optional.street2?.let { addProperty("street2", it) }
+                optional.city?.let { addProperty("city", it) }
+                optional.state?.let { addProperty("state", it) }
+                optional.postalCode?.let { addProperty("postalCode", it) }
+                optional.country?.let { addProperty("country", it) }
+                optional.website?.let { addProperty("website", it) }
+                optional.linkedin?.let { addProperty("linkedin", it) }
+                optional.twitter?.let { addProperty("twitter", it) }
+                optional.instagram?.let { addProperty("instagram", it) }
+                optional.github?.let { addProperty("github", it) }
+                if (customFields.isNotEmpty()) {
+                    val arr = com.google.gson.JsonArray()
+                    customFields.forEach { f ->
+                        arr.add(com.google.gson.JsonObject().apply {
+                            addProperty("id", f.id)
+                            addProperty("name", f.name)
+                            addProperty("value", f.value)
+                            addProperty("category", f.category.name)
+                            addProperty("fieldType", f.fieldType.name)
+                            addProperty("createdAt", f.createdAt)
+                            addProperty("updatedAt", f.updatedAt)
+                        })
                     }
+                    add("customFields", arr)
                 }
             }
             val payload = com.google.gson.JsonObject().apply {
@@ -259,9 +281,6 @@ class PersonalDataViewModel @Inject constructor(
             result.fold(
                 onSuccess = { requestId ->
                     Log.d(TAG, "Sync request sent: $requestId")
-                    // In a real implementation, we'd wait for the response
-                    // For now, mark as synced optimistically
-                    personalDataStore.markSyncComplete()
                     _state.update {
                         it.copy(
                             isSyncing = false,
@@ -297,11 +316,6 @@ class PersonalDataViewModel @Inject constructor(
     }
 
     private suspend fun continueToNext() {
-        // Trigger background sync if there are pending changes
-        if (personalDataStore.hasPendingSync()) {
-            Log.d(TAG, "Scheduling background sync for pending changes")
-            PersonalDataSyncWorker.scheduleImmediate(context)
-        }
         _effects.emit(PersonalDataEffect.NavigateToMain)
     }
 

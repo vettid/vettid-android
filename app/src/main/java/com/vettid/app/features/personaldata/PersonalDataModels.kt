@@ -19,6 +19,7 @@ data class PersonalDataItem(
     val name: String,
     val type: DataType,
     val value: String,
+    val alias: String = "",                  // Short user-defined disambiguator
     val category: DataCategory? = null,
     val fieldType: FieldType = FieldType.TEXT,
     val isSystemField: Boolean = false,
@@ -550,6 +551,14 @@ data class PersonalDataMultiTemplate(
 data class PersonalDataTemplateFormState(
     val template: PersonalDataMultiTemplate,
     val fieldValues: Map<Int, String> = emptyMap(),
+    /**
+     * Alias applied to every field this template creates. Surfaced
+     * once at the top of the dialog because a template (e.g. Family
+     * Member) creates a logical group of fields about the same
+     * person — the alias disambiguates "which family member" so a
+     * future Wife + Daughter pair stays readable in the catalog.
+     */
+    val alias: String = "",
     val isSaving: Boolean = false
 ) {
     fun getValue(fieldIndex: Int): String = fieldValues[fieldIndex] ?: ""
@@ -653,6 +662,7 @@ data class EditDataItemState(
     val id: String? = null,
     val name: String = "",
     val value: String = "",
+    val alias: String = "",                       // Short user-defined disambiguator: "Wife", "Maria", "Work"
     val type: DataType = DataType.PRIVATE,
     val fieldType: FieldType = FieldType.TEXT,
     val category: DataCategory? = null,

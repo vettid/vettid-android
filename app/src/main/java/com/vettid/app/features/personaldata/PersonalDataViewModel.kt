@@ -12,10 +12,10 @@ import com.vettid.app.core.nats.NatsConnectionManager
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.core.storage.CredentialStore
+import com.vettid.app.core.storage.MinorSecret
 import com.vettid.app.core.storage.MinorSecretsStore
 import com.vettid.app.core.storage.PersonalDataStore
 import com.vettid.app.core.storage.SecretType
-import com.vettid.app.worker.PersonalDataSyncWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.*
@@ -92,7 +92,19 @@ class PersonalDataViewModel @Inject constructor(
 
     // Critical-secret metadata as emitted by the vault's secret_catalog.
     // Populated from the published-profile fetch; values are never here.
+    /**
+     * Mirror of the vault's `data_catalog` from the latest
+     * `profile.get-published` response. Used by the own-profile
+     * preview's Data badge so the count exactly matches what peers
+     * see (instead of a different filter on local items, which used
+     * to drift away from the wire).
+     */
+    private val _ownDataCatalog = MutableStateFlow<List<PublicMetadataItem>>(emptyList())
+    val ownDataCatalog: StateFlow<List<PublicMetadataItem>> = _ownDataCatalog.asStateFlow()
+
     private val _criticalSecretCatalog = MutableStateFlow<List<PublicMetadataItem>>(emptyList())
+    /** Public-facing mirror of the vault's secret_catalog. */
+    val criticalSecretCatalog: StateFlow<List<PublicMetadataItem>> = _criticalSecretCatalog.asStateFlow()
 
     // Installed vault handlers
     private val _installedHandlers = MutableStateFlow<List<com.vettid.app.core.nats.VaultHandler>>(emptyList())
@@ -141,11 +153,13 @@ class PersonalDataViewModel @Inject constructor(
     val hasUnpublishedSecrets: StateFlow<Boolean> = _hasUnpublishedSecrets.asStateFlow()
 
     private fun recomputeUnpublishedSecrets() {
-        _hasUnpublishedSecrets.value = minorSecretsStore.getAllSecrets().any {
-            it.type == com.vettid.app.core.storage.SecretType.PUBLIC_KEY &&
-                it.isInPublicProfile &&
-                it.syncStatus == com.vettid.app.core.storage.SyncStatus.PENDING
-        }
+        // Vault is the source of truth — once a secret reaches it,
+        // it's by definition synced. Pending state was a local-only
+        // concept of the old store. The "unpublished" banner now
+        // collapses to false; if we want a real "publish required"
+        // signal in the future we'll derive it from the discoverability
+        // diff between the local view and what's in profile.publish.
+        _hasUnpublishedSecrets.value = false
     }
 
     init {
@@ -154,15 +168,8 @@ class PersonalDataViewModel @Inject constructor(
         loadCustomCategories()
         loadPublicMetadata()
         recomputeUnpublishedSecrets()
-        // Watch the store-level dirty tick. The tick bumps on both
-        // mutations (toggle/add/update — leaves PENDING entries
-        // behind) and on markSyncComplete (clears PENDING). Only the
-        // recompute is unconditional; we avoid touching
-        // `_hasUnpublishedChanges` here because the publish flow
-        // explicitly sets that to false on success — and a tick
-        // fired by markSyncComplete used to re-flip it true,
-        // leaving the banner stuck. The unpublished-secrets flag is
-        // now its own source of truth for the secrets-side banner.
+        // Watch the store-level dirty tick — bumps on every secret
+        // mutation so the catalog and "unpublished" hint stay in sync.
         viewModelScope.launch {
             minorSecretsStore.publishDirtyTick.drop(1).collect {
                 recomputeUnpublishedSecrets()
@@ -426,23 +433,51 @@ class PersonalDataViewModel @Inject constructor(
                         } ?: now
                     } else now
 
-                    // Derive category and display name from namespace
-                    val category = categoryFromNamespace(namespace)
-                    val displayName = displayNameFromNamespace(namespace)
-                    val dataType = dataTypeFromNamespace(namespace)
-                    val isInPublicProfile = publicProfileFields.contains(namespace)
-                    val hiddenFromCatalog = hiddenFromCatalogFields.contains(namespace)
+                    // The map key may be a plain namespace OR a
+                    // composite "namespace::alias" — split it. The
+                    // entry payload also carries `alias` and (for
+                    // newer vaults) `namespace` so we don't have to
+                    // rely on the key alone.
+                    val composite = namespace
+                    val (parsedNs, parsedAliasFromKey) = composite
+                        .indexOf("::").let { idx ->
+                            if (idx >= 0) composite.substring(0, idx) to composite.substring(idx + 2)
+                            else composite to ""
+                        }
+                    val alias = if (value.isJsonObject) {
+                        val obj = value.asJsonObject
+                        obj.get("alias")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
+                            .ifEmpty { parsedAliasFromKey }
+                    } else parsedAliasFromKey
+                    val baseNamespace = if (value.isJsonObject) {
+                        value.asJsonObject.get("namespace")?.takeIf { !it.isJsonNull }?.asString
+                            ?.takeIf { it.isNotEmpty() }
+                            ?: parsedNs
+                    } else parsedNs
+
+                    // Derive category and display name from the
+                    // logical namespace (not the composite). The id
+                    // stays as the composite so add/edit/delete
+                    // round-trip the (namespace, alias) tuple.
+                    val category = categoryFromNamespace(baseNamespace)
+                    val displayName = displayNameFromNamespace(baseNamespace)
+                    val dataType = dataTypeFromNamespace(baseNamespace)
+                    val isInPublicProfile = publicProfileFields.contains(composite) ||
+                        publicProfileFields.contains(baseNamespace)
+                    val hiddenFromCatalog = hiddenFromCatalogFields.contains(composite) ||
+                        hiddenFromCatalogFields.contains(baseNamespace)
 
                     items.add(PersonalDataItem(
-                        id = namespace,
+                        id = composite,
                         name = displayName,
                         type = dataType,
                         value = fieldValue,
+                        alias = alias,
                         category = category,
                         isSystemField = false,
                         isInPublicProfile = isInPublicProfile,
                         hideFromCatalog = hiddenFromCatalog,
-                        sortOrder = savedSortOrder[namespace] ?: 0,
+                        sortOrder = savedSortOrder[composite] ?: savedSortOrder[baseNamespace] ?: 0,
                         createdAt = updatedAt,
                         updatedAt = updatedAt
                     ))
@@ -869,6 +904,7 @@ class PersonalDataViewModel @Inject constructor(
                 id = item.id,
                 name = item.name,
                 value = item.value,
+                alias = item.alias,
                 type = item.type,
                 category = item.category,
                 originalCategory = item.category,  // Track original for detecting changes
@@ -954,12 +990,6 @@ class PersonalDataViewModel @Inject constructor(
                         if (response.success) {
                             Log.i(TAG, "Profile published successfully")
                             _hasUnpublishedChanges.value = false
-                            // Mark public-key secrets as SYNCED so the
-                            // "Unpublished Public Keys" sync flag in
-                            // MinorSecretsStore.hasPendingSync clears
-                            // (otherwise the secrets-tab still thinks
-                            // there are pending changes).
-                            minorSecretsStore.markSyncComplete()
                             loadPublicMetadata()
                             _effects.emit(PersonalDataEffect.ShowSuccess("Public profile published"))
                         } else {
@@ -998,6 +1028,10 @@ class PersonalDataViewModel @Inject constructor(
 
     fun updateEditValue(value: String) {
         _editState.value = _editState.value.copy(value = value, valueError = null)
+    }
+
+    fun updateEditAlias(alias: String) {
+        _editState.value = _editState.value.copy(alias = alias)
     }
 
     fun updateEditType(type: DataType) {
@@ -1083,11 +1117,22 @@ class PersonalDataViewModel @Inject constructor(
                     deleteFieldLocally(oldNamespace)
                 }
 
-                // Save the field with the new namespace
+                // Save the field with the new namespace. The optional
+                // `aliases` map carries the user-defined disambiguator
+                // ("Wife", "Maria") so peers can tell similar entries
+                // apart in the published catalog without seeing the
+                // value itself.
                 val payload = JsonObject().apply {
                     val fieldsObj = JsonObject()
                     fieldsObj.addProperty(newNamespace, current.value)
                     add("fields", fieldsObj)
+                    if (current.alias.isNotBlank() || current.isEditing) {
+                        // Always send when editing so an empty alias clears
+                        // a previously-set one.
+                        val aliasesObj = JsonObject()
+                        aliasesObj.addProperty(newNamespace, current.alias.trim())
+                        add("aliases", aliasesObj)
+                    }
                 }
 
                 Log.d(TAG, "Saving field to vault via personal-data.update: $payload")
@@ -1103,17 +1148,9 @@ class PersonalDataViewModel @Inject constructor(
                     }
                     is VaultResponse.Error -> {
                         Log.e(TAG, "Vault error saving field: ${response.code} - ${response.message}")
-                        // Schedule background sync to retry later
-                        personalDataStore.markPendingSync()
-                        PersonalDataSyncWorker.scheduleImmediate(context)
-                        Log.i(TAG, "Scheduled background sync for failed save")
                     }
                     null -> {
                         Log.w(TAG, "Timeout waiting for vault update confirmation")
-                        // Schedule background sync to retry later
-                        personalDataStore.markPendingSync()
-                        PersonalDataSyncWorker.scheduleImmediate(context)
-                        Log.i(TAG, "Scheduled background sync for timed-out save")
                     }
                     else -> {
                         Log.w(TAG, "Unexpected response type: ${response::class.simpleName}")
@@ -1213,9 +1250,20 @@ class PersonalDataViewModel @Inject constructor(
                     fieldsObj.addProperty(field.namespace, value)
                 }
 
-                // Send to vault
+                // Send to vault. The optional `aliases` map carries
+                // the per-namespace alias — for templates we apply
+                // the same alias to every field the template wrote
+                // (one template = one logical entity).
                 val payload = JsonObject().apply {
                     add("fields", fieldsObj)
+                    val alias = formState.alias.trim()
+                    if (alias.isNotEmpty()) {
+                        val aliasesObj = JsonObject()
+                        fieldsToSave.forEach { (field, _) ->
+                            aliasesObj.addProperty(field.namespace, alias)
+                        }
+                        add("aliases", aliasesObj)
+                    }
                 }
 
                 Log.d(TAG, "Saving template fields to vault: $payload")
@@ -1244,24 +1292,34 @@ class PersonalDataViewModel @Inject constructor(
 
                 // Save each field locally and update in-memory list
                 val now = Instant.now()
+                val aliasTrimmed = formState.alias.trim()
                 fieldsToSave.forEach { (field, value) ->
+                    // Composite id matches what the vault stores —
+                    // (namespace, alias) pair joined by "::". Without
+                    // this, two family members with the same template
+                    // namespace would collide in the local list.
+                    val compositeId = if (aliasTrimmed.isNotEmpty()) {
+                        "${field.namespace}::$aliasTrimmed"
+                    } else field.namespace
+
                     // Save locally for offline access
                     val editState = EditDataItemState(
-                        id = field.namespace,
+                        id = compositeId,
                         name = field.name,
                         value = value,
                         category = field.category,
                         isEditing = false
                     )
-                    saveFieldLocally(field.namespace, editState)
+                    saveFieldLocally(compositeId, editState)
 
                     // Update in-memory data
-                    val existingIndex = dataItems.indexOfFirst { it.id == field.namespace }
+                    val existingIndex = dataItems.indexOfFirst { it.id == compositeId }
                     val item = PersonalDataItem(
-                        id = field.namespace,
+                        id = compositeId,
                         name = displayNameFromNamespace(field.namespace),
                         type = dataTypeFromNamespace(field.namespace),
                         value = value,
+                        alias = aliasTrimmed,
                         category = field.category,
                         isSystemField = false,
                         isInPublicProfile = false,
@@ -2120,34 +2178,19 @@ class PersonalDataViewModel @Inject constructor(
             }
         }
 
-        // Include public keys from secrets store that are marked for public profile
+        // Public keys belonging to the user that should appear on the
+        // calling card now flow through the vault's published profile
+        // (`fields[]` for non-key fields, `wallets[]` for BTC, plus the
+        // top-level `public_key` for identity). We previously merged in
+        // local minor-secrets here; that became a duplicate source.
+        // The block is intentionally a no-op now — kept as a marker
+        // for future per-key-type rendering.
+        @Suppress("UNUSED_VARIABLE")
         val hasIdentityKeyFromVault = items.any { it.id == "_published_public_key" }
         try {
-            val publicKeySecrets = minorSecretsStore.getPublicProfileSecrets()
+            val publicKeySecrets = emptyList<MinorSecret>()
             var addedCount = 0
-            publicKeySecrets.forEach { secret ->
-                // Skip system enrollment key if vault already provided it
-                if (secret.isSystemField && hasIdentityKeyFromVault) return@forEach
-
-                // Use group label to identify which wallet/group the key belongs to
-                val displayName = if (secret.groupLabel != null) {
-                    "${secret.groupLabel}: ${secret.name}"
-                } else {
-                    secret.name
-                }
-                items.add(PersonalDataItem(
-                    id = "_secret_${secret.id}",
-                    name = displayName,
-                    type = DataType.KEY,
-                    value = secret.value,
-                    category = DataCategory.IDENTITY,
-                    isSystemField = secret.isSystemField,
-                    isInPublicProfile = true,
-                    isSensitive = false,
-                    sortOrder = secret.sortOrder,
-                    createdAt = com.vettid.app.util.toInstant(secret.createdAt),
-                    updatedAt = com.vettid.app.util.toInstant(secret.updatedAt)
-                ))
+            publicKeySecrets.forEach { _ ->
                 addedCount++
             }
             if (addedCount > 0) {
@@ -2193,6 +2236,25 @@ class PersonalDataViewModel @Inject constructor(
             } catch (_: Exception) { /* skip malformed */ }
         }
         _criticalSecretCatalog.value = criticalCatalog
+
+        // data_catalog mirrors what peers see — capture it so the
+        // own-profile Data badge surfaces the same count and rows.
+        val dataCatalog = mutableListOf<PublicMetadataItem>()
+        result.getAsJsonArray("data_catalog")?.forEach { el ->
+            try {
+                val o = el.asJsonObject
+                val name = o.get("name")?.asString ?: return@forEach
+                val displayName = o.get("display_name")?.asString?.takeIf { it.isNotBlank() } ?: name
+                dataCatalog += PublicMetadataItem(
+                    name = displayName,
+                    type = o.get("field_type")?.asString?.takeIf { it.isNotBlank() } ?: "TEXT",
+                    category = o.get("category")?.asString?.takeIf { it.isNotBlank() }
+                        ?: DataCategory.OTHER.displayName,
+                    alias = o.get("alias")?.takeIf { !it.isJsonNull }?.asString.orEmpty(),
+                )
+            } catch (_: Exception) { /* skip malformed */ }
+        }
+        _ownDataCatalog.value = dataCatalog
 
         // Refresh the secrets-catalog so any newly-published wallets
         // show up — loadPublicMetadata reads _publishedProfile.value.
@@ -2392,5 +2454,9 @@ data class PublishedProfileData(
 data class PublicMetadataItem(
     val name: String,
     val type: String,
-    val category: String
-)
+    val category: String,
+    val alias: String = "",
+) {
+    /** "<name> — <alias>" when alias is set; just the name otherwise. */
+    val display: String get() = if (alias.isNotBlank()) "$name — $alias" else name
+}

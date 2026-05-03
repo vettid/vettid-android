@@ -45,7 +45,11 @@ fun HeaderView(
     searchQuery: String = "",
     onSearchQueryChange: (String) -> Unit = {},
     onSearchToggle: () -> Unit = {},
-    showSearchIcon: Boolean = true
+    showSearchIcon: Boolean = true,
+    // Settings mode hides the avatar entirely so the only entry/exit
+    // is the gear icon — avoids users tapping the photo and ending up
+    // on the profile screen mid-settings.
+    showProfileAvatar: Boolean = true,
 ) {
     // Decode profile photo if available
     val profileBitmap = remember(profilePhotoBase64) {
@@ -70,31 +74,32 @@ fun HeaderView(
 
     TopAppBar(
         navigationIcon = {
-            // Profile avatar (opens drawer)
-            IconButton(onClick = onProfileClick) {
-                if (profileBitmap != null) {
-                    Image(
-                        bitmap = profileBitmap.asImageBitmap(),
-                        contentDescription = "Profile",
-                        modifier = Modifier
-                            .size(32.dp)
-                            .clip(CircleShape),
-                        contentScale = ContentScale.Crop
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .size(32.dp)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.primaryContainer),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Person,
+            if (showProfileAvatar) {
+                IconButton(onClick = onProfileClick) {
+                    if (profileBitmap != null) {
+                        Image(
+                            bitmap = profileBitmap.asImageBitmap(),
                             contentDescription = "Profile",
-                            modifier = Modifier.size(20.dp),
-                            tint = MaterialTheme.colorScheme.onPrimaryContainer
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape),
+                            contentScale = ContentScale.Crop
                         )
+                    } else {
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(MaterialTheme.colorScheme.primaryContainer),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Person,
+                                contentDescription = "Profile",
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
                     }
                 }
             }

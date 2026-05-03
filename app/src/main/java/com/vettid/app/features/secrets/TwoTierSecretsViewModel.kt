@@ -104,7 +104,18 @@ class TwoTierSecretsViewModel @Inject constructor(
             _state.update { it.copy(isLoading = true) }
 
             try {
-                val minorSecrets = minorSecretsStore.getAllSecrets()
+                // Minor secrets now live in the vault (`secrets/`
+                // namespace). secret.list returns metadata only; values
+                // come on demand via secret.get when the user reveals.
+                val resp = ownerSpaceClient.sendAndAwaitResponse(
+                    "secret.list",
+                    com.google.gson.JsonObject(),
+                    10_000L,
+                )
+                val minorSecrets = if (resp is com.vettid.app.core.nats.VaultResponse.HandlerResult && resp.success && resp.result != null) {
+                    parseMinorSecretsFromVault(resp.result)
+                } else emptyList()
+
                 val criticalMetadata = criticalMetadataStore.getAllMetadata()
 
                 _state.update {
@@ -126,6 +137,53 @@ class TwoTierSecretsViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Map secret.list response → list of MinorSecret (the data class
+     * the UI already expects). Values are absent here; reveal calls
+     * secret.get on demand.
+     */
+    private fun parseMinorSecretsFromVault(result: com.google.gson.JsonObject): List<com.vettid.app.core.storage.MinorSecret> {
+        val out = mutableListOf<com.vettid.app.core.storage.MinorSecret>()
+        val arr = result.getAsJsonArray("secrets") ?: return out
+        for (el in arr) {
+            try {
+                val o = el.asJsonObject
+                val id = o.get("id")?.asString ?: continue
+                val name = o.get("name")?.asString ?: ""
+                val categoryStr = o.get("category")?.asString.orEmpty()
+                val category = runCatching { com.vettid.app.core.storage.SecretCategory.valueOf(categoryStr) }
+                    .getOrDefault(com.vettid.app.core.storage.SecretCategory.OTHER)
+                val typeStr = o.get("type")?.asString.orEmpty()
+                val type = runCatching { com.vettid.app.core.storage.SecretType.valueOf(typeStr) }
+                    .getOrDefault(com.vettid.app.core.storage.SecretType.TEXT)
+                val discoverability = o.get("discoverability")?.asString.orEmpty()
+                val createdAt = o.get("created_at")?.asString.orEmpty()
+                val updatedAt = o.get("updated_at")?.asString.orEmpty()
+                out += com.vettid.app.core.storage.MinorSecret(
+                    id = id,
+                    name = name,
+                    value = "", // reveal via secret.get on demand
+                    category = category,
+                    type = type,
+                    notes = o.get("description")?.asString,
+                    isShareable = true,
+                    isInPublicProfile = discoverability == "public",
+                    hideFromCatalog = discoverability == "private",
+                    isSystemField = false,
+                    sortOrder = 0,
+                    syncStatus = com.vettid.app.core.storage.SyncStatus.SYNCED,
+                    createdAt = parseIsoMillis(createdAt),
+                    updatedAt = parseIsoMillis(updatedAt),
+                )
+            } catch (_: Exception) { /* skip */ }
+        }
+        return out
+    }
+
+    private fun parseIsoMillis(s: String): Long = try {
+        java.time.Instant.parse(s).toEpochMilli()
+    } catch (_: Exception) { System.currentTimeMillis() }
+
     private fun selectTab(tab: SecretsTab) {
         _state.update { it.copy(selectedTab = tab, searchQuery = "") }
     }
@@ -146,33 +204,31 @@ class TwoTierSecretsViewModel @Inject constructor(
     }
 
     private suspend fun revealMinorSecret(secretId: String, password: String) {
+        // Minor secrets live in the vault datastore, not the credential.
+        // No password re-verification needed (that's the line between
+        // minor and critical) — fetch the value via secret.get and
+        // reveal. The `password` arg is preserved on the event signature
+        // so the UI can keep the same dialog plumbing while we migrate
+        // to a no-prompt reveal flow.
         _state.update { it.copy(minorSecretValueState = MinorSecretValueState.Verifying) }
-
         try {
-            val isValid = verifyPassword(password)
-            if (!isValid) {
-                _state.update { it.copy(minorSecretValueState = MinorSecretValueState.Error("Invalid password")) }
+            val payload = com.google.gson.JsonObject().apply { addProperty("id", secretId) }
+            val resp = ownerSpaceClient.sendAndAwaitResponse("secret.get", payload, 10_000L)
+            if (resp !is com.vettid.app.core.nats.VaultResponse.HandlerResult || !resp.success || resp.result == null) {
+                _state.update { it.copy(minorSecretValueState = MinorSecretValueState.Error("Could not retrieve secret")) }
                 return
             }
-
-            val secret = minorSecretsStore.getSecret(secretId)
-            if (secret == null) {
-                _state.update { it.copy(minorSecretValueState = MinorSecretValueState.Error("Secret not found")) }
-                return
-            }
-
+            val value = resp.result.get("value")?.asString.orEmpty()
             _state.update {
                 it.copy(
                     minorSecretValueState = MinorSecretValueState.Revealed(
-                        value = secret.value,
-                        autoHideSeconds = AUTO_HIDE_SECONDS
+                        value = value,
+                        autoHideSeconds = AUTO_HIDE_SECONDS,
                     )
                 )
             }
-
             startAutoHideTimer()
             _effects.emit(TwoTierSecretsEffect.ShowMessage("Secret revealed"))
-
         } catch (e: Exception) {
             Log.e(TAG, "Failed to reveal minor secret", e)
             _state.update { it.copy(minorSecretValueState = MinorSecretValueState.Error(e.message ?: "Failed")) }
@@ -181,12 +237,18 @@ class TwoTierSecretsViewModel @Inject constructor(
 
     private suspend fun addMinorSecret(name: String, value: String, category: SecretCategory, notes: String?) {
         try {
-            val secret = minorSecretsStore.addSecret(
-                name = name,
-                value = value,
-                category = category,
-                notes = notes
-            )
+            val payload = com.google.gson.JsonObject().apply {
+                addProperty("name", name)
+                addProperty("value", value)
+                addProperty("category", category.name)
+                if (!notes.isNullOrBlank()) addProperty("description", notes)
+                addProperty("discoverability", "cataloged")
+            }
+            val resp = ownerSpaceClient.sendAndAwaitResponse("secret.add", payload, 10_000L)
+            if (resp !is com.vettid.app.core.nats.VaultResponse.HandlerResult || !resp.success) {
+                _effects.emit(TwoTierSecretsEffect.ShowError("Failed to save secret to vault"))
+                return
+            }
             loadAllSecrets()
             _effects.emit(TwoTierSecretsEffect.ShowMessage("Secret added"))
             _effects.emit(TwoTierSecretsEffect.NavigateBack)
@@ -197,13 +259,13 @@ class TwoTierSecretsViewModel @Inject constructor(
     }
 
     private suspend fun togglePublicProfile(secretId: String) {
+        // "Public profile" for a secret means discoverability=public —
+        // metadata broadcast on the calling card. cataloged is the
+        // default catalog-only visibility.
         try {
-            val ok = minorSecretsStore.togglePublicProfile(secretId)
-            if (ok) {
-                loadAllSecrets()
-            } else {
-                _effects.emit(TwoTierSecretsEffect.ShowError("Only public-key secrets can go on the calling card"))
-            }
+            val current = _state.value.minorSecrets.firstOrNull { it.id == secretId } ?: return
+            val nextDiscoverability = if (current.isInPublicProfile) "cataloged" else "public"
+            setSecretDiscoverability(secretId, nextDiscoverability)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to toggle public profile", e)
             _effects.emit(TwoTierSecretsEffect.ShowError("Failed: ${e.message}"))
@@ -212,21 +274,36 @@ class TwoTierSecretsViewModel @Inject constructor(
 
     private suspend fun toggleHideFromCatalog(secretId: String) {
         try {
-            val ok = minorSecretsStore.toggleHideFromCatalog(secretId)
-            if (ok) {
-                loadAllSecrets()
-            } else {
-                _effects.emit(TwoTierSecretsEffect.ShowError("Could not update catalog visibility"))
-            }
+            val current = _state.value.minorSecrets.firstOrNull { it.id == secretId } ?: return
+            val nextDiscoverability = if (current.hideFromCatalog) "cataloged" else "private"
+            setSecretDiscoverability(secretId, nextDiscoverability)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to toggle catalog visibility", e)
             _effects.emit(TwoTierSecretsEffect.ShowError("Failed: ${e.message}"))
         }
     }
 
+    private suspend fun setSecretDiscoverability(secretId: String, discoverability: String) {
+        val payload = com.google.gson.JsonObject().apply {
+            addProperty("id", secretId)
+            addProperty("discoverability", discoverability)
+        }
+        val resp = ownerSpaceClient.sendAndAwaitResponse("secret.set-discoverability", payload, 10_000L)
+        if (resp !is com.vettid.app.core.nats.VaultResponse.HandlerResult || !resp.success) {
+            _effects.emit(TwoTierSecretsEffect.ShowError("Could not update visibility"))
+            return
+        }
+        loadAllSecrets()
+    }
+
     private suspend fun deleteMinorSecret(secretId: String) {
         try {
-            minorSecretsStore.deleteSecret(secretId)
+            val payload = com.google.gson.JsonObject().apply { addProperty("id", secretId) }
+            val resp = ownerSpaceClient.sendAndAwaitResponse("secret.delete", payload, 10_000L)
+            if (resp !is com.vettid.app.core.nats.VaultResponse.HandlerResult || !resp.success) {
+                _effects.emit(TwoTierSecretsEffect.ShowError("Failed to delete secret"))
+                return
+            }
             loadAllSecrets()
             _effects.emit(TwoTierSecretsEffect.ShowMessage("Secret deleted"))
         } catch (e: Exception) {
@@ -238,12 +315,14 @@ class TwoTierSecretsViewModel @Inject constructor(
     // MARK: - Critical Secrets
 
     private fun selectCriticalSecret(secretId: String) {
-        val metadata = criticalMetadataStore.getMetadata(secretId) ?: return
-        _state.update {
-            it.copy(
-                selectedCriticalSecretId = secretId,
-                criticalSecretViewState = CriticalSecretViewState.PasswordPrompt
-            )
+        viewModelScope.launch {
+            val metadata = criticalMetadataStore.getMetadata(secretId) ?: return@launch
+            _state.update {
+                it.copy(
+                    selectedCriticalSecretId = secretId,
+                    criticalSecretViewState = CriticalSecretViewState.PasswordPrompt
+                )
+            }
         }
     }
 
@@ -288,9 +367,6 @@ class TwoTierSecretsViewModel @Inject constructor(
             val secretValue = retrieveCriticalSecretFromVault(secretId, password)
 
             _state.update { it.copy(criticalSecretViewState = CriticalSecretViewState.Retrieving(0.9f)) }
-
-            // Record access
-            criticalMetadataStore.recordAccess(secretId)
 
             _state.update {
                 it.copy(
@@ -444,18 +520,6 @@ class TwoTierSecretsViewModel @Inject constructor(
                     // Remove used UTK
                     credentialStore.removeUtk(utk.keyId)
 
-                    // Store metadata locally
-                    val metadata = CriticalSecretMetadata(
-                        id = vaultSecretId,
-                        name = name,
-                        category = category,
-                        description = description,
-                        createdAt = System.currentTimeMillis(),
-                        lastAccessedAt = null,
-                        accessCount = 0
-                    )
-                    criticalMetadataStore.storeMetadata(metadata)
-
                     loadAllSecrets()
                     _effects.emit(TwoTierSecretsEffect.ShowMessage("Critical secret added"))
                     _effects.emit(TwoTierSecretsEffect.NavigateBack)
@@ -490,7 +554,6 @@ class TwoTierSecretsViewModel @Inject constructor(
             // Send delete to vault
             // TODO: Implement credential.secret.delete
 
-            criticalMetadataStore.removeMetadata(secretId)
             loadAllSecrets()
             _effects.emit(TwoTierSecretsEffect.ShowMessage("Critical secret deleted"))
 

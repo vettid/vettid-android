@@ -45,8 +45,15 @@ fun SendBtcScreen(
     val feeEstimates by viewModel.feeEstimates.collectAsState()
     val sendState by viewModel.sendState.collectAsState()
 
-    var recipientAddress by remember { mutableStateOf("") }
-    var amountBtc by remember { mutableStateOf("") }
+    var recipientAddress by remember { mutableStateOf(viewModel.initialToAddress) }
+    // Initial amount is pre-filled when the user reached this screen
+    // by approving a payment request. Free-form sends start blank.
+    val initialAmountBtc = remember(viewModel.initialAmountSats) {
+        if (viewModel.initialAmountSats > 0L) {
+            String.format("%.8f", viewModel.initialAmountSats / 100_000_000.0).trimEnd('0').trimEnd('.')
+        } else ""
+    }
+    var amountBtc by remember { mutableStateOf(initialAmountBtc) }
     var selectedFeeTier by remember { mutableStateOf(FeeTier.STANDARD) }
     var showConfirmation by remember { mutableStateOf(false) }
     var passwordPrompt by remember { mutableStateOf<String?>(null) }

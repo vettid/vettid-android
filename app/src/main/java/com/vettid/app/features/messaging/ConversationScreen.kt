@@ -18,6 +18,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AccountBalance
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Widgets
@@ -50,6 +51,7 @@ import com.vettid.app.core.network.Message
 import com.vettid.app.core.network.MessageContentType
 import com.vettid.app.core.network.MessageStatus
 import com.vettid.app.features.wallet.BtcAddress
+import com.vettid.app.features.wallet.BtcPaymentDecline
 import com.vettid.app.features.wallet.BtcPaymentReceipt
 import com.vettid.app.features.wallet.PaymentRequest
 import kotlinx.coroutines.launch
@@ -65,7 +67,20 @@ fun ConversationScreen(
     viewModel: ConversationViewModel = hiltViewModel(),
     onBack: () -> Unit = {},
     onConnectionDetail: () -> Unit = {},
-    onPaymentRequest: (connectionId: String) -> Unit = {}
+    onPaymentRequest: (connectionId: String) -> Unit = {},
+    /**
+     * Approve-pay flow: navigate to SendBtc with the request body's
+     * address + amount + request_id pre-filled so the user just
+     * confirms/signs. The receipt back to the requester is sent
+     * after a successful broadcast (see SendBtcViewModel).
+     */
+    onPayPaymentRequest: (connectionId: String, requestId: String, address: String, amountSats: Long) -> Unit = { _, _, _, _ -> },
+    /**
+     * When true, auto-open the RequestPaymentSheet on entry.
+     * Triggered by the connection-card "Request BTC" action so the
+     * user lands directly on the amount entry without an extra tap.
+     */
+    autoOpenRequestSheet: Boolean = false,
 ) {
     val state by viewModel.state.collectAsState()
     val connection by viewModel.connection.collectAsState()
@@ -79,6 +94,7 @@ fun ConversationScreen(
     val scope = rememberCoroutineScope()
 
     val snackbarHostState = remember { SnackbarHostState() }
+    var showRequestSheet by remember { mutableStateOf(autoOpenRequestSheet) }
 
     // Show scroll-to-bottom FAB when not at bottom
     val showScrollToBottom by remember {
@@ -230,6 +246,9 @@ fun ConversationScreen(
                 }
 
                 is ConversationState.Loaded -> {
+                    var declineTarget by remember {
+                        mutableStateOf<Triple<String, String, Long>?>(null)
+                    }
                     MessageList(
                         messages = currentState.messages,
                         hasMore = currentState.hasMore,
@@ -237,8 +256,28 @@ fun ConversationScreen(
                         listState = listState,
                         isFromCurrentUser = { viewModel.isFromCurrentUser(it) },
                         onLoadMore = { viewModel.loadMoreMessages() },
-                        onPaymentRequest = { onPaymentRequest(connection?.connectionId ?: "") }
+                        onPaymentRequest = { onPaymentRequest(connection?.connectionId ?: "") },
+                        onPayPaymentRequest = { requestId, address, amountSats ->
+                            onPayPaymentRequest(
+                                connection?.connectionId ?: "",
+                                requestId,
+                                address,
+                                amountSats,
+                            )
+                        },
+                        onDeclinePaymentRequest = { requestId, address, amountSats ->
+                            declineTarget = Triple(requestId, address, amountSats)
+                        },
                     )
+                    declineTarget?.let { (requestId, _, _) ->
+                        DeclinePaymentDialog(
+                            onDismiss = { declineTarget = null },
+                            onSend = { reason ->
+                                viewModel.sendPaymentDecline(requestId, reason)
+                                declineTarget = null
+                            },
+                        )
+                    }
                 }
 
                 is ConversationState.Error -> {
@@ -248,6 +287,19 @@ fun ConversationScreen(
                     )
                 }
             }
+        }
+
+        if (showRequestSheet) {
+            com.vettid.app.features.wallet.RequestPaymentSheet(
+                connections = emptyList(),
+                onDismiss = { showRequestSheet = false },
+                onSendRequest = { amountSats, memo, _ ->
+                    viewModel.sendPaymentRequest(amountSats, memo)
+                    showRequestSheet = false
+                },
+                preselectedConnectionId = connection?.connectionId.orEmpty(),
+                preselectedConnectionLabel = connection?.peerDisplayName.orEmpty(),
+            )
         }
     }
 }
@@ -260,7 +312,9 @@ private fun MessageList(
     listState: LazyListState,
     isFromCurrentUser: (Message) -> Boolean,
     onLoadMore: () -> Unit,
-    onPaymentRequest: () -> Unit = {}
+    onPaymentRequest: () -> Unit = {},
+    onPayPaymentRequest: (requestId: String, address: String, amountSats: Long) -> Unit = { _, _, _ -> },
+    onDeclinePaymentRequest: (requestId: String, address: String, amountSats: Long) -> Unit = { _, _, _ -> },
 ) {
     // Load more when reaching the end
     val shouldLoadMore by remember {
@@ -290,7 +344,9 @@ private fun MessageList(
             MessageBubble(
                 message = message,
                 isSent = isSent,
-                onPaymentRequest = onPaymentRequest
+                onPaymentRequest = onPaymentRequest,
+                onPayPaymentRequest = onPayPaymentRequest,
+                onDeclinePaymentRequest = onDeclinePaymentRequest,
             )
         }
 
@@ -313,7 +369,9 @@ private fun MessageList(
 fun MessageBubble(
     message: Message,
     isSent: Boolean,
-    onPaymentRequest: () -> Unit = {}
+    onPaymentRequest: () -> Unit = {},
+    onPayPaymentRequest: (requestId: String, address: String, amountSats: Long) -> Unit = { _, _, _ -> },
+    onDeclinePaymentRequest: (requestId: String, address: String, amountSats: Long) -> Unit = { _, _, _ -> },
 ) {
     val gold = Color(0xFFffc125) // VettID brand gold
     val alignment = if (isSent) Alignment.End else Alignment.Start
@@ -354,7 +412,8 @@ fun MessageBubble(
                             content = message.content,
                             isSent = isSent,
                             textColor = textColor,
-                            onPay = onPaymentRequest
+                            onPay = onPayPaymentRequest,
+                            onDecline = onDeclinePaymentRequest,
                         )
                     }
                     MessageContentType.BTC_PAYMENT_RECEIPT -> {
@@ -362,6 +421,13 @@ fun MessageBubble(
                             content = message.content,
                             isSent = isSent,
                             textColor = textColor
+                        )
+                    }
+                    MessageContentType.BTC_PAYMENT_DECLINE -> {
+                        BtcPaymentDeclineContent(
+                            content = message.content,
+                            isSent = isSent,
+                            textColor = textColor,
                         )
                     }
                     MessageContentType.BTC_ADDRESS -> {
@@ -412,7 +478,8 @@ private fun BtcPaymentRequestContent(
     content: String,
     isSent: Boolean,
     textColor: androidx.compose.ui.graphics.Color,
-    onPay: () -> Unit
+    onPay: (requestId: String, address: String, amountSats: Long) -> Unit,
+    onDecline: (requestId: String, address: String, amountSats: Long) -> Unit = { _, _, _ -> },
 ) {
     val request = remember(content) {
         try {
@@ -468,23 +535,117 @@ private fun BtcPaymentRequestContent(
 
         if (!isSent) {
             Spacer(modifier = Modifier.height(8.dp))
-            Button(
-                onClick = onPay,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
-                ),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.Send,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("Pay")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        onDecline(request.requestId, request.address, request.amountSats)
+                    },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(8.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Decline")
+                }
+                Button(
+                    onClick = {
+                        onPay(request.requestId, request.address, request.amountSats)
+                    },
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp),
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Approve")
+                }
             }
+        }
+    }
+}
+
+@Composable
+private fun DeclinePaymentDialog(
+    onDismiss: () -> Unit,
+    onSend: (reason: String) -> Unit,
+) {
+    var reason by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Decline payment request") },
+        text = {
+            Column {
+                Text(
+                    "Let the requester know why you're declining. They'll see this message in your conversation.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = reason,
+                    onValueChange = { reason = it.take(280) },
+                    label = { Text("Reason") },
+                    placeholder = { Text("e.g. Wrong amount, sending later, can't right now") },
+                    singleLine = false,
+                    minLines = 2,
+                    maxLines = 4,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSend(reason.trim()) },
+                enabled = reason.isNotBlank(),
+            ) { Text("Send decline") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun BtcPaymentDeclineContent(
+    content: String,
+    isSent: Boolean,
+    textColor: androidx.compose.ui.graphics.Color,
+) {
+    val decline = remember(content) {
+        try {
+            Gson().fromJson(content, BtcPaymentDecline::class.java)
+        } catch (_: Exception) { null }
+    }
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Default.Close,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = textColor,
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = if (isSent) "You declined a payment request" else "Payment request declined",
+                style = MaterialTheme.typography.labelMedium,
+                color = textColor.copy(alpha = 0.85f),
+            )
+        }
+        if (!decline?.reason.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = decline!!.reason,
+                style = MaterialTheme.typography.bodySmall,
+                color = textColor,
+            )
         }
     }
 }

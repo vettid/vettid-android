@@ -229,6 +229,10 @@ class ConversationViewModel @Inject constructor(
                                 contentType = when (stored.contentType) {
                                     "image" -> MessageContentType.IMAGE
                                     "file" -> MessageContentType.FILE
+                                    "btc_payment_request" -> MessageContentType.BTC_PAYMENT_REQUEST
+                                    "btc_payment_receipt" -> MessageContentType.BTC_PAYMENT_RECEIPT
+                                    "btc_payment_decline" -> MessageContentType.BTC_PAYMENT_DECLINE
+                                    "btc_address" -> MessageContentType.BTC_ADDRESS
                                     else -> MessageContentType.TEXT
                                 },
                                 sentAt = sentAtMillis,
@@ -335,6 +339,10 @@ class ConversationViewModel @Inject constructor(
                         contentType = when (incomingMessage.contentType) {
                             "image" -> MessageContentType.IMAGE
                             "file" -> MessageContentType.FILE
+                            "btc_payment_request" -> MessageContentType.BTC_PAYMENT_REQUEST
+                            "btc_payment_receipt" -> MessageContentType.BTC_PAYMENT_RECEIPT
+                            "btc_payment_decline" -> MessageContentType.BTC_PAYMENT_DECLINE
+                            "btc_address" -> MessageContentType.BTC_ADDRESS
                             else -> MessageContentType.TEXT
                         },
                         sentAt = sentAtMillis,
@@ -474,6 +482,185 @@ class ConversationViewModel @Inject constructor(
             }
 
             _isSending.value = false
+        }
+    }
+
+    /**
+     * Send a structured `btc_payment_request` message to this
+     * connection. The body carries amount + memo + the peer's
+     * published BTC address so the request is self-contained — the
+     * payer can approve and pay without a separate address lookup.
+     * Also stamps a fresh `requestId` (UUID) for future receipt /
+     * decline correlation.
+     */
+    fun sendPaymentRequest(amountSats: Long, memo: String?) {
+        if (amountSats <= 0L) return
+        viewModelScope.launch {
+            try {
+                // Address from the cached peer profile — set via
+                // ConnectionsClient.list when the peer published.
+                val peerAddress = connection.value?.let {
+                    // The legacy Connection model doesn't carry
+                    // wallet addresses; pull from the live cache via
+                    // owner-space client.
+                    null as String?
+                }
+                val address = peerAddress ?: peerWalletAddressFromCache()
+                if (address.isNullOrBlank()) {
+                    _effects.emit(ConversationEffect.ShowError("Peer hasn't published a wallet address"))
+                    return@launch
+                }
+                val requestId = "req-" + java.util.UUID.randomUUID().toString().take(16)
+                val body = com.google.gson.JsonObject().apply {
+                    addProperty("requestId", requestId)
+                    addProperty("address", address)
+                    addProperty("amountSats", amountSats)
+                    if (!memo.isNullOrBlank()) addProperty("memo", memo)
+                }.toString()
+                val key = transportKey
+                val sendResult = if (key != null) {
+                    val encrypted = connectionCryptoManager.encryptXChaCha20(body, key)
+                    messagingClient.sendMessage(
+                        connectionId = connectionId,
+                        encryptedContent = android.util.Base64.encodeToString(encrypted.ciphertext, android.util.Base64.NO_WRAP),
+                        nonce = android.util.Base64.encodeToString(encrypted.nonce, android.util.Base64.NO_WRAP),
+                        contentType = "btc_payment_request",
+                    )
+                } else {
+                    messagingClient.sendMessage(
+                        connectionId = connectionId,
+                        content = body,
+                        contentType = "btc_payment_request",
+                    )
+                }
+                sendResult.fold(
+                    onSuccess = { sent ->
+                        val sentAtMillis = try {
+                            java.time.Instant.parse(sent.timestamp).toEpochMilli()
+                        } catch (_: Exception) { System.currentTimeMillis() }
+                        val message = Message(
+                            messageId = sent.messageId,
+                            connectionId = connectionId,
+                            senderId = currentUserGuid ?: "",
+                            content = body,
+                            contentType = MessageContentType.BTC_PAYMENT_REQUEST,
+                            sentAt = sentAtMillis,
+                            receivedAt = null,
+                            readAt = null,
+                            status = MessageStatus.SENT,
+                        )
+                        val current = _state.value
+                        val existing = (current as? ConversationState.Loaded)?.messages.orEmpty().toMutableList()
+                        existing.add(0, message)
+                        _state.value = ConversationState.Loaded(
+                            messages = existing.toList(),
+                            hasMore = (current as? ConversationState.Loaded)?.hasMore ?: false,
+                        )
+                    },
+                    onFailure = { err ->
+                        _effects.emit(ConversationEffect.ShowError(err.message ?: "Failed to send payment request"))
+                    },
+                )
+            } catch (e: Exception) {
+                _effects.emit(ConversationEffect.ShowError(e.message ?: "Failed to send payment request"))
+            }
+        }
+    }
+
+    /**
+     * Look up the peer's primary BTC address from the connection
+     * record cache. Returns null if the peer hasn't published a
+     * wallet — the request flow short-circuits in that case.
+     */
+    private suspend fun peerWalletAddressFromCache(): String? {
+        return try {
+            val resp = ownerSpaceClient.sendAndAwaitResponse(
+                "connection.list",
+                com.google.gson.JsonObject(),
+                10_000L,
+            )
+            if (resp !is com.vettid.app.core.nats.VaultResponse.HandlerResult || !resp.success || resp.result == null) return null
+            val arr = resp.result.getAsJsonArray("connections") ?: return null
+            for (el in arr) {
+                val obj = el.asJsonObject
+                if (obj.get("connection_id")?.asString != connectionId) continue
+                val profile = obj.getAsJsonObject("peer_profile") ?: continue
+                val wallets = profile.getAsJsonArray("wallets") ?: continue
+                for (w in wallets) {
+                    val addr = w.asJsonObject.get("address")?.asString
+                    if (!addr.isNullOrBlank()) return addr
+                }
+            }
+            null
+        } catch (e: Exception) {
+            android.util.Log.w("ConversationVM", "peerWalletAddressFromCache failed: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * Send a structured `btc_payment_decline` message in response to
+     * a payment-request the user wants to reject. Goes through the
+     * same encrypted-message path as a regular text message; the
+     * recipient renders it as a special card via the
+     * BTC_PAYMENT_DECLINE content type.
+     */
+    fun sendPaymentDecline(requestId: String, reason: String) {
+        if (reason.isBlank()) return
+        viewModelScope.launch {
+            try {
+                val payload = com.google.gson.JsonObject().apply {
+                    addProperty("requestId", requestId)
+                    addProperty("reason", reason)
+                }
+                val body = payload.toString()
+                val key = transportKey
+                val sendResult = if (key != null) {
+                    val encrypted = connectionCryptoManager.encryptXChaCha20(body, key)
+                    messagingClient.sendMessage(
+                        connectionId = connectionId,
+                        encryptedContent = android.util.Base64.encodeToString(encrypted.ciphertext, android.util.Base64.NO_WRAP),
+                        nonce = android.util.Base64.encodeToString(encrypted.nonce, android.util.Base64.NO_WRAP),
+                        contentType = "btc_payment_decline",
+                    )
+                } else {
+                    messagingClient.sendMessage(
+                        connectionId = connectionId,
+                        content = body,
+                        contentType = "btc_payment_decline",
+                    )
+                }
+                sendResult.fold(
+                    onSuccess = { sent ->
+                        val sentAtMillis = try {
+                            java.time.Instant.parse(sent.timestamp).toEpochMilli()
+                        } catch (_: Exception) { System.currentTimeMillis() }
+                        val message = Message(
+                            messageId = sent.messageId,
+                            connectionId = connectionId,
+                            senderId = currentUserGuid ?: "",
+                            content = body,
+                            contentType = MessageContentType.BTC_PAYMENT_DECLINE,
+                            sentAt = sentAtMillis,
+                            receivedAt = null,
+                            readAt = null,
+                            status = MessageStatus.SENT,
+                        )
+                        val current = _state.value
+                        val existing = (current as? ConversationState.Loaded)?.messages.orEmpty().toMutableList()
+                        existing.add(0, message)
+                        _state.value = ConversationState.Loaded(
+                            messages = existing.toList(),
+                            hasMore = (current as? ConversationState.Loaded)?.hasMore ?: false,
+                        )
+                    },
+                    onFailure = { err ->
+                        _effects.emit(ConversationEffect.ShowError(err.message ?: "Failed to send decline"))
+                    },
+                )
+            } catch (e: Exception) {
+                _effects.emit(ConversationEffect.ShowError(e.message ?: "Failed to send decline"))
+            }
         }
     }
 

@@ -17,7 +17,6 @@ import com.vettid.app.core.storage.MinorSecretsStore
 import com.vettid.app.core.storage.PersonalDataStore
 import com.vettid.app.core.storage.SecretCategory
 import com.vettid.app.core.storage.SecretType
-import com.vettid.app.worker.SecretsSyncWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.*
@@ -78,8 +77,6 @@ class SecretsViewModel @Inject constructor(
             is SecretsEvent.DeleteSecret -> confirmDeleteSecret(event.secretId)
             is SecretsEvent.TogglePublicProfile -> togglePublicProfile(event.secretId)
             is SecretsEvent.ToggleHideFromCatalog -> toggleHideFromCatalog(event.secretId)
-            is SecretsEvent.MoveSecretUp -> moveSecretUp(event.secretId)
-            is SecretsEvent.MoveSecretDown -> moveSecretDown(event.secretId)
             is SecretsEvent.Refresh -> loadSecrets()
             is SecretsEvent.PublishPublicKeys -> publishPublicKeys()
         }
@@ -134,16 +131,15 @@ class SecretsViewModel @Inject constructor(
 
     private fun updateSearchQuery(query: String) {
         val currentState = _state.value
-        if (currentState is SecretsState.Loaded) {
+        if (currentState !is SecretsState.Loaded) return
+        viewModelScope.launch {
             if (query.isBlank()) {
-                // Reset to full list
                 val allSecrets = minorSecretsStore.getAllSecrets()
                 _state.value = currentState.copy(
                     items = allSecrets,
                     searchQuery = ""
                 )
             } else {
-                // Filter secrets
                 val filtered = minorSecretsStore.searchSecrets(query)
                 _state.value = currentState.copy(
                     items = filtered,
@@ -211,19 +207,25 @@ class SecretsViewModel @Inject constructor(
     }
 
     fun showEditSecretDialog(secretId: String) {
-        val secret = minorSecretsStore.getSecret(secretId)
-        if (secret != null) {
-            _editState.value = EditSecretState(
-                id = secret.id,
-                name = secret.name,
-                value = secret.value,
-                type = secret.type,
-                category = secret.category,
-                notes = secret.notes ?: "",
-                isInPublicProfile = secret.isInPublicProfile,
-                isEditing = true
-            )
-            _showAddDialog.value = true
+        viewModelScope.launch {
+            val secret = minorSecretsStore.getSecret(secretId)
+            if (secret != null) {
+                // Value is fetched lazily — pull it now so the edit
+                // dialog has it pre-filled. revealSecretValue hits
+                // `secret.get` against the vault.
+                val value = minorSecretsStore.revealSecretValue(secretId).orEmpty()
+                _editState.value = EditSecretState(
+                    id = secret.id,
+                    name = secret.name,
+                    value = value,
+                    type = secret.type,
+                    category = secret.category,
+                    notes = secret.notes ?: "",
+                    isInPublicProfile = secret.isInPublicProfile,
+                    isEditing = true
+                )
+                _showAddDialog.value = true
+            }
         }
     }
 
@@ -288,11 +290,10 @@ class SecretsViewModel @Inject constructor(
                         isInPublicProfile = if (currentEdit.type == SecretType.PUBLIC_KEY)
                             currentEdit.isInPublicProfile else false
                     )
-                    Log.i(TAG, "Added new secret: ${newSecret.name}")
+                    Log.i(TAG, "Added new secret: ${newSecret?.name ?: "(unknown)"}")
                 }
 
                 // Trigger sync
-                SecretsSyncWorker.scheduleImmediate(context)
 
                 dismissAddDialog()
                 loadSecrets()
@@ -337,7 +338,6 @@ class SecretsViewModel @Inject constructor(
                 }
 
                 if (savedCount > 0) {
-                    SecretsSyncWorker.scheduleImmediate(context)
                     loadSecrets()
                     _effects.emit(SecretsEffect.ShowSuccess("Added $savedCount ${template.name} field${if (savedCount > 1) "s" else ""}"))
                     Log.i(TAG, "Saved template ${template.name} with $savedCount fields")
@@ -352,21 +352,23 @@ class SecretsViewModel @Inject constructor(
     // MARK: - Rename Group
 
     fun renameGroup(groupId: String, newLabel: String) {
-        minorSecretsStore.updateGroupLabel(groupId, newLabel)
-        loadSecrets()
+        viewModelScope.launch {
+            minorSecretsStore.updateGroupLabel(groupId, newLabel)
+            loadSecrets()
+        }
     }
 
     // MARK: - Delete Secret
 
     private fun confirmDeleteSecret(secretId: String) {
-        val secret = minorSecretsStore.getSecret(secretId)
-        if (secret?.isSystemField == true) {
-            viewModelScope.launch {
+        viewModelScope.launch {
+            val secret = minorSecretsStore.getSecret(secretId)
+            if (secret?.isSystemField == true) {
                 _effects.emit(SecretsEffect.ShowError("Cannot delete system fields"))
+                return@launch
             }
-            return
+            _showDeleteConfirmDialog.value = secretId
         }
-        _showDeleteConfirmDialog.value = secretId
     }
 
     fun dismissDeleteConfirmDialog() {
@@ -441,26 +443,6 @@ class SecretsViewModel @Inject constructor(
         }
     }
 
-    // MARK: - Reordering
-
-    private fun moveSecretUp(secretId: String) {
-        viewModelScope.launch {
-            val result = minorSecretsStore.moveSecretUp(secretId)
-            if (result) {
-                loadSecrets()
-            }
-        }
-    }
-
-    private fun moveSecretDown(secretId: String) {
-        viewModelScope.launch {
-            val result = minorSecretsStore.moveSecretDown(secretId)
-            if (result) {
-                loadSecrets()
-            }
-        }
-    }
-
     // MARK: - Publish Public Keys
 
     private fun publishPublicKeys() {
@@ -487,13 +469,6 @@ class SecretsViewModel @Inject constructor(
 
                 result.fold(
                     onSuccess = {
-                        // Mark all public keys as synced
-                        publicSecrets.forEach { secret ->
-                            minorSecretsStore.updateSyncStatus(
-                                secret.id,
-                                com.vettid.app.core.storage.SyncStatus.SYNCED
-                            )
-                        }
                         loadSecrets()
                         _effects.emit(SecretsEffect.ShowSuccess("Public keys published"))
                         Log.i(TAG, "Published ${publicSecrets.size} public keys to profile")
@@ -508,148 +483,6 @@ class SecretsViewModel @Inject constructor(
                 Log.e(TAG, "Failed to publish public keys", e)
                 _effects.emit(SecretsEffect.ShowError(e.message ?: "Failed to publish"))
             }
-        }
-    }
-
-    // MARK: - Sync from Vault
-
-    fun syncFromVault() {
-        viewModelScope.launch {
-            try {
-                if (natsAutoConnector.connectionState.value !is NatsAutoConnector.AutoConnectState.Connected) {
-                    _effects.emit(SecretsEffect.ShowError("Not connected to vault. Please wait for connection."))
-                    return@launch
-                }
-
-                val response = ownerSpaceClient.sendAndAwaitResponse(
-                    "secrets.retrieve",
-                    JsonObject(),
-                    15000L
-                )
-
-                when (response) {
-                    is VaultResponse.HandlerResult -> {
-                        if (response.success && response.result != null) {
-                            val secretsArray = response.result.getAsJsonArray("secrets")
-                            if (secretsArray != null) {
-                                val secretsData = parseSecretsFromVault(secretsArray)
-                                minorSecretsStore.importFromSync(secretsData)
-                                loadSecrets()
-                                _effects.emit(SecretsEffect.ShowSuccess("Synced from vault"))
-                                Log.i(TAG, "Synced ${secretsData.size} secrets from vault")
-                            }
-                        } else {
-                            _effects.emit(SecretsEffect.ShowError(response.error ?: "Sync failed"))
-                        }
-                    }
-                    is VaultResponse.Error -> {
-                        _effects.emit(SecretsEffect.ShowError(response.message))
-                    }
-                    null -> {
-                        _effects.emit(SecretsEffect.ShowError("Sync timed out"))
-                    }
-                    else -> {
-                        _effects.emit(SecretsEffect.ShowError("Unexpected response"))
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to sync from vault", e)
-                _effects.emit(SecretsEffect.ShowError(e.message ?: "Sync failed"))
-            }
-        }
-    }
-
-    private fun parseSecretsFromVault(secretsArray: JsonArray): List<Map<String, Any?>> {
-        return secretsArray.mapNotNull { element ->
-            try {
-                val obj = element.asJsonObject
-                mapOf(
-                    "id" to obj.get("id").asString,
-                    "name" to obj.get("name").asString,
-                    "value" to obj.get("value").asString,
-                    "category" to obj.get("category")?.asString,
-                    "type" to obj.get("type")?.asString,
-                    "notes" to obj.get("notes")?.asString,
-                    "isShareable" to obj.get("isShareable")?.asBoolean,
-                    "isInPublicProfile" to obj.get("isInPublicProfile")?.asBoolean,
-                    "isSystemField" to obj.get("isSystemField")?.asBoolean,
-                    "sortOrder" to obj.get("sortOrder")?.asInt,
-                    "createdAt" to obj.get("createdAt")?.asLong,
-                    "updatedAt" to obj.get("updatedAt")?.asLong
-                )
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to parse secret from vault", e)
-                null
-            }
-        }
-    }
-
-    // MARK: - User's Unique Public Key
-
-    /**
-     * Ensure the user's unique public key is in the local secrets store.
-     *
-     * The unique key pair is generated by the vault during enrollment:
-     * - Private key is sealed in the credential (enclave-side)
-     * - Public key is stored in the vault's datastore
-     *
-     * This method syncs from vault if the key is not present locally.
-     */
-    fun ensureEnrollmentKeyInSecrets() {
-        viewModelScope.launch {
-            val existingKey = minorSecretsStore.getEnrollmentPublicKey()
-            if (existingKey == null) {
-                Log.d(TAG, "User's public key not found locally, fetching from vault...")
-                fetchUserPublicKeyFromVault()
-            }
-        }
-    }
-
-    /**
-     * Fetch the user's unique Ed25519 identity public key from the vault.
-     * The key is generated during enrollment and stored in the credential.
-     */
-    private suspend fun fetchUserPublicKeyFromVault() {
-        try {
-            if (natsAutoConnector.connectionState.value !is NatsAutoConnector.AutoConnectState.Connected) {
-                Log.w(TAG, "Cannot fetch user public key: not connected to vault")
-                return
-            }
-
-            // Use the dedicated identity endpoint
-            val response = ownerSpaceClient.sendAndAwaitResponse(
-                "secrets.identity",
-                JsonObject(),
-                15000L
-            )
-
-            when (response) {
-                is VaultResponse.HandlerResult -> {
-                    if (response.success && response.result != null) {
-                        val publicKeyBase64 = response.result.get("public_key")?.asString
-                        val keyType = response.result.get("key_type")?.asString ?: "Ed25519"
-
-                        if (publicKeyBase64 != null) {
-                            minorSecretsStore.setEnrollmentPublicKey(publicKeyBase64, keyType)
-                            loadSecrets()
-                            Log.i(TAG, "Fetched user's $keyType identity public key from vault")
-                            return
-                        }
-                        Log.w(TAG, "Public key not found in identity response")
-                    } else {
-                        Log.w(TAG, "Identity request failed: ${response.error}")
-                    }
-                }
-                is VaultResponse.Error -> {
-                    Log.e(TAG, "Failed to fetch user public key: ${response.message}")
-                }
-                null -> {
-                    Log.w(TAG, "Timeout fetching user public key from vault")
-                }
-                else -> {}
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error fetching user public key from vault", e)
         }
     }
 

@@ -206,6 +206,7 @@ fun PersonalDataContent(
             onNameChange = viewModel::updateEditName,
             onFieldTypeChange = viewModel::updateEditFieldType,
             onValueChange = viewModel::updateEditValue,
+            onAliasChange = viewModel::updateEditAlias,
             onPublicProfileChange = viewModel::updateEditPublicProfile,
             onSave = viewModel::saveItem,
             onDismiss = viewModel::dismissDialog,
@@ -242,6 +243,9 @@ fun PersonalDataContent(
                 templateFormState = formState.copy(
                     fieldValues = formState.fieldValues + (index to value)
                 )
+            },
+            onAliasChange = { newAlias ->
+                templateFormState = formState.copy(alias = newAlias)
             },
             onSave = {
                 templateFormState = formState.copy(isSaving = true)
@@ -776,8 +780,12 @@ private fun CompactDataRow(
                     .clickable(onClick = onClick)
                     .padding(vertical = 4.dp)
             ) {
+                // "Mobile Phone — Wife" when alias is set; otherwise
+                // just the field name. Keeping the alias on the same
+                // line as the name groups them visually.
+                val displayName = if (item.alias.isNotBlank()) "${item.name} — ${item.alias}" else item.name
                 Text(
-                    text = item.name,
+                    text = displayName,
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface
@@ -919,6 +927,7 @@ private fun AddFieldDialog(
     onNameChange: (String) -> Unit,
     onFieldTypeChange: (FieldType) -> Unit,
     onValueChange: (String) -> Unit,
+    onAliasChange: (String) -> Unit,
     onPublicProfileChange: (Boolean) -> Unit,
     onSave: () -> Unit,
     onDismiss: () -> Unit,
@@ -1166,6 +1175,25 @@ private fun AddFieldDialog(
                         )
                     )
                 }
+
+                // 5. Alias — disambiguator that surfaces in the
+                // catalog when peers see the field. Optional. Helps
+                // tell "Family · Phone — Wife" apart from
+                // "Family · Phone — Daughter" without leaking the
+                // value itself.
+                OutlinedTextField(
+                    value = state.alias,
+                    onValueChange = onAliasChange,
+                    label = { Text("Alias (optional)") },
+                    placeholder = { Text("e.g. Wife, Mom, Work") },
+                    supportingText = { Text("Helps tell similar entries apart in your catalog.") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Text,
+                        capitalization = KeyboardCapitalization.Words,
+                    ),
+                )
 
                 // Public profile toggle removed — use the list toggle instead
             }
@@ -1615,7 +1643,7 @@ internal fun PublicMetadataDialog(
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
-                                            text = item.name,
+                                            text = item.display,
                                             style = MaterialTheme.typography.bodyMedium
                                         )
                                         Text(
@@ -2496,6 +2524,7 @@ private fun PersonalDataTemplateChooserDialog(
 private fun PersonalDataTemplateFormDialog(
     state: PersonalDataTemplateFormState,
     onFieldValueChange: (Int, String) -> Unit,
+    onAliasChange: (String) -> Unit = {},
     onCategoryChange: (DataCategory) -> Unit = {},
     customCategories: List<com.vettid.app.core.storage.CategoryInfo> = emptyList(),
     onCreateCategory: (String) -> Unit = {},
@@ -2623,6 +2652,24 @@ private fun PersonalDataTemplateFormDialog(
                         )
                     }
                 }
+                // Alias — single input at the top of the form so all
+                // fields created by this template share the same
+                // disambiguator (one template = one logical entity,
+                // e.g. one family member).
+                OutlinedTextField(
+                    value = state.alias,
+                    onValueChange = onAliasChange,
+                    label = { Text("Alias (optional)") },
+                    placeholder = { Text("e.g. Wife, Maria, Mom") },
+                    supportingText = { Text("Helps tell similar entries apart in your catalog.") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Text,
+                        capitalization = KeyboardCapitalization.Words,
+                    ),
+                )
+
                 state.template.fields.forEachIndexed { index, field ->
                     when (field.inputHint) {
                         PersonalDataFieldInputHint.DATE, PersonalDataFieldInputHint.EXPIRY_DATE -> {

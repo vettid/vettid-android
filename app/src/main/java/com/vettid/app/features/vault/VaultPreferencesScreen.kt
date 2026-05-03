@@ -244,32 +244,23 @@ fun VaultPreferencesContent(
 
             HorizontalDivider()
 
-            // Appearance
+            // App — collapses the former Appearance + About sections
+            // into one. Theme picker leads, then version, then vault
+            // status, then the destructive-but-recoverable Reset
+            // Cache row at the bottom of the section.
             SettingsCategoryHeader(
-                icon = Icons.Default.Palette,
-                title = "Appearance",
+                icon = Icons.Default.Apps,
+                title = "App",
                 subtitle = state.theme.name.lowercase().replaceFirstChar { it.uppercase() },
-                expanded = expandedSection == "appearance",
-                onClick = { expandedSection = if (expandedSection == "appearance") null else "appearance" }
+                expanded = expandedSection == "app",
+                onClick = { expandedSection = if (expandedSection == "app") null else "app" }
             )
-            if (expandedSection == "appearance") {
+            if (expandedSection == "app") {
                 AppearanceSection(
                     currentTheme = state.theme,
                     onThemeChange = { viewModel.updateTheme(it) }
                 )
-            }
-
-            HorizontalDivider()
-
-            // About
-            SettingsCategoryHeader(
-                icon = Icons.Default.Info,
-                title = "About",
-                subtitle = "Version, vault status, help",
-                expanded = expandedSection == "about",
-                onClick = { expandedSection = if (expandedSection == "about") null else "about" }
-            )
-            if (expandedSection == "about") {
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                 PreferencesItem(
                     icon = Icons.Default.PhoneAndroid,
                     title = "App Details",

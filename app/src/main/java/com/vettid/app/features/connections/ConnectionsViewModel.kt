@@ -192,6 +192,9 @@ class ConnectionsViewModel @Inject constructor(
                                 "Failed to parse timestamp '${record.createdAt}' for ${record.connectionId}")
                             0L
                         }
+                        val lastMessageMillis = record.lastMessageAt?.let {
+                            try { java.time.Instant.parse(it).toEpochMilli() } catch (_: Exception) { null }
+                        }
                         ConnectionWithLastMessage(
                             connection = Connection(
                                 connectionId = record.connectionId,
@@ -200,8 +203,8 @@ class ConnectionsViewModel @Inject constructor(
                                 peerAvatarUrl = null,
                                 status = status,
                                 createdAt = createdAtMillis,
-                                lastMessageAt = null,
-                                unreadCount = 0
+                                lastMessageAt = lastMessageMillis,
+                                unreadCount = record.unreadMessageCount
                             ),
                             lastMessage = null,
                             peerPhotoBase64 = record.peerProfile?.photo

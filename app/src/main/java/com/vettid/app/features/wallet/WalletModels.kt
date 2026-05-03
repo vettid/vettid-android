@@ -71,14 +71,29 @@ data class TxHistoryEntry(
 )
 
 /**
- * A payment request sent to a connection.
+ * A payment request sent to a connection. Serialized as the JSON
+ * body of a `btc_payment_request` message.
+ *
+ * `requestId` is the idempotency key — recipient's reply (receipt
+ * or decline) carries the same id so the sender can correlate.
  */
 data class PaymentRequest(
+    val requestId: String = "",
     val amountSats: Long,
     val address: String,
     val memo: String? = null,
     val walletId: String? = null,
     val expiresAt: String? = null
+)
+
+/**
+ * Decline payload sent back when the recipient rejects a payment
+ * request. Carries the original request_id and a free-text reason
+ * so the sender knows which request was rejected and why.
+ */
+data class BtcPaymentDecline(
+    val requestId: String,
+    val reason: String,
 )
 
 /**

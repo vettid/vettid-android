@@ -14,7 +14,6 @@ import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.core.storage.CredentialStore
 import com.vettid.app.core.network.TransactionKeyInfo
 import com.vettid.app.core.storage.PersonalDataStore
-import com.vettid.app.core.storage.SystemPersonalData
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -272,9 +271,6 @@ class PinUnlockViewModel @Inject constructor(
                         } catch (e: Exception) {
                             Log.w(TAG, "PersonalDataStore hydrate failed (non-fatal)", e)
                         }
-                        // Legacy refresh path (writes some fields hydrate
-                        // doesn't yet cover); harmless to run in parallel.
-                        viewModelScope.launch { loadProfileFromVault() }
 
                         val firstName = personalDataStore.getSystemFields()?.firstName
 
@@ -616,99 +612,6 @@ class PinUnlockViewModel @Inject constructor(
         } catch (e: Exception) {
             Log.e(TAG, "PIN verification error", e)
             return@withContext PinVerificationResult.Error()
-        }
-    }
-
-    /**
-     * Load profile data from vault after successful PIN unlock.
-     * Populates PersonalDataStore with system and optional fields from vault.
-     */
-    /**
-     * Fetch the profile from the vault and write system fields into
-     * [PersonalDataStore]. Uses JetStream request-response (durable) so the
-     * reply isn't dropped if the `forApp.>` subscription is still being
-     * re-established after the post-unlock NATS reconnect. The previous
-     * plain-publish path lost responses on that race.
-     */
-    private suspend fun loadProfileFromVault() {
-        try {
-            if (!connectionManager.isConnected()) {
-                Log.d(TAG, "Not connected to vault, skipping profile load")
-                return
-            }
-
-            Log.d(TAG, "Loading profile from vault after PIN unlock (JetStream)")
-
-            val response = ownerSpaceClient.sendAndAwaitResponse(
-                messageType = "profile.get",
-                payload = com.google.gson.JsonObject(),
-                timeoutMs = 6000L,
-            )
-
-            when (response) {
-                is com.vettid.app.core.nats.VaultResponse.HandlerResult -> {
-                    if (response.success && response.result != null) {
-                        processVaultProfileResponse(response.result)
-                    } else {
-                        Log.w(TAG, "profile.get failed: ${response.error}")
-                    }
-                }
-                is com.vettid.app.core.nats.VaultResponse.Error -> {
-                    Log.e(TAG, "profile.get error: ${response.code} - ${response.message}")
-                }
-                null -> {
-                    Log.w(TAG, "profile.get timed out (cache may be stale)")
-                }
-                else -> {
-                    Log.w(TAG, "Unexpected response type for profile.get")
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error loading profile from vault", e)
-        }
-    }
-
-    /**
-     * Process profile data from vault response and store in PersonalDataStore.
-     */
-    private fun processVaultProfileResponse(result: JsonObject) {
-        try {
-            Log.d(TAG, "Processing vault profile response: ${result.keySet()}")
-
-            // Extract system fields (_system_* prefix)
-            val systemFirstName = result.get("_system_first_name")?.asString
-            val systemLastName = result.get("_system_last_name")?.asString
-            val systemEmail = result.get("_system_email")?.asString
-
-            if (systemFirstName != null && systemLastName != null && systemEmail != null) {
-                Log.d(TAG, "Storing system fields from vault")
-                personalDataStore.storeSystemFields(
-                    SystemPersonalData(
-                        firstName = systemFirstName,
-                        lastName = systemLastName,
-                        email = systemEmail
-                    )
-                )
-            }
-
-            // Extract optional fields (non-system fields)
-            result.entrySet().forEach { (key, value) ->
-                if (!key.startsWith("_") && value.isJsonPrimitive) {
-                    val stringValue = value.asString
-                    if (stringValue.isNotEmpty()) {
-                        val updated = personalDataStore.updateOptionalFieldByKey(key, stringValue)
-                        if (updated) {
-                            Log.d(TAG, "Updated optional field from vault: $key")
-                        }
-                    }
-                }
-            }
-
-            // Mark sync as complete since we just synced from vault
-            personalDataStore.markSyncComplete()
-            Log.i(TAG, "Profile loaded from vault successfully")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error processing vault profile response", e)
         }
     }
 

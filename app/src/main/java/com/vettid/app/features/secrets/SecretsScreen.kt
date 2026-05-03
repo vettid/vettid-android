@@ -79,11 +79,6 @@ fun SecretsContent(
     var showTemplateChooser by remember { mutableStateOf(false) }
     var templateFormState by remember { mutableStateOf<TemplateFormState?>(null) }
 
-    // Ensure enrollment key is in secrets on first load
-    LaunchedEffect(Unit) {
-        viewModel.ensureEnrollmentKeyInSecrets()
-    }
-
     // Handle effects
     LaunchedEffect(Unit) {
         viewModel.effects.collectLatest { effect ->
@@ -146,8 +141,8 @@ fun SecretsContent(
                         onSecretClick = { viewModel.onEvent(SecretsEvent.SecretClicked(it)) },
                         onTogglePublicProfile = { viewModel.onEvent(SecretsEvent.TogglePublicProfile(it)) },
                         onToggleHideFromCatalog = { viewModel.onEvent(SecretsEvent.ToggleHideFromCatalog(it)) },
-                        onMoveUp = { viewModel.onEvent(SecretsEvent.MoveSecretUp(it)) },
-                        onMoveDown = { viewModel.onEvent(SecretsEvent.MoveSecretDown(it)) },
+                        onMoveUp = { /* sort order is vault-driven; UI move is a no-op */ },
+                        onMoveDown = { /* sort order is vault-driven; UI move is a no-op */ },
                         onRenameGroup = { groupId, newLabel -> viewModel.renameGroup(groupId, newLabel) },
                         onPublishClick = { viewModel.onEvent(SecretsEvent.PublishPublicKeys) },
                         onCriticalSecretsTap = onNavigateToCriticalSecrets

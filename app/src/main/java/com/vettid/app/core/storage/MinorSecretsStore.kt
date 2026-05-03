@@ -107,32 +107,6 @@ class MinorSecretsStore @Inject constructor(
         return getAllSecrets().filter { it.isInPublicProfile }
     }
 
-    /**
-     * Identity public key shim: the legacy local store kept the
-     * enrollment public key as a "system field" minor secret. With
-     * the vault model, the identity key already lives on the
-     * calling card via PublishedProfile.PublicKey — but callers that
-     * still ask for it as a MinorSecret get a stub here so the UI
-     * keeps working until the calling-card flow takes over.
-     */
-    @Suppress("UNUSED_PARAMETER")
-    suspend fun getEnrollmentPublicKey(): MinorSecret? = null
-    @Suppress("UNUSED_PARAMETER")
-    suspend fun setEnrollmentPublicKey(publicKeyBase64: String, keyType: String = "Ed25519") { /* no-op */ }
-
-    /**
-     * Sort-order operations are no-ops in the vault model. The vault
-     * stores entries in insertion order; UI sorts by category +
-     * created_at + name. Callers that flipped order locally now get
-     * a stable but vault-driven ordering.
-     */
-    @Suppress("UNUSED_PARAMETER")
-    suspend fun updateSortOrder(secretId: String, newSortOrder: Int) { /* no-op */ }
-    @Suppress("UNUSED_PARAMETER")
-    suspend fun moveSecretUp(secretId: String): Boolean = false
-    @Suppress("UNUSED_PARAMETER")
-    suspend fun moveSecretDown(secretId: String): Boolean = false
-
     // MARK: - Writes
 
     /**
@@ -229,23 +203,6 @@ class MinorSecretsStore @Inject constructor(
             updateSecret(s.copy(groupLabel = newLabel, updatedAt = System.currentTimeMillis()))
         }
     }
-
-    // MARK: - Sync compatibility shims (no-ops; kept for API parity)
-
-    /**
-     * Legacy sync hooks live on for compatibility — there's nothing
-     * to sync now since the vault is the source of truth.
-     */
-    fun hasPendingSync(): Boolean = false
-    fun markPendingSync() { /* no-op */ }
-    fun markSyncComplete() { /* no-op */ }
-    fun getLastSyncedAt(): Long = System.currentTimeMillis()
-    @Suppress("UNUSED_PARAMETER")
-    fun updateSyncStatus(secretId: String, status: SyncStatus) { /* no-op */ }
-    fun exportPendingForSync(): List<Map<String, Any?>> = emptyList()
-    @Suppress("UNUSED_PARAMETER")
-    fun importFromSync(secretsData: List<Map<String, Any?>>) { /* no-op */ }
-    fun clearAll() { /* no-op — vault is the store; nothing to clear locally */ }
 
     // MARK: - Internal helpers
 

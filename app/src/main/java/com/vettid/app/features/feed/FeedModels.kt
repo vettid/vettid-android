@@ -64,6 +64,23 @@ sealed class FeedDisplayItem {
         // recently, or we're out of range). Absence is not "offline"
         // per plans/luminous-unifying-manatee.md §15.
         val presence: String? = null,
+        // True when the user created an invitation and the peer
+        // hasn't acted on it yet (status invited/pending, outbound
+        // direction, no acceptance signal). Card renders as a
+        // pending-invitation row with a Cancel action so abandoned
+        // invites don't pile up as empty connection cards.
+        val hasOutstandingInvitation: Boolean = false,
+        // Peer published at least one wallet (BTC) in their profile.
+        // Used together with the local user's wallet state to gate
+        // BTC actions on the connection card — no point offering
+        // Send/Request BTC if either side can't transact.
+        val peerHasWallet: Boolean = false,
+        // The local user has at least one active BTC wallet — surfaced
+        // here (rather than read fresh from the wallet store at render
+        // time) so card recomposition stays cheap.
+        val localHasWallet: Boolean = false,
+        // Peer's primary published BTC address. Pre-filled in Send BTC.
+        val peerBtcAddress: String? = null,
         override val sortTimestamp: Long,
         override val isUnread: Boolean
     ) : FeedDisplayItem()

@@ -83,6 +83,13 @@ class FeedViewModel @Inject constructor(
     // Track if initial loadFeed() is still in progress
     private var isInitialLoadComplete = false
 
+    // Cached "do I have a wallet?" flag. Refreshed lazily on each
+    // connection rebuild — cheap to recompute, but we don't want to
+    // hit the vault on every recomposition. Used to gate the BTC
+    // actions on connection cards: no point offering Send BTC if
+    // the user has nothing to send from.
+    private var localHasAnyWallet: Boolean = false
+
     // Connection event types that get grouped under a single ConnectionItem
     // IMPORTANT: must be declared before init{} since showCachedFeed() uses it
     // Cached connections from connection.list (primary data source for cards)
@@ -257,6 +264,11 @@ class FeedViewModel @Inject constructor(
      * These two sections are INDEPENDENT — no timing dependencies.
      */
     private fun buildDisplayItems(events: List<FeedEvent>): List<FeedDisplayItem> {
+        // Refresh wallet flag opportunistically — cheap fire-and-forget
+        // request that updates the cache, then triggers a no-op rebuild
+        // once it lands. Avoids stale BTC-action gating after the user
+        // creates their first wallet.
+        refreshLocalHasWalletAsync()
         val cards = buildConnectionCards()
         val activity = buildActivityItems(events)
         // Footer card surfaces archived (declined/revoked/expired)
@@ -267,6 +279,54 @@ class FeedViewModel @Inject constructor(
             listOf(FeedDisplayItem.ArchivedConnectionsCard(count = archivedCount))
         } else emptyList()
         return cards + activity + footer
+    }
+
+    /**
+     * Revoke an outstanding outbound invitation. Used when the user
+     * decided not to share an invite they created — without this,
+     * the card sits on the Connections screen as a blank row until
+     * the invitation expires (~10 minutes). Calls the same
+     * `connection.revoke` path that revokes active connections;
+     * vault handles either case.
+     */
+    fun cancelInvitation(connectionId: String) {
+        viewModelScope.launch {
+            connectionsClient.revoke(connectionId).onFailure { err ->
+                Log.w(TAG, "cancelInvitation($connectionId) failed: ${err.message}")
+            }
+            // Optimistically drop the row from the list and request a
+            // refresh so the vault's authoritative state lands soon.
+            cachedConnections = cachedConnections.filterNot { it.connectionId == connectionId }
+            rebuildConnectionCardsForBadgeRefresh()
+            refresh()
+        }
+    }
+
+    private var walletProbeInFlight = false
+    private fun refreshLocalHasWalletAsync() {
+        if (walletProbeInFlight) return
+        walletProbeInFlight = true
+        viewModelScope.launch {
+            try {
+                val resp = ownerSpaceClient.sendAndAwaitResponse(
+                    "wallet.list", com.google.gson.JsonObject(), 8_000L
+                )
+                val ok = resp is com.vettid.app.core.nats.VaultResponse.HandlerResult && resp.success
+                val wallets = if (ok) {
+                    (resp as com.vettid.app.core.nats.VaultResponse.HandlerResult).result
+                        ?.getAsJsonArray("wallets")
+                } else null
+                val newHas = wallets?.size().let { (it ?: 0) > 0 }
+                if (newHas != localHasAnyWallet) {
+                    localHasAnyWallet = newHas
+                    rebuildConnectionCardsForBadgeRefresh()
+                }
+            } catch (_: Exception) {
+                // Best-effort; failure leaves the previous flag value.
+            } finally {
+                walletProbeInFlight = false
+            }
+        }
     }
 
     /**
@@ -417,6 +477,18 @@ class FeedViewModel @Inject constructor(
                 // card never gets a presence ring.
                 presence = if (conn.connectionType != "system" &&
                     presenceAggregator.isOnline(conn.connectionId)) "online" else null,
+                // Peer-wallet flags drive whether Send/Request BTC are
+                // even offered on the card. Pull from the cached
+                // peerProfile.wallets array — published by the peer's
+                // vault when they publish their profile. The local
+                // user's wallet state is reconciled separately on the
+                // wallet screen entry path.
+                hasOutstandingInvitation = (conn.status == "invited" || conn.status == "pending") &&
+                    conn.direction == "outbound" &&
+                    !hasAccepted,
+                peerHasWallet = conn.peerProfile?.wallets.orEmpty().isNotEmpty(),
+                peerBtcAddress = conn.peerProfile?.wallets?.firstOrNull()?.address?.takeIf { it.isNotBlank() },
+                localHasWallet = localHasAnyWallet,
                 sortTimestamp = sortTime,
                 // Unread badges the card if: pending review, unread
                 // messages exist, or there's an unacknowledged missed

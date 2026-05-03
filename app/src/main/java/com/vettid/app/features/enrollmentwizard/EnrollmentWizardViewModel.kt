@@ -28,7 +28,6 @@ import com.vettid.app.features.enrollment.AttestationInfo
 import com.vettid.app.features.enrollment.NatsBootstrapInfo
 import com.vettid.app.features.enrollment.PasswordStrength
 import com.vettid.app.worker.BackupWorker
-import com.vettid.app.worker.PersonalDataSyncWorker
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.delay
@@ -1364,14 +1363,6 @@ class EnrollmentWizardViewModel @Inject constructor(
     // ============== COMPLETE PHASE ==============
 
     private suspend fun completeWizard() {
-        // Schedule background sync if there are pending personal data changes
-        // This handles the case where personal data was entered during enrollment
-        // but couldn't be synced because vault wasn't connected yet
-        if (personalDataStore.hasPendingSync()) {
-            Log.i(TAG, "Scheduling PersonalDataSyncWorker for pending changes")
-            PersonalDataSyncWorker.scheduleImmediate(context)
-        }
-
         _state.value = WizardState.Complete(userGuid = userGuid ?: "")
     }
 

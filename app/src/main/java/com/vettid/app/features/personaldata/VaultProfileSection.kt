@@ -81,8 +81,13 @@ fun VaultProfileSection(
     if (showPublicProfilePreview) {
         val publishedProfile by personalDataViewModel.publishedProfile.collectAsState()
         val isLoadingPublishedProfile by personalDataViewModel.isLoadingPublishedProfile.collectAsState()
-        val publicSecrets by personalDataViewModel.publicSecrets.collectAsState()
-        val publicPersonalData by personalDataViewModel.publicPersonalData.collectAsState()
+        // Use the vault's catalog directly (not the local-only mix)
+        // so the own-profile counts match exactly what peers see in
+        // their connection-card preview. Without this, the badge
+        // numbers drift apart based on local-only minor secrets and
+        // local filter rules that never reach the wire.
+        val publicSecrets by personalDataViewModel.criticalSecretCatalog.collectAsState()
+        val publicPersonalData by personalDataViewModel.ownDataCatalog.collectAsState()
         val installedHandlers by personalDataViewModel.installedHandlers.collectAsState()
 
         androidx.compose.ui.window.Dialog(

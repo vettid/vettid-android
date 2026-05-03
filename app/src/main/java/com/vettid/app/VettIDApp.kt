@@ -167,15 +167,19 @@ sealed class Screen(val route: String) {
     object ConnectionDetail : Screen("connections/{connectionId}") {
         fun createRoute(connectionId: String) = "connections/${encodeId(connectionId)}"
     }
-    object Conversation : Screen("connections/{connectionId}/messages") {
-        fun createRoute(connectionId: String) = "connections/${encodeId(connectionId)}/messages"
+    object Conversation : Screen("connections/{connectionId}/messages?openRequest={openRequest}") {
+        fun createRoute(connectionId: String, openRequest: Boolean = false) =
+            "connections/${encodeId(connectionId)}/messages?openRequest=$openRequest"
     }
     object ConnectionHistory : Screen("connections/{connectionId}/history") {
         fun createRoute(connectionId: String) = "connections/${encodeId(connectionId)}/history"
     }
     object ArchivedConnections : Screen("connections/archived")
-    object Sharing : Screen("connections/{connectionId}/sharing") {
-        fun createRoute(connectionId: String) = "connections/${encodeId(connectionId)}/sharing"
+    object PeerCatalog : Screen("connections/{connectionId}/peer-catalog") {
+        fun createRoute(connectionId: String) = "connections/${encodeId(connectionId)}/peer-catalog"
+    }
+    object MySharing : Screen("connections/{connectionId}/my-sharing") {
+        fun createRoute(connectionId: String) = "connections/${encodeId(connectionId)}/my-sharing"
     }
     companion object {
         // Connection IDs historically were UUIDs with no special chars,
@@ -255,8 +259,18 @@ sealed class Screen(val route: String) {
     object WalletDetail : Screen("wallet/{walletId}") {
         fun createRoute(walletId: String) = "wallet/$walletId"
     }
-    object SendBtc : Screen("wallet/send?walletId={walletId}&connectionId={connectionId}") {
-        fun createRoute(walletId: String, connectionId: String = "") = "wallet/send?walletId=$walletId&connectionId=$connectionId"
+    object SendBtc : Screen("wallet/send?walletId={walletId}&connectionId={connectionId}&toAddress={toAddress}&amountSats={amountSats}&requestId={requestId}") {
+        fun createRoute(
+            walletId: String,
+            connectionId: String = "",
+            toAddress: String = "",
+            amountSats: Long = 0L,
+            requestId: String = "",
+        ): String {
+            val encodedAddr = java.net.URLEncoder.encode(toAddress, "UTF-8")
+            val encodedReq = java.net.URLEncoder.encode(requestId, "UTF-8")
+            return "wallet/send?walletId=$walletId&connectionId=$connectionId&toAddress=$encodedAddr&amountSats=$amountSats&requestId=$encodedReq"
+        }
     }
     object ReceiveBtc : Screen("wallet/receive/{walletId}") {
         fun createRoute(walletId: String) = "wallet/receive/$walletId"
@@ -581,8 +595,13 @@ fun VettIDApp(
                     appViewModel.refreshCredentialStatus()
                     appViewModel.refreshUserProfile()
                     appViewModel.setAuthenticated(true)
+                    // Clear the ENTIRE back stack — popping only the
+                    // wizard left Welcome behind, so an OS back-gesture
+                    // from Main re-exposed the enrollment entry point
+                    // and stranded the user (no PIN prompt path back
+                    // to Main without a full app restart).
                     navController.navigate(Screen.Main.route) {
-                        popUpTo(Screen.EnrollmentWizard.route) { inclusive = true }
+                        popUpTo(0) { inclusive = true }
                     }
                 },
                 onCancel = {
@@ -653,14 +672,27 @@ fun VettIDApp(
                 onNavigateToConversation = { connectionId ->
                     navController.navigate(Screen.Conversation.createRoute(connectionId))
                 },
-                onNavigateToBtcSend = { connectionId ->
-                    navController.navigate(Screen.SendBtc.createRoute(walletId = "", connectionId = connectionId))
+                onNavigateToBtcSend = { connectionId, peerBtcAddress ->
+                    navController.navigate(
+                        Screen.SendBtc.createRoute(
+                            walletId = "",
+                            connectionId = connectionId,
+                            toAddress = peerBtcAddress.orEmpty(),
+                        )
+                    )
                 },
-                onNavigateToBtcRequest = { connectionId ->
-                    // Request payment is invoked from inside the
-                    // ConversationScreen via its + menu today — route
-                    // there until a dedicated request screen exists.
-                    navController.navigate(Screen.Conversation.createRoute(connectionId))
+                onNavigateToBtcRequest = { connectionId, _peerBtcAddress ->
+                    // Request payment opens the RequestPaymentSheet
+                    // inside the conversation. The sheet sends a
+                    // btc_payment_request structured message;
+                    // recipient sees it as a card with Approve /
+                    // Decline buttons.
+                    navController.navigate(
+                        Screen.Conversation.createRoute(
+                            connectionId = connectionId,
+                            openRequest = true,
+                        )
+                    )
                 },
                 onNavigateToVaultMessages = {
                     navController.navigate(Screen.VaultMessages.route)
@@ -891,23 +923,36 @@ fun VettIDApp(
                 onMessageClick = {
                     navController.navigate(Screen.Conversation.createRoute(connectionId))
                 },
-                onSendBtc = { connId ->
-                    navController.navigate(Screen.SendBtc.createRoute(walletId = "", connectionId = connId))
+                onSendBtc = { connId, peerBtcAddress ->
+                    navController.navigate(
+                        Screen.SendBtc.createRoute(
+                            walletId = "",
+                            connectionId = connId,
+                            toAddress = peerBtcAddress.orEmpty(),
+                        )
+                    )
                 },
                 onShowHistory = {
                     navController.navigate(Screen.ConnectionHistory.createRoute(connectionId))
                 },
-                onNavigateToSharing = { id ->
-                    navController.navigate(Screen.Sharing.createRoute(id))
+                onNavigateToPeerCatalog = { id ->
+                    navController.navigate(Screen.PeerCatalog.createRoute(id))
+                },
+                onNavigateToMySharing = { id ->
+                    navController.navigate(Screen.MySharing.createRoute(id))
                 },
                 onBack = { navController.safePopBackStack() }
             )
         }
         composable(
             route = Screen.Conversation.route,
-            arguments = listOf(navArgument("connectionId") { type = NavType.StringType })
+            arguments = listOf(
+                navArgument("connectionId") { type = NavType.StringType },
+                navArgument("openRequest") { type = NavType.BoolType; defaultValue = false },
+            ),
         ) { backStackEntry ->
             val connectionId = backStackEntry.arguments?.getString("connectionId") ?: return@composable
+            val openRequest = backStackEntry.arguments?.getBoolean("openRequest") ?: false
             ConversationScreen(
                 onBack = { navController.safePopBackStack() },
                 onConnectionDetail = {
@@ -915,7 +960,19 @@ fun VettIDApp(
                 },
                 onPaymentRequest = { connId ->
                     navController.navigate(Screen.SendBtc.createRoute(walletId = "", connectionId = connId))
-                }
+                },
+                autoOpenRequestSheet = openRequest,
+                onPayPaymentRequest = { connId, requestId, address, amountSats ->
+                    navController.navigate(
+                        Screen.SendBtc.createRoute(
+                            walletId = "",
+                            connectionId = connId,
+                            toAddress = address,
+                            amountSats = amountSats,
+                            requestId = requestId,
+                        )
+                    )
+                },
             )
         }
         composable(
@@ -940,10 +997,18 @@ fun VettIDApp(
             )
         }
         composable(
-            route = Screen.Sharing.route,
+            route = Screen.PeerCatalog.route,
             arguments = listOf(navArgument("connectionId") { type = NavType.StringType })
         ) {
-            com.vettid.app.features.sharing.ConnectionSharingScreen(
+            com.vettid.app.features.sharing.PeerCatalogScreen(
+                onBack = { navController.safePopBackStack() },
+            )
+        }
+        composable(
+            route = Screen.MySharing.route,
+            arguments = listOf(navArgument("connectionId") { type = NavType.StringType })
+        ) {
+            com.vettid.app.features.sharing.MySharingScreen(
                 onBack = { navController.safePopBackStack() },
             )
         }
@@ -1240,7 +1305,10 @@ fun VettIDApp(
             route = Screen.SendBtc.route,
             arguments = listOf(
                 navArgument("walletId") { type = NavType.StringType; defaultValue = "" },
-                navArgument("connectionId") { type = NavType.StringType; defaultValue = "" }
+                navArgument("connectionId") { type = NavType.StringType; defaultValue = "" },
+                navArgument("toAddress") { type = NavType.StringType; defaultValue = "" },
+                navArgument("amountSats") { type = NavType.LongType; defaultValue = 0L },
+                navArgument("requestId") { type = NavType.StringType; defaultValue = "" },
             )
         ) {
             SendBtcScreen(
@@ -1843,8 +1911,8 @@ fun MainScreen(
     onNavigateToCreateInvitation: () -> Unit = {},
     onNavigateToScanInvitation: () -> Unit = {},
     onNavigateToConversation: (String) -> Unit = {},
-    onNavigateToBtcSend: (connectionId: String) -> Unit = {},
-    onNavigateToBtcRequest: (connectionId: String) -> Unit = {},
+    onNavigateToBtcSend: (connectionId: String, peerBtcAddress: String?) -> Unit = { _, _ -> },
+    onNavigateToBtcRequest: (connectionId: String, peerBtcAddress: String?) -> Unit = { _, _ -> },
     onNavigateToVaultMessages: () -> Unit = {},
     onNavigateToVotes: () -> Unit = {},
     onNavigateToGuidesList: () -> Unit = {},

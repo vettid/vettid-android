@@ -112,7 +112,12 @@ data class ConnectionListItem(
 
     // Timestamps
     val createdAt: Instant,
-    val acceptedAt: Instant? = null
+    val acceptedAt: Instant? = null,
+
+    // Peer capability flags surfaced from the published profile.
+    // Used to gate per-connection actions (e.g. only show "Send BTC"
+    // when both sides have a wallet).
+    val peerHasWallet: Boolean = false,
 ) {
     val needsProfileSync: Boolean
         get() = profileVersion > cachedProfileVersion

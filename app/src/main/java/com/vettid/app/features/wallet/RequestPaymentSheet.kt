@@ -23,11 +23,19 @@ import androidx.compose.ui.unit.dp
 fun RequestPaymentSheet(
     connections: List<ConnectionOption> = emptyList(),
     onDismiss: () -> Unit,
-    onSendRequest: (amountSats: Long, memo: String?, connectionId: String) -> Unit
+    onSendRequest: (amountSats: Long, memo: String?, connectionId: String) -> Unit,
+    /**
+     * When invoked from inside a conversation, the connection is
+     * already known — pass it through so the sheet skips the
+     * connection picker and the user can request straight away.
+     * Empty string keeps the picker visible (legacy callers).
+     */
+    preselectedConnectionId: String = "",
+    preselectedConnectionLabel: String = "",
 ) {
     var amountBtc by remember { mutableStateOf("") }
     var memo by remember { mutableStateOf("") }
-    var selectedConnectionId by remember { mutableStateOf("") }
+    var selectedConnectionId by remember { mutableStateOf(preselectedConnectionId) }
     var isSending by remember { mutableStateOf(false) }
     var connectionExpanded by remember { mutableStateOf(false) }
 
@@ -104,7 +112,9 @@ fun RequestPaymentSheet(
                 }
             )
 
-            // Connection selector
+            // Connection selector — hidden when invoked from a
+            // conversation (the connection is already implicit).
+            if (preselectedConnectionId.isEmpty()) {
             ExposedDropdownMenuBox(
                 expanded = connectionExpanded,
                 onExpandedChange = { connectionExpanded = it }
@@ -155,6 +165,13 @@ fun RequestPaymentSheet(
                         }
                     }
                 }
+            }
+            } else if (preselectedConnectionLabel.isNotEmpty()) {
+                Text(
+                    text = "Sending to ${preselectedConnectionLabel}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
 
             Spacer(modifier = Modifier.height(8.dp))

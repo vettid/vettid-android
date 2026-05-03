@@ -7,19 +7,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Adapter for critical-secret metadata. Vault-backed; no on-device
- * persistence.
- *
- * Critical secrets themselves live sealed inside the credential
- * blob. The metadata index (`credential-secrets/_metadata`) is
- * authoritative on the vault and is what `credential.secret.list`
- * returns. This adapter lets existing callers stay on the same API
- * (`getAllMetadata`, `getMetadata`, `storeMetadata`, …) while every
- * read goes to the vault and every write is a no-op (the actual
- * write happens on the `credential.secret.*` path).
- *
- * The local access-log is dropped — it was never used elsewhere and
- * counted as on-device user data.
+ * Read-only adapter for critical-secret metadata. The vault is the
+ * authoritative store; writes go directly through `credential.secret.*`
+ * verbs on `OwnerSpaceClient`.
  */
 @Singleton
 class CriticalSecretMetadataStore @Inject constructor(
@@ -44,36 +34,6 @@ class CriticalSecretMetadataStore @Inject constructor(
 
     suspend fun getMetadata(id: String): CriticalSecretMetadata? =
         getAllMetadata().firstOrNull { it.id == id }
-
-    /**
-     * Local writes were a duplicate index. The credential-secret
-     * write path on the vault (credential.secret.add) is the
-     * authoritative store; this is a no-op compatibility shim.
-     */
-    @Suppress("UNUSED_PARAMETER")
-    fun storeMetadata(metadata: CriticalSecretMetadata) { /* no-op */ }
-
-    @Suppress("UNUSED_PARAMETER")
-    fun removeMetadata(id: String) { /* no-op */ }
-
-    /**
-     * Access tracking moves to the vault's audit log when needed.
-     * Local-only access counters were never read elsewhere.
-     */
-    @Suppress("UNUSED_PARAMETER")
-    fun recordAccess(id: String) { /* no-op */ }
-
-    fun getAccessLog(): List<CriticalSecretAccessLog> = emptyList()
-
-    @Suppress("UNUSED_PARAMETER")
-    fun getAccessLogForSecret(secretId: String): List<CriticalSecretAccessLog> = emptyList()
-
-    @Suppress("UNUSED_PARAMETER")
-    fun importFromVault(metadataList: List<Map<String, Any?>>) { /* no-op */ }
-
-    fun getLastSyncedAt(): Long = System.currentTimeMillis()
-
-    fun clearAll() { /* no-op */ }
 
     // --- Helpers ---
 
@@ -119,11 +79,6 @@ enum class CriticalSecretCategory(val displayName: String) {
     RECOVERY_KEY("Recovery Key"),
     OTHER("Critical Secret"),
 }
-
-data class CriticalSecretAccessLog(
-    val secretId: String,
-    val accessedAt: Long,
-)
 
 sealed class CriticalSecretViewState {
     object Hidden : CriticalSecretViewState()

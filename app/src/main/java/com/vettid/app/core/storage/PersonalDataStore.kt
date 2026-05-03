@@ -311,10 +311,6 @@ class PersonalDataStore @Inject constructor(
         // Profile photo (local cache)
         private const val KEY_PROFILE_PHOTO = "profile_photo_base64"
 
-        // Sync status
-        private const val KEY_LAST_SYNCED_AT = "last_synced_at"
-        private const val KEY_PENDING_SYNC = "pending_sync"
-
         // Field sort order
         private const val KEY_FIELD_SORT_ORDER = "field_sort_order"
 
@@ -416,7 +412,6 @@ class PersonalDataStore @Inject constructor(
             putBoolean(KEY_SYSTEM_FIELDS_SET, true)
             commit()  // Use commit() instead of apply() to ensure synchronous write
         }
-        markPendingSync()
     }
 
     /**
@@ -495,7 +490,6 @@ class PersonalDataStore @Inject constructor(
             putStringOrRemove(KEY_GITHUB, data.github)
             apply()
         }
-        markPendingSync()
     }
 
     /**
@@ -533,7 +527,6 @@ class PersonalDataStore @Inject constructor(
             putStringOrRemove(key, value)
             apply()
         }
-        markPendingSync()
     }
 
     /**
@@ -716,7 +709,6 @@ class PersonalDataStore @Inject constructor(
         val fields = getCustomFields().toMutableList()
         fields.add(field)
         saveCustomFields(fields)
-        markPendingSync()
         return field
     }
 
@@ -731,7 +723,6 @@ class PersonalDataStore @Inject constructor(
         if (index >= 0) {
             fields[index] = field.copy(updatedAt = System.currentTimeMillis())
             saveCustomFields(fields)
-            markPendingSync()
         }
     }
 
@@ -744,184 +735,11 @@ class PersonalDataStore @Inject constructor(
         val fields = getCustomFields().toMutableList()
         fields.removeAll { it.id == id }
         saveCustomFields(fields)
-        markPendingSync()
     }
 
     private fun saveCustomFields(fields: List<CustomField>) {
         val json = gson.toJson(fields)
         encryptedPrefs.edit().putString(KEY_CUSTOM_FIELDS, json).apply()
-    }
-
-    // MARK: - Sync Status
-
-    /**
-     * Check if there are pending changes to sync.
-     */
-    fun hasPendingSync(): Boolean {
-        return encryptedPrefs.getBoolean(KEY_PENDING_SYNC, false)
-    }
-
-    /**
-     * Mark that there are pending changes to sync.
-     */
-    fun markPendingSync() {
-        encryptedPrefs.edit().putBoolean(KEY_PENDING_SYNC, true).apply()
-    }
-
-    /**
-     * Mark sync as complete.
-     */
-    fun markSyncComplete() {
-        encryptedPrefs.edit().apply {
-            putBoolean(KEY_PENDING_SYNC, false)
-            putLong(KEY_LAST_SYNCED_AT, System.currentTimeMillis())
-            apply()
-        }
-    }
-
-    /**
-     * Get the last sync timestamp.
-     *
-     * @return Epoch millis of last sync, or 0 if never synced
-     */
-    fun getLastSyncedAt(): Long {
-        return encryptedPrefs.getLong(KEY_LAST_SYNCED_AT, 0)
-    }
-
-    // MARK: - Export/Import for Sync
-
-    /**
-     * Export all personal data as a map for syncing to vault.
-     * This format is suitable for the profile.update NATS topic.
-     *
-     * @return Map of all personal data
-     */
-    fun exportForSync(): Map<String, Any?> {
-        val data = mutableMapOf<String, Any?>()
-
-        // System fields
-        getSystemFields()?.let { system ->
-            data["firstName"] = system.firstName
-            data["lastName"] = system.lastName
-            data["email"] = system.email
-        }
-
-        // Optional fields
-        val optional = getOptionalFields()
-        // Name fields
-        data["prefix"] = optional.prefix
-        data["middleName"] = optional.middleName
-        data["suffix"] = optional.suffix
-        // Contact fields
-        data["phone"] = optional.phone
-        data["birthday"] = optional.birthday
-        // Address fields
-        data["street"] = optional.street
-        data["street2"] = optional.street2
-        data["city"] = optional.city
-        data["state"] = optional.state
-        data["postalCode"] = optional.postalCode
-        data["country"] = optional.country
-        // Social/Web fields
-        data["website"] = optional.website
-        data["linkedin"] = optional.linkedin
-        data["twitter"] = optional.twitter
-        data["instagram"] = optional.instagram
-        data["github"] = optional.github
-
-        // Custom fields
-        val customFields = getCustomFields()
-        if (customFields.isNotEmpty()) {
-            data["customFields"] = customFields.map { field ->
-                mapOf(
-                    "id" to field.id,
-                    "name" to field.name,
-                    "value" to field.value,
-                    "category" to field.category.name,
-                    "fieldType" to field.fieldType.name,
-                    "createdAt" to field.createdAt,
-                    "updatedAt" to field.updatedAt
-                )
-            }
-        }
-
-        return data
-    }
-
-    /**
-     * Import personal data from vault sync response.
-     *
-     * @param data Map of personal data from vault
-     */
-    fun importFromSync(data: Map<String, Any?>) {
-        // Import system fields if present
-        val firstName = data["firstName"] as? String
-        val lastName = data["lastName"] as? String
-        val email = data["email"] as? String
-        if (firstName != null && lastName != null && email != null) {
-            storeSystemFields(SystemPersonalData(firstName, lastName, email))
-        }
-
-        // Import optional fields
-        updateOptionalFields(OptionalPersonalData(
-            // Name fields
-            prefix = data["prefix"] as? String,
-            middleName = data["middleName"] as? String,
-            suffix = data["suffix"] as? String,
-            // Contact fields
-            phone = data["phone"] as? String,
-            birthday = data["birthday"] as? String,
-            // Address fields
-            street = data["street"] as? String,
-            street2 = data["street2"] as? String,
-            city = data["city"] as? String,
-            state = data["state"] as? String,
-            postalCode = data["postalCode"] as? String,
-            country = data["country"] as? String,
-            // Social/Web fields
-            website = data["website"] as? String,
-            linkedin = data["linkedin"] as? String,
-            twitter = data["twitter"] as? String,
-            instagram = data["instagram"] as? String,
-            github = data["github"] as? String
-        ))
-
-        // Import custom fields
-        @Suppress("UNCHECKED_CAST")
-        val customFieldsData = data["customFields"] as? List<Map<String, Any?>>
-        if (customFieldsData != null) {
-            val customFields = customFieldsData.mapNotNull { fieldData ->
-                try {
-                    CustomField(
-                        id = fieldData["id"] as String,
-                        name = fieldData["name"] as String,
-                        value = fieldData["value"] as String,
-                        category = try {
-                            FieldCategory.valueOf(fieldData["category"] as String)
-                        } catch (e: Exception) {
-                            FieldCategory.OTHER
-                        },
-                        fieldType = try {
-                            FieldType.valueOf(fieldData["fieldType"] as? String ?: "TEXT")
-                        } catch (e: Exception) {
-                            FieldType.TEXT
-                        },
-                        createdAt = (fieldData["createdAt"] as Number).toLong(),
-                        updatedAt = (fieldData["updatedAt"] as Number).toLong()
-                    )
-                } catch (e: Exception) {
-                    null
-                }
-            }
-            saveCustomFields(customFields)
-        }
-
-        // Don't mark pending sync since we just synced from vault
-        encryptedPrefs.edit().apply {
-            putBoolean(KEY_PENDING_SYNC, false)
-            putLong(KEY_LAST_SYNCED_AT, System.currentTimeMillis())
-            apply()
-        }
     }
 
     // MARK: - Custom Categories
@@ -999,7 +817,6 @@ class PersonalDataStore @Inject constructor(
             .putString(KEY_PUBLIC_PROFILE_FIELDS, json)
             .putInt(KEY_PUBLIC_PROFILE_VERSION, getPublicProfileVersion() + 1)
             .apply()
-        markPendingSync()
     }
 
     /**
@@ -1025,7 +842,6 @@ class PersonalDataStore @Inject constructor(
         encryptedPrefs.edit()
             .putString(KEY_HIDDEN_FROM_CATALOG_FIELDS, json)
             .apply()
-        markPendingSync()
     }
 
     /**

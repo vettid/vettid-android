@@ -50,6 +50,7 @@ fun PeerProfileView(
                 name = d.displayName.ifBlank { d.name },
                 type = d.fieldType.ifBlank { "TEXT" },
                 category = d.category.ifBlank { "Other" },
+                alias = d.alias,
             )
         } ?: profile.items
             .filter { it.type == DataType.PUBLIC && it.isInPublicProfile }
@@ -58,6 +59,7 @@ fun PeerProfileView(
                     name = item.name,
                     type = item.type.name,
                     category = item.category?.displayName ?: "Other",
+                    alias = item.alias,
                 )
             }
     }
