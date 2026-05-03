@@ -1,11 +1,8 @@
 package com.vettid.app.features.connections.offline
 
-import android.content.Context
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
-import dagger.hilt.android.qualifiers.ApplicationContext
+import com.vettid.app.core.storage.InMemoryPrefs
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -15,29 +12,18 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Manages offline operation queue for connections.
+ * Manages the in-session connection-operation queue.
  *
- * Queues operations when offline and processes them when connectivity is restored.
+ * Pending operations live in memory only; if the process dies before
+ * a flush, queued operations are lost (the user must retry). The vault
+ * is the authoritative store for any operation that has been
+ * acknowledged.
  */
 @Singleton
-class OfflineQueueManager @Inject constructor(
-    @ApplicationContext private val context: Context
-) {
+class OfflineQueueManager @Inject constructor() {
     private val gson = Gson()
 
-    private val prefs by lazy {
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-
-        EncryptedSharedPreferences.create(
-            context,
-            PREFS_NAME,
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
-    }
+    private val prefs = InMemoryPrefs()
 
     private val _pendingOperations = MutableStateFlow<List<PendingOperation>>(emptyList())
     val pendingOperations: StateFlow<List<PendingOperation>> = _pendingOperations.asStateFlow()

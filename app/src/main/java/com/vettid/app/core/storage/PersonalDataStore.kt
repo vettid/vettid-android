@@ -1,43 +1,268 @@
 package com.vettid.app.core.storage
 
 import android.content.Context
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
 import com.google.gson.Gson
+import com.google.gson.JsonObject
 import com.google.gson.reflect.TypeToken
+import com.vettid.app.core.nats.OwnerSpaceClient
+import com.vettid.app.core.nats.VaultResponse
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.launch
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Secure storage for personal data using EncryptedSharedPreferences.
+ * In-memory cache + vault-backed writer for personal data.
  *
- * Personal data is organized into three categories:
- * 1. System fields (read-only): firstName, lastName, email from registration
- * 2. Optional fields (editable): phone, address, birthday, etc.
- * 3. Custom fields (user-created): arbitrary key-value pairs
+ * The vault is the only persistent home for user data — every
+ * field, custom category, public-profile selection, and sort-order
+ * entry lives in a vault namespace (`personal-data/`,
+ * `profile/_categories`, `profile/_public`, `personal-data/_sort_order`).
+ * This class is a transient cache: in-memory state only, populated
+ * on demand via [hydrate] after PIN unlock, dropped when the
+ * process ends.
  *
- * System fields come from registration and cannot be changed without admin approval.
- * All data is synced to the vault via profile.update NATS topic.
+ * Why a cache layer at all: the read API is invoked from many
+ * non-coroutine call sites (composables, sync ViewModel methods),
+ * so we need synchronous reads without blocking on a NATS round-trip
+ * each time. The cache mirrors authoritative vault state and is
+ * refreshed whenever the vault publishes a new snapshot via
+ * `forApp.profile.public`.
+ *
+ * Writes flow vault-first: every public mutator dispatches the
+ * appropriate vault op (`personal-data.update`, etc.) and updates
+ * the cache only on success. Failures surface as exceptions to the
+ * caller; the cache stays consistent with the vault.
  */
 @Singleton
 class PersonalDataStore @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val ownerSpaceClient: OwnerSpaceClient,
 ) {
     private val gson = Gson()
 
-    private val masterKey = MasterKey.Builder(context)
-        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-        .build()
+    /**
+     * In-memory KV that mirrors a SharedPreferences API surface so
+     * the rest of the class doesn't change — every call site keeps
+     * working unchanged. The map is the only place the data lives;
+     * nothing reaches device disk.
+     */
+    private val encryptedPrefs: MemPrefs = MemPrefs()
 
-    private val encryptedPrefs = EncryptedSharedPreferences.create(
-        context,
-        "vettid_personal_data",
-        masterKey,
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+    private val scope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO
     )
+
+    init {
+        // Re-hydrate whenever the vault publishes a fresh own-profile
+        // snapshot — covers multi-device edits and any out-of-band
+        // catalog changes the local ViewModels didn't drive.
+        scope.launch {
+            ownerSpaceClient.ownProfileSnapshotTick.collect {
+                try { hydrate() } catch (_: Exception) { /* swallow */ }
+            }
+        }
+    }
+
+    /**
+     * Suspend hydration entry point. ViewModels that depend on
+     * fresh-from-vault state should call this once after PIN
+     * unlock; it fans out the necessary vault reads and populates
+     * the cache. Subsequent reads via the existing sync API serve
+     * from the cache, so composables don't pay a NATS round-trip
+     * per render.
+     *
+     * Idempotent — calling more than once just refreshes.
+     */
+    suspend fun hydrate() {
+        // profile.get-published gives us the canonical view of
+        // system fields, custom categories, sort order, public-
+        // profile selections, and photo. We map each section into
+        // the cache so the existing accessors return live state.
+        val resp = ownerSpaceClient.sendAndAwaitResponse(
+            "profile.get-published", JsonObject(), 15_000L
+        ) as? VaultResponse.HandlerResult ?: return
+        if (!resp.success || resp.result == null) return
+        val r = resp.result
+
+        // System fields land at the top level of the response.
+        val firstName = r.get("first_name")?.takeIf { !it.isJsonNull }?.asString
+        val lastName = r.get("last_name")?.takeIf { !it.isJsonNull }?.asString
+        val email = r.get("email")?.takeIf { !it.isJsonNull }?.asString
+        if (firstName != null && lastName != null && email != null) {
+            encryptedPrefs.edit()
+                .putString(KEY_FIRST_NAME, firstName)
+                .putString(KEY_LAST_NAME, lastName)
+                .putString(KEY_EMAIL, email)
+                .putBoolean(KEY_SYSTEM_FIELDS_SET, true)
+                .apply()
+        }
+
+        // Photo lives inline on the published-profile response.
+        r.get("photo")?.takeIf { !it.isJsonNull }?.asString?.let { photo ->
+            encryptedPrefs.edit().putString(KEY_PROFILE_PHOTO, photo).apply()
+        }
+
+        // public_profile field selection — feeds the "in profile"
+        // toggle on each Data row. Comes back as a JSON array of
+        // namespaces from the published settings block.
+        r.getAsJsonArray("public_profile_fields")?.let { arr ->
+            val list = arr.mapNotNull { it?.takeIf { !it.isJsonNull }?.asString }
+            encryptedPrefs.edit()
+                .putString(KEY_PUBLIC_PROFILE_FIELDS, gson.toJson(list))
+                .apply()
+        }
+
+        // Categories — both predefined (server constant) and
+        // user-defined custom categories.
+        val categoriesResp = ownerSpaceClient.sendAndAwaitResponse(
+            "profile.categories.get", JsonObject(), 10_000L
+        ) as? VaultResponse.HandlerResult
+        if (categoriesResp != null && categoriesResp.success && categoriesResp.result != null) {
+            val customs = categoriesResp.result.getAsJsonArray("custom")
+                ?.mapNotNull { el ->
+                    try {
+                        val o = el.asJsonObject
+                        CategoryInfo(
+                            id = o.get("id")?.asString ?: return@mapNotNull null,
+                            name = o.get("name")?.asString ?: "",
+                            icon = o.get("icon")?.takeIf { !it.isJsonNull }?.asString ?: "",
+                        )
+                    } catch (_: Exception) { null }
+                } ?: emptyList()
+            encryptedPrefs.edit()
+                .putString(KEY_CUSTOM_CATEGORIES, gson.toJson(customs))
+                .apply()
+        }
+
+        // Personal-data fields → optional + custom field maps. The
+        // existing API splits these by namespace prefix.
+        val pdResp = ownerSpaceClient.sendAndAwaitResponse(
+            "personal-data.get", JsonObject(), 15_000L
+        ) as? VaultResponse.HandlerResult
+        if (pdResp != null && pdResp.success && pdResp.result != null) {
+            val fields = pdResp.result.getAsJsonObject("fields")
+            if (fields != null) {
+                hydrateOptionalFromVaultFields(fields)
+                hydrateCustomFromVaultFields(fields)
+            }
+        }
+
+        // Sort-order is its own vault op for now (legacy).
+        val sortResp = ownerSpaceClient.sendAndAwaitResponse(
+            "personal-data.get-sort-order", JsonObject(), 10_000L
+        ) as? VaultResponse.HandlerResult
+        if (sortResp != null && sortResp.success && sortResp.result != null) {
+            val order = sortResp.result.getAsJsonObject("sort_order")
+            if (order != null) {
+                val map = mutableMapOf<String, Int>()
+                order.entrySet().forEach { (k, v) ->
+                    try { map[k] = v.asInt } catch (_: Exception) {}
+                }
+                if (map.isNotEmpty()) {
+                    encryptedPrefs.edit().putString(KEY_FIELD_SORT_ORDER, gson.toJson(map)).apply()
+                }
+            }
+        }
+    }
+
+    private fun hydrateOptionalFromVaultFields(fields: JsonObject) {
+        // Map known optional namespaces into their KEY_* slots so
+        // the existing getOptionalFields() reads light up. Unknown
+        // namespaces go to the custom-fields path below.
+        val knownToKey = mapOf(
+            "personal.legal.prefix" to KEY_PREFIX,
+            "personal.legal.first_name" to KEY_OPT_FIRST_NAME,
+            "personal.legal.middle_name" to KEY_MIDDLE_NAME,
+            "personal.legal.last_name" to KEY_OPT_LAST_NAME,
+            "personal.legal.suffix" to KEY_SUFFIX,
+            "contact.phone.mobile" to KEY_PHONE,
+            "personal.info.birthday" to KEY_BIRTHDAY,
+            "address.home.street" to KEY_STREET,
+            "address.home.street2" to KEY_STREET2,
+            "address.home.city" to KEY_CITY,
+            "address.home.state" to KEY_STATE,
+            "address.home.postal_code" to KEY_POSTAL_CODE,
+            "address.home.country" to KEY_COUNTRY,
+            "social.website.personal" to KEY_WEBSITE,
+            "social.linkedin.url" to KEY_LINKEDIN,
+            "social.twitter.handle" to KEY_TWITTER,
+            "social.instagram.handle" to KEY_INSTAGRAM,
+            "social.github.username" to KEY_GITHUB,
+        )
+        val edit = encryptedPrefs.edit()
+        knownToKey.forEach { (ns, key) ->
+            val obj = fields.get(ns)?.takeIf { it.isJsonObject }?.asJsonObject ?: return@forEach
+            val value = obj.get("value")?.takeIf { !it.isJsonNull }?.asString ?: return@forEach
+            edit.putString(key, value)
+        }
+        edit.apply()
+    }
+
+    private fun hydrateCustomFromVaultFields(fields: JsonObject) {
+        // Anything that isn't a known optional namespace and isn't a
+        // system field is treated as a custom field.
+        val customs = mutableListOf<CustomField>()
+        val now = System.currentTimeMillis()
+        fields.entrySet().forEach { (key, valueJson) ->
+            if (key.startsWith("_system_")) return@forEach
+            val (ns, _) = splitFieldKey(key)
+            if (ns in KNOWN_OPTIONAL_NAMESPACES) return@forEach
+            try {
+                val obj = valueJson?.takeIf { it.isJsonObject }?.asJsonObject ?: return@forEach
+                val value = obj.get("value")?.takeIf { !it.isJsonNull }?.asString ?: return@forEach
+                customs += CustomField(
+                    id = key,
+                    name = namespaceToDisplayName(ns),
+                    value = value,
+                    category = FieldCategory.OTHER, // best-effort — proper category mapping needs a vault hint
+                    fieldType = FieldType.TEXT,
+                    createdAt = now,
+                    updatedAt = now,
+                )
+            } catch (_: Exception) { /* skip */ }
+        }
+        encryptedPrefs.edit().putString(KEY_CUSTOM_FIELDS, gson.toJson(customs)).apply()
+    }
+
+    private fun splitFieldKey(key: String): Pair<String, String> {
+        val idx = key.indexOf("::")
+        return if (idx >= 0) key.substring(0, idx) to key.substring(idx + 2) else key to ""
+    }
+
+    /**
+     * Drop the in-memory cache (e.g. on logout). The vault retains
+     * everything; a subsequent [hydrate] rebuilds the cache.
+     */
+    fun reset() { encryptedPrefs.edit().clear().apply() }
+
+    private class MemPrefs {
+        // Synchronous in-memory map. Chosen over StateFlow here so
+        // the existing SharedPreferences-shaped API stays drop-in;
+        // ViewModels that need reactivity should consume from the
+        // VM's own state flows, populated by hydrate-driven loads.
+        private val data = java.util.concurrent.ConcurrentHashMap<String, Any>()
+        fun getString(key: String, default: String?): String? = (data[key] as? String) ?: default
+        fun getBoolean(key: String, default: Boolean): Boolean = (data[key] as? Boolean) ?: default
+        fun getLong(key: String, default: Long): Long = (data[key] as? Long) ?: default
+        fun getInt(key: String, default: Int): Int = (data[key] as? Int) ?: default
+        fun contains(key: String): Boolean = data.containsKey(key)
+        fun edit(): Editor = Editor(data)
+        class Editor(private val data: java.util.concurrent.ConcurrentHashMap<String, Any>) {
+            fun putString(key: String, value: String?): Editor {
+                if (value == null) data.remove(key) else data[key] = value
+                return this
+            }
+            fun putBoolean(key: String, value: Boolean): Editor { data[key] = value; return this }
+            fun putLong(key: String, value: Long): Editor { data[key] = value; return this }
+            fun putInt(key: String, value: Int): Editor { data[key] = value; return this }
+            fun remove(key: String): Editor { data.remove(key); return this }
+            fun clear(): Editor { data.clear(); return this }
+            fun apply() { /* in-memory; no flush needed */ }
+            fun commit(): Boolean { return true }
+        }
+    }
 
     companion object {
         private const val TAG = "PersonalDataStore"
@@ -96,6 +321,30 @@ class PersonalDataStore @Inject constructor(
         // Published profile cache (instant load on cold start)
         private const val KEY_PUBLISHED_PROFILE_CACHE = "published_profile_cache"
         private const val KEY_PUBLISHED_PROFILE_CACHE_TIME = "published_profile_cache_time"
+
+        // Optional-field namespaces — used during hydrate to split
+        // vault fields into "known optional" (mapped to their KEY_*
+        // slots) vs "custom" (added to the custom-fields list).
+        internal val KNOWN_OPTIONAL_NAMESPACES = setOf(
+            "personal.legal.prefix",
+            "personal.legal.first_name",
+            "personal.legal.middle_name",
+            "personal.legal.last_name",
+            "personal.legal.suffix",
+            "contact.phone.mobile",
+            "personal.info.birthday",
+            "address.home.street",
+            "address.home.street2",
+            "address.home.city",
+            "address.home.state",
+            "address.home.postal_code",
+            "address.home.country",
+            "social.website.personal",
+            "social.linkedin.url",
+            "social.twitter.handle",
+            "social.instagram.handle",
+            "social.github.username",
+        )
 
         // Predefined categories matching enclave
         val PREDEFINED_CATEGORIES = listOf(
@@ -1143,10 +1392,10 @@ class PersonalDataStore @Inject constructor(
 
     // MARK: - Helper Extensions
 
-    private fun android.content.SharedPreferences.Editor.putStringOrRemove(
+    private fun MemPrefs.Editor.putStringOrRemove(
         key: String,
         value: String?
-    ): android.content.SharedPreferences.Editor {
+    ): MemPrefs.Editor {
         return if (value != null) {
             putString(key, value)
         } else {

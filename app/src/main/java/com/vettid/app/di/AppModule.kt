@@ -108,21 +108,16 @@ object AppModule {
 
     // NATS Dependencies
 
+    /**
+     * In-memory NATS credentials cache. Bearer tokens are minted from
+     * the credential blob; we keep the most recent set in memory so
+     * we don't re-mint on every reconnect, but they never hit disk.
+     */
     @Provides
     @Singleton
     @Named("nats")
-    fun provideNatsSharedPreferences(@ApplicationContext context: Context): SharedPreferences {
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-
-        return EncryptedSharedPreferences.create(
-            context,
-            "nats_prefs",
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
+    fun provideNatsCacheStore(): com.vettid.app.core.storage.InMemoryPrefs {
+        return com.vettid.app.core.storage.InMemoryPrefs()
     }
 
     @Provides
@@ -142,9 +137,9 @@ object AppModule {
     fun provideNatsConnectionManager(
         natsClient: NatsClient,
         natsApiClient: NatsApiClient,
-        @Named("nats") sharedPreferences: SharedPreferences
+        @Named("nats") prefs: com.vettid.app.core.storage.InMemoryPrefs
     ): NatsConnectionManager {
-        return NatsConnectionManager(natsClient, natsApiClient, sharedPreferences)
+        return NatsConnectionManager(natsClient, natsApiClient, prefs)
     }
 
     @Provides
@@ -287,8 +282,8 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideContractStore(@ApplicationContext context: Context): ContractStore {
-        return ContractStore(context)
+    fun provideContractStore(): ContractStore {
+        return ContractStore()
     }
 
     @Provides

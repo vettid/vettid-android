@@ -1,14 +1,11 @@
 package com.vettid.app.features.feed
 
-import android.content.Context
 import android.util.Log
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import com.vettid.app.core.nats.FeedClient
 import com.vettid.app.core.nats.FeedEvent
-import dagger.hilt.android.qualifiers.ApplicationContext
+import com.vettid.app.core.storage.InMemoryPrefs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -20,17 +17,15 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Repository for feed events with local caching and sync support.
+ * Repository for feed events.
  *
- * Uses EncryptedSharedPreferences for local storage (consistent with codebase architecture).
- * Supports:
- * - Offline access to cached events
- * - Incremental sync via sequence numbers
- * - Background sync coordination
+ * In-memory only — the vault and JetStream are authoritative.
+ * The local cache here keeps a session-scoped copy so the feed list
+ * doesn't refetch on every navigation. On process death we drop it
+ * and re-sync from the vault.
  */
 @Singleton
 class FeedRepository @Inject constructor(
-    @ApplicationContext private val context: Context,
     private val feedClient: FeedClient,
     private val connectionsClient: com.vettid.app.core.nats.ConnectionsClient
 ) {
@@ -43,23 +38,10 @@ class FeedRepository @Inject constructor(
     private val _isOnline = MutableStateFlow(true)
     val isOnline: StateFlow<Boolean> = _isOnline.asStateFlow()
 
-    private val prefs by lazy {
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-
-        EncryptedSharedPreferences.create(
-            context,
-            PREFS_NAME,
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
-    }
+    private val prefs = InMemoryPrefs()
 
     companion object {
         private const val TAG = "FeedRepository"
-        private const val PREFS_NAME = "feed_cache"
         private const val KEY_EVENTS = "cached_events"
         private const val KEY_LAST_SEQUENCE = "last_sync_sequence"
         private const val KEY_LAST_SYNC_TIME = "last_sync_time"

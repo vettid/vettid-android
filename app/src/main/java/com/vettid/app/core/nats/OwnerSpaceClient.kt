@@ -110,6 +110,15 @@ class OwnerSpaceClient @Inject constructor(
     /** Flow of feed notifications (new events, status updates). */
     val feedNotifications: SharedFlow<FeedNotification> = _feedNotifications.asSharedFlow()
 
+    /**
+     * Tick fired whenever the vault republishes the owner's public
+     * profile snapshot (`forApp.profile.public`). Cache holders such
+     * as PersonalDataStore observe this and re-hydrate so other
+     * devices' edits propagate without a full app restart.
+     */
+    private val _ownProfileSnapshotTick = MutableSharedFlow<Long>(extraBufferCapacity = 8)
+    val ownProfileSnapshotTick: SharedFlow<Long> = _ownProfileSnapshotTick.asSharedFlow()
+
     // Location sharing events
     private val _locationUpdates = MutableSharedFlow<SharedLocationUpdate>(extraBufferCapacity = 16)
     /** Flow of location updates from connections sharing their location. */
@@ -1664,6 +1673,13 @@ class OwnerSpaceClient @Inject constructor(
                 // Profile
                 subject.contains(".forApp.profile-update") -> {
                     handleProfileUpdate(message); return
+                }
+                // Own published-profile snapshot republished by the
+                // vault (multi-device fan-out + after every catalog
+                // mutation). Caches re-hydrate from this tick.
+                subject.contains(".forApp.profile.public") -> {
+                    _ownProfileSnapshotTick.tryEmit(System.currentTimeMillis())
+                    return
                 }
 
                 // Credentials

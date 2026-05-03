@@ -261,19 +261,20 @@ class PinUnlockViewModel @Inject constructor(
                             }
                         }
 
-                        // If the local cache is empty (fresh install, app data
-                        // cleared, profile never synced), wait briefly for the
-                        // vault to respond so the welcome message can include
-                        // the name. If the cache already has it, this is a
-                        // no-op either way — the vault response just refreshes
-                        // cache in place.
-                        val cachedFirstName = personalDataStore.getSystemFields()?.firstName
-                        if (cachedFirstName.isNullOrEmpty()) {
-                            loadProfileFromVault()
-                        } else {
-                            // Refresh in the background — don't block the UI.
-                            viewModelScope.launch { loadProfileFromVault() }
+                        // Personal-data is now in-memory only (vault is the
+                        // source of truth) so we MUST hydrate before we can
+                        // read the system name or render any data screen.
+                        // Block briefly to populate; refresh kicks in async.
+                        try {
+                            kotlinx.coroutines.withTimeoutOrNull(6000L) {
+                                personalDataStore.hydrate()
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "PersonalDataStore hydrate failed (non-fatal)", e)
                         }
+                        // Legacy refresh path (writes some fields hydrate
+                        // doesn't yet cover); harmless to run in parallel.
+                        viewModelScope.launch { loadProfileFromVault() }
 
                         val firstName = personalDataStore.getSystemFields()?.firstName
 

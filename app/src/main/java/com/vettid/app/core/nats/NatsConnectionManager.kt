@@ -1,7 +1,7 @@
 package com.vettid.app.core.nats
 
-import android.content.SharedPreferences
 import com.google.gson.Gson
+import com.vettid.app.core.storage.InMemoryPrefs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -26,7 +26,7 @@ import javax.inject.Singleton
 class NatsConnectionManager @Inject constructor(
     private val natsClient: NatsClient,
     private val natsApiClient: NatsApiClient,
-    private val sharedPreferences: SharedPreferences
+    private val sharedPreferences: InMemoryPrefs
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val mutex = Mutex()

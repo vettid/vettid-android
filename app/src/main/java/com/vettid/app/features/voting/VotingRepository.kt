@@ -1,41 +1,24 @@
 package com.vettid.app.features.voting
 
-import android.content.Context
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
-import dagger.hilt.android.qualifiers.ApplicationContext
+import com.vettid.app.core.storage.InMemoryPrefs
 import java.time.Instant
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Repository for storing and retrieving voting data.
+ * Repository for vote receipts and proposal cache.
  *
- * Stores:
- * - Vote receipts (for My Votes screen and verification)
- * - Proposal cache (optional, for offline viewing)
- *
- * Uses EncryptedSharedPreferences for secure storage.
+ * In-memory only — the vault and JetStream are the authoritative
+ * stores for proposals and votes. Local cache exists purely to keep
+ * the UI responsive during a session.
  */
 @Singleton
-class VotingRepository @Inject constructor(
-    @ApplicationContext private val context: Context
-) {
+class VotingRepository @Inject constructor() {
     private val gson = Gson()
 
-    private val masterKey = MasterKey.Builder(context)
-        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-        .build()
-
-    private val encryptedPrefs = EncryptedSharedPreferences.create(
-        context,
-        "vettid_voting",
-        masterKey,
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-    )
+    private val encryptedPrefs = InMemoryPrefs()
 
     companion object {
         private const val KEY_VOTES = "votes"
