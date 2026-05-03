@@ -2191,6 +2191,7 @@ class PersonalDataViewModel @Inject constructor(
                     type = o.get("type")?.asString ?: "",
                     category = o.get("category")?.asString?.takeIf { it.isNotBlank() }
                         ?: DataCategory.OTHER.displayName,
+                    alias = o.get("alias")?.takeIf { !it.isJsonNull }?.asString.orEmpty(),
                 )
             } catch (_: Exception) { /* skip malformed */ }
         }

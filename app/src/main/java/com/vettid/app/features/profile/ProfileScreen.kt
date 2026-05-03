@@ -152,24 +152,25 @@ fun ProfileScreen(
         }
     }
 
-    // Public Secrets Metadata Dialog
+    // Available Secrets Dialog — metadata-only inventory of secrets
+    // a peer can request access to via the standard policy/handler flow.
     if (showSecretsDialog) {
         MetadataDialog(
-            title = "Public Secret Metadata",
-            subtitle = "Visible to agents, services, and connections",
+            title = "Available Secrets",
+            subtitle = "Metadata only — peers can request these via policy. Values are never shared without consent.",
             items = publicSecrets,
-            emptyMessage = "No secrets are shared publicly",
+            emptyMessage = "No secrets are available yet.",
             onDismiss = { showSecretsDialog = false }
         )
     }
 
-    // Public Personal Data Dialog
+    // Available Personal Data Dialog
     if (showPersonalDataDialog) {
         MetadataDialog(
-            title = "Public Personal Data",
-            subtitle = "Visible to agents, services, and connections",
+            title = "Available Personal Data",
+            subtitle = "Metadata only — peers can request these via policy. Values are never shared without consent.",
             items = publicPersonalData,
-            emptyMessage = "No personal data is shared publicly",
+            emptyMessage = "No personal data is available yet.",
             onDismiss = { showPersonalDataDialog = false }
         )
     }

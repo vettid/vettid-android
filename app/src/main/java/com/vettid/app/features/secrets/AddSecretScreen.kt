@@ -51,6 +51,7 @@ fun AddSecretScreen(
     var value by remember { mutableStateOf("") }
     var notes by remember { mutableStateOf("") }
     var description by remember { mutableStateOf("") }
+    var alias by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
 
     var selectedMinorCategory by remember { mutableStateOf(SecretCategory.PASSWORD) }
@@ -104,7 +105,8 @@ fun AddSecretScreen(
                                     name = name,
                                     value = value,
                                     category = selectedMinorCategory,
-                                    notes = notes.takeIf { it.isNotBlank() }
+                                    notes = notes.takeIf { it.isNotBlank() },
+                                    alias = alias.takeIf { it.isNotBlank() }
                                 ))
                             }
                         },
@@ -277,6 +279,22 @@ fun AddSecretScreen(
 
             // Notes/Description field
             OutlinedTextField(
+                value = alias,
+                onValueChange = { alias = it },
+                label = { Text("Alias / group (optional)") },
+                placeholder = { Text("e.g. Trading Wallet, Hardware Backup") },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.Label, null) },
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Words,
+                    imeAction = ImeAction.Next
+                ),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            OutlinedTextField(
                 value = if (isCritical) description else notes,
                 onValueChange = { if (isCritical) description = it else notes = it },
                 label = { Text(if (isCritical) "Description (optional)" else "Notes (optional)") },
@@ -340,7 +358,8 @@ fun AddSecretScreen(
                             name = name,
                             value = value,
                             category = selectedMinorCategory,
-                            notes = notes.takeIf { it.isNotBlank() }
+                            notes = notes.takeIf { it.isNotBlank() },
+                            alias = alias.takeIf { it.isNotBlank() }
                         ))
                     }
                 },
@@ -443,6 +462,7 @@ fun AddSecretScreen(
                                 value = value,
                                 category = selectedCriticalCategory,
                                 description = description.takeIf { it.isNotBlank() },
+                                alias = alias.takeIf { it.isNotBlank() },
                                 password = password
                             ))
                             password = ""  // Clear password immediately

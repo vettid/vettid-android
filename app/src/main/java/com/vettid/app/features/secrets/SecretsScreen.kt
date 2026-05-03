@@ -1110,6 +1110,20 @@ private fun AddSecretDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
+                // Alias field (optional) — groups related secrets in
+                // the catalog (e.g. "Trading Wallet", "Hardware Backup").
+                OutlinedTextField(
+                    value = state.alias,
+                    onValueChange = { onStateChange(state.copy(alias = it)) },
+                    label = { Text("Alias / group (optional)") },
+                    placeholder = { Text("e.g. Trading Wallet") },
+                    singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Words,
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
                 // Notes field (optional)
                 OutlinedTextField(
                     value = state.notes,

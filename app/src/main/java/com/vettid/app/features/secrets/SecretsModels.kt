@@ -27,6 +27,7 @@ data class EditSecretState(
     val value: String = "",
     val type: SecretType = SecretType.TEXT,
     val category: SecretCategory = SecretCategory.OTHER,
+    val alias: String = "",
     val notes: String = "",
     val isInPublicProfile: Boolean = false,
     val isEditing: Boolean = false,

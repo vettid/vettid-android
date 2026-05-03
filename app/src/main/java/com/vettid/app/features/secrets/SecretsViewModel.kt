@@ -287,6 +287,7 @@ class SecretsViewModel @Inject constructor(
                         category = currentEdit.category,
                         type = currentEdit.type,
                         notes = currentEdit.notes.takeIf { it.isNotBlank() },
+                        alias = currentEdit.alias.takeIf { it.isNotBlank() },
                         isInPublicProfile = if (currentEdit.type == SecretType.PUBLIC_KEY)
                             currentEdit.isInPublicProfile else false
                     )

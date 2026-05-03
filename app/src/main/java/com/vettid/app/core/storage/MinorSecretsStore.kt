@@ -124,12 +124,14 @@ class MinorSecretsStore @Inject constructor(
         isSystemField: Boolean = false,
         groupId: String? = null,
         groupLabel: String? = null,
+        alias: String? = null,
     ): MinorSecret? {
         val payload = JsonObject().apply {
             addProperty("name", name)
             addProperty("value", value)
             addProperty("category", category.name)
             addProperty("type", type.name)
+            if (!alias.isNullOrBlank()) addProperty("alias", alias)
             if (!notes.isNullOrBlank()) addProperty("description", notes)
             // New entries default to cataloged — peers see metadata,
             // values stay in the vault. Toggling to public puts the

@@ -78,7 +78,7 @@ class TwoTierSecretsViewModel @Inject constructor(
                 // Minor secrets
                 is TwoTierSecretsEvent.MinorSecretClicked -> selectMinorSecret(event.secretId)
                 is TwoTierSecretsEvent.RevealMinorSecret -> revealMinorSecret(event.secretId, event.password)
-                is TwoTierSecretsEvent.AddMinorSecret -> addMinorSecret(event.name, event.value, event.category, event.notes)
+                is TwoTierSecretsEvent.AddMinorSecret -> addMinorSecret(event.name, event.value, event.category, event.notes, event.alias)
                 is TwoTierSecretsEvent.DeleteMinorSecret -> deleteMinorSecret(event.secretId)
                 is TwoTierSecretsEvent.ToggleHideFromCatalog -> toggleHideFromCatalog(event.secretId)
                 is TwoTierSecretsEvent.TogglePublicProfile -> togglePublicProfile(event.secretId)
@@ -87,7 +87,7 @@ class TwoTierSecretsViewModel @Inject constructor(
                 is TwoTierSecretsEvent.CriticalSecretClicked -> selectCriticalSecret(event.secretId)
                 is TwoTierSecretsEvent.SubmitPasswordForCritical -> submitPasswordForCritical(event.password)
                 is TwoTierSecretsEvent.AcknowledgeCriticalAccess -> acknowledgeCriticalAccess()
-                is TwoTierSecretsEvent.AddCriticalSecret -> addCriticalSecret(event.name, event.value, event.category, event.description, event.password)
+                is TwoTierSecretsEvent.AddCriticalSecret -> addCriticalSecret(event.name, event.value, event.category, event.description, event.alias, event.password)
                 is TwoTierSecretsEvent.DeleteCriticalSecret -> deleteCriticalSecret(event.secretId, event.password)
 
                 // Common
@@ -235,12 +235,13 @@ class TwoTierSecretsViewModel @Inject constructor(
         }
     }
 
-    private suspend fun addMinorSecret(name: String, value: String, category: SecretCategory, notes: String?) {
+    private suspend fun addMinorSecret(name: String, value: String, category: SecretCategory, notes: String?, alias: String?) {
         try {
             val payload = com.google.gson.JsonObject().apply {
                 addProperty("name", name)
                 addProperty("value", value)
                 addProperty("category", category.name)
+                if (!alias.isNullOrBlank()) addProperty("alias", alias)
                 if (!notes.isNullOrBlank()) addProperty("description", notes)
                 addProperty("discoverability", "cataloged")
             }
@@ -434,6 +435,7 @@ class TwoTierSecretsViewModel @Inject constructor(
         value: String,
         category: CriticalSecretCategory,
         description: String?,
+        alias: String?,
         password: String
     ) {
         try {
@@ -471,6 +473,7 @@ class TwoTierSecretsViewModel @Inject constructor(
                 addProperty("name", name)
                 addProperty("category", vaultCategory)
                 addProperty("description", description)
+                if (!alias.isNullOrBlank()) addProperty("alias", alias)
                 addProperty("value", valueBase64)
                 addProperty("encrypted_credential", encryptedBlob)
                 addProperty("encrypted_password_hash", encryptedPassword.encryptedPasswordHash)
@@ -696,7 +699,7 @@ sealed class TwoTierSecretsEvent {
     // Minor secrets
     data class MinorSecretClicked(val secretId: String) : TwoTierSecretsEvent()
     data class RevealMinorSecret(val secretId: String, val password: String) : TwoTierSecretsEvent()
-    data class AddMinorSecret(val name: String, val value: String, val category: SecretCategory, val notes: String?) : TwoTierSecretsEvent()
+    data class AddMinorSecret(val name: String, val value: String, val category: SecretCategory, val notes: String?, val alias: String?) : TwoTierSecretsEvent()
     data class DeleteMinorSecret(val secretId: String) : TwoTierSecretsEvent()
     data class ToggleHideFromCatalog(val secretId: String) : TwoTierSecretsEvent()
     data class TogglePublicProfile(val secretId: String) : TwoTierSecretsEvent()
@@ -710,6 +713,7 @@ sealed class TwoTierSecretsEvent {
         val value: String,
         val category: CriticalSecretCategory,
         val description: String?,
+        val alias: String?,
         val password: String
     ) : TwoTierSecretsEvent()
     data class DeleteCriticalSecret(val secretId: String, val password: String) : TwoTierSecretsEvent()

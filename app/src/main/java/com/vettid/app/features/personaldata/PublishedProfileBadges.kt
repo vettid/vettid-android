@@ -97,19 +97,19 @@ fun PublishedProfileBadges(
     // preview so the peer-side view matches the self-side view exactly.
     if (showDataDialog) {
         PublicMetadataDialog(
-            title = "Personal Data Catalog",
-            subtitle = "Metadata only — values are never shared without consent. Items the user has marked private don't appear here.",
+            title = "Available Personal Data",
+            subtitle = "Metadata only — peers can request these via policy. Values are never shared without consent.",
             items = dataCatalog,
-            emptyMessage = "No personal data has been cataloged yet.",
+            emptyMessage = "No personal data is available yet.",
             onDismiss = { showDataDialog = false },
         )
     }
     if (showSecretsDialog) {
         PublicMetadataDialog(
-            title = "Secret Catalog",
-            subtitle = "Metadata only — values are never shared without consent. Items the user has marked private don't appear here.",
+            title = "Available Secrets",
+            subtitle = "Metadata only — peers can request these via policy. Values are never shared without consent.",
             items = secretCatalog,
-            emptyMessage = "No secrets have been cataloged yet.",
+            emptyMessage = "No secrets are available yet.",
             onDismiss = { showSecretsDialog = false },
         )
     }
