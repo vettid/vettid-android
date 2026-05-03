@@ -1572,11 +1572,66 @@ internal fun PublicMetadataDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
+                    // Group rows by (category, alias) so a user who
+                    // added three fields for "Wife" (phone, name,
+                    // relationship) sees a single "Family — Wife"
+                    // card with the field list inside, rather than
+                    // three loose rows. Items with no alias render
+                    // individually as before.
+                    val grouped = items
+                        .filter { it.alias.isNotBlank() }
+                        .groupBy { it.category to it.alias }
+                        .toList()
+                        .sortedBy { (key, _) -> "${key.first} ${key.second}" }
+                    val ungrouped = items.filter { it.alias.isBlank() }
                     LazyColumn(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.heightIn(max = 400.dp)
                     ) {
-                        items(items) { item ->
+                        items(grouped, key = { (key, _) -> "${key.first}::${key.second}" }) { (key, groupItems) ->
+                            val (category, alias) = key
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                                )
+                            ) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = alias,
+                                                style = MaterialTheme.typography.titleSmall
+                                            )
+                                            Text(
+                                                text = category,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        Icon(
+                                            Icons.Default.Visibility,
+                                            contentDescription = "Public",
+                                            modifier = Modifier.size(16.dp),
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    groupItems.forEach { gi ->
+                                        Text(
+                                            text = "• ${gi.name}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        items(ungrouped) { item ->
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = CardDefaults.cardColors(
@@ -1592,7 +1647,7 @@ internal fun PublicMetadataDialog(
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
-                                            text = item.display,
+                                            text = item.name,
                                             style = MaterialTheme.typography.bodyMedium
                                         )
                                         Text(
