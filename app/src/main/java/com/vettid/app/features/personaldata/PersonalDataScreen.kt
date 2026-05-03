@@ -1572,23 +1572,30 @@ internal fun PublicMetadataDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 } else {
-                    // Group rows by (category, alias) so a user who
-                    // added three fields for "Wife" (phone, name,
-                    // relationship) sees a single "Family — Wife"
-                    // card with the field list inside, rather than
-                    // three loose rows. Items with no alias render
-                    // individually as before.
-                    val grouped = items
+                    // Two-tier grouping for visual consistency between
+                    // data and secrets dialogs:
+                    //   1. Items with an alias collapse into a card per
+                    //      (category, alias) — e.g. "Family — Wife"
+                    //      with phone/name/relationship as bullets.
+                    //   2. Items without an alias group by category
+                    //      alone, so secrets render as one card per
+                    //      bucket ("Critical Secret", "Cryptocurrency"
+                    //      etc.) instead of a loose list.
+                    val aliasGroups = items
                         .filter { it.alias.isNotBlank() }
                         .groupBy { it.category to it.alias }
                         .toList()
                         .sortedBy { (key, _) -> "${key.first} ${key.second}" }
-                    val ungrouped = items.filter { it.alias.isBlank() }
+                    val categoryGroups = items
+                        .filter { it.alias.isBlank() }
+                        .groupBy { it.category }
+                        .toList()
+                        .sortedBy { (cat, _) -> cat }
                     LazyColumn(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.heightIn(max = 400.dp)
                     ) {
-                        items(grouped, key = { (key, _) -> "${key.first}::${key.second}" }) { (key, groupItems) ->
+                        items(aliasGroups, key = { (key, _) -> "alias::${key.first}::${key.second}" }) { (key, groupItems) ->
                             val (category, alias) = key
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
@@ -1631,37 +1638,39 @@ internal fun PublicMetadataDialog(
                                 }
                             }
                         }
-                        items(ungrouped) { item ->
+                        items(categoryGroups, key = { (cat, _) -> "cat::$cat" }) { (category, groupItems) ->
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = CardDefaults.cardColors(
                                     containerColor = MaterialTheme.colorScheme.surfaceVariant
                                 )
                             ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(12.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
+                                Column(modifier = Modifier.padding(12.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
                                         Text(
-                                            text = item.name,
-                                            style = MaterialTheme.typography.bodyMedium
+                                            text = category,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            modifier = Modifier.weight(1f)
                                         )
+                                        Icon(
+                                            Icons.Default.Visibility,
+                                            contentDescription = "Public",
+                                            modifier = Modifier.size(16.dp),
+                                            tint = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    groupItems.forEach { gi ->
                                         Text(
-                                            text = "${item.category} - ${item.type}",
-                                            style = MaterialTheme.typography.labelSmall,
+                                            text = "• ${gi.name}",
+                                            style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
-                                    Icon(
-                                        Icons.Default.Visibility,
-                                        contentDescription = "Public",
-                                        modifier = Modifier.size(16.dp),
-                                        tint = MaterialTheme.colorScheme.primary
-                                    )
                                 }
                             }
                         }
