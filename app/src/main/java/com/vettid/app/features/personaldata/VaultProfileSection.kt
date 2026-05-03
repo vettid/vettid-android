@@ -45,15 +45,8 @@ fun VaultProfileSection(
 ) {
     val photo by personalDataViewModel.profilePhoto.collectAsState()
     val systemFields by personalDataViewModel.systemFields.collectAsState()
-    val hasUnpublishedProfile by personalDataViewModel.hasUnpublishedChanges.collectAsState()
     val showPublicProfilePreview by personalDataViewModel.showPublicProfilePreview.collectAsState()
     val showPhotoCapture by personalDataViewModel.showPhotoCapture.collectAsState()
-    // Read the unpublished-secrets flag from the personal-data VM
-    // (which mirrors the store directly) rather than from the
-    // SecretsViewModel state — Hilt sometimes hands the embedded
-    // SecretsContent a different VM instance than this composable
-    // resolves, leading to stale "still pending" reads after publish.
-    val hasUnpublishedKeys by personalDataViewModel.hasUnpublishedSecrets.collectAsState()
 
     Column(modifier = Modifier.fillMaxWidth()) {
         ProfileHeaderRow(
@@ -63,16 +56,6 @@ fun VaultProfileSection(
             onEditPhoto = { personalDataViewModel.showPhotoCaptureDialog() },
             onNameClick = { personalDataViewModel.showPublicProfilePreview() },
         )
-        // One banner covers both data-field and public-key changes —
-        // publishProfile() already publishes everything in one call,
-        // so showing two prompts confuses the user. We OR the two
-        // sources but route the action through the unified publish.
-        if (hasUnpublishedProfile || hasUnpublishedKeys) {
-            UnpublishedChangesBanner(
-                title = "Unpublished Profile Changes",
-                onPublish = { personalDataViewModel.publishProfile() },
-            )
-        }
         HorizontalDivider(
             color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
         )

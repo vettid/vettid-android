@@ -142,7 +142,6 @@ fun PersonalDataContent(
             }
 
             is PersonalDataState.Loaded -> {
-                val hasUnpublishedChanges by viewModel.hasUnpublishedChanges.collectAsState()
                 val isRefreshing by viewModel.isRefreshing.collectAsState()
                 val publishedProfile by viewModel.publishedProfile.collectAsState()
                 // Compute groupedByCategory directly (no remember) to ensure recomposition on sort order changes
@@ -155,7 +154,6 @@ fun PersonalDataContent(
                 ) {
                     PersonalDataList(
                         groupedByCategory = groupedByCategory,
-                        hasUnpublishedChanges = hasUnpublishedChanges,
                         lastPublishedAt = publishedProfile?.updatedAt,
                         isProfilePublished = publishedProfile?.isFromVault == true && publishedProfile?.items?.isNotEmpty() == true,
                         firstName = systemFields?.firstName ?: "",
@@ -168,7 +166,6 @@ fun PersonalDataContent(
                         onToggleHideFromCatalog = { viewModel.onEvent(PersonalDataEvent.ToggleHideFromCatalog(it)) },
                         onMoveUp = { viewModel.onEvent(PersonalDataEvent.MoveItemUp(it)) },
                         onMoveDown = { viewModel.onEvent(PersonalDataEvent.MoveItemDown(it)) },
-                        onPublishClick = { viewModel.publishProfile() },
                         onPreviewClick = { viewModel.showPublicProfilePreview() },
                         onEditPhoto = { viewModel.showPhotoCaptureDialog() }
                     )
@@ -265,7 +262,6 @@ fun PersonalDataContent(
 @Composable
 private fun PersonalDataList(
     groupedByCategory: GroupedByCategory,
-    hasUnpublishedChanges: Boolean,
     lastPublishedAt: String?,
     isProfilePublished: Boolean,
     firstName: String,
@@ -278,7 +274,6 @@ private fun PersonalDataList(
     onToggleHideFromCatalog: (String) -> Unit,
     onMoveUp: (String) -> Unit,
     onMoveDown: (String) -> Unit,
-    onPublishClick: () -> Unit,
     onPreviewClick: () -> Unit,
     onEditPhoto: () -> Unit
 ) {
@@ -386,11 +381,12 @@ private fun PersonalDataList(
             }
         }
 
-        // Last published timestamp at the bottom
+        // Last updated timestamp at the bottom (every change auto-publishes,
+        // so the published-at timestamp is also "last updated")
         if (lastPublishedAt != null) {
             item {
                 Text(
-                    text = "Last published: ${formatPublishedTimestamp(lastPublishedAt) ?: lastPublishedAt}",
+                    text = "Last updated: ${formatPublishedTimestamp(lastPublishedAt) ?: lastPublishedAt}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -601,43 +597,13 @@ private fun CollapsibleCategoryHeader(
 
 @Composable
 private fun PublishProfileButton(
-    hasUnpublishedChanges: Boolean,
     lastPublishedAt: String?,
     isProfilePublished: Boolean,
-    onPublishClick: () -> Unit,
     onPreviewClick: () -> Unit
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         // Status indicator
         when {
-            hasUnpublishedChanges -> {
-                // Unpublished changes warning
-                Surface(
-                    color = MaterialTheme.colorScheme.tertiaryContainer,
-                    shape = MaterialTheme.shapes.small,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            Icons.Default.Info,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.onTertiaryContainer
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "You have unpublished changes",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onTertiaryContainer
-                        )
-                    }
-                }
-            }
             isProfilePublished -> {
                 // Published successfully indicator
                 Surface(
@@ -659,7 +625,7 @@ private fun PublishProfileButton(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = if (lastPublishedAt != null) "Published: ${formatPublishedTimestamp(lastPublishedAt) ?: lastPublishedAt}" else "Profile published",
+                            text = if (lastPublishedAt != null) "Updated: ${formatPublishedTimestamp(lastPublishedAt) ?: lastPublishedAt}" else "Profile up to date",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
@@ -696,34 +662,17 @@ private fun PublishProfileButton(
             }
         }
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        OutlinedButton(
+            onClick = onPreviewClick,
+            modifier = Modifier.fillMaxWidth()
         ) {
-            OutlinedButton(
-                onClick = onPreviewClick,
-                modifier = Modifier.weight(1f)
-            ) {
-                Icon(
-                    Icons.Default.Visibility,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Profile")
-            }
-            Button(
-                onClick = onPublishClick,
-                modifier = Modifier.weight(1f)
-            ) {
-                Icon(
-                    Icons.Default.Share,
-                    contentDescription = null,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Publish")
-            }
+            Icon(
+                Icons.Default.Visibility,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text("Preview profile")
         }
     }
 }
@@ -2029,14 +1978,18 @@ internal fun BusinessCardView(
 
         // Additional fields organized by category
         if (groupedByCategory.isNotEmpty()) {
+            // OTHER is intentionally omitted — anything that doesn't
+            // map to a structured category still surfaces through the
+            // Data badge dialog, but we don't show it on the calling
+            // card itself (that bucket was leaking system fields onto
+            // the preview).
             val categoryOrder = listOf(
                 DataCategory.IDENTITY,
                 DataCategory.CONTACT,
                 DataCategory.FAMILY,
                 DataCategory.ADDRESS,
                 DataCategory.FINANCIAL,
-                DataCategory.MEDICAL,
-                DataCategory.OTHER
+                DataCategory.MEDICAL
             )
 
             categoryOrder.forEach { category ->

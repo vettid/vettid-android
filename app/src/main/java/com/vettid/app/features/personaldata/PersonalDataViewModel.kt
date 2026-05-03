@@ -70,10 +70,6 @@ class PersonalDataViewModel @Inject constructor(
     private val _showPhotoCapture = MutableStateFlow(false)
     val showPhotoCapture: StateFlow<Boolean> = _showPhotoCapture.asStateFlow()
 
-    // Track if there are unpublished changes
-    private val _hasUnpublishedChanges = MutableStateFlow(false)
-    val hasUnpublishedChanges: StateFlow<Boolean> = _hasUnpublishedChanges.asStateFlow()
-
     // Pull-to-refresh state
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
@@ -140,39 +136,15 @@ class PersonalDataViewModel @Inject constructor(
     private var publicProfileFields = mutableSetOf<String>()
     private var hiddenFromCatalogFields = mutableSetOf<String>()
 
-    /**
-     * Mirror of `MinorSecretsStore`'s "any public-key secret in the
-     * profile is still PENDING" predicate, recomputed every time the
-     * store fires a dirty tick. The vault's profile section reads
-     * this so the unpublished-changes banner reflects the same state
-     * regardless of which Hilt-scoped SecretsViewModel happens to be
-     * alive (the two-tier embedded view and the legacy SecretsScreen
-     * sometimes resolve to different VM instances).
-     */
-    private val _hasUnpublishedSecrets = MutableStateFlow(false)
-    val hasUnpublishedSecrets: StateFlow<Boolean> = _hasUnpublishedSecrets.asStateFlow()
-
-    private fun recomputeUnpublishedSecrets() {
-        // Vault is the source of truth — once a secret reaches it,
-        // it's by definition synced. Pending state was a local-only
-        // concept of the old store. The "unpublished" banner now
-        // collapses to false; if we want a real "publish required"
-        // signal in the future we'll derive it from the discoverability
-        // diff between the local view and what's in profile.publish.
-        _hasUnpublishedSecrets.value = false
-    }
-
     init {
         Log.i(TAG, "PersonalDataViewModel created - starting load")
         loadPersonalData()
         loadCustomCategories()
         loadPublicMetadata()
-        recomputeUnpublishedSecrets()
         // Watch the store-level dirty tick — bumps on every secret
-        // mutation so the catalog and "unpublished" hint stay in sync.
+        // mutation so the catalog stays in sync with the vault.
         viewModelScope.launch {
             minorSecretsStore.publishDirtyTick.drop(1).collect {
-                recomputeUnpublishedSecrets()
                 loadPublicMetadata()
             }
         }
@@ -549,11 +521,6 @@ class PersonalDataViewModel @Inject constructor(
         publicProfileFields.addAll(personalDataStore.getPublicProfileFields())
         hiddenFromCatalogFields.clear()
         hiddenFromCatalogFields.addAll(personalDataStore.getHiddenFromCatalogFields())
-
-        // Check if there are unpublished changes based on local settings
-        // This is a heuristic - if there are public profile fields selected but
-        // we don't know if they were published, we assume no changes until user makes one
-        _hasUnpublishedChanges.value = false
     }
 
     /**
@@ -989,9 +956,7 @@ class PersonalDataViewModel @Inject constructor(
                     is VaultResponse.HandlerResult -> {
                         if (response.success) {
                             Log.i(TAG, "Profile published successfully")
-                            _hasUnpublishedChanges.value = false
                             loadPublicMetadata()
-                            _effects.emit(PersonalDataEffect.ShowSuccess("Public profile published"))
                         } else {
                             val errorMsg = response.error ?: "Unknown error"
                             Log.e(TAG, "Profile publish failed: $errorMsg")
@@ -1008,9 +973,6 @@ class PersonalDataViewModel @Inject constructor(
                     }
                     else -> {
                         Log.w(TAG, "Unexpected response type: ${response::class.simpleName}")
-                        // Assume success if we got an unexpected but not error response
-                        _hasUnpublishedChanges.value = false
-                        _effects.emit(PersonalDataEffect.ShowSuccess("Public profile published"))
                     }
                 }
             } catch (e: Exception) {
@@ -1166,9 +1128,8 @@ class PersonalDataViewModel @Inject constructor(
                 }
                 saveFieldLocally(newNamespace, localState)
 
-                // Mark as having unpublished changes if field is in public profile
                 if (current.isInPublicProfile) {
-                    _hasUnpublishedChanges.value = true
+                    publishProfile()
                 }
 
                 // Update local state optimistically instead of reloading from vault
@@ -1533,9 +1494,6 @@ class PersonalDataViewModel @Inject constructor(
                     // Update vault public profile settings
                     ownerSpaceClient.updatePublicProfileSettings(publicProfileFields.toList())
 
-                    // Mark as having unpublished changes
-                    _hasUnpublishedChanges.value = true
-
                     // Refresh state
                     _state.value = PersonalDataState.Loaded(items = dataItems.toList())
 
@@ -1544,6 +1502,7 @@ class PersonalDataViewModel @Inject constructor(
 
                     Log.d(TAG, "Toggled public profile for $itemId: $newValue")
                     loadPublicMetadata()
+                    publishProfile()
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to toggle public profile", e)
@@ -1576,12 +1535,12 @@ class PersonalDataViewModel @Inject constructor(
                 else hiddenFromCatalogFields.remove(itemId)
                 personalDataStore.updateHiddenFromCatalogFields(hiddenFromCatalogFields)
 
-                _hasUnpublishedChanges.value = true
                 _state.value = PersonalDataState.Loaded(items = dataItems.toList())
 
                 val statusText = if (newValue) "hidden from your catalog" else "back in your catalog"
                 _effects.emit(PersonalDataEffect.ShowSuccess("${item.name} $statusText"))
                 loadPublicMetadata()
+                publishProfile()
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to toggle hide-from-catalog", e)
                 _effects.emit(PersonalDataEffect.ShowError("Failed to update catalog visibility"))
