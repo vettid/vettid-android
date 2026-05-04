@@ -341,7 +341,13 @@ class ScanInvitationViewModel @Inject constructor(
         // Bare base64 payload — decode it and hope it's the JSON blob.
         decodeBase64OrNull(raw)?.let { return it }
 
-        // Bare short code? Wrap it as the broker-compact JSON form.
+        // Bare short code — accept the canonical 12-char form
+        // (with or without the user's hyphens/spaces between blocks).
+        // Falls back to the looser legacy regex for older codes.
+        val normalizedShortCode = com.vettid.app.core.util.ShortCode.normalize(raw)
+        if (com.vettid.app.core.util.ShortCode.isValid(normalizedShortCode)) {
+            return gson.toJson(mapOf("c" to normalizedShortCode))
+        }
         if (raw.matches(Regex("^[A-Za-z0-9_-]{6,64}$"))) {
             return gson.toJson(mapOf("c" to raw))
         }

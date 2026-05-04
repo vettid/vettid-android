@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
+import com.vettid.app.core.util.formatShortCode
 
 /**
  * Screen for creating connection invitations.
@@ -327,7 +328,7 @@ private fun CreatedContent(
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = inviteCode,
+                        text = formatShortCode(inviteCode),
                         style = MaterialTheme.typography.headlineSmall,
                         fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
                         letterSpacing = 2.sp
