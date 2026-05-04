@@ -353,21 +353,13 @@ class CriticalSecretsViewModel @Inject constructor(
             }
         }
 
-        result.getAsJsonArray("crypto_keys")?.forEach { element ->
-            try {
-                val obj = element.asJsonObject
-                cryptoKeys.add(CryptoKeyItem(
-                    id = obj.get("id").asString,
-                    label = obj.get("label").asString,
-                    type = obj.get("type").asString,
-                    publicKey = obj.get("public_key")?.asString,
-                    derivationPath = obj.get("derivation_path")?.asString,
-                    createdAt = obj.get("created_at")?.asString ?: ""
-                ))
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to parse crypto key", e)
-            }
-        }
+        // Crypto keys (wallet signing keys, enrollment identity key) live
+        // in the credential blob from the moment those parents are
+        // created — they're implementation detail, not critical secrets
+        // the user explicitly placed there. The Critical Secrets screen
+        // is for items the user moved here on purpose, so we omit
+        // crypto_keys entirely. They still surface in the catalog
+        // (alias-grouped with their parent wallet/credential).
 
         result.getAsJsonObject("credential")?.let { cred ->
             try {

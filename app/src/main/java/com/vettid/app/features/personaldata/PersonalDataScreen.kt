@@ -1643,8 +1643,21 @@ internal fun PublicMetadataDialog(
                                     }
                                     Spacer(modifier = Modifier.height(6.dp))
                                     groupItems.forEach { gi ->
+                                        // When the row's name equals the
+                                        // alias (true for wallet bundles
+                                        // — wallet, signing key, and seed
+                                        // all carry the wallet label as
+                                        // both name and alias), fall back
+                                        // to a readable description of
+                                        // what the row IS so peers can
+                                        // tell the bullets apart.
+                                        val bulletLabel = if (gi.name.equals(alias, ignoreCase = true)) {
+                                            describeCatalogItem(gi)
+                                        } else {
+                                            gi.name
+                                        }
                                         Text(
-                                            text = "• ${gi.name}",
+                                            text = "• $bulletLabel",
                                             style = MaterialTheme.typography.bodySmall,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
@@ -2983,5 +2996,29 @@ internal fun getProfileHandlerIcon(handlerId: String): androidx.compose.ui.graph
         "wallet" -> Icons.Default.AccountBalance
         "agent-secrets" -> Icons.Default.SmartToy
         else -> Icons.Default.Extension
+    }
+}
+
+/**
+ * Friendly bullet label for a catalog row when its `name` is just the
+ * alias repeated (which is the case for wallet bundles — wallet,
+ * signing key, and seed all carry the wallet label as their name).
+ * Translates the cryptic `type` / `category` strings into something a
+ * peer can decipher: "Wallet address", "Signing key", "Seed phrase".
+ */
+private fun describeCatalogItem(item: PublicMetadataItem): String {
+    val type = item.type.uppercase()
+    return when {
+        type == "BTC_WALLET" || type == "WALLET" -> "Wallet address"
+        type == "SECP256K1" || type.contains("ED25519") || type.contains("X25519") ||
+            item.category.equals("Crypto Key", ignoreCase = true) -> "Signing key"
+        type == "SEED_PHRASE" || type.contains("SEED") -> "Seed phrase"
+        type == "PRIVATE_KEY" -> "Private key"
+        type == "MASTER_PASSWORD" -> "Master password"
+        type == "RECOVERY_KEY" -> "Recovery key"
+        type == "PUBLIC_KEY" -> "Public key"
+        type == "PASSWORD" -> "Password"
+        type == "TEXT" -> item.category.ifBlank { "Note" }
+        else -> item.type.ifBlank { item.category.ifBlank { item.name } }
     }
 }
