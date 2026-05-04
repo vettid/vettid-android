@@ -127,6 +127,13 @@ class WebRTCClient(
                     PeerConnection.IceConnectionState.DISCONNECTED -> {
                         listener.onConnectionDisconnected()
                     }
+                    // CLOSED is unambiguous — peer (or local) has shut
+                    // down the connection. Treat as a definitive end so
+                    // the receiver tears down without waiting for the
+                    // NATS-relayed hangup to arrive.
+                    PeerConnection.IceConnectionState.CLOSED -> {
+                        listener.onConnectionFailed("ICE connection closed by peer")
+                    }
                     PeerConnection.IceConnectionState.FAILED -> {
                         listener.onConnectionFailed("ICE connection failed")
                     }

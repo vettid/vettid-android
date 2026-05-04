@@ -456,7 +456,7 @@ class CallManager @Inject constructor(
         }
 
         // Brief pause so the "Call ended" state is visible, then Idle.
-        delay(500)
+        delay(250)
         _callState.value = CallState.Idle
         _showCallUI.emit(CallUIEvent.DismissCall)
         return Result.success(Unit)
@@ -923,7 +923,11 @@ class CallManager @Inject constructor(
         disposeWebRTC()
 
         _callState.value = CallState.Ended(call, event.reason, event.duration)
-        delay(1500)
+        // Short linger so the user registers the "Call ended" status
+        // before the screen dismisses. Trimmed from 1500ms — the
+        // earlier value compounded with NATS-relay latency from the
+        // peer's hangup signal and made calls feel slow to drop.
+        delay(600)
         _callState.value = CallState.Idle
         _showCallUI.emit(CallUIEvent.DismissCall)
     }
