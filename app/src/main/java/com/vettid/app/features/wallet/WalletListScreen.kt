@@ -267,11 +267,17 @@ private fun WalletCard(
 
 @Composable
 private fun NetworkBadge(network: String) {
-    val (color, label) = when (network.lowercase()) {
+    // Today every native wallet is BTC; the badge prefixes that so a
+    // user's calling card and wallet list can hold non-BTC wallets
+    // (recorded as Cryptocurrency secrets) without ambiguity once
+    // those land. When we add native ETH/SOL/etc. wallet creation
+    // this label will read directly off the wallet's asset ticker.
+    val (color, networkLabel) = when (network.lowercase()) {
         "testnet" -> MaterialTheme.colorScheme.tertiary to "Testnet"
         "signet" -> MaterialTheme.colorScheme.secondary to "Signet"
         else -> MaterialTheme.colorScheme.primary to "Mainnet"
     }
+    val label = "BTC · $networkLabel"
 
     Surface(
         shape = RoundedCornerShape(4.dp),

@@ -53,6 +53,25 @@ fun AddSecretScreen(
     var description by remember { mutableStateOf("") }
     var alias by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var selectedNetwork by remember { mutableStateOf<com.vettid.app.core.util.CryptoNetwork?>(null) }
+    var networkExpanded by remember { mutableStateOf(false) }
+
+    /**
+     * Compose the catalog alias from the user-entered alias and the
+     * selected crypto network ticker. "BTC · Trading Wallet" reads
+     * naturally and feeds the existing alias-grouping in the catalog
+     * dialog (so all BTC entries collapse together).
+     */
+    fun composedAlias(): String? {
+        val ticker = selectedNetwork?.takeIf { it.ticker != "OTHER" }?.ticker
+        val raw = alias.trim()
+        return when {
+            ticker != null && raw.isNotEmpty() -> "$ticker · $raw"
+            ticker != null -> ticker
+            raw.isNotEmpty() -> raw
+            else -> null
+        }
+    }
 
     var selectedMinorCategory by remember { mutableStateOf(SecretCategory.PASSWORD) }
     var selectedCriticalCategory by remember { mutableStateOf(CriticalSecretCategory.SEED_PHRASE) }
@@ -106,7 +125,7 @@ fun AddSecretScreen(
                                     value = value,
                                     category = selectedMinorCategory,
                                     notes = notes.takeIf { it.isNotBlank() },
-                                    alias = alias.takeIf { it.isNotBlank() }
+                                    alias = composedAlias()
                                 ))
                             }
                         },
@@ -255,6 +274,60 @@ fun AddSecretScreen(
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth()
             )
+
+            // Crypto network picker (Cryptocurrency minor secrets +
+            // seed/private/recovery critical secrets — the categories
+            // where chain context matters). Composed into the alias
+            // at submit so the catalog dialog naturally groups by
+            // chain (BTC · Trading Wallet, ETH · Trading Wallet).
+            val showNetworkPicker = if (isCritical) {
+                selectedCriticalCategory == CriticalSecretCategory.SEED_PHRASE ||
+                    selectedCriticalCategory == CriticalSecretCategory.PRIVATE_KEY ||
+                    selectedCriticalCategory == CriticalSecretCategory.RECOVERY_KEY
+            } else {
+                selectedMinorCategory == SecretCategory.CRYPTOCURRENCY
+            }
+            if (showNetworkPicker) {
+                Spacer(modifier = Modifier.height(16.dp))
+                ExposedDropdownMenuBox(
+                    expanded = networkExpanded,
+                    onExpandedChange = { networkExpanded = it }
+                ) {
+                    OutlinedTextField(
+                        value = selectedNetwork?.let { "${it.ticker} — ${it.displayName}" } ?: "",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Network (optional)") },
+                        placeholder = { Text("Pick a chain") },
+                        leadingIcon = { Icon(Icons.Default.CurrencyBitcoin, null) },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = networkExpanded) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                    )
+                    ExposedDropdownMenu(
+                        expanded = networkExpanded,
+                        onDismissRequest = { networkExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("(none)") },
+                            onClick = {
+                                selectedNetwork = null
+                                networkExpanded = false
+                            }
+                        )
+                        com.vettid.app.core.util.CryptoNetworks.all.forEach { net ->
+                            DropdownMenuItem(
+                                text = { Text("${net.ticker} — ${net.displayName}") },
+                                onClick = {
+                                    selectedNetwork = net
+                                    networkExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -463,7 +536,7 @@ fun AddSecretScreen(
                                 value = value,
                                 category = selectedCriticalCategory,
                                 description = description.takeIf { it.isNotBlank() },
-                                alias = alias.takeIf { it.isNotBlank() },
+                                alias = composedAlias(),
                                 password = password
                             ))
                             password = ""  // Clear password immediately
