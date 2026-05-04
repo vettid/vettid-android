@@ -90,6 +90,51 @@ class CallManager @Inject constructor(
     private var iceServerCacheExpiry: Long = 0
 
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+    // Proximity-based screen-off wake lock. Acquired on voice-call
+    // connect so the screen blanks when the user holds the phone to
+    // their ear (cheek-touch protection); released on end + whenever
+    // the speaker phone is on (user is no longer near the screen).
+    private val powerManager: android.os.PowerManager =
+        context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+    private var proximityWakeLock: android.os.PowerManager.WakeLock? = null
+
+    private fun acquireProximityLock() {
+        if (!powerManager.isWakeLockLevelSupported(android.os.PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
+            return
+        }
+        if (proximityWakeLock == null) {
+            proximityWakeLock = powerManager.newWakeLock(
+                android.os.PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK,
+                "vettid:call-proximity"
+            )
+        }
+        val lock = proximityWakeLock ?: return
+        if (!lock.isHeld) {
+            try {
+                lock.acquire()
+                Log.d(TAG, "Proximity screen-off wake lock acquired")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to acquire proximity wake lock", e)
+            }
+        }
+    }
+
+    private fun releaseProximityLock() {
+        val lock = proximityWakeLock ?: return
+        if (lock.isHeld) {
+            try {
+                // RELEASE_FLAG_WAIT_FOR_NO_PROXIMITY keeps the screen
+                // off until the user moves the phone away from their
+                // face — avoids a momentary unblank between "call
+                // ended" and "phone leaves ear".
+                lock.release(android.os.PowerManager.RELEASE_FLAG_WAIT_FOR_NO_PROXIMITY)
+                Log.d(TAG, "Proximity screen-off wake lock released")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to release proximity wake lock", e)
+            }
+        }
+    }
     private val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         val vm = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager
         vm.defaultVibrator
@@ -495,6 +540,11 @@ class CallManager @Inject constructor(
                 val newSpeaker = !state.isSpeakerOn
                 _callState.value = state.copy(isSpeakerOn = newSpeaker)
                 setSpeakerphone(newSpeaker)
+                // Speaker on → user is no longer holding the phone to
+                // their ear, so the proximity-blank lock should let go.
+                // Speaker off (back to earpiece) → re-acquire so cheek
+                // touches don't activate the screen.
+                if (newSpeaker) releaseProximityLock() else acquireProximityLock()
                 Log.d(TAG, "Speaker toggled: $newSpeaker")
             }
             is CallState.Outgoing -> {
@@ -1212,6 +1262,16 @@ class CallManager @Inject constructor(
         // Focus may already have been requested at dial/ring time; this is a
         // no-op in that case.
         requestCallAudioFocus()
+        // Voice calls route to the earpiece by default — the user
+        // holds the phone to their face, so blank the screen against
+        // their cheek via the proximity sensor. Video calls keep
+        // the screen on so the user can see the remote feed.
+        val callType = (_callState.value as? CallState.Active)?.call?.callType
+            ?: (_callState.value as? CallState.Outgoing)?.call?.callType
+            ?: (_callState.value as? CallState.Incoming)?.call?.callType
+        if (callType == CallType.VOICE) {
+            acquireProximityLock()
+        }
     }
 
     private fun resetAudio() {
@@ -1220,6 +1280,7 @@ class CallManager @Inject constructor(
         audioManager.isMicrophoneMute = false
         audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
         audioFocusRequest = null
+        releaseProximityLock()
     }
 
     private fun setSpeakerphone(enabled: Boolean) {

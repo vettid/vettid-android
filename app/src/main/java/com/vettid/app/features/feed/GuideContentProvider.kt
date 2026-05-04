@@ -109,7 +109,7 @@ object GuideContentProvider {
         icon = Icons.Default.Lock,
         sections = listOf(
             GuideSection.Paragraph(
-                "Your vault is where everything sensitive lives. The app can't read it directly — all reads and writes go through your personal enclave, which is hardware-attested before it answers."
+                "Your vault is where everything sensitive lives. The app can't read it directly — all reads and writes go through your personal vault manager running inside a hardware-attested enclave, which only answers after the attestation passes."
             ),
             GuideSection.Heading("Getting there"),
             GuideSection.Paragraph(
