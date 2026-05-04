@@ -1480,21 +1480,21 @@ internal fun PublicProfileFullScreen(
     // Public Secrets Metadata Dialog
     if (showSecretsDialog) {
         PublicMetadataDialog(
-            title = "Public Secret Metadata",
-            subtitle = "Visible to agents, services, and connections",
+            title = "Available Secrets",
+            subtitle = "Metadata only — peers can request these via policy. Values are never shared without consent.",
             items = publicSecrets,
-            emptyMessage = "No secrets are shared publicly",
+            emptyMessage = "No secrets are available yet.",
             onDismiss = { showSecretsDialog = false }
         )
     }
 
-    // Public Personal Data Dialog
+    // Available Personal Data Dialog
     if (showPersonalDataDialog) {
         PublicMetadataDialog(
-            title = "Public Personal Data",
-            subtitle = "Visible to agents, services, and connections",
+            title = "Available Personal Data",
+            subtitle = "Metadata only — peers can request these via policy. Values are never shared without consent.",
             items = publicPersonalData,
-            emptyMessage = "No personal data is shared publicly",
+            emptyMessage = "No personal data is available yet.",
             onDismiss = { showPersonalDataDialog = false }
         )
     }
@@ -1574,18 +1574,21 @@ internal fun PublicMetadataDialog(
                 } else {
                     // Two-tier grouping for visual consistency between
                     // data and secrets dialogs:
-                    //   1. Items with an alias collapse into a card per
-                    //      (category, alias) — e.g. "Family — Wife"
-                    //      with phone/name/relationship as bullets.
+                    //   1. Items with an alias collapse into a single
+                    //      card per alias — even across categories.
+                    //      E.g. a wallet ("Cryptocurrency"), its seed
+                    //      ("Critical Secret"), and its signing key
+                    //      ("Crypto Key") all share the wallet label
+                    //      as their alias and render as one card.
                     //   2. Items without an alias group by category
-                    //      alone, so secrets render as one card per
-                    //      bucket ("Critical Secret", "Cryptocurrency"
-                    //      etc.) instead of a loose list.
+                    //      alone, so unaliased secrets render as one
+                    //      card per bucket ("Critical Secret", etc.)
+                    //      instead of a loose list.
                     val aliasGroups = items
                         .filter { it.alias.isNotBlank() }
-                        .groupBy { it.category to it.alias }
+                        .groupBy { it.alias }
                         .toList()
-                        .sortedBy { (key, _) -> "${key.first} ${key.second}" }
+                        .sortedBy { (alias, _) -> alias }
                     val categoryGroups = items
                         .filter { it.alias.isBlank() }
                         .groupBy { it.category }
@@ -1595,8 +1598,17 @@ internal fun PublicMetadataDialog(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.heightIn(max = 400.dp)
                     ) {
-                        items(aliasGroups, key = { (key, _) -> "alias::${key.first}::${key.second}" }) { (key, groupItems) ->
-                            val (category, alias) = key
+                        items(aliasGroups, key = { (alias, _) -> "alias::$alias" }) { (alias, groupItems) ->
+                            // Surface the set of categories spanned by
+                            // this alias group as a subtitle. For a
+                            // wallet, that's "Cryptocurrency · Critical
+                            // Secret · Crypto Key" — peers see exactly
+                            // what's in the bundle.
+                            val categories = groupItems
+                                .map { it.category }
+                                .filter { it.isNotBlank() }
+                                .distinct()
+                                .joinToString(" · ")
                             Card(
                                 modifier = Modifier.fillMaxWidth(),
                                 colors = CardDefaults.cardColors(
@@ -1614,11 +1626,13 @@ internal fun PublicMetadataDialog(
                                                 text = alias,
                                                 style = MaterialTheme.typography.titleSmall
                                             )
-                                            Text(
-                                                text = category,
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
+                                            if (categories.isNotEmpty()) {
+                                                Text(
+                                                    text = categories,
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
                                         }
                                         Icon(
                                             Icons.Default.Visibility,
