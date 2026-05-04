@@ -63,6 +63,12 @@ fun PermissionsPhaseContent(
 
     var micGranted by remember { mutableStateOf(isGranted(Manifest.permission.RECORD_AUDIO)) }
     var cameraGranted by remember { mutableStateOf(isGranted(Manifest.permission.CAMERA)) }
+    var locationGranted by remember {
+        mutableStateOf(
+            isGranted(Manifest.permission.ACCESS_FINE_LOCATION) ||
+                isGranted(Manifest.permission.ACCESS_COARSE_LOCATION)
+        )
+    }
 
     val notificationLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -75,6 +81,10 @@ fun PermissionsPhaseContent(
     val cameraLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted -> cameraGranted = granted }
+
+    val locationLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted -> locationGranted = granted }
 
     LaunchedEffect(hasNotificationPermission) {
         if (hasNotificationPermission && notificationsGranted == null) {
@@ -153,6 +163,17 @@ fun PermissionsPhaseContent(
             )
             Spacer(modifier = Modifier.height(10.dp))
 
+            // Location (optional — only used when you opt in to share
+            // your location with a specific connection)
+            PermissionCard(
+                icon = Icons.Default.LocationOn,
+                title = "Location",
+                description = "Optional. Lets you share your location with a connection — only when you turn the toggle on for that connection. The OS won't prompt mid-flow if you grant it here.",
+                isGranted = locationGranted,
+                onRequest = { locationLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION) }
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+
             // Battery optimization exemption
             val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
             var isBatteryExempt by remember {
@@ -190,26 +211,6 @@ fun PermissionsPhaseContent(
                 Spacer(modifier = Modifier.height(10.dp))
             }
 
-            Card(
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text(
-                        text = "Location",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "Location is requested only when you choose to share it with a connection — it stays off by default.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
         }
 
         Spacer(modifier = Modifier.height(8.dp))
