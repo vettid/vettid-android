@@ -72,8 +72,22 @@ class MainActivity : ComponentActivity() {
         // Perform runtime security check
         performSecurityCheck()
 
-        // Extract deep link data from launch intent
-        deepLinkState.value = extractDeepLinkData(intent)
+        // Only extract the deep-link data on the very first launch.
+        // Activity gets recreated on config changes (rotation, theme,
+        // dark-mode) and that fired the original enrollment URI a
+        // second time → a 401 from /enroll/authenticate (token already
+        // consumed) → the user lands on the QR scanner with a
+        // "something went wrong" toast. The non-null savedInstanceState
+        // is Android's signal that this is a recreation; in that case
+        // we keep whatever deepLinkState was already (initial NONE
+        // or whatever onNewIntent has since set).
+        if (savedInstanceState == null) {
+            deepLinkState.value = extractDeepLinkData(intent)
+            // Belt-and-braces: drop the data off the intent so any
+            // future getIntent() reads after a process death also
+            // see it as already-consumed.
+            intent?.data = null
+        }
 
         setContent {
             val currentDeepLink by deepLinkState
