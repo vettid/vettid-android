@@ -712,16 +712,10 @@ private fun WalletDetailContent(
             )
         }
 
-        // Seed-phrase backup toggle. Off by default; flipping on
-        // copies the wallet's BIP39 mnemonic into the user's
-        // Critical Secrets list (gated by password re-auth).
-        item {
-            SeedBackupCard(
-                backedUp = wallet.seedBackedUpAt > 0,
-                inFlight = seedBackupInFlight,
-                onToggle = onToggleSeedBackup,
-            )
-        }
+        // Seed-backup card removed: wallets now write their seed
+        // directly into the credential at creation time, so there's
+        // nothing to "move". Every send already requires the password
+        // gate; the toggle had no remaining role.
 
         // Transaction history header
         if (transactions.isNotEmpty()) {

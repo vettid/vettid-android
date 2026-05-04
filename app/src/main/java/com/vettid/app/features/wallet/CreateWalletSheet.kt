@@ -1,7 +1,6 @@
 package com.vettid.app.features.wallet
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -19,8 +18,11 @@ import androidx.compose.ui.unit.dp
 /**
  * Bottom sheet for creating a new Bitcoin wallet.
  *
- * Allows the user to set a label and choose the network.
- * Key generation happens in the enclave when the vault handler processes the request.
+ * The user picks a label + network and taps Create. Tapping Create
+ * opens a follow-on password dialog — the seed will be written into
+ * the credential and every wallet sign requires the password gate,
+ * so we collect it once at confirmation. The password never lives
+ * inline with the form fields.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -30,8 +32,7 @@ fun CreateWalletSheet(
 ) {
     var label by remember { mutableStateOf("") }
     var selectedNetwork by remember { mutableStateOf("mainnet") }
-    var password by remember { mutableStateOf("") }
-    var showPassword by remember { mutableStateOf(false) }
+    var pendingPasswordPrompt by remember { mutableStateOf(false) }
     var isCreating by remember { mutableStateOf(false) }
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -56,7 +57,7 @@ fun CreateWalletSheet(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = "Your seed will be sealed inside your credential. Enter your password to confirm — every wallet sign asks for it again.",
+                text = "Your seed will be sealed inside your credential. We'll ask for your password when you tap Create — every wallet sign asks for it again.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -113,46 +114,12 @@ fun CreateWalletSheet(
                 )
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Password field — required because creation writes the
-            // wallet's seed into the credential and the credential is
-            // never held in vault memory; every mutation re-auths.
-            OutlinedTextField(
-                value = password,
-                onValueChange = { password = it },
-                label = { Text("Password") },
-                placeholder = { Text("Your VettID password") },
-                singleLine = true,
-                visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                trailingIcon = {
-                    IconButton(onClick = { showPassword = !showPassword }) {
-                        Icon(
-                            if (showPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                            contentDescription = if (showPassword) "Hide password" else "Show password",
-                        )
-                    }
-                },
-                modifier = Modifier.fillMaxWidth(),
-                leadingIcon = {
-                    Icon(
-                        Icons.Default.Lock,
-                        contentDescription = null,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-            )
-
             Spacer(modifier = Modifier.height(32.dp))
 
-            // Create button
+            // Create button — opens the password confirmation dialog.
             Button(
-                onClick = {
-                    isCreating = true
-                    onCreateWallet(label.trim(), selectedNetwork, password)
-                },
-                enabled = label.isNotBlank() && password.isNotEmpty() && !isCreating,
+                onClick = { pendingPasswordPrompt = true },
+                enabled = label.isNotBlank() && !isCreating,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 if (isCreating) {
@@ -175,6 +142,66 @@ fun CreateWalletSheet(
             }
         }
     }
+
+    if (pendingPasswordPrompt) {
+        WalletPasswordDialog(
+            onConfirm = { password ->
+                pendingPasswordPrompt = false
+                isCreating = true
+                onCreateWallet(label.trim(), selectedNetwork, password)
+            },
+            onCancel = { pendingPasswordPrompt = false },
+        )
+    }
+}
+
+@Composable
+private fun WalletPasswordDialog(
+    onConfirm: (String) -> Unit,
+    onCancel: () -> Unit,
+) {
+    var password by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = onCancel,
+        icon = { Icon(Icons.Default.Lock, contentDescription = null) },
+        title = { Text("Confirm with password") },
+        text = {
+            Column {
+                Text(
+                    text = "Your wallet's seed will be sealed inside your credential. Enter your password to authorize the write.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Password") },
+                    singleLine = true,
+                    visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        IconButton(onClick = { showPassword = !showPassword }) {
+                            Icon(
+                                if (showPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = if (showPassword) "Hide password" else "Show password",
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(password) },
+                enabled = password.isNotEmpty(),
+            ) { Text("Create") }
+        },
+        dismissButton = {
+            TextButton(onClick = onCancel) { Text("Cancel") }
+        },
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
