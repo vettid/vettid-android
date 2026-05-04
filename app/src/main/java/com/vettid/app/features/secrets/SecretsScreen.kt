@@ -773,8 +773,15 @@ private fun SecretRow(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Spacer(modifier = Modifier.height(2.dp))
+                // Show the type under the name (mirrors the data tab's
+                // "value under field name" treatment). The actual
+                // value stays out of the list — tap to reveal.
                 Text(
-                    text = truncateValue(secret.value),
+                    text = if (secret.alias.isNotBlank()) {
+                        "${secret.type.displayName} • ${secret.alias}"
+                    } else {
+                        secret.type.displayName
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1050,6 +1057,20 @@ private fun AddSecretDialog(
                     }
                 }
 
+                // Alias field (optional) — groups related secrets in
+                // the catalog (e.g. "Trading Wallet", "Hardware Backup").
+                OutlinedTextField(
+                    value = state.alias,
+                    onValueChange = { onStateChange(state.copy(alias = it)) },
+                    label = { Text("Alias (optional)") },
+                    placeholder = { Text("e.g. Trading Wallet") },
+                    singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Words,
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
                 // Name field
                 OutlinedTextField(
                     value = state.name,
@@ -1107,20 +1128,6 @@ private fun AddSecretDialog(
                     supportingText = state.valueError?.let { { Text(it) } },
                     minLines = 2,
                     maxLines = 4,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                // Alias field (optional) — groups related secrets in
-                // the catalog (e.g. "Trading Wallet", "Hardware Backup").
-                OutlinedTextField(
-                    value = state.alias,
-                    onValueChange = { onStateChange(state.copy(alias = it)) },
-                    label = { Text("Alias / group (optional)") },
-                    placeholder = { Text("e.g. Trading Wallet") },
-                    singleLine = true,
-                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                        capitalization = KeyboardCapitalization.Words,
-                    ),
                     modifier = Modifier.fillMaxWidth()
                 )
 

@@ -975,7 +975,26 @@ private fun AddFieldDialog(
                     }
                 }
 
-                // 2. Field name with template suggestions
+                // 2. Alias — disambiguator that surfaces in the
+                // catalog when peers see the field. Optional. Helps
+                // tell "Family · Phone — Wife" apart from
+                // "Family · Phone — Daughter" without leaking the
+                // value itself.
+                OutlinedTextField(
+                    value = state.alias,
+                    onValueChange = onAliasChange,
+                    label = { Text("Alias (optional)") },
+                    placeholder = { Text("e.g. Wife, Mom, Work") },
+                    supportingText = { Text("Helps tell similar entries apart in your catalog.") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Text,
+                        capitalization = KeyboardCapitalization.Words,
+                    ),
+                )
+
+                // 3. Field name with template suggestions
                 ExposedDropdownMenuBox(
                     expanded = expandedTemplates && categoryTemplates.isNotEmpty() && state.name.isEmpty() && !state.isEditing,
                     onExpandedChange = { if (categoryTemplates.isNotEmpty() && state.name.isEmpty() && !state.isEditing) expandedTemplates = it }
@@ -1124,25 +1143,6 @@ private fun AddFieldDialog(
                         )
                     )
                 }
-
-                // 5. Alias — disambiguator that surfaces in the
-                // catalog when peers see the field. Optional. Helps
-                // tell "Family · Phone — Wife" apart from
-                // "Family · Phone — Daughter" without leaking the
-                // value itself.
-                OutlinedTextField(
-                    value = state.alias,
-                    onValueChange = onAliasChange,
-                    label = { Text("Alias (optional)") },
-                    placeholder = { Text("e.g. Wife, Mom, Work") },
-                    supportingText = { Text("Helps tell similar entries apart in your catalog.") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    keyboardOptions = KeyboardOptions(
-                        keyboardType = KeyboardType.Text,
-                        capitalization = KeyboardCapitalization.Words,
-                    ),
-                )
 
                 // Public profile toggle removed — use the list toggle instead
             }

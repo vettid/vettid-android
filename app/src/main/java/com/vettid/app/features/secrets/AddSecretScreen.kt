@@ -241,6 +241,23 @@ fun AddSecretScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            // Alias field (optional) — groups related secrets in the catalog.
+            OutlinedTextField(
+                value = alias,
+                onValueChange = { alias = it },
+                label = { Text("Alias (optional)") },
+                placeholder = { Text("e.g. Trading Wallet, Hardware Backup") },
+                leadingIcon = { Icon(Icons.AutoMirrored.Filled.Label, null) },
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Words,
+                    imeAction = ImeAction.Next
+                ),
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+
             // Value field
             OutlinedTextField(
                 value = value,
@@ -278,22 +295,6 @@ fun AddSecretScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             // Notes/Description field
-            OutlinedTextField(
-                value = alias,
-                onValueChange = { alias = it },
-                label = { Text("Alias / group (optional)") },
-                placeholder = { Text("e.g. Trading Wallet, Hardware Backup") },
-                leadingIcon = { Icon(Icons.AutoMirrored.Filled.Label, null) },
-                keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.Words,
-                    imeAction = ImeAction.Next
-                ),
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Spacer(modifier = Modifier.height(16.dp))
-
             OutlinedTextField(
                 value = if (isCritical) description else notes,
                 onValueChange = { if (isCritical) description = it else notes = it },

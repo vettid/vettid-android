@@ -241,6 +241,7 @@ class MinorSecretsStore @Inject constructor(
             value = "", // values fetched on demand via revealSecretValue
             category = category,
             type = type,
+            alias = o.get("alias")?.takeIf { !it.isJsonNull }?.asString.orEmpty(),
             notes = o.get("description")?.asString,
             isShareable = true,
             isInPublicProfile = discoverability == "public",
@@ -271,6 +272,7 @@ data class MinorSecret(
     val value: String,
     val category: SecretCategory,
     val type: SecretType = SecretType.TEXT,
+    val alias: String = "",
     val notes: String? = null,
     val isShareable: Boolean = true,
     val isInPublicProfile: Boolean = false,
