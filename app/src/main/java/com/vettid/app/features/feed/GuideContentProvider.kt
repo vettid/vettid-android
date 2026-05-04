@@ -113,7 +113,7 @@ object GuideContentProvider {
             ),
             GuideSection.Heading("Getting there"),
             GuideSection.Paragraph(
-                "Tap your profile avatar in the top-left of the Connections screen. A profile strip sits above the tabs on every vault view, showing your photo and name plus a \"publish changes\" banner whenever you have unpublished updates."
+                "Tap your profile avatar in the top-left of the Connections screen. A profile strip sits above the tabs on every vault view, showing your photo and name. Tap your name to preview exactly what connections see."
             ),
             GuideSection.Heading("Profile Photo"),
             GuideSection.Paragraph(
@@ -139,11 +139,11 @@ object GuideContentProvider {
             ),
             GuideSection.Heading("Wallets tab"),
             GuideSection.Paragraph(
-                "Bitcoin wallets with BIP84 HD key derivation. Private keys never leave the enclave. Create multiple wallets, send BTC to any address or connection, and optionally mark a wallet address as public so it appears on your profile."
+                "Bitcoin wallets with BIP84 HD key derivation. The seed and signing key live inside your credential — wallet creation asks for your password, and every send asks again. Private keys never leave the enclave. Create multiple wallets, send BTC to any address or connection, and optionally mark a wallet address as public so it appears on your profile. In the Available Secrets catalog, a wallet shows as one card containing the address, signing key, and seed phrase grouped together."
             ),
             GuideSection.Heading("Reordering items"),
             GuideSection.Paragraph(
-                "Each row on the Data and Secrets tabs has a drag handle (≡) on the left. Long-press the handle, then drag up or down — the item walks past its neighbors as you go. Lift your finger to drop. The new order is saved automatically and reflected on your published profile after you publish."
+                "Each row on the Data and Secrets tabs has a drag handle (≡) on the left. Long-press the handle, then drag up or down — the item walks past its neighbors as you go. Lift your finger to drop. The new order is saved automatically and connections see it immediately."
             ),
             GuideSection.NavigationLink("Open Personal Data", NavigationTarget.DrawerNav(DrawerItem.PERSONAL_DATA)),
             GuideSection.NavigationLink("Open Secrets", NavigationTarget.DrawerNav(DrawerItem.SECRETS)),
@@ -177,13 +177,13 @@ object GuideContentProvider {
             GuideSection.Paragraph(
                 "The order items appear on your calling card and in the catalogs is the order you see them on the Data and Secrets tabs. To reorder, long-press the drag handle (≡) on the left of any row and drag up or down. Useful for putting your most important fields at the top."
             ),
-            GuideSection.Heading("Publishing"),
+            GuideSection.Heading("Auto-publish"),
             GuideSection.Paragraph(
-                "Changes aren't visible to connections until you publish. Whenever you have unpublished changes, a banner appears above the vault tabs — tap Publish to push the update."
+                "Every change you make — toggling visibility, editing a value, adding a field — is published to your connections immediately. There's no manual \"Publish\" step. The catalog badges and calling card update on each side within a few seconds."
             ),
             GuideSection.Heading("Previewing"),
             GuideSection.Paragraph(
-                "Tap your name in the vault profile strip (\"Tap to preview\") to see exactly what your connections see — calling card up top, the three catalog badges (Data, Secrets, Handlers) right below it. Tap any badge to inspect the catalog."
+                "Tap your name in the vault profile strip (\"Tap to preview\") to see exactly what your connections see — calling card up top, the three catalog badges (Data, Secrets, Handlers) right below it. Tap any badge to inspect the catalog. Each catalog row groups by alias when you've set one (a wallet shows up as a single bundle: address, signing key, and seed phrase together)."
             ),
             GuideSection.NavigationLink("Go to Personal Data", NavigationTarget.DrawerNav(DrawerItem.PERSONAL_DATA))
         )
