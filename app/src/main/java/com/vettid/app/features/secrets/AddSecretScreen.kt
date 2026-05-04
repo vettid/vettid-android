@@ -146,6 +146,11 @@ fun AddSecretScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                // imePadding so the soft keyboard doesn't cover the
+                // bottom of the form; combined with verticalScroll
+                // the user can scroll multi-line fields (Value, Notes)
+                // even when they expand past the visible area.
+                .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {

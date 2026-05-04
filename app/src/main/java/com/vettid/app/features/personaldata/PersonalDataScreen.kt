@@ -1605,7 +1605,7 @@ internal fun PublicMetadataDialog(
                             // Secret · Crypto Key" — peers see exactly
                             // what's in the bundle.
                             val categories = groupItems
-                                .map { it.category }
+                                .map { prettifyCategory(it.category) }
                                 .filter { it.isNotBlank() }
                                 .distinct()
                                 .joinToString(" · ")
@@ -1679,7 +1679,7 @@ internal fun PublicMetadataDialog(
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(
-                                            text = category,
+                                            text = prettifyCategory(category),
                                             style = MaterialTheme.typography.titleSmall,
                                             modifier = Modifier.weight(1f)
                                         )
@@ -3008,17 +3008,45 @@ internal fun getProfileHandlerIcon(handlerId: String): androidx.compose.ui.graph
  */
 private fun describeCatalogItem(item: PublicMetadataItem): String {
     val type = item.type.uppercase()
+    // If the alias starts with a known crypto ticker (e.g. "BTC · "),
+    // pull it through to the bullet text too — peers see "BTC seed
+    // phrase" / "BTC signing key" / "BTC wallet address" rather than
+    // having to scan up to the card title to remember the chain.
+    val tickerPrefix = item.alias.substringBefore(" · ", "")
+        .takeIf { it.isNotBlank() && it.length <= 5 && it.all { c -> c.isUpperCase() || c.isDigit() } }
+        ?.let { "$it " }
+        ?: ""
     return when {
-        type == "BTC_WALLET" || type == "WALLET" -> "Wallet address"
+        type == "BTC_WALLET" || type == "WALLET" -> "${tickerPrefix}wallet address".replaceFirstChar { it.uppercase() }
         type == "SECP256K1" || type.contains("ED25519") || type.contains("X25519") ||
-            item.category.equals("Crypto Key", ignoreCase = true) -> "Signing key"
-        type == "SEED_PHRASE" || type.contains("SEED") -> "Seed phrase"
-        type == "PRIVATE_KEY" -> "Private key"
+            item.category.equals("Crypto Key", ignoreCase = true) ->
+                "${tickerPrefix}signing key".replaceFirstChar { it.uppercase() }
+        type == "SEED_PHRASE" || type.contains("SEED") ->
+            "${tickerPrefix}seed phrase".replaceFirstChar { it.uppercase() }
+        type == "PRIVATE_KEY" -> "${tickerPrefix}private key".replaceFirstChar { it.uppercase() }
         type == "MASTER_PASSWORD" -> "Master password"
-        type == "RECOVERY_KEY" -> "Recovery key"
+        type == "RECOVERY_KEY" -> "${tickerPrefix}recovery key".replaceFirstChar { it.uppercase() }
         type == "PUBLIC_KEY" -> "Public key"
         type == "PASSWORD" -> "Password"
         type == "TEXT" -> item.category.ifBlank { "Note" }
         else -> item.type.ifBlank { item.category.ifBlank { item.name } }
+    }
+}
+
+/**
+ * Convert UPPER_SNAKE_CASE enum names ("CRYPTOCURRENCY",
+ * "BANK_ACCOUNT") to display-friendly Title Case ("Cryptocurrency",
+ * "Bank Account") so categories that flow from raw enum names look
+ * the same as categories already stored as display strings. Used by
+ * the catalog dialog so a manually-added Cryptocurrency secret and a
+ * wallet's auto-stamped "Cryptocurrency" group together visually.
+ */
+fun prettifyCategory(raw: String): String {
+    if (raw.isBlank()) return raw
+    val looksUpperSnake = raw.all { it.isUpperCase() || it == '_' || it.isDigit() }
+    if (!looksUpperSnake) return raw
+    return raw.split('_').joinToString(" ") { word ->
+        if (word.isEmpty()) word
+        else word[0].uppercase() + word.substring(1).lowercase()
     }
 }
