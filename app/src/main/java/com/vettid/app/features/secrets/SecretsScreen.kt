@@ -962,6 +962,23 @@ private fun AddSecretDialog(
     var expandedType by remember { mutableStateOf(false) }
     var showNewCategoryDialog by remember { mutableStateOf(false) }
     var customCategoryName by remember { mutableStateOf<String?>(null) }
+    var selectedNetwork by remember { mutableStateOf<com.vettid.app.core.util.CryptoNetwork?>(null) }
+    var expandedNetwork by remember { mutableStateOf(false) }
+
+    /**
+     * Compose the catalog alias from the network ticker + the user's
+     * alias entry: "BTC · Trading Wallet". Drives the existing alias-
+     * grouping in the catalog dialog.
+     */
+    fun composedAlias(raw: String): String {
+        val ticker = selectedNetwork?.takeIf { it.ticker != "OTHER" }?.ticker
+        val rawTrim = raw.trim()
+        return when {
+            ticker != null && rawTrim.isNotEmpty() -> "$ticker · $rawTrim"
+            ticker != null -> ticker
+            else -> rawTrim
+        }
+    }
 
     // New category dialog
     if (showNewCategoryDialog) {
@@ -1071,6 +1088,49 @@ private fun AddSecretDialog(
                     modifier = Modifier.fillMaxWidth()
                 )
 
+                // Crypto network picker — shown when category is
+                // Cryptocurrency. Composed into alias on save as
+                // "TICKER · <user alias>".
+                if (state.category == SecretCategory.CRYPTOCURRENCY) {
+                    ExposedDropdownMenuBox(
+                        expanded = expandedNetwork,
+                        onExpandedChange = { expandedNetwork = it }
+                    ) {
+                        OutlinedTextField(
+                            value = selectedNetwork?.let { "${it.ticker} — ${it.displayName}" } ?: "",
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("Network (optional)") },
+                            placeholder = { Text("Pick a chain") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedNetwork) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                        )
+                        ExposedDropdownMenu(
+                            expanded = expandedNetwork,
+                            onDismissRequest = { expandedNetwork = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("(none)") },
+                                onClick = {
+                                    selectedNetwork = null
+                                    expandedNetwork = false
+                                }
+                            )
+                            com.vettid.app.core.util.CryptoNetworks.all.forEach { net ->
+                                DropdownMenuItem(
+                                    text = { Text("${net.ticker} — ${net.displayName}") },
+                                    onClick = {
+                                        selectedNetwork = net
+                                        expandedNetwork = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // Name field
                 OutlinedTextField(
                     value = state.name,
@@ -1148,7 +1208,13 @@ private fun AddSecretDialog(
         },
         confirmButton = {
             Button(
-                onClick = onSave,
+                onClick = {
+                    // Apply the composed alias (network ticker + user
+                    // alias) into state right before save fires, so
+                    // the catalog groups by chain.
+                    onStateChange(state.copy(alias = composedAlias(state.alias)))
+                    onSave()
+                },
                 enabled = !state.isSaving
             ) {
                 if (state.isSaving) {
