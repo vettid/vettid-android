@@ -1119,14 +1119,42 @@ class PersonalDataViewModel @Inject constructor(
                     }
                 }
 
+                // The vault stores the field under a composite key
+                // (`<namespace>::<alias>` when an alias is set), and so
+                // does the personal-data index. The local id MUST match
+                // the composite or settings.Fields ends up with a key
+                // the publisher can't dereference — the field
+                // disappears from the published profile until the user
+                // toggles it off and on again (which re-reads the
+                // composite from vault).
+                val aliasTrimmed = current.alias.trim()
+                val compositeKey = if (aliasTrimmed.isNotEmpty())
+                    "$newNamespace::$aliasTrimmed"
+                else
+                    newNamespace
+
                 // Also save locally for offline access (with new namespace if changed)
                 // If category changed, treat as new field since old one was deleted
                 val localState = if (categoryChanged) {
-                    current.copy(id = newNamespace, isEditing = false)
+                    current.copy(id = compositeKey, isEditing = false)
                 } else {
-                    current.copy(id = newNamespace)
+                    current.copy(id = compositeKey)
                 }
-                saveFieldLocally(newNamespace, localState)
+                saveFieldLocally(compositeKey, localState)
+
+                // Repoint the public-profile + hidden-from-catalog
+                // sets if the user had previously toggled with the
+                // bare namespace. Belt-and-braces — keeps existing
+                // entries usable across the upgrade.
+                if (publicProfileFields.remove(newNamespace)) {
+                    publicProfileFields.add(compositeKey)
+                    personalDataStore.updatePublicProfileFields(publicProfileFields.toList())
+                    ownerSpaceClient.updatePublicProfileSettings(publicProfileFields.toList())
+                }
+                if (hiddenFromCatalogFields.remove(newNamespace)) {
+                    hiddenFromCatalogFields.add(compositeKey)
+                    personalDataStore.updateHiddenFromCatalogFields(hiddenFromCatalogFields)
+                }
 
                 if (current.isInPublicProfile) {
                     publishProfile()
@@ -1136,10 +1164,11 @@ class PersonalDataViewModel @Inject constructor(
                 // This avoids race conditions with other vault requests
                 val now = Instant.now()
                 val updatedItem = PersonalDataItem(
-                    id = newNamespace,
+                    id = compositeKey,
                     name = current.name,
                     type = current.type,
                     value = current.value,
+                    alias = aliasTrimmed,
                     category = newCategory,
                     fieldType = current.fieldType,
                     isSystemField = false,
@@ -1153,8 +1182,12 @@ class PersonalDataViewModel @Inject constructor(
                     dataItems.removeAll { it.id == oldNamespace }
                     dataItems.add(updatedItem)
                 } else if (current.isEditing) {
-                    // Update existing item
-                    val index = dataItems.indexOfFirst { it.id == newNamespace }
+                    // Update existing item — match on the prior
+                    // (composite or bare) id, since editing might have
+                    // come in via either shape.
+                    val index = dataItems.indexOfFirst {
+                        it.id == compositeKey || it.id == newNamespace || it.id == oldNamespace
+                    }
                     if (index >= 0) {
                         dataItems[index] = updatedItem
                     } else {
