@@ -276,6 +276,12 @@ class VotingViewModel @Inject constructor(
             addProperty("ephemeral_public_key", passwordEncryption.ephemeralPublicKey)
             addProperty("nonce", passwordEncryption.nonce)
             addProperty("password_key_id", utk.keyId)
+            // Phase D: include the encrypted credential blob so the
+            // vault verifies the password by decrypting in-flight
+            // rather than reading vaultState.credential.
+            credentialStore.getEncryptedBlob()?.let {
+                addProperty("encrypted_credential", it)
+            }
         }
 
         // Send via OwnerSpaceClient — publishes to {space}.forVault.vote.cast

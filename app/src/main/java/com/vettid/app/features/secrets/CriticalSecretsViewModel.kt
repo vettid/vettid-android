@@ -161,8 +161,14 @@ class CriticalSecretsViewModel @Inject constructor(
 
                 val utk = utkPool.first()
                 val encResult = cryptoManager.encryptPasswordForServer(password, salt, utk.publicKey)
+                val encryptedBlob = credentialStore.getEncryptedBlob()
+                if (encryptedBlob == null) {
+                    _state.value = CriticalSecretsState.Error("No credential blob available")
+                    return@launch
+                }
 
                 val payload = JsonObject().apply {
+                    addProperty("encrypted_credential", encryptedBlob)
                     addProperty("encrypted_password_hash", encResult.encryptedPasswordHash)
                     addProperty("ephemeral_public_key", encResult.ephemeralPublicKey)
                     addProperty("nonce", encResult.nonce)

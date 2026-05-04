@@ -800,10 +800,15 @@ class OwnerSpaceClient @Inject constructor(
             val combined = ephemeralPubKeyBytes + nonceBytes + ciphertextBytes
             val encryptedPayloadBase64 = android.util.Base64.encodeToString(combined, android.util.Base64.NO_WRAP)
 
-            // Build request payload
+            // Build request payload. Phase D: include the encrypted
+            // credential blob so the vault decrypts in-flight rather
+            // than reading vaultState.credential.
             val requestPayload = JsonObject().apply {
                 addProperty("utk_id", availableUtk.keyId)
                 addProperty("encrypted_payload", encryptedPayloadBase64)
+                credentialStore.getEncryptedBlob()?.let {
+                    addProperty("encrypted_credential", it)
+                }
             }
 
             // Ensure we're subscribed to vault responses
@@ -925,6 +930,11 @@ class OwnerSpaceClient @Inject constructor(
             val requestPayload = JsonObject().apply {
                 addProperty("utk_id", availableUtk.keyId)
                 addProperty("encrypted_payload", encryptedPayloadBase64)
+                // Phase D: vault decrypts the credential per-op rather
+                // than holding it in memory; supply the blob here.
+                credentialStore.getEncryptedBlob()?.let {
+                    addProperty("encrypted_credential", it)
+                }
             }
 
             // Ensure we're subscribed to vault responses
