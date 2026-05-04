@@ -16,7 +16,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -28,11 +27,19 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 
 /**
- * Permissions phase content — focused on the one thing we really
- * need: notifications, so we can reach the user when something
- * important happens. Battery-optimization exemption is offered
- * too (keeps the notification channel alive in the background).
- * All permissions are optional; the user can always continue.
+ * Permissions phase. Collects everything VettID needs to function the
+ * first time:
+ *   - Notifications (so we can reach the user about calls/messages).
+ *   - Microphone (so the first incoming call doesn't connect with a
+ *     dead mic — the OS prompt that fires on Answer often arrives
+ *     too late for the WebRTC track to attach).
+ *   - Camera (for video calls + QR scanning + profile photos).
+ *   - Battery-optimization exemption (keeps notifications alive in
+ *     the background).
+ *
+ * Each is optional — the user can continue past any of them — but
+ * we make the request once here so the runtime UX after enrollment
+ * doesn't surprise them.
  */
 @Composable
 fun PermissionsPhaseContent(
@@ -42,22 +49,33 @@ fun PermissionsPhaseContent(
 ) {
     val context = LocalContext.current
 
-    // Check current notification permission state
     val hasNotificationPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
         ContextCompat.checkSelfPermission(
             context, Manifest.permission.POST_NOTIFICATIONS
         ) == android.content.pm.PackageManager.PERMISSION_GRANTED
     } else {
-        true // Pre-Android 13, notifications are granted by default
+        true
     }
+
+    fun isGranted(perm: String): Boolean =
+        ContextCompat.checkSelfPermission(context, perm) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+
+    var micGranted by remember { mutableStateOf(isGranted(Manifest.permission.RECORD_AUDIO)) }
+    var cameraGranted by remember { mutableStateOf(isGranted(Manifest.permission.CAMERA)) }
 
     val notificationLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        onNotificationsResult(granted)
-    }
+    ) { granted -> onNotificationsResult(granted) }
 
-    // Update state if already granted
+    val micLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted -> micGranted = granted }
+
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted -> cameraGranted = granted }
+
     LaunchedEffect(hasNotificationPermission) {
         if (hasNotificationPermission && notificationsGranted == null) {
             onNotificationsResult(true)
@@ -79,52 +97,68 @@ fun PermissionsPhaseContent(
             Icon(
                 imageVector = Icons.Default.Notifications,
                 contentDescription = null,
-                modifier = Modifier.size(80.dp),
+                modifier = Modifier.size(72.dp),
                 tint = MaterialTheme.colorScheme.primary
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
             Text(
-                text = "Stay reachable",
-                style = MaterialTheme.typography.headlineMedium,
+                text = "Make VettID work first time",
+                style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center
             )
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             Text(
-                text = "VettID uses notifications to reach you when:\n\n• Someone calls you\n• You receive a message\n• A connection request arrives\n• Your vault needs attention",
-                style = MaterialTheme.typography.bodyLarge,
+                text = "We'll set up the permissions VettID needs now so calls, messages, and notifications work the moment your enrollment finishes. Each is optional — you can continue without any of them.",
+                style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Start
+                textAlign = TextAlign.Center
             )
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
-            // Notifications permission
+            // Notifications
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 PermissionCard(
                     icon = Icons.Default.Notifications,
                     title = "Notifications",
-                    description = "Get notified about incoming calls, messages, connection requests, and security alerts.",
+                    description = "Incoming calls, messages, connection requests, and security alerts.",
                     isGranted = notificationsGranted == true || hasNotificationPermission,
-                    onRequest = {
-                        notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                    }
+                    onRequest = { notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }
                 )
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
             }
 
-            // Battery optimization exemption (for reliable background notifications)
+            // Microphone
+            PermissionCard(
+                icon = Icons.Default.Mic,
+                title = "Microphone",
+                description = "Voice and video calls. Granting now means the first call connects with audio working from the start — without this, the OS prompt fires too late for the call to attach your mic.",
+                isGranted = micGranted,
+                onRequest = { micLauncher.launch(Manifest.permission.RECORD_AUDIO) }
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Camera
+            PermissionCard(
+                icon = Icons.Default.Videocam,
+                title = "Camera",
+                description = "Video calls, QR-code scanning to add connections, and your profile photo.",
+                isGranted = cameraGranted,
+                onRequest = { cameraLauncher.launch(Manifest.permission.CAMERA) }
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Battery optimization exemption
             val powerManager = context.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager
             var isBatteryExempt by remember {
                 mutableStateOf(powerManager.isIgnoringBatteryOptimizations(context.packageName))
             }
             var batteryRequestMade by remember { mutableStateOf(false) }
-
-            // Only poll after user taps Allow (to catch when they return from system dialog)
             if (batteryRequestMade && !isBatteryExempt) {
                 LaunchedEffect(batteryRequestMade) {
                     while (true) {
@@ -137,13 +171,11 @@ fun PermissionsPhaseContent(
                     }
                 }
             }
-
-            // Only show if not already exempt
             if (!isBatteryExempt) {
                 PermissionCard(
                     icon = Icons.Default.BatteryChargingFull,
-                    title = "Background Activity",
-                    description = "Keep VettID running in the background to receive notifications reliably, even when the app is closed.",
+                    title = "Background activity",
+                    description = "Keeps notifications alive when VettID is closed.",
                     isGranted = false,
                     onRequest = {
                         batteryRequestMade = true
@@ -155,12 +187,9 @@ fun PermissionsPhaseContent(
                         } catch (_: Exception) { }
                     }
                 )
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(10.dp))
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Info card about other permissions
             Card(
                 colors = CardDefaults.cardColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
@@ -169,13 +198,13 @@ fun PermissionsPhaseContent(
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text(
-                        text = "Other permissions",
+                        text = "Location",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Medium
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Camera access will be requested when you scan a QR code or take a profile photo. Location and microphone are optional and can be enabled later in Settings.",
+                        text = "Location is requested only when you choose to share it with a connection — it stays off by default.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -185,7 +214,6 @@ fun PermissionsPhaseContent(
 
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Continue button - always enabled
         Button(
             onClick = onContinue,
             modifier = Modifier
@@ -207,9 +235,7 @@ private fun PermissionCard(
     isGranted: Boolean,
     onRequest: () -> Unit
 ) {
-    Card(
-        modifier = Modifier.fillMaxWidth()
-    ) {
+    Card(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -220,7 +246,7 @@ private fun PermissionCard(
                 imageVector = icon,
                 contentDescription = null,
                 tint = if (isGranted) Color(0xFF4CAF50) else MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(32.dp)
+                modifier = Modifier.size(28.dp)
             )
             Spacer(modifier = Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f)) {
@@ -245,9 +271,7 @@ private fun PermissionCard(
                     modifier = Modifier.size(24.dp)
                 )
             } else {
-                OutlinedButton(onClick = onRequest) {
-                    Text("Allow")
-                }
+                OutlinedButton(onClick = onRequest) { Text("Allow") }
             }
         }
     }
