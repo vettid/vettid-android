@@ -139,8 +139,8 @@ fun WalletListContentEmbedded(
     if (showCreateSheet) {
         CreateWalletSheet(
             onDismiss = { showCreateSheet = false },
-            onCreateWallet = { label, network ->
-                viewModel.createWallet(label, network)
+            onCreateWallet = { label, network, password ->
+                viewModel.createWallet(label, network, password)
             }
         )
     }
