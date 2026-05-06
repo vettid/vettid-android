@@ -2,6 +2,8 @@ package com.vettid.app.core.storage
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import com.vettid.app.features.location.DisplacementThreshold
 import com.vettid.app.features.location.LocationPrecision
 import com.vettid.app.features.location.LocationRetention
@@ -14,11 +16,26 @@ import kotlinx.coroutines.flow.asStateFlow
 /**
  * Non-sensitive app preferences (theme, UI settings, location tracking config).
  * Uses regular SharedPreferences since these are not sensitive data.
+ *
+ * Last-known GPS coordinates are sensitive (PII), so they live in a
+ * separate EncryptedSharedPreferences file. SECURITY (android-storage-H2).
  */
 class AppPreferencesStore(context: Context) {
 
     private val prefs: SharedPreferences =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+
+    private val secureMasterKey: MasterKey = MasterKey.Builder(context)
+        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+        .build()
+
+    private val securePrefs: SharedPreferences = EncryptedSharedPreferences.create(
+        context,
+        SECURE_PREFS_NAME,
+        secureMasterKey,
+        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+    )
 
     private val _themeFlow = MutableStateFlow(getTheme())
     val themeFlow: StateFlow<AppTheme> = _themeFlow.asStateFlow()
@@ -108,14 +125,33 @@ class AppPreferencesStore(context: Context) {
         prefs.edit().putString(KEY_LOCATION_RETENTION, retention.name).apply()
     }
 
-    fun getLastKnownLatitude(): Double =
-        Double.fromBits(prefs.getLong(KEY_LAST_KNOWN_LAT, 0L))
+    /**
+     * Last-known GPS coordinates. Persisted in EncryptedSharedPreferences
+     * (separate from the rest of app prefs) because lat/lon is PII.
+     * SECURITY (android-storage-H2).
+     */
+    fun getLastKnownLatitude(): Double {
+        // Migrate any existing plaintext value to encrypted on first read.
+        if (prefs.contains(KEY_LAST_KNOWN_LAT)) {
+            val legacy = Double.fromBits(prefs.getLong(KEY_LAST_KNOWN_LAT, 0L))
+            val legacyLon = Double.fromBits(prefs.getLong(KEY_LAST_KNOWN_LON, 0L))
+            securePrefs.edit()
+                .putLong(KEY_LAST_KNOWN_LAT, legacy.toBits())
+                .putLong(KEY_LAST_KNOWN_LON, legacyLon.toBits())
+                .apply()
+            prefs.edit()
+                .remove(KEY_LAST_KNOWN_LAT)
+                .remove(KEY_LAST_KNOWN_LON)
+                .apply()
+        }
+        return Double.fromBits(securePrefs.getLong(KEY_LAST_KNOWN_LAT, 0L))
+    }
 
     fun getLastKnownLongitude(): Double =
-        Double.fromBits(prefs.getLong(KEY_LAST_KNOWN_LON, 0L))
+        Double.fromBits(securePrefs.getLong(KEY_LAST_KNOWN_LON, 0L))
 
     fun setLastKnownLocation(latitude: Double, longitude: Double) {
-        prefs.edit()
+        securePrefs.edit()
             .putLong(KEY_LAST_KNOWN_LAT, latitude.toBits())
             .putLong(KEY_LAST_KNOWN_LON, longitude.toBits())
             .apply()
@@ -159,12 +195,14 @@ class AppPreferencesStore(context: Context) {
      */
     fun clearAll() {
         prefs.edit().clear().apply()
+        securePrefs.edit().clear().apply()
         _themeFlow.value = AppTheme.AUTO
         _locationTrackingFlow.value = false
     }
 
     companion object {
         private const val PREFS_NAME = "app_preferences"
+        private const val SECURE_PREFS_NAME = "app_preferences_secure"
         private const val KEY_THEME = "app_theme"
 
         // Credential settings keys

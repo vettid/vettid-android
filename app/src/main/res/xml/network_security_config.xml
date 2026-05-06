@@ -49,10 +49,15 @@
         -->
     </domain-config>
 
-    <!-- Debug config - Allow user-installed CA certs only in debug builds -->
+    <!--
+    Debug config — system CA only; user CAs are NOT trusted even in
+    debug. Without this, a malicious user-installed CA on a developer
+    device would be silently honored. SECURITY (manifest-F5).
+    Developers needing to MITM a debug build should install their CA
+    into the system trust store on a userdebug ROM, or use adb tunnels.
+    -->
     <debug-overrides>
         <trust-anchors>
-            <certificates src="user" />
             <certificates src="system" />
         </trust-anchors>
     </debug-overrides>

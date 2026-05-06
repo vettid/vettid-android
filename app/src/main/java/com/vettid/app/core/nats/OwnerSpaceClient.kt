@@ -34,7 +34,8 @@ import javax.inject.Singleton
 @Singleton
 class OwnerSpaceClient @Inject constructor(
     private val connectionManager: NatsConnectionManager,
-    private val credentialStore: CredentialStore
+    private val credentialStore: CredentialStore,
+    private val unlockRateLimiter: com.vettid.app.core.security.UnlockRateLimiter,
 ) {
     private val gson = Gson()
 
@@ -969,6 +970,12 @@ class OwnerSpaceClient @Inject constructor(
         password: com.vettid.app.core.security.SecurePassword,
         cryptoManager: com.vettid.app.core.crypto.CryptoManager
     ): Result<IdentityUnlockResult> {
+        // SECURITY (android-auth-H2): drain UTKs aren't free — rate-
+        // limit consecutive failures so a stolen-but-locked phone
+        // can't burn the whole pool guessing.
+        if (!unlockRateLimiter.beforeAttempt()) {
+            return Result.failure(Exception("Too many failed attempts; restart the app to try again"))
+        }
         return try {
             val salt = credentialStore.getPasswordSaltBytes()
                 ?: return Result.failure(Exception("Password salt not found"))
@@ -998,7 +1005,7 @@ class OwnerSpaceClient @Inject constructor(
             // UTKs are single-use regardless of outcome.
             credentialStore.removeUtk(utk.keyId)
 
-            when (response) {
+            val outcome: Result<IdentityUnlockResult> = when (response) {
                 is VaultResponse.HandlerResult -> {
                     if (response.success && response.result != null) {
                         val expiresAt = response.result.get("expires_at")?.asLong ?: 0L
@@ -1012,8 +1019,15 @@ class OwnerSpaceClient @Inject constructor(
                 null -> Result.failure(Exception("Request timed out"))
                 else -> Result.failure(Exception("Unexpected response from vault"))
             }
+            if (outcome.isSuccess) {
+                unlockRateLimiter.recordSuccess()
+            } else {
+                unlockRateLimiter.recordFailure()
+            }
+            outcome
         } catch (e: Exception) {
             Log.e(TAG, "unlockIdentity failed", e)
+            unlockRateLimiter.recordFailure()
             Result.failure(e)
         }
     }

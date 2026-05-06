@@ -65,6 +65,16 @@ class NitroAttestationVerifier @Inject constructor(
         // AWS Nitro Enclave root CA subject
         private const val AWS_NITRO_ROOT_CA_CN = "aws.nitro-enclaves"
 
+        // SHA-384 of the AWS Nitro Enclave root CA's SubjectPublicKeyInfo
+        // (the canonical pin published at
+        // https://docs.aws.amazon.com/enclaves/latest/user/verify-root.html).
+        // SECURITY (android-crypto-H4): a CN-string match alone lets any
+        // CA who happened to issue a cert with `CN=aws.nitro-enclaves`
+        // pass verification — pinning the SPKI hash binds trust to the
+        // specific public key AWS controls.
+        private const val AWS_NITRO_ROOT_CA_SPKI_SHA384_HEX =
+            "641a0321a3e244efe456463195d606317ed7cdcc3c1756e09893f3c68f79bb5b085ed5c2104c46db1eaa3b7c5b3fdcb4"
+
         init {
             // Register Bouncy Castle provider for certificate verification
             if (Security.getProvider(BouncyCastleProvider.PROVIDER_NAME) == null) {
@@ -496,6 +506,21 @@ class NitroAttestationVerifier @Inject constructor(
         if (rootCN != AWS_NITRO_ROOT_CA_CN) {
             throw AttestationVerificationException(
                 "Root CA is not AWS Nitro: expected CN=$AWS_NITRO_ROOT_CA_CN, got CN=$rootCN"
+            )
+        }
+
+        // SECURITY (android-crypto-H4): pin the root CA by SHA-384 of
+        // the SubjectPublicKeyInfo (the AWS-published Nitro root pin).
+        val spkiBytes = rootCert.publicKey.encoded
+            ?: throw AttestationVerificationException("Root CA has no SPKI bytes")
+        val spkiSha384 = java.security.MessageDigest.getInstance("SHA-384").digest(spkiBytes)
+        val spkiHex = spkiSha384.joinToString("") { "%02x".format(it) }
+        if (!java.security.MessageDigest.isEqual(
+                spkiSha384,
+                hexToBytes(AWS_NITRO_ROOT_CA_SPKI_SHA384_HEX)
+            )) {
+            throw AttestationVerificationException(
+                "Root CA SPKI hash mismatch: expected $AWS_NITRO_ROOT_CA_SPKI_SHA384_HEX, got $spkiHex"
             )
         }
 

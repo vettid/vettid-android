@@ -139,9 +139,10 @@ object AppModule {
     @Singleton
     fun provideOwnerSpaceClient(
         connectionManager: NatsConnectionManager,
-        credentialStore: CredentialStore
+        credentialStore: CredentialStore,
+        unlockRateLimiter: com.vettid.app.core.security.UnlockRateLimiter,
     ): OwnerSpaceClient {
-        return OwnerSpaceClient(connectionManager, credentialStore)
+        return OwnerSpaceClient(connectionManager, credentialStore, unlockRateLimiter)
     }
 
     @Provides

@@ -93,36 +93,40 @@ class ProteanCredentialManager @Inject constructor(
     // MARK: - Credential Storage
 
     /**
-     * Store a new Protean Credential received from the enclave.
+     * Record metadata for a newly-stored Protean Credential.
      *
-     * @param credentialBlob The encrypted credential blob (base64 encoded)
-     * @param userGuid User identifier
-     * @param version Credential version number
-     * @param triggerBackup Whether to trigger automatic backup
+     * SECURITY (android-storage-H3): the canonical encrypted blob lives
+     * in CredentialStore (EncryptedSharedPreferences). This manager
+     * only retains backup-tracking metadata to avoid duplicating the
+     * sensitive payload across two on-disk stores.
+     *
+     * @param sizeBytes Size of the canonical blob (recorded for the
+     *   backup status display).
+     * @param userGuid User identifier (used for backup attribution).
+     * @param version Credential version number.
+     * @param triggerBackup Whether to trigger automatic backup.
      */
     fun storeCredential(
-        credentialBlob: String,
+        sizeBytes: Int,
         userGuid: String,
         version: Int = 1,
         triggerBackup: Boolean = true
     ) {
-        Log.i(TAG, "Storing Protean Credential version $version for user $userGuid")
+        Log.i(TAG, "Recording Protean Credential metadata version $version for user $userGuid")
 
         val metadata = CredentialMetadata(
             version = version,
             createdAt = Date(),
             backedUpAt = null,
-            sizeBytes = credentialBlob.length
+            sizeBytes = sizeBytes
         )
 
         prefs.edit()
-            .putString(KEY_CREDENTIAL_BLOB, credentialBlob)
+            .remove(KEY_CREDENTIAL_BLOB)
             .putString(KEY_METADATA, gson.toJson(metadata))
             .putString(KEY_USER_GUID, userGuid)
             .putString(KEY_BACKUP_STATUS, BackupStatus.PENDING.name)
             .apply()
-
-        Log.d(TAG, "Credential stored locally (${metadata.sizeBytes} bytes)")
 
         if (triggerBackup) {
             scheduleBackup()
@@ -130,7 +134,8 @@ class ProteanCredentialManager @Inject constructor(
     }
 
     /**
-     * Store a new Protean Credential from raw bytes.
+     * Record metadata using a raw byte size — convenience overload for
+     * call sites that don't already have a base64 string handy.
      */
     fun storeCredential(
         credentialBytes: ByteArray,
@@ -138,30 +143,7 @@ class ProteanCredentialManager @Inject constructor(
         version: Int = 1,
         triggerBackup: Boolean = true
     ) {
-        val base64 = Base64.encodeToString(credentialBytes, Base64.NO_WRAP)
-        storeCredential(base64, userGuid, version, triggerBackup)
-    }
-
-    /**
-     * Get the stored credential blob.
-     *
-     * @return Base64-encoded credential blob, or null if not stored
-     */
-    fun getCredential(): String? {
-        return prefs.getString(KEY_CREDENTIAL_BLOB, null)
-    }
-
-    /**
-     * Get the stored credential as raw bytes.
-     */
-    fun getCredentialBytes(): ByteArray? {
-        val base64 = getCredential() ?: return null
-        return try {
-            Base64.decode(base64, Base64.NO_WRAP)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to decode credential", e)
-            null
-        }
+        storeCredential(credentialBytes.size, userGuid, version, triggerBackup)
     }
 
     /**
@@ -244,7 +226,7 @@ class ProteanCredentialManager @Inject constructor(
         Log.i(TAG, "Updating credential to version $newVersion")
 
         storeCredential(
-            credentialBlob = newCredentialBlob,
+            sizeBytes = newCredentialBlob.length,
             userGuid = userGuid,
             version = newVersion,
             triggerBackup = triggerBackup
@@ -265,11 +247,13 @@ class ProteanCredentialManager @Inject constructor(
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
 
+        // SECURITY (android-storage-H3): no user_guid (or any other
+        // identifier) in the WorkManager inputData. WorkManager
+        // persists inputData in unencrypted androidx.work.workdb;
+        // anything sensitive there leaks at rest. The worker pulls
+        // identifiers fresh from CredentialStore at execution time.
         val backupRequest = OneTimeWorkRequestBuilder<CredentialBackupWorker>()
             .setConstraints(constraints)
-            .setInputData(workDataOf(
-                CredentialBackupWorker.KEY_USER_GUID to getUserGuid()
-            ))
             .build()
 
         workManager.enqueueUniqueWork(
@@ -319,7 +303,7 @@ class ProteanCredentialManager @Inject constructor(
         userGuid: String,
         version: Int
     ) {
-        Log.i(TAG, "Importing recovered credential version $version")
+        Log.i(TAG, "Importing recovered credential metadata version $version")
 
         val metadata = CredentialMetadata(
             version = version,
@@ -328,14 +312,18 @@ class ProteanCredentialManager @Inject constructor(
             sizeBytes = credentialBlob.length
         )
 
+        // SECURITY (android-storage-H3): only metadata is recorded
+        // here. The recovered blob itself is persisted via
+        // CredentialStore by the recovery flow caller — this manager
+        // no longer keeps a duplicate copy.
         prefs.edit()
-            .putString(KEY_CREDENTIAL_BLOB, credentialBlob)
+            .remove(KEY_CREDENTIAL_BLOB)
             .putString(KEY_METADATA, gson.toJson(metadata))
             .putString(KEY_USER_GUID, userGuid)
             .putString(KEY_BACKUP_STATUS, BackupStatus.COMPLETED.name)
             .apply()
 
-        Log.i(TAG, "Recovered credential imported successfully")
+        Log.i(TAG, "Recovered credential metadata imported successfully")
     }
 
     // MARK: - Recovery Flow (24-hour delayed recovery)

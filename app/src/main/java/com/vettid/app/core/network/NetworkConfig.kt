@@ -34,32 +34,37 @@ object NetworkConfig {
 
     /**
      * Whether to enable certificate pinning.
-     * Only enable when using custom domain with stable certificates.
+     *
+     * SECURITY (manifest-F6): pinned to the Amazon RSA 2048 M04
+     * intermediate (current api.vettid.dev issuer) plus the Amazon
+     * Root CA 1 as a backup. We do NOT pin the leaf — ACM rotates it
+     * roughly annually and there is no dev workflow today to push a
+     * new pin every rotation. The intermediate has a 2030 expiry and
+     * the root expires in 2038, so the pin set survives anything but
+     * Amazon retiring the M04 line.
+     *
+     * Refresh procedure if Amazon publishes a new intermediate:
+     *   echo | openssl s_client -servername api.vettid.dev \
+     *       -showcerts -connect api.vettid.dev:443 2>/dev/null \
+     *     | awk '/-----BEGIN CERTIFICATE-----/,/-----END CERTIFICATE-----/' \
+     *     | csplit -s -z -f cert- - '/-----BEGIN CERTIFICATE-----/' '{*}'
+     *   openssl x509 -in cert-01 -pubkey -noout \
+     *     | openssl pkey -pubin -outform der \
+     *     | openssl dgst -sha256 -binary | base64
+     *   # Replace AMAZON_RSA_M04_PIN below with the new value.
      */
-    private val ENABLE_CERTIFICATE_PINNING = false
+    private val ENABLE_CERTIFICATE_PINNING = true
 
-    /**
-     * Certificate pins for VettID API custom domain.
-     * These must be updated when certificates rotate.
-     *
-     * To generate pins:
-     * 1. Primary pin (leaf certificate):
-     *    openssl s_client -connect api.vettid.dev:443 | \
-     *    openssl x509 -pubkey -noout | openssl pkey -pubin -outform der | \
-     *    openssl dgst -sha256 -binary | base64
-     *
-     * 2. Backup pin (intermediate CA):
-     *    Include at least one backup pin from the CA chain for rotation resilience
-     */
+    // Amazon RSA 2048 M04 (intermediate that signs api.vettid.dev today).
+    private const val AMAZON_RSA_M04_PIN = "sha256/G9LNNAql897egYsabashkzUCTEJkWBzgoEtk8X/678c="
+
+    // Amazon Root CA 1 (backup; would have to replace M04 entirely if M04 is retired).
+    private const val AMAZON_ROOT_CA_1_PIN = "sha256/++MBgDH5WGvL9Bcn5Be30cRcL0f5O+NyoXuWtQdX1aI="
+
     private val CERTIFICATE_PINS: Map<String, List<String>> = mapOf(
-        // Custom domain pins (update when deployed)
-        "api.vettid.dev" to emptyList(),
-        "vettid.dev" to emptyList()
-        // When pins are available, add them like:
-        // "api.vettid.dev" to listOf(
-        //     "sha256/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", // Primary pin
-        //     "sha256/BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB="  // Backup pin
-        // )
+        "api.vettid.dev" to listOf(AMAZON_RSA_M04_PIN, AMAZON_ROOT_CA_1_PIN),
+        "vettid.dev"     to listOf(AMAZON_RSA_M04_PIN, AMAZON_ROOT_CA_1_PIN),
+        "pcr-manifest.vettid.dev" to listOf(AMAZON_RSA_M04_PIN, AMAZON_ROOT_CA_1_PIN),
     )
 
     /**
@@ -113,20 +118,35 @@ object NetworkConfig {
      * @param enableLogging Whether to enable HTTP logging (should be false in production)
      */
     fun createHttpClient(enableLogging: Boolean = BuildConfig.DEBUG): OkHttpClient {
+        return newHttpClientBuilder(enableLogging).build()
+    }
+
+    /**
+     * Returns an OkHttpClient.Builder pre-configured with TLS 1.2/1.3
+     * only, certificate pinning (when enabled), connection pool limits,
+     * and the localhost-only-cleartext interceptor in debug.
+     *
+     * SECURITY (android-crypto-H2 + manifest-F5 + manifest-F6): every
+     * HTTP-using component in the app should construct its OkHttpClient
+     * via this factory. Direct `OkHttpClient.Builder()` calls inherit
+     * OkHttp defaults that include TLS 1.0 / 1.1 in some negotiations
+     * and have no cert pinning — that's the bug F-H2 was about.
+     */
+    fun newHttpClientBuilder(enableLogging: Boolean = BuildConfig.DEBUG): OkHttpClient.Builder {
         val builder = OkHttpClient.Builder()
-            // Timeouts
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
             .writeTimeout(30, TimeUnit.SECONDS)
-            // SECURITY: TLS only in production; allow cleartext only in debug builds for localhost testing
             .connectionSpecs(
                 if (BuildConfig.DEBUG) listOf(tlsSpec, ConnectionSpec.CLEARTEXT)
                 else listOf(tlsSpec)
             )
-            // Connection pool limits
             .connectionPool(connectionPool)
 
-        // Add logging interceptor in debug builds
+        if (BuildConfig.DEBUG) {
+            builder.addInterceptor(LocalhostOnlyCleartextInterceptor())
+        }
+
         if (enableLogging) {
             val loggingInterceptor = HttpLoggingInterceptor().apply {
                 level = HttpLoggingInterceptor.Level.BODY
@@ -134,12 +154,32 @@ object NetworkConfig {
             builder.addInterceptor(loggingInterceptor)
         }
 
-        // Add certificate pinning if configured
         buildCertificatePinner()?.let { pinner ->
             builder.certificatePinner(pinner)
         }
 
-        return builder.build()
+        return builder
+    }
+
+    /**
+     * Debug-only interceptor that rejects cleartext (HTTP) requests
+     * unless they target localhost or the emulator-host alias. Prevents
+     * a debug build from accidentally talking unencrypted to a
+     * production-shaped URL when ConnectionSpec.CLEARTEXT is allowed.
+     */
+    private class LocalhostOnlyCleartextInterceptor : okhttp3.Interceptor {
+        override fun intercept(chain: okhttp3.Interceptor.Chain): okhttp3.Response {
+            val req = chain.request()
+            if (!req.isHttps) {
+                val host = req.url.host
+                val ok = host == "127.0.0.1" || host == "::1" ||
+                    host == "localhost" || host == "10.0.2.2"
+                if (!ok) {
+                    throw SecurityException("Cleartext request to non-localhost host blocked: $host")
+                }
+            }
+            return chain.proceed(req)
+        }
     }
 
     /**

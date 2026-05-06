@@ -194,7 +194,17 @@ class AndroidNatsClient {
                 newSocket = sslFactory.createSocket() as SSLSocket
                 newSocket.connect(InetSocketAddress(host, port), timeoutMs)
                 newSocket.soTimeout = timeoutMs
+                // SECURITY (android-crypto-H1): force TLS 1.2/1.3 only.
+                // Default `SSLSocketFactory.getDefault()` may negotiate
+                // older versions on legacy Android devices.
+                val supportedTls = newSocket.supportedProtocols
+                    .filter { it == "TLSv1.2" || it == "TLSv1.3" }
+                    .toTypedArray()
+                if (supportedTls.isNotEmpty()) {
+                    newSocket.enabledProtocols = supportedTls
+                }
                 newSocket.startHandshake()
+                verifyNatsCertificateChain(newSocket, host)
 
                 newInput = BufferedInputStream(newSocket.inputStream)
                 newOutput = BufferedOutputStream(newSocket.outputStream)
@@ -480,6 +490,40 @@ class AndroidNatsClient {
     }
 
     // --- Private methods ---
+
+    /**
+     * Verify the NATS server certificate chain after the TLS handshake.
+     *
+     * SECURITY (android-crypto-H1 + manifest-F6): the default
+     * SSLSocketFactory accepts any system-trusted CA. Mirror the
+     * OkHttp CertificatePinner behavior we apply to api.vettid.dev:
+     * the chain must contain a public-key SPKI hash matching one of
+     * the pins documented in NetworkConfig. Anything else gets the
+     * connection torn down before we exchange auth credentials.
+     */
+    private fun verifyNatsCertificateChain(socket: SSLSocket, hostname: String) {
+        val chain = socket.session.peerCertificates
+        if (chain.isEmpty()) {
+            socket.close()
+            throw IOException("TLS handshake produced empty cert chain")
+        }
+        val expected = setOf(
+            "G9LNNAql897egYsabashkzUCTEJkWBzgoEtk8X/678c=", // Amazon RSA 2048 M04 (current intermediate)
+            "++MBgDH5WGvL9Bcn5Be30cRcL0f5O+NyoXuWtQdX1aI=", // Amazon Root CA 1 (backup)
+        )
+        val md = java.security.MessageDigest.getInstance("SHA-256")
+        val matched = chain.any { cert ->
+            val spki = cert.publicKey?.encoded ?: return@any false
+            val hash = Base64.getEncoder().encodeToString(md.digest(spki))
+            md.reset()
+            hash in expected
+        }
+        if (!matched) {
+            socket.close()
+            throw IOException("NATS TLS chain for $hostname does not match any pinned SPKI")
+        }
+        Log.d(TAG, "NATS TLS chain verified against SPKI pin")
+    }
 
     private fun parseEndpoint(endpoint: String): Pair<String, Int> {
         // Handle tls://, nats://, or plain host:port

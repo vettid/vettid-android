@@ -2,8 +2,6 @@ package com.vettid.app.core.network
 
 import com.google.gson.JsonObject
 import com.google.gson.annotations.SerializedName
-import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
@@ -28,13 +26,10 @@ class VaultHandlerClient @Inject constructor() {
         private const val TIMEOUT_SECONDS = 60L // Longer timeout for handler execution
     }
 
-    private val okHttpClient = OkHttpClient.Builder()
+    private val okHttpClient = NetworkConfig.newHttpClientBuilder()
         .connectTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .readTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
         .writeTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
-        .addInterceptor(HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
-        })
         .build()
 
     private val retrofit = Retrofit.Builder()

@@ -23,6 +23,7 @@ class ApiClient @Inject constructor() {
 
     private val retrofit = Retrofit.Builder()
         .baseUrl("https://api.vettid.dev/")
+        .client(NetworkConfig.createHttpClient())
         .addConverterFactory(GsonConverterFactory.create())
         .build()
 

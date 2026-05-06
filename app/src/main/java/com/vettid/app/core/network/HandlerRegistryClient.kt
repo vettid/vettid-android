@@ -2,13 +2,10 @@ package com.vettid.app.core.network
 
 import com.google.gson.JsonObject
 import com.google.gson.annotations.SerializedName
-import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.*
-import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -24,17 +21,9 @@ class HandlerRegistryClient @Inject constructor() {
 
     companion object {
         private const val BASE_URL = "https://api.vettid.dev/"
-        private const val TIMEOUT_SECONDS = 30L
     }
 
-    private val okHttpClient = OkHttpClient.Builder()
-        .connectTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
-        .readTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
-        .writeTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
-        .addInterceptor(HttpLoggingInterceptor().apply {
-            level = HttpLoggingInterceptor.Level.BODY
-        })
-        .build()
+    private val okHttpClient = NetworkConfig.createHttpClient()
 
     private val retrofit = Retrofit.Builder()
         .baseUrl(BASE_URL)

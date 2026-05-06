@@ -30,14 +30,15 @@ class CredentialBackupWorker @AssistedInject constructor(
 
     companion object {
         private const val TAG = "CredentialBackup"
-        const val KEY_USER_GUID = "user_guid"
     }
 
     override suspend fun doWork(): Result {
         Log.i(TAG, "Starting credential backup")
 
-        // Get the credential blob
-        val credentialBlob = credentialManager.getCredential()
+        // SECURITY (android-storage-H3): pull the canonical encrypted
+        // blob from CredentialStore (EncryptedSharedPreferences) instead
+        // of the legacy ProteanCredentialManager duplicate.
+        val credentialBlob = credentialStore.getEncryptedBlob()
         if (credentialBlob == null) {
             Log.e(TAG, "No credential to backup")
             credentialManager.updateBackupStatus(BackupStatus.FAILED)
