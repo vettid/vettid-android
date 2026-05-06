@@ -48,7 +48,18 @@ class PcrConfigManager @Inject constructor(
         // VettID's ECDSA P-256 public key for verifying PCR manifest signatures
         // Key ID: a5e30b97-89da-41e9-b447-c759a9f9c801 (alias/vettid-pcr-signing)
         // Updated: 2026-01-06
-        private const val VETTID_SIGNING_KEY_BASE64 = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEzSr2U/RxJRP7dWKMASJSs6fURsEzdn59XSvp3TitMaw3bMBIj8slPXJhJF7d2/DS4UnzMhxEdQHLq2NdoKaVUw=="
+        // ECDSA P-256 public key for the KMS key that signs the CloudFront PCR
+        // manifest (alias `vettid-pcr-signing`). X.509 SubjectPublicKeyInfo, base64.
+        // This is the trust root for the offline-update path: the manifest in S3
+        // can be replaced by anyone with the bucket key, so the app verifies
+        // the embedded signature against this pinned key before adopting new
+        // PCRs. If we fetched the verifier key from the network too, the chain
+        // of trust would collapse.
+        // Refresh procedure if the KMS key is recreated (CDK stack rebuild, etc):
+        //   aws kms get-public-key --key-id alias/vettid-pcr-signing \
+        //       --query "PublicKey" --output text
+        // Replace the constant below with the output, ship a new APK.
+        private const val VETTID_SIGNING_KEY_BASE64 = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEW4IZe5nk/Rf7eyf9/PT2HCM5v22m2p1VURccr/D/LXUBJGRK8lliecP7F01f6ILhvrkCg3fwm2UlLls0S97Arw=="
 
         // Fallback PCRs - ONLY used if network fetch completely fails on first launch
         // These should never be relied upon in production - always fetch fresh from API
@@ -296,20 +307,21 @@ class PcrConfigManager @Inject constructor(
     /**
      * Fetch PCR manifest from the API endpoint.
      *
-     * This fetches from /api/enclave/pcrs as specified in the architecture doc.
-     *
-     * @param baseUrl The base URL for the API (e.g., "https://api.vettid.com")
-     * @return Result containing the updated PCRs or an error
+     * Hits /vault/pcrs/current — the live route served by the
+     * getPcrConfig Lambda. Older builds called /api/enclave/pcrs
+     * which 404s in production today; the only effect of that path
+     * was three retries with backoff before falling through to the
+     * CloudFront manifest, which slowed enrollment by ~6 seconds.
      */
     suspend fun fetchFromApi(baseUrl: String): Result<ExpectedPcrs> {
-        Log.d(TAG, "Fetching PCRs from API: $baseUrl/api/enclave/pcrs")
+        Log.d(TAG, "Fetching PCRs from API: $baseUrl/vault/pcrs/current")
 
         var lastException: Exception? = null
         var delayMs = INITIAL_RETRY_DELAY_MS
 
         for (attempt in 1..MAX_RETRY_ATTEMPTS) {
             try {
-                val url = java.net.URL("$baseUrl/api/enclave/pcrs")
+                val url = java.net.URL("$baseUrl/vault/pcrs/current")
                 val connection = url.openConnection() as java.net.HttpURLConnection
                 connection.requestMethod = "GET"
                 connection.setRequestProperty("Accept", "application/json")
