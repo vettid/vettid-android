@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.nats.CallSignalingClient
+import com.vettid.app.features.feed.FeedNotificationService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -19,7 +20,8 @@ private const val TAG = "CallHistoryViewModel"
  */
 @HiltViewModel
 class CallHistoryViewModel @Inject constructor(
-    private val callSignalingClient: CallSignalingClient
+    private val callSignalingClient: CallSignalingClient,
+    private val notificationService: FeedNotificationService
 ) : ViewModel() {
 
     private val _calls = MutableStateFlow<List<CallHistoryEntry>>(emptyList())
@@ -36,6 +38,9 @@ class CallHistoryViewModel @Inject constructor(
 
     init {
         loadHistory()
+        // Once the user is looking at call history, any missed-call
+        // notifications still in the shade have served their purpose.
+        notificationService.clearCallNotifications()
     }
 
     /**

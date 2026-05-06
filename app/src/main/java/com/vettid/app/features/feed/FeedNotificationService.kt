@@ -709,6 +709,27 @@ class FeedNotificationService @Inject constructor(
     fun clearAllNotifications() {
         NotificationManagerCompat.from(context).cancelAll()
     }
+
+    /**
+     * Clear active notifications categorised as CATEGORY_CALL — i.e. the
+     * missed-call entries posted by `showFeedNotification` for `call.*`
+     * event types. Call this when the user opens the Call History screen
+     * so a missed call still in the shade gets dismissed once the user
+     * has actually seen it in-app. Other categories (messages, votes,
+     * security alerts) are left alone.
+     */
+    fun clearCallNotifications() {
+        val systemManager = context.getSystemService(NotificationManager::class.java) ?: return
+        try {
+            for (sb in systemManager.activeNotifications) {
+                if (sb.notification.category == NotificationCompat.CATEGORY_CALL) {
+                    systemManager.cancel(sb.tag, sb.id)
+                }
+            }
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Cannot read active notifications", e)
+        }
+    }
 }
 
 /**

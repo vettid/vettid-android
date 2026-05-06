@@ -1005,6 +1005,22 @@ class CallManager @Inject constructor(
     }
 
     private fun handleRemoteIceCandidate(event: CallEvent.IceCandidate) {
+        // Ignore candidates that aren't tagged for the call we're in.
+        // JetStream can deliver events from a prior, abandoned call_id
+        // (e.g. caller retried after the callee's vault stayed in a
+        // partial-accept state). Adding those poisons ICE pair-checking
+        // because their ufrag won't match either side's SDP and WebRTC
+        // silently drops them while we sit waiting for `connected`.
+        val activeCallId = when (val state = _callState.value) {
+            is CallState.Active -> state.call.callId
+            is CallState.Outgoing -> state.call.callId
+            is CallState.Incoming -> state.call.callId
+            else -> null
+        }
+        if (activeCallId == null || activeCallId != event.callId) {
+            Log.d(TAG, "Ignoring IceCandidate for ${event.callId} (active=$activeCallId)")
+            return
+        }
         val rewritten = rewriteRelayRaddr(event.candidate)
         val candidate = IceCandidate(
             event.sdpMid ?: "",
