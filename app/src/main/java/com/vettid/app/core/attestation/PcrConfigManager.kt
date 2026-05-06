@@ -39,6 +39,7 @@ class PcrConfigManager @Inject constructor(
         private const val KEY_PREVIOUS_PCRS = "previous_pcrs"
         private const val KEY_LAST_UPDATE = "last_update_timestamp"
         private const val KEY_PCR_VERSION = "pcr_version"
+        private const val KEY_MAX_MANIFEST_VERSION = "max_manifest_version"
         private const val KEY_TRUSTED_PCR0_SET = "user_trusted_pcr0_set"
 
         // PCR manifest CloudFront URL (custom domain)
@@ -136,6 +137,36 @@ class PcrConfigManager @Inject constructor(
             }
         } else {
             Log.w(TAG, "No manifest available for signature verification - skipping")
+        }
+
+        // SECURITY (attestation-F4): enforce manifest-level monotonic
+        // version + per-set valid_until. Without these checks, an
+        // attacker who can publish a stale-but-still-signed manifest
+        // could roll us back to a retired PCR baseline.
+        if (manifest != null) {
+            val seenVersion = prefs.getLong(KEY_MAX_MANIFEST_VERSION, 0L)
+            if (manifest.version.toLong() < seenVersion) {
+                Log.e(
+                    TAG,
+                    "PCR manifest version ${manifest.version} is older than the highest version seen ($seenVersion); refusing to roll back",
+                )
+                throw PcrUpdateException("manifest version rollback rejected")
+            }
+            val currentSet = manifest.getCurrentPcrSet()
+            if (currentSet?.validUntil != null) {
+                val expiry = parseRfc3339OrNull(currentSet.validUntil)
+                if (expiry != null && expiry < System.currentTimeMillis()) {
+                    Log.e(
+                        TAG,
+                        "Current PCR set ${currentSet.id} expired at ${currentSet.validUntil}; refusing to adopt",
+                    )
+                    throw PcrUpdateException("current PCR set has expired")
+                }
+            }
+            // Pin the new high-water mark only after the rollback check passes.
+            if (manifest.version.toLong() > seenVersion) {
+                prefs.edit().putLong(KEY_MAX_MANIFEST_VERSION, manifest.version.toLong()).apply()
+            }
         }
 
         // Check if PCRs actually changed (compare PCR0 hash and metadata)
@@ -567,6 +598,18 @@ class PcrConfigManager @Inject constructor(
      */
     fun isUsingBundledDefaults(): Boolean {
         return prefs.getString(KEY_CURRENT_PCRS, null) == null
+    }
+
+    private fun parseRfc3339OrNull(value: String): Long? {
+        return try {
+            java.time.Instant.parse(value).toEpochMilli()
+        } catch (_: Exception) {
+            try {
+                java.time.OffsetDateTime.parse(value).toInstant().toEpochMilli()
+            } catch (_: Exception) {
+                null
+            }
+        }
     }
 }
 
