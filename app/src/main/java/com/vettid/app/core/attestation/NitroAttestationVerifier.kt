@@ -65,15 +65,18 @@ class NitroAttestationVerifier @Inject constructor(
         // AWS Nitro Enclave root CA subject
         private const val AWS_NITRO_ROOT_CA_CN = "aws.nitro-enclaves"
 
-        // SHA-384 of the AWS Nitro Enclave root CA's SubjectPublicKeyInfo
-        // (the canonical pin published at
-        // https://docs.aws.amazon.com/enclaves/latest/user/verify-root.html).
+        // SHA-384 of the AWS Nitro Enclave Root CA G1 SubjectPublicKeyInfo.
+        // Source cert: https://aws-nitro-enclaves.amazonaws.com/AWS_NitroEnclaves_Root-G1.zip
+        // Refresh procedure (only needed if AWS publishes a new generation):
+        //   curl -sSL https://aws-nitro-enclaves.amazonaws.com/AWS_NitroEnclaves_Root-G1.zip -o /tmp/r.zip
+        //   unzip -p /tmp/r.zip root.pem | openssl x509 -pubkey -noout \
+        //     | openssl pkey -pubin -outform der | openssl dgst -sha384 -hex
         // SECURITY (android-crypto-H4): a CN-string match alone lets any
         // CA who happened to issue a cert with `CN=aws.nitro-enclaves`
         // pass verification — pinning the SPKI hash binds trust to the
         // specific public key AWS controls.
         private const val AWS_NITRO_ROOT_CA_SPKI_SHA384_HEX =
-            "641a0321a3e244efe456463195d606317ed7cdcc3c1756e09893f3c68f79bb5b085ed5c2104c46db1eaa3b7c5b3fdcb4"
+            "4b9304ae9024d81ad3990fd7d143025dd72b15aba91961d0259d757cb6295c2b4c3f101eb8e5d266e6c9b32aa56eb439"
 
         init {
             // Register Bouncy Castle provider for certificate verification

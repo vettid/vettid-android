@@ -203,7 +203,18 @@ class AndroidNatsClient {
                 if (supportedTls.isNotEmpty()) {
                     newSocket.enabledProtocols = supportedTls
                 }
+                // SNI: SSLSocketFactory.createSocket() without host args
+                // doesn't auto-populate SNI; set it explicitly so NLB sees
+                // the right server_name in ClientHello.
+                try {
+                    val params = newSocket.sslParameters
+                    params.serverNames = listOf(javax.net.ssl.SNIHostName(host))
+                    newSocket.sslParameters = params
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to set SNI: ${e.message}")
+                }
                 newSocket.startHandshake()
+                Log.i(TAG, "TLS handshake done: protocol=${newSocket.session.protocol} cipher=${newSocket.session.cipherSuite}")
                 verifyNatsCertificateChain(newSocket, host)
 
                 newInput = BufferedInputStream(newSocket.inputStream)
