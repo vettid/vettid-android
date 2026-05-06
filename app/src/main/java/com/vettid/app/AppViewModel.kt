@@ -76,6 +76,7 @@ class AppViewModel @Inject constructor(
     private val profilePhotoEvents: ProfilePhotoEvents,
     private val personalDataStore: PersonalDataStore,
     private val appLifecycleObserver: com.vettid.app.core.nats.AppLifecycleObserver,
+    private val localDataWiper: com.vettid.app.core.security.LocalDataWiper,
 ) : ViewModel() {
 
     private val _appState = MutableStateFlow(AppState(
@@ -456,12 +457,15 @@ class AppViewModel @Inject constructor(
         }
     }
 
-    fun signOut() {
+    /**
+     * Soft "lock the session": disconnect NATS and flip
+     * `isAuthenticated` to false. The encrypted credential blob and
+     * every other store stay on disk so the user can re-unlock with
+     * PIN / password without re-enrolling.
+     */
+    fun lockSession() {
         viewModelScope.launch {
-            // Disconnect from NATS
             natsAutoConnector.disconnect()
-
-            // Clear authentication state
             _appState.update {
                 it.copy(
                     isAuthenticated = false,
@@ -469,8 +473,30 @@ class AppViewModel @Inject constructor(
                     natsError = null
                 )
             }
-            // Note: This just signs out of this session.
-            // To clear credentials entirely, we would call credentialStore.clearAll()
+        }
+    }
+
+    /**
+     * Hard sign-out: lock the session AND wipe every local store
+     * (credential blob, personal data cache, contracts, protean
+     * credential, app prefs, work-manager queue, cache dir). The user
+     * has to re-enroll after this.
+     *
+     * No-data-on-device principle: the vault is authoritative, so
+     * dropping these caches is recoverable; leaving them on a stolen
+     * device is the bigger risk.
+     */
+    fun signOutAndWipe() {
+        viewModelScope.launch {
+            natsAutoConnector.disconnect()
+            localDataWiper.wipeAll()
+            _appState.update {
+                AppState(
+                    hasCredential = false,
+                    isAuthenticated = false,
+                    natsConnectionState = NatsConnectionState.Idle,
+                )
+            }
         }
     }
 

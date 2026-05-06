@@ -1022,8 +1022,16 @@ private fun AddSecretDialog(
             Text(if (state.isEditing) "Edit Secret" else "Add Secret")
         },
         text = {
+            // The form fields collectively grow taller than the dialog
+            // can render (especially once a Crypto Network picker, Notes,
+            // and a long Value field are visible). Wrap in a bounded
+            // scrollable column so the user can reach Notes and the
+            // Save button below.
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 480.dp)
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 // Category dropdown (first - helps set context)

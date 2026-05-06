@@ -1642,16 +1642,19 @@ internal fun PublicMetadataDialog(
                                         )
                                     }
                                     Spacer(modifier = Modifier.height(6.dp))
+                                    // The alias may carry an asset ticker
+                                    // prefix ("BTC · Test"); the underlying
+                                    // catalog row's `name` is the bare label
+                                    // ("Test"). When they refer to the same
+                                    // thing, swap in the friendly
+                                    // describeCatalogItem text so peers see
+                                    // "BTC wallet address" / "BTC seed phrase"
+                                    // instead of repeated "Test" bullets.
+                                    val aliasBare = alias.substringAfter(" · ", alias)
                                     groupItems.forEach { gi ->
-                                        // When the row's name equals the
-                                        // alias (true for wallet bundles
-                                        // — wallet, signing key, and seed
-                                        // all carry the wallet label as
-                                        // both name and alias), fall back
-                                        // to a readable description of
-                                        // what the row IS so peers can
-                                        // tell the bullets apart.
-                                        val bulletLabel = if (gi.name.equals(alias, ignoreCase = true)) {
+                                        val nameMatchesAlias = gi.name.equals(alias, ignoreCase = true)
+                                            || gi.name.equals(aliasBare, ignoreCase = true)
+                                        val bulletLabel = if (nameMatchesAlias) {
                                             describeCatalogItem(gi)
                                         } else {
                                             gi.name
@@ -2314,10 +2317,11 @@ internal fun PublicKeyQRDialog(
         profileGenerateQrCode(item.value, 300)
     }
     val context = LocalContext.current
+    val secureClipboard = com.vettid.app.core.security.rememberSecureClipboard()
     val copyToClipboard = {
-        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-            as android.content.ClipboardManager
-        clipboard.setPrimaryClip(android.content.ClipData.newPlainText(item.name, item.value))
+        // Public-key values shown in the QR dialog — sensitive flag
+        // is cheap defense-in-depth + auto-clear after 30s.
+        secureClipboard.copySensitiveText(item.value)
         android.widget.Toast.makeText(context, "Copied to clipboard", android.widget.Toast.LENGTH_SHORT).show()
     }
 

@@ -16,10 +16,17 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.vettid.app.core.util.ShortCode
 import com.vettid.app.ui.components.QrCodeScanner
 
 /**
@@ -284,15 +291,24 @@ private fun ManualEntryContent(
 
         Spacer(modifier = Modifier.height(32.dp))
 
+        // Stored value is the raw 12-character normalized code. The
+        // VisualTransformation overlays hyphens for display so the
+        // user types ABCDEFGHJKLM and sees ABCD-EFGH-JKLM. Lowercase
+        // and stray separators are normalized away on input, so the
+        // submit button is enabled exactly when the code is valid.
+        val normalized = ShortCode.normalize(code).take(ShortCode.LENGTH)
         OutlinedTextField(
-            value = code,
-            onValueChange = onCodeChanged,
+            value = normalized,
+            onValueChange = { input -> onCodeChanged(ShortCode.normalize(input).take(ShortCode.LENGTH)) },
             label = { Text("Invitation Code") },
-            placeholder = { Text("e.g., ABC123-XYZ789") },
+            placeholder = { Text("ABCD-EFGH-JKLM") },
             singleLine = true,
+            visualTransformation = ShortCodeVisualTransformation,
             modifier = Modifier.fillMaxWidth(),
             keyboardOptions = KeyboardOptions(
-                imeAction = ImeAction.Done
+                capitalization = KeyboardCapitalization.Characters,
+                keyboardType = KeyboardType.Ascii,
+                imeAction = ImeAction.Done,
             ),
             keyboardActions = KeyboardActions(
                 onDone = { onSubmit() }
@@ -568,4 +584,34 @@ private fun ErrorContent(
             }
         }
     }
+}
+
+/**
+ * Inserts hyphens every [ShortCode.BLOCK_SIZE] characters as the user
+ * types so a stored "ABCDEFGHJKLM" displays as "ABCD-EFGH-JKLM". The
+ * cursor offset is mapped through the same arithmetic so backspace and
+ * arrow-key motion work over the visible (hyphenated) text.
+ */
+private val ShortCodeVisualTransformation = VisualTransformation { text ->
+    val raw = text.text
+    val out = buildString(raw.length + raw.length / ShortCode.BLOCK_SIZE) {
+        raw.forEachIndexed { i, c ->
+            if (i > 0 && i % ShortCode.BLOCK_SIZE == 0) append('-')
+            append(c)
+        }
+    }
+    val mapping = object : OffsetMapping {
+        override fun originalToTransformed(offset: Int): Int {
+            val hyphens = (offset / ShortCode.BLOCK_SIZE).coerceAtMost(
+                ((raw.length - 1) / ShortCode.BLOCK_SIZE).coerceAtLeast(0)
+            )
+            return offset + hyphens
+        }
+        override fun transformedToOriginal(offset: Int): Int {
+            // Each hyphen in [0, offset) shrinks the stored offset by 1.
+            val hyphens = (offset / (ShortCode.BLOCK_SIZE + 1))
+            return (offset - hyphens).coerceAtMost(raw.length)
+        }
+    }
+    TransformedText(AnnotatedString(out), mapping)
 }

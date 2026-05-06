@@ -174,11 +174,18 @@ class VotingViewModel @Inject constructor(
         val currentState = _state.value
         if (currentState !is VotingState.EnteringPassword) return
 
-        val password = currentState.password
-        if (password.isBlank()) {
+        val pwString = currentState.password
+        if (pwString.isBlank()) {
             _state.value = currentState.copy(error = "Please enter your password")
             return
         }
+
+        // Move the password out of state into a SecurePassword and
+        // drop the String reference. State transitions to Casting (no
+        // password field) so the only live reference is the
+        // SecurePassword carried into castVote, which wipes on completion.
+        val securePw = com.vettid.app.core.security.SecurePassword.fromString(pwString)
+        _state.value = currentState.copy(password = "")
 
         viewModelScope.launch {
             _state.value = VotingState.Casting(
@@ -190,7 +197,7 @@ class VotingViewModel @Inject constructor(
                 val receipt = castVote(
                     proposal = currentState.proposal,
                     choiceId = currentState.selectedChoice.id,
-                    password = password
+                    password = securePw
                 )
 
                 if (receipt != null) {
@@ -244,8 +251,9 @@ class VotingViewModel @Inject constructor(
     private suspend fun castVote(
         proposal: Proposal,
         choiceId: String,
-        password: String
+        password: com.vettid.app.core.security.SecurePassword
     ): VoteReceipt? {
+        return try {
         // Get UTK for password encryption
         val utkPool = credentialStore.getUtkPool()
         if (utkPool.isEmpty()) {
@@ -332,6 +340,12 @@ class VotingViewModel @Inject constructor(
             is VaultResponse.Error -> throw Exception(response.message)
             null -> throw Exception("Vault response timeout")
             else -> throw Exception("Unexpected response type")
+        }
+        } finally {
+            // Vote signing always wipes the password (every vote requires
+            // fresh password — see vote_handler.HandleCastVote on the
+            // vault side, which always password-verifies).
+            password.wipe()
         }
     }
 

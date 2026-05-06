@@ -96,6 +96,16 @@ class ScanInvitationViewModel @Inject constructor(
         connectionsClient.resolveInvite(inviteCode).fold(
             onSuccess = { invitation ->
                 android.util.Log.d("ScanInvitationVM", "Invite resolved: connectionId=${invitation.connectionId}, profile keys=${invitation.inviterProfile?.keys}")
+
+                val rejection = validateInvitationOrReject(
+                    peerOwnerSpace = invitation.ownerSpaceId,
+                    expiresAt = invitation.expiresAt,
+                )
+                if (rejection != null) {
+                    _state.value = ScanInvitationState.Error(message = rejection)
+                    return
+                }
+
                 parsedInvitation = ConnectionInvitationData(
                     connectionId = invitation.connectionId,
                     peerGuid = invitation.ownerSpaceId,
@@ -375,6 +385,17 @@ class ScanInvitationViewModel @Inject constructor(
     private fun processInvitation(invitation: ConnectionInvitationData) {
         android.util.Log.d("ScanInvitationVM", "processInvitation called for ${invitation.connectionId}")
         viewModelScope.launch {
+            // Final-line check before any state-mutating call hits the vault:
+            // the inline-QR path doesn't carry expires_at, but it does
+            // give us peerGuid — catch a self-connect attempt here.
+            val rejection = validateInvitationOrReject(
+                peerOwnerSpace = invitation.ownerSpaceId,
+                expiresAt = null,
+            )
+            if (rejection != null) {
+                _state.value = ScanInvitationState.Error(message = rejection)
+                return@launch
+            }
             _state.value = ScanInvitationState.Processing
 
             // Wait for NATS connection (with timeout)
@@ -577,6 +598,47 @@ class ScanInvitationViewModel @Inject constructor(
         val match = regex.find(messageSpace)
         return match?.groupValues?.get(1)?.let { guid ->
             guid
+        }
+    }
+
+    /**
+     * Reject self-connects and expired invitations before we touch the
+     * vault. Returns a user-facing message when the invitation is bad,
+     * or null when it's safe to proceed.
+     *
+     * peerOwnerSpace: the inviter's owner-space GUID (the "who am I
+     *   connecting to") — must not match our own user GUID.
+     * expiresAt: ISO-8601 RFC3339 timestamp from the broker payload, or
+     *   null when the entry-point form doesn't carry one (inline QR).
+     */
+    private fun validateInvitationOrReject(
+        peerOwnerSpace: String,
+        expiresAt: String?,
+    ): String? {
+        val selfGuid = credentialStore.getUserGuid()
+        if (!selfGuid.isNullOrBlank() && peerOwnerSpace.equals(selfGuid, ignoreCase = true)) {
+            android.util.Log.w("ScanInvitationVM", "Rejecting self-connect attempt for $peerOwnerSpace")
+            return "You cannot connect with yourself"
+        }
+        if (!expiresAt.isNullOrBlank()) {
+            val expiryEpochMs = parseRfc3339ToEpochMs(expiresAt)
+            if (expiryEpochMs != null && expiryEpochMs < System.currentTimeMillis()) {
+                android.util.Log.w("ScanInvitationVM", "Rejecting expired invitation (expires_at=$expiresAt)")
+                return "This invitation has expired"
+            }
+        }
+        return null
+    }
+
+    private fun parseRfc3339ToEpochMs(value: String): Long? {
+        return try {
+            java.time.Instant.parse(value).toEpochMilli()
+        } catch (_: Exception) {
+            try {
+                java.time.OffsetDateTime.parse(value).toInstant().toEpochMilli()
+            } catch (_: Exception) {
+                null
+            }
         }
     }
 

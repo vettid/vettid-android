@@ -72,6 +72,7 @@ fun PeerProfileView(
                 name = s.name,
                 type = s.type.ifBlank { "SECRET" },
                 category = s.category.ifBlank { "Other" },
+                alias = s.alias,
             )
         }
     }

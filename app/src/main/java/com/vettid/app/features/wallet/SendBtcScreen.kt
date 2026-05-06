@@ -58,6 +58,13 @@ fun SendBtcScreen(
     var showConfirmation by remember { mutableStateOf(false) }
     var passwordPrompt by remember { mutableStateOf<String?>(null) }
     var passwordInput by remember { mutableStateOf("") }
+    DisposableEffect(passwordPrompt) {
+        // When the password dialog hides (passwordPrompt -> null), drop
+        // the held String reference. DisposableEffect runs onDispose on
+        // every key change, so this fires both when the dialog dismisses
+        // and when the screen leaves composition.
+        onDispose { passwordInput = "" }
+    }
 
     val selectedWallet = wallets.find { it.walletId == selectedWalletId }
     val amountSats = btcToSats(amountBtc)
@@ -173,7 +180,7 @@ fun SendBtcScreen(
                 Button(
                     enabled = passwordInput.isNotBlank(),
                     onClick = {
-                        val pwd = passwordInput
+                        val pwd = com.vettid.app.core.security.SecurePassword.fromString(passwordInput)
                         passwordInput = ""
                         passwordPrompt = null
                         viewModel.send(

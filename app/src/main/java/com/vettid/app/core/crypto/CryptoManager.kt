@@ -5,6 +5,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import com.google.crypto.tink.subtle.Hkdf
+import com.vettid.app.core.security.wipe
 import com.google.crypto.tink.subtle.X25519
 import com.vettid.app.core.security.SecureByteArray
 import com.vettid.app.core.security.secureClear
@@ -131,6 +132,33 @@ class CryptoManager @Inject constructor() {
     }
 
     /**
+     * Wipeable variant of [hashPassword]. Takes a SecurePassword
+     * and zeroes the UTF-8 byte buffer fed to Argon2 before
+     * returning. The SecurePassword itself is NOT wiped — the caller
+     * keeps ownership and decides when to wipe (e.g. multiple
+     * derivations in one auth round-trip).
+     */
+    fun hashPassword(password: com.vettid.app.core.security.SecurePassword, salt: ByteArray): ByteArray {
+        val argon2 = Argon2.Builder(Version.V13)
+            .type(Type.Argon2id)
+            .memoryCost(MemoryCost.KiB(ARGON2_MEMORY_KB))
+            .parallelism(ARGON2_PARALLELISM)
+            .iterations(ARGON2_ITERATIONS)
+            .hashLength(ARGON2_HASH_LENGTH)
+            .build()
+        val pwBytes = password.asUtf8Bytes()
+        try {
+            val result = argon2.hash(pwBytes, salt)
+            return result.hash
+        } finally {
+            // Argon2 implementation may copy internally — we still
+            // wipe our own buffer so the bytes aren't sitting in the
+            // heap waiting for GC.
+            pwBytes.wipe()
+        }
+    }
+
+    /**
      * Generate a random salt for Argon2
      */
     fun generateSalt(): ByteArray = randomBytes(16)
@@ -249,6 +277,19 @@ class CryptoManager @Inject constructor() {
         val saltB64 = Base64.encodeToString(salt, Base64.NO_WRAP or Base64.NO_PADDING)
         val hashB64 = Base64.encodeToString(hash, Base64.NO_WRAP or Base64.NO_PADDING)
 
+        return "\$argon2id\$v=19\$m=$ARGON2_MEMORY_KB,t=$ARGON2_ITERATIONS,p=$ARGON2_PARALLELISM\$$saltB64\$$hashB64"
+    }
+
+    /**
+     * Wipeable variant of [hashPasswordPHC]. Caller retains ownership
+     * of the SecurePassword (does not wipe). The returned PHC string
+     * is the Argon2id hash — safe to hold in a String since it's a
+     * derivation, not the password itself.
+     */
+    fun hashPasswordPHC(password: com.vettid.app.core.security.SecurePassword, salt: ByteArray): String {
+        val hash = hashPassword(password, salt)
+        val saltB64 = Base64.encodeToString(salt, Base64.NO_WRAP or Base64.NO_PADDING)
+        val hashB64 = Base64.encodeToString(hash, Base64.NO_WRAP or Base64.NO_PADDING)
         return "\$argon2id\$v=19\$m=$ARGON2_MEMORY_KB,t=$ARGON2_ITERATIONS,p=$ARGON2_PARALLELISM\$$saltB64\$$hashB64"
     }
 
@@ -508,6 +549,35 @@ class CryptoManager @Inject constructor() {
     }
 
     /**
+     * Wipeable variant of [encryptPasswordForServer]. Caller retains
+     * ownership of the SecurePassword (this fn doesn't wipe).
+     */
+    fun encryptPasswordForServer(
+        password: com.vettid.app.core.security.SecurePassword,
+        salt: ByteArray,
+        utkPublicKeyBase64: String
+    ): PasswordEncryptionResult {
+        val passwordHashPHC = hashPasswordPHC(password, salt)
+        val passwordHashBytes = passwordHashPHC.toByteArray(Charsets.UTF_8)
+
+        val (ephemeralPrivate, ephemeralPublic) = generateX25519KeyPair()
+        val utkPublicKey = Base64.decode(utkPublicKeyBase64, Base64.NO_WRAP)
+        val sharedSecret = x25519SharedSecret(ephemeralPrivate, utkPublicKey)
+        val encryptionKey = deriveKeyWithDomain(sharedSecret, UTK_DOMAIN)
+        val (ciphertext, nonce) = xChaChaEncrypt(passwordHashBytes, encryptionKey)
+
+        ephemeralPrivate.fill(0)
+        sharedSecret.fill(0)
+        encryptionKey.fill(0)
+
+        return PasswordEncryptionResult(
+            encryptedPasswordHash = Base64.encodeToString(ciphertext, Base64.NO_WRAP),
+            ephemeralPublicKey = Base64.encodeToString(ephemeralPublic, Base64.NO_WRAP),
+            nonce = Base64.encodeToString(nonce, Base64.NO_WRAP)
+        )
+    }
+
+    /**
      * Encrypt password hash for Nitro Enclave (new architecture).
      *
      * Flow:
@@ -627,53 +697,6 @@ class CryptoManager @Inject constructor() {
             .setDigests(KeyProperties.DIGEST_SHA256)
             .setUserAuthenticationRequired(false)
             .build()
-
-        keyPairGenerator.initialize(parameterSpec)
-        val javaKeyPair = keyPairGenerator.generateKeyPair()
-
-        return KeyPair(
-            privateKey = javaKeyPair.private,
-            publicKey = javaKeyPair.public
-        )
-    }
-
-    /**
-     * Generate a biometric-protected key pair
-     */
-    fun generateBiometricProtectedKeyPair(alias: String): KeyPair {
-        val keyAlias = "$KEY_ALIAS_PREFIX$alias"
-
-        if (keyStore.containsAlias(keyAlias)) {
-            keyStore.deleteEntry(keyAlias)
-        }
-
-        val keyPairGenerator = KeyPairGenerator.getInstance(
-            KeyProperties.KEY_ALGORITHM_EC,
-            ANDROID_KEYSTORE
-        )
-
-        // PURPOSE_AGREE_KEY requires API 31+
-        val purposes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_AGREE_KEY
-        } else {
-            KeyProperties.PURPOSE_SIGN
-        }
-
-        val builder = KeyGenParameterSpec.Builder(keyAlias, purposes)
-            .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
-            .setDigests(KeyProperties.DIGEST_SHA256)
-            .setUserAuthenticationRequired(true)
-            .setInvalidatedByBiometricEnrollment(true)
-
-        // setUserAuthenticationParameters requires API 30+
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            builder.setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)
-        } else {
-            @Suppress("DEPRECATION")
-            builder.setUserAuthenticationValidityDurationSeconds(-1)
-        }
-
-        val parameterSpec = builder.build()
 
         keyPairGenerator.initialize(parameterSpec)
         val javaKeyPair = keyPairGenerator.generateKeyPair()

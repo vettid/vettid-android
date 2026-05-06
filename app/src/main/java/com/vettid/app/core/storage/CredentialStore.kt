@@ -5,6 +5,8 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.google.gson.Gson
 import android.util.Base64
+import java.security.MessageDigest
+import java.util.Locale
 import com.vettid.app.core.network.CredentialPackage
 import com.vettid.app.core.network.LedgerAuthToken
 import com.vettid.app.core.network.LegacyCredentialPackage
@@ -185,6 +187,21 @@ class CredentialStore @Inject constructor(
     }
 
     /**
+     * Replace the locally-stored encrypted credential blob. Called when
+     * the vault returns a re-encrypted blob after password change, PIN
+     * change, or any other op that mutates credential contents — keeps
+     * the app's local copy in sync with what the vault now considers
+     * authoritative. Drift here causes "incorrect password" failures on
+     * every subsequent op that decrypts the blob and verifies against it.
+     */
+    fun setEncryptedBlob(encryptedBlob: String) {
+        encryptedPrefs.edit().apply {
+            putString(KEY_ENCRYPTED_BLOB, encryptedBlob)
+            apply()
+        }
+    }
+
+    /**
      * Get current CEK version
      */
     fun getCekVersion(): Int {
@@ -207,9 +224,8 @@ class CredentialStore @Inject constructor(
         val storedToken = encryptedPrefs.getString(KEY_LAT_TOKEN, null) ?: return false
         val storedLatId = encryptedPrefs.getString(KEY_LAT_ID, null) ?: return false
 
-        // Constant-time comparison
-        return receivedLat.latId == storedLatId &&
-               receivedLat.token.lowercase() == storedToken.lowercase()
+        return constantTimeEqualsCaseInsensitive(receivedLat.latId, storedLatId) &&
+               constantTimeEqualsCaseInsensitive(receivedLat.token, storedToken)
     }
 
     /**
@@ -495,8 +511,8 @@ class CredentialStore @Inject constructor(
         val storedToken = encryptedPrefs.getString(KEY_LAT_TOKEN, null) ?: return false
         val storedLatId = encryptedPrefs.getString(KEY_LAT_ID, null) ?: return false
 
-        return receivedLat.latId == storedLatId &&
-               receivedLat.token.lowercase() == storedToken.lowercase()
+        return constantTimeEqualsCaseInsensitive(receivedLat.latId, storedLatId) &&
+               constantTimeEqualsCaseInsensitive(receivedLat.token, storedToken)
     }
 
     /**
@@ -1234,6 +1250,12 @@ class CredentialStore @Inject constructor(
      */
     fun clearAll() {
         encryptedPrefs.edit().clear().apply()
+    }
+
+    private fun constantTimeEqualsCaseInsensitive(a: String, b: String): Boolean {
+        val aBytes = a.lowercase(Locale.ROOT).toByteArray(Charsets.UTF_8)
+        val bBytes = b.lowercase(Locale.ROOT).toByteArray(Charsets.UTF_8)
+        return MessageDigest.isEqual(aBytes, bBytes)
     }
 }
 

@@ -11,12 +11,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.fragment.app.FragmentActivity
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.vettid.app.features.auth.BiometricAuthManager
-import com.vettid.app.features.auth.BiometricAuthResult
+import com.vettid.app.core.crypto.CryptoManager
+import com.vettid.app.core.nats.OwnerSpaceClient
 import kotlinx.coroutines.launch
 
 /**
@@ -34,13 +37,19 @@ import kotlinx.coroutines.launch
 fun TransferApprovalScreen(
     transferId: String,
     viewModel: TransferViewModel = hiltViewModel(),
-    biometricAuthManager: BiometricAuthManager = hiltViewModel<TransferApprovalViewModel>().biometricAuthManager,
     onNavigateBack: () -> Unit = {}
 ) {
     val state by viewModel.approvalState.collectAsState()
     val context = LocalContext.current
-    val activity = context as? FragmentActivity
     val scope = rememberCoroutineScope()
+
+    // Password-prompt state. Replaces the prior biometric flow —
+    // approving a credential transfer is high-stakes, so we gate it
+    // on fresh password authentication via the existing
+    // `credential.identity-unlock` round-trip.
+    val deps: TransferApprovalDeps = hiltViewModel<TransferApprovalViewModel>().deps
+    var showPasswordDialog by remember { mutableStateOf(false) }
+    var pendingPassword by remember { mutableStateOf("") }
 
     // Load transfer on mount
     LaunchedEffect(transferId) {
@@ -58,30 +67,44 @@ fun TransferApprovalScreen(
                     Toast.makeText(context, effect.message, Toast.LENGTH_SHORT).show()
                 }
                 is TransferApprovalEffect.RequestBiometric -> {
-                    // Trigger biometric authentication
-                    if (activity != null) {
-                        scope.launch {
-                            val result = biometricAuthManager.authenticateWithFallback(
-                                activity = activity,
-                                title = "Approve Transfer",
-                                subtitle = "Authenticate to approve credential transfer"
-                            )
-                            when (result) {
-                                is BiometricAuthResult.Success -> {
-                                    viewModel.onApprovalEvent(TransferApprovalEvent.BiometricSuccess)
-                                }
-                                is BiometricAuthResult.Error -> {
-                                    viewModel.onApprovalEvent(
-                                        TransferApprovalEvent.BiometricFailed(result.message)
-                                    )
-                                }
-                            }
-                        }
-                    }
+                    // Biometric was removed; we now prompt for the
+                    // user's credential password and route the result
+                    // through the same Success/Failed events the
+                    // viewmodel already understands. Renaming the
+                    // events is a follow-up cleanup.
+                    showPasswordDialog = true
+                    pendingPassword = ""
                 }
                 is TransferApprovalEffect.NavigateBack -> onNavigateBack()
             }
         }
+    }
+
+    if (showPasswordDialog) {
+        TransferApprovalPasswordDialog(
+            onCancel = {
+                showPasswordDialog = false
+                viewModel.onApprovalEvent(
+                    TransferApprovalEvent.BiometricFailed("Password entry cancelled")
+                )
+            },
+            onSubmit = { securePw ->
+                showPasswordDialog = false
+                scope.launch {
+                    // unlockIdentity (SecurePassword variant) wipes
+                    // the password before returning. Don't reuse
+                    // securePw after this call.
+                    val result = deps.ownerSpaceClient.unlockIdentity(securePw, deps.cryptoManager)
+                    result.onSuccess {
+                        viewModel.onApprovalEvent(TransferApprovalEvent.BiometricSuccess)
+                    }.onFailure { e ->
+                        viewModel.onApprovalEvent(
+                            TransferApprovalEvent.BiometricFailed(e.message ?: "Password verification failed")
+                        )
+                    }
+                }
+            }
+        )
     }
 
     Scaffold(
@@ -150,12 +173,79 @@ fun TransferApprovalScreen(
 }
 
 /**
- * ViewModel to provide BiometricAuthManager via Hilt.
+ * Bundle of dependencies the transfer-approval flow needs from Hilt.
+ * Replaces the prior BiometricAuthManager-only ViewModel since we
+ * now gate approval on a password verification round-trip via the
+ * vault rather than on a local biometric prompt.
  */
+data class TransferApprovalDeps(
+    val ownerSpaceClient: OwnerSpaceClient,
+    val cryptoManager: CryptoManager,
+)
+
 @dagger.hilt.android.lifecycle.HiltViewModel
 class TransferApprovalViewModel @javax.inject.Inject constructor(
-    val biometricAuthManager: BiometricAuthManager
-) : androidx.lifecycle.ViewModel()
+    ownerSpaceClient: OwnerSpaceClient,
+    cryptoManager: CryptoManager,
+) : androidx.lifecycle.ViewModel() {
+    val deps = TransferApprovalDeps(ownerSpaceClient, cryptoManager)
+}
+
+@Composable
+private fun TransferApprovalPasswordDialog(
+    onCancel: () -> Unit,
+    onSubmit: (com.vettid.app.core.security.SecurePassword) -> Unit,
+) {
+    // Same pattern as the FeedScreen ReauthPasswordDialog: the
+    // OutlinedTextField hands back a String at the IME boundary. On
+    // submit we copy into a CharArray-backed SecurePassword and drop
+    // the String reference. DisposableEffect wipes the held String on
+    // dialog dismiss.
+    var password by remember { mutableStateOf("") }
+    var show by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) {
+        onDispose { password = "" }
+    }
+    AlertDialog(
+        onDismissRequest = onCancel,
+        title = { Text("Approve Transfer") },
+        text = {
+            Column {
+                Text(
+                    "Enter your password to approve this credential transfer.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Password") },
+                    singleLine = true,
+                    visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        TextButton(onClick = { show = !show }) {
+                            Text(if (show) "Hide" else "Show")
+                        }
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val pw = com.vettid.app.core.security.SecurePassword.fromString(password)
+                    password = ""
+                    onSubmit(pw)
+                },
+                enabled = password.isNotEmpty(),
+            ) { Text("Approve") }
+        },
+        dismissButton = {
+            TextButton(onClick = onCancel) { Text("Cancel") }
+        }
+    )
+}
 
 @Composable
 private fun LoadingContent() {

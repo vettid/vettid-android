@@ -3,6 +3,7 @@ package com.vettid.app.features.agents
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import com.vettid.app.core.security.secureClipboard
 import android.widget.Toast
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -286,8 +287,9 @@ private fun CreatedContent(
                 Spacer(modifier = Modifier.height(12.dp))
                 OutlinedButton(
                     onClick = {
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("VettID Agent Init", initCommand))
+                        // Agent init command embeds short-lived
+                        // credentials — auto-clear + sensitive flag.
+                        context.secureClipboard().copySensitiveText(initCommand)
                         Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
                     },
                     modifier = Modifier.fillMaxWidth()

@@ -2,6 +2,7 @@ package com.vettid.app.features.wallet
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import com.vettid.app.core.security.secureClipboard
 import android.content.Context
 import android.graphics.Bitmap
 import android.util.Log
@@ -277,8 +278,12 @@ class WalletDetailViewModel @Inject constructor(
         _backupPasswordPrompt.value = null
     }
 
-    fun confirmBackupPrompt(password: String) {
-        val mode = _backupPasswordPrompt.value ?: return
+    fun confirmBackupPrompt(password: com.vettid.app.core.security.SecurePassword) {
+        val mode = _backupPasswordPrompt.value
+        if (mode == null) {
+            password.wipe()
+            return
+        }
         _backupPasswordPrompt.value = null
         viewModelScope.launch {
             _backupInFlight.value = true
@@ -286,11 +291,12 @@ class WalletDetailViewModel @Inject constructor(
                 if (mode == "enable") backupSeed(password) else revokeSeedBackup(password)
             } finally {
                 _backupInFlight.value = false
+                password.wipe()
             }
         }
     }
 
-    private suspend fun backupSeed(password: String) {
+    private suspend fun backupSeed(password: com.vettid.app.core.security.SecurePassword) {
         val payload = buildCredentialAuthPayload(password) ?: return
         payload.addProperty("wallet_id", walletId)
         val response = ownerSpaceClient.sendAndAwaitResponse("wallet.move-seed-to-credential", payload)
@@ -308,7 +314,7 @@ class WalletDetailViewModel @Inject constructor(
         }
     }
 
-    private suspend fun revokeSeedBackup(password: String) {
+    private suspend fun revokeSeedBackup(password: com.vettid.app.core.security.SecurePassword) {
         val payload = buildCredentialAuthPayload(password) ?: return
         payload.addProperty("wallet_id", walletId)
         val response = ownerSpaceClient.sendAndAwaitResponse("wallet.move-seed-to-wallet", payload)
@@ -332,7 +338,7 @@ class WalletDetailViewModel @Inject constructor(
      * + emits a user-visible error if any prerequisite is missing
      * (no salt, no UTKs, etc.) — caller bails out.
      */
-    private suspend fun buildCredentialAuthPayload(password: String): JsonObject? {
+    private suspend fun buildCredentialAuthPayload(password: com.vettid.app.core.security.SecurePassword): JsonObject? {
         val saltBytes = credentialStore.getPasswordSaltBytes()
         if (saltBytes == null) {
             _effects.emit(WalletDetailEffect.ShowError("No password salt available"))
@@ -656,8 +662,9 @@ fun WalletDetailScreen(
                     onTogglePublic = { viewModel.requestTogglePublic(it) },
                     onToggleSeedBackup = { viewModel.requestBackupToggle(it) },
                     onCopyAddress = {
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("Bitcoin Address", currentState.wallet.address))
+                        // SecureClipboard auto-clears + tags as sensitive
+                        // (no IME logging / no Recents preview on A13+).
+                        context.secureClipboard().copySensitiveText(currentState.wallet.address)
                     },
                     onTransactionClick = { txid -> onTransactionClick(currentState.wallet.walletId, txid) },
                     modifier = Modifier.padding(padding)
@@ -1019,10 +1026,11 @@ private fun SeedBackupCard(
 @Composable
 private fun SeedBackupPasswordDialog(
     mode: String,
-    onConfirm: (String) -> Unit,
+    onConfirm: (com.vettid.app.core.security.SecurePassword) -> Unit,
     onCancel: () -> Unit,
 ) {
     var password by remember { mutableStateOf("") }
+    DisposableEffect(Unit) { onDispose { password = "" } }
     val title = if (mode == "enable") "Move Seed to Credential" else "Move Seed Back to Wallet"
     val body = if (mode == "enable")
         "Enter your account password to move this wallet's 12-word seed into your credential. The seed will be wiped from the wallet record — every BTC send afterwards will require your password."
@@ -1048,7 +1056,11 @@ private fun SeedBackupPasswordDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onConfirm(password) },
+                onClick = {
+                    val pw = com.vettid.app.core.security.SecurePassword.fromString(password)
+                    password = ""
+                    onConfirm(pw)
+                },
                 enabled = password.isNotBlank(),
             ) {
                 Text(if (mode == "enable") "Back up" else "Remove")

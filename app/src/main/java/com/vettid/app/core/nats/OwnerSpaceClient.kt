@@ -5,6 +5,7 @@ import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 import com.vettid.app.core.crypto.EncryptedSessionMessage
+import com.vettid.app.core.security.wipe
 import com.vettid.app.core.crypto.SessionCrypto
 import com.vettid.app.core.crypto.SessionInfo
 import com.vettid.app.core.crypto.SessionKeyPair
@@ -768,6 +769,33 @@ class OwnerSpaceClient @Inject constructor(
         newPin: String,
         cryptoManager: com.vettid.app.core.crypto.CryptoManager
     ): Result<PINChangeResult> {
+        val oldPw = com.vettid.app.core.security.SecurePassword.fromString(oldPin)
+        val newPw = com.vettid.app.core.security.SecurePassword.fromString(newPin)
+        return try {
+            changePIN(oldPw, newPw, cryptoManager)
+        } finally {
+            oldPw.wipe()
+            newPw.wipe()
+        }
+    }
+
+    /**
+     * Wipeable variant — takes ownership of both PINs.
+     *
+     * The JSON payload sent to the enclave does briefly contain the
+     * PINs as a JSON String (unavoidable; that's the wire format).
+     * That String only lives for the microseconds it takes to
+     * `toByteArray()` and encrypt; the long-lived parameter slots
+     * that previously held the PIN through the suspending NATS
+     * round-trip are now SecurePassword-backed and wiped by the
+     * String overload above (or by the caller if they passed a
+     * SecurePassword directly).
+     */
+    suspend fun changePIN(
+        oldPin: com.vettid.app.core.security.SecurePassword,
+        newPin: com.vettid.app.core.security.SecurePassword,
+        cryptoManager: com.vettid.app.core.crypto.CryptoManager
+    ): Result<PINChangeResult> {
         return try {
             // Get enclave public key
             val enclavePublicKey = credentialStore.getEnclavePublicKey()
@@ -780,17 +808,36 @@ class OwnerSpaceClient @Inject constructor(
 
             Log.d(TAG, "changePIN: Using UTK ${availableUtk.keyId}")
 
-            // Build PIN payload matching enclave PINChangePayload struct
-            val pinPayload = JsonObject().apply {
-                addProperty("old_pin", oldPin)
-                addProperty("new_pin", newPin)
+            // Build the JSON payload byte-by-byte from the
+            // SecurePassword chars. The intermediate String at the
+            // JsonObject boundary still exists briefly — but we
+            // construct it inside this scope and immediately drop
+            // the reference. The String is unreachable as soon as
+            // `pinPayload.toString().toByteArray()` returns.
+            val pinPayloadBytes = run {
+                val oldChars = oldPin.copyChars()
+                val newChars = newPin.copyChars()
+                try {
+                    val pinPayload = JsonObject().apply {
+                        addProperty("old_pin", String(oldChars))
+                        addProperty("new_pin", String(newChars))
+                    }
+                    pinPayload.toString().toByteArray(Charsets.UTF_8)
+                } finally {
+                    oldChars.wipe()
+                    newChars.wipe()
+                }
             }
 
             // Encrypt with X25519 + ChaCha20-Poly1305 to enclave's public key
-            val encryptedResult = cryptoManager.encryptToPublicKey(
-                plaintext = pinPayload.toString().toByteArray(),
-                publicKeyBase64 = android.util.Base64.encodeToString(enclavePublicKey, android.util.Base64.NO_WRAP)
-            )
+            val encryptedResult = try {
+                cryptoManager.encryptToPublicKey(
+                    plaintext = pinPayloadBytes,
+                    publicKeyBase64 = android.util.Base64.encodeToString(enclavePublicKey, android.util.Base64.NO_WRAP)
+                )
+            } finally {
+                pinPayloadBytes.wipe()
+            }
 
             // Combine ephemeral public key + nonce + ciphertext
             val ephemeralPubKeyBytes = android.util.Base64.decode(encryptedResult.ephemeralPublicKey, android.util.Base64.NO_WRAP)
@@ -854,6 +901,12 @@ class OwnerSpaceClient @Inject constructor(
                                     Log.i(TAG, "changePIN: Added ${newKeys.size} new UTKs. Total: ${credentialStore.getUtkCount()}")
                                 }
                             }
+                            // Persist the re-encrypted credential blob the
+                            // vault just minted with the new AuthHash/Salt
+                            // so subsequent password-verify ops compare
+                            // against the up-to-date hash.
+                            response.result.get("encrypted_credential")?.asString?.takeIf { it.isNotBlank() }
+                                ?.let { credentialStore.setEncryptedBlob(it) }
                             Result.success(PINChangeResult(success = true))
                         } else {
                             val error = response.result.get("error")?.asString ?: "PIN change failed"
@@ -879,6 +932,93 @@ class OwnerSpaceClient @Inject constructor(
     }
 
     /**
+     * Phase E: re-populate the in-memory identity-key carve-out after
+     * the sliding TTL has lapsed (or to extend the window proactively).
+     *
+     * Flow:
+     * 1. Hash password with Argon2id PHC, encrypt to UTK
+     * 2. Send credential blob + encrypted password material via
+     *    credential.identity-unlock
+     * 3. Enclave decrypts blob, verifies password, copies identity
+     *    keypair into vaultState carve-outs with a fresh TTL window
+     *
+     * @return IdentityUnlockResult with the unix timestamp when the
+     *         window will lapse if not extended by other signed ops
+     */
+    suspend fun unlockIdentity(
+        password: String,
+        cryptoManager: com.vettid.app.core.crypto.CryptoManager
+    ): Result<IdentityUnlockResult> {
+        // Wrap the String into a SecurePassword and delegate. Callers
+        // that already hold a SecurePassword should call the overload
+        // below directly so the String constructor never runs.
+        val pw = com.vettid.app.core.security.SecurePassword.fromString(password)
+        return try {
+            unlockIdentity(pw, cryptoManager)
+        } finally {
+            pw.wipe()
+        }
+    }
+
+    /**
+     * Wipeable variant — takes ownership of [password] and wipes it
+     * before returning. Caller MUST NOT use [password] after this
+     * call.
+     */
+    suspend fun unlockIdentity(
+        password: com.vettid.app.core.security.SecurePassword,
+        cryptoManager: com.vettid.app.core.crypto.CryptoManager
+    ): Result<IdentityUnlockResult> {
+        return try {
+            val salt = credentialStore.getPasswordSaltBytes()
+                ?: return Result.failure(Exception("Password salt not found"))
+            val utkPool = credentialStore.getUtkPool()
+            val utk = utkPool.firstOrNull()
+                ?: return Result.failure(Exception("No transaction keys available"))
+            val encryptedBlob = credentialStore.getEncryptedBlob()
+                ?: return Result.failure(Exception("No credential blob available"))
+
+            val enc = cryptoManager.encryptPasswordForServer(password, salt, utk.publicKey)
+
+            val payload = JsonObject().apply {
+                addProperty("encrypted_credential", encryptedBlob)
+                addProperty("encrypted_password_hash", enc.encryptedPasswordHash)
+                addProperty("ephemeral_public_key", enc.ephemeralPublicKey)
+                addProperty("nonce", enc.nonce)
+                addProperty("key_id", utk.keyId)
+            }
+
+            subscribeToVault()
+            val response = sendAndAwaitResponse(
+                messageType = "credential.identity-unlock",
+                payload = payload,
+                timeoutMs = 15000L
+            )
+
+            // UTKs are single-use regardless of outcome.
+            credentialStore.removeUtk(utk.keyId)
+
+            when (response) {
+                is VaultResponse.HandlerResult -> {
+                    if (response.success && response.result != null) {
+                        val expiresAt = response.result.get("expires_at")?.asLong ?: 0L
+                        val ttl = response.result.get("ttl_seconds")?.asLong ?: 0L
+                        Result.success(IdentityUnlockResult(expiresAt, ttl))
+                    } else {
+                        Result.failure(Exception(response.error ?: "identity unlock failed"))
+                    }
+                }
+                is VaultResponse.Error -> Result.failure(Exception(response.message))
+                null -> Result.failure(Exception("Request timed out"))
+                else -> Result.failure(Exception("Unexpected response from vault"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "unlockIdentity failed", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Change the credential password stored in the Protean Credential.
      *
      * Flow:
@@ -895,6 +1035,26 @@ class OwnerSpaceClient @Inject constructor(
     suspend fun changePassword(
         oldPassword: String,
         newPassword: String,
+        cryptoManager: com.vettid.app.core.crypto.CryptoManager
+    ): Result<PasswordChangeResult> {
+        // Wrap + delegate. Strings are dropped after fromString().
+        val oldPw = com.vettid.app.core.security.SecurePassword.fromString(oldPassword)
+        val newPw = com.vettid.app.core.security.SecurePassword.fromString(newPassword)
+        return try {
+            changePassword(oldPw, newPw, cryptoManager)
+        } finally {
+            oldPw.wipe()
+            newPw.wipe()
+        }
+    }
+
+    /**
+     * Wipeable variant — takes ownership of both passwords and wipes
+     * them before returning.
+     */
+    suspend fun changePassword(
+        oldPassword: com.vettid.app.core.security.SecurePassword,
+        newPassword: com.vettid.app.core.security.SecurePassword,
         cryptoManager: com.vettid.app.core.crypto.CryptoManager
     ): Result<PasswordChangeResult> {
         return try {
@@ -979,6 +1139,17 @@ class OwnerSpaceClient @Inject constructor(
                                     Log.i(TAG, "changePassword: Added ${newKeys.size} new UTKs. Total: ${credentialStore.getUtkCount()}")
                                 }
                             }
+
+                            // Persist the re-encrypted credential blob the
+                            // vault just minted. Without this we keep the
+                            // pre-change blob locally — and because we ALSO
+                            // store the new salt below, every subsequent
+                            // password verify hashes the typed password
+                            // with the new salt, compares against the
+                            // old-salt PHC inside the stale blob, and
+                            // fails with "incorrect password".
+                            response.result.get("encrypted_credential")?.asString?.takeIf { it.isNotBlank() }
+                                ?.let { credentialStore.setEncryptedBlob(it) }
 
                             // Update stored password salt for future operations
                             credentialStore.setPasswordSalt(
@@ -3049,6 +3220,17 @@ data class PINChangeResult(
 data class PasswordChangeResult(
     val success: Boolean,
     val error: String? = null
+)
+
+/**
+ * Result of [OwnerSpaceClient.unlockIdentity]. The vault echoes back the
+ * window length (so the UI can mirror the user's setting without
+ * re-fetching it) and the unix timestamp when the in-memory key will
+ * be wiped if no signed op extends it.
+ */
+data class IdentityUnlockResult(
+    val expiresAtUnix: Long,
+    val ttlSeconds: Long
 )
 
 /**

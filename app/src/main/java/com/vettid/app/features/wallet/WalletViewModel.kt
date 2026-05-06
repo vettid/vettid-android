@@ -109,7 +109,7 @@ class WalletViewModel @Inject constructor(
      * fresh batch of UTKs; we persist both before surfacing the
      * wallet to the UI.
      */
-    fun createWallet(label: String, network: String = "mainnet", password: String) {
+    fun createWallet(label: String, network: String = "mainnet", password: com.vettid.app.core.security.SecurePassword) {
         viewModelScope.launch {
             try {
                 val saltBytes = credentialStore.getPasswordSaltBytes()
@@ -186,6 +186,8 @@ class WalletViewModel @Inject constructor(
             } catch (e: Exception) {
                 Log.e(TAG, "Error creating wallet", e)
                 _effects.emit(WalletEffect.ShowError("Error creating wallet: ${e.message}"))
+            } finally {
+                password.wipe()
             }
         }
     }

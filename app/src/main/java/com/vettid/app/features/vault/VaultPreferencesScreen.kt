@@ -366,13 +366,20 @@ fun VaultPreferencesContent(
 @Composable
 private fun ChangePinDialog(
     onDismiss: () -> Unit,
-    onChangePIN: (currentPin: String, newPin: String, onError: (String) -> Unit) -> Unit
+    onChangePIN: (currentPin: com.vettid.app.core.security.SecurePassword, newPin: com.vettid.app.core.security.SecurePassword, onError: (String) -> Unit) -> Unit
 ) {
     var currentPin by remember { mutableStateOf("") }
     var newPin by remember { mutableStateOf("") }
     var confirmPin by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var isChanging by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) {
+        onDispose {
+            currentPin = ""
+            newPin = ""
+            confirmPin = ""
+        }
+    }
 
     val pinsMatch = newPin.length >= 4 && confirmPin.isNotEmpty() && newPin == confirmPin
 
@@ -499,7 +506,12 @@ private fun ChangePinDialog(
                         else -> {
                             isChanging = true
                             error = null
-                            onChangePIN(currentPin, newPin) { errorMsg ->
+                            val curPw = com.vettid.app.core.security.SecurePassword.fromString(currentPin)
+                            val newPw = com.vettid.app.core.security.SecurePassword.fromString(newPin)
+                            currentPin = ""
+                            newPin = ""
+                            confirmPin = ""
+                            onChangePIN(curPw, newPw) { errorMsg ->
                                 error = errorMsg
                                 isChanging = false
                             }
@@ -525,7 +537,7 @@ private fun ChangePinDialog(
 @Composable
 private fun ChangePasswordDialog(
     onDismiss: () -> Unit,
-    onChangePassword: (currentPassword: String, newPassword: String, onError: (String) -> Unit) -> Unit
+    onChangePassword: (currentPassword: com.vettid.app.core.security.SecurePassword, newPassword: com.vettid.app.core.security.SecurePassword, onError: (String) -> Unit) -> Unit
 ) {
     var currentPassword by remember { mutableStateOf("") }
     var newPassword by remember { mutableStateOf("") }
@@ -534,6 +546,13 @@ private fun ChangePasswordDialog(
     var isChanging by remember { mutableStateOf(false) }
     var currentPasswordVisible by remember { mutableStateOf(false) }
     var newPasswordVisible by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) {
+        onDispose {
+            currentPassword = ""
+            newPassword = ""
+            confirmPassword = ""
+        }
+    }
     var confirmPasswordVisible by remember { mutableStateOf(false) }
 
     val passwordsMatch = newPassword.isNotEmpty() && confirmPassword.isNotEmpty() && newPassword == confirmPassword
@@ -682,7 +701,12 @@ private fun ChangePasswordDialog(
                         else -> {
                             isChanging = true
                             error = null
-                            onChangePassword(currentPassword, newPassword) { errorMsg ->
+                            val curPw = com.vettid.app.core.security.SecurePassword.fromString(currentPassword)
+                            val newPw = com.vettid.app.core.security.SecurePassword.fromString(newPassword)
+                            currentPassword = ""
+                            newPassword = ""
+                            confirmPassword = ""
+                            onChangePassword(curPw, newPw) { errorMsg ->
                                 error = errorMsg
                                 isChanging = false
                             }
@@ -946,12 +970,18 @@ private fun CredentialAuthDialog(
     title: String,
     message: String,
     onDismiss: () -> Unit,
-    onAuthenticate: (password: String, onError: (String) -> Unit) -> Unit
+    onAuthenticate: (password: com.vettid.app.core.security.SecurePassword, onError: (String) -> Unit) -> Unit
 ) {
+    // String input lives at the IME boundary only. On submit we copy
+    // into SecurePassword and drop the local String reference;
+    // DisposableEffect drops it on dialog dismiss too.
     var password by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
     var isAuthenticating by remember { mutableStateOf(false) }
     var passwordVisible by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) {
+        onDispose { password = "" }
+    }
 
     AlertDialog(
         onDismissRequest = { if (!isAuthenticating) onDismiss() },
@@ -1033,7 +1063,9 @@ private fun CredentialAuthDialog(
                     } else {
                         isAuthenticating = true
                         error = null
-                        onAuthenticate(password) { errorMsg ->
+                        val pw = com.vettid.app.core.security.SecurePassword.fromString(password)
+                        password = ""
+                        onAuthenticate(pw) { errorMsg ->
                             error = errorMsg
                             isAuthenticating = false
                         }

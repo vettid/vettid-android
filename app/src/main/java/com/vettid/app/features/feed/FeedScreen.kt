@@ -33,11 +33,15 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -413,6 +417,7 @@ private fun FeedList(
     // ActionInvokeSheet.
     val actionsVm: com.vettid.app.features.actions.ActionsViewModel = androidx.hilt.navigation.compose.hiltViewModel()
     val peerActions by actionsVm.peerActions.collectAsState()
+    val identityLocked by actionsVm.identityLocked.collectAsState()
     var actionsConnectionId by remember { mutableStateOf<String?>(null) }
     var pickedAction by remember { mutableStateOf<com.vettid.app.core.actions.PublishedAction?>(null) }
     var lastInvocationStatus by remember { mutableStateOf<String?>(null) }
@@ -564,6 +569,16 @@ private fun FeedList(
                 },
             )
         }
+    }
+
+    // Phase E: vault returned identity_locked — prompt the user for
+    // their password so the action invoke can be retried under a fresh
+    // TTL window.
+    if (identityLocked) {
+        ReauthPasswordDialog(
+            onDismiss = { actionsVm.cancelReauth() },
+            onSubmit = { pwd -> actionsVm.submitReauthPassword(pwd) },
+        )
     }
     lastInvocationStatus?.let { status ->
         LaunchedEffect(status) {
@@ -2172,6 +2187,70 @@ private fun EventDetailDialog(
         },
         dismissButton = if (event.requiresAction && event.actionType == ActionTypes.ACCEPT_DECLINE) null else {
             { /* No dismiss button for action dialogs */ }
+        }
+    )
+}
+
+@Composable
+private fun ReauthPasswordDialog(
+    onDismiss: () -> Unit,
+    onSubmit: (password: com.vettid.app.core.security.SecurePassword) -> Unit,
+) {
+    // Password input lives as a String here briefly because that's what
+    // OutlinedTextField hands back from the IME. On submit we copy into
+    // a CharArray-backed SecurePassword and immediately drop the String
+    // reference so it becomes GC-eligible. The caller takes ownership of
+    // the SecurePassword and is responsible for wiping it.
+    var password by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) {
+        onDispose {
+            // Belt-and-braces: drop the dialog-side String reference
+            // when the dialog leaves the composition.
+            password = ""
+        }
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Re-authenticate") },
+        text = {
+            Column {
+                Text(
+                    "Your sign-in window has expired. Enter your password to continue.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Password") },
+                    singleLine = true,
+                    visualTransformation = if (showPassword) {
+                        VisualTransformation.None
+                    } else {
+                        PasswordVisualTransformation()
+                    },
+                    trailingIcon = {
+                        TextButton(onClick = { showPassword = !showPassword }) {
+                            Text(if (showPassword) "Hide" else "Show")
+                        }
+                    },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val pw = com.vettid.app.core.security.SecurePassword.fromString(password)
+                    password = "" // drop String reference immediately
+                    onSubmit(pw)
+                },
+                enabled = password.isNotEmpty(),
+            ) { Text("Continue") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
 }

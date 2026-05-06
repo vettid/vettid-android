@@ -140,17 +140,65 @@ fun AddSecretScreen(
                 }
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) }
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        bottomBar = {
+            // Pin the primary Save button above the keyboard so the
+            // form's last field (Notes) is never hidden behind it.
+            // The TopAppBar Save action remains for parity.
+            Surface(
+                tonalElevation = 3.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .imePadding()
+            ) {
+                Button(
+                    onClick = {
+                        if (isCritical) {
+                            showConfirmDialog = true
+                        } else {
+                            isSaving = true
+                            viewModel.onEvent(TwoTierSecretsEvent.AddMinorSecret(
+                                name = name,
+                                value = value,
+                                category = selectedMinorCategory,
+                                notes = notes.takeIf { it.isNotBlank() },
+                                alias = composedAlias()
+                            ))
+                        }
+                    },
+                    enabled = name.isNotBlank() && value.isNotBlank() && !isSaving,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .height(56.dp)
+                ) {
+                    if (isSaving) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Icon(
+                            if (isCritical) Icons.Default.Shield else Icons.Default.Add,
+                            contentDescription = null
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(if (isCritical) "Save Critical Secret" else "Save Secret")
+                    }
+                }
+            }
+        }
     ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                // imePadding so the soft keyboard doesn't cover the
-                // bottom of the form; combined with verticalScroll
-                // the user can scroll multi-line fields (Value, Notes)
-                // even when they expand past the visible area.
-                .imePadding()
+                // verticalScroll so a long Value or Notes field doesn't
+                // push later fields off the bottom — keyboard insets
+                // are handled by the Scaffold bottomBar (imePadding
+                // there raises the Save button above the keyboard, and
+                // Scaffold trims this content area accordingly).
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
@@ -365,8 +413,13 @@ fun AddSecretScreen(
                     keyboardType = KeyboardType.Password,
                     imeAction = ImeAction.Next
                 ),
+                // Cap the visible height of the Value field so a long
+                // pasted value (e.g. a 130-char crypto public key)
+                // doesn't push the Notes field off the bottom of the
+                // screen. The text still wraps fully — the field
+                // scrolls internally past the cap.
                 minLines = if (isCritical && selectedCriticalCategory == CriticalSecretCategory.SEED_PHRASE) 3 else 1,
-                maxLines = 5,
+                maxLines = if (isCritical && selectedCriticalCategory == CriticalSecretCategory.SEED_PHRASE) 5 else 3,
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -424,44 +477,9 @@ fun AddSecretScreen(
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
-
-            // Save button (larger for mobile)
-            Button(
-                onClick = {
-                    if (isCritical) {
-                        showConfirmDialog = true
-                    } else {
-                        isSaving = true
-                        viewModel.onEvent(TwoTierSecretsEvent.AddMinorSecret(
-                            name = name,
-                            value = value,
-                            category = selectedMinorCategory,
-                            notes = notes.takeIf { it.isNotBlank() },
-                            alias = alias.takeIf { it.isNotBlank() }
-                        ))
-                    }
-                },
-                enabled = name.isNotBlank() && value.isNotBlank() && !isSaving,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp)
-            ) {
-                if (isSaving) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        color = MaterialTheme.colorScheme.onPrimary,
-                        strokeWidth = 2.dp
-                    )
-                } else {
-                    Icon(
-                        if (isCritical) Icons.Default.Shield else Icons.Default.Add,
-                        contentDescription = null
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(if (isCritical) "Save Critical Secret" else "Save Secret")
-                }
-            }
+            // Bottom padding so the last form item clears the pinned
+            // Save button in the Scaffold bottomBar.
+            Spacer(modifier = Modifier.height(16.dp))
         }
 
         // Confirmation dialog for critical secrets

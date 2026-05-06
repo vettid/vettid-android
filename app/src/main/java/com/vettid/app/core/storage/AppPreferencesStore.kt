@@ -151,6 +151,18 @@ class AppPreferencesStore(context: Context) {
         prefs.edit().putInt(KEY_DELETE_AFTER_DAYS, days).apply()
     }
 
+    /**
+     * Wipe every preference (used by sign-out + decommission).
+     * Drops the cached lat/lon, location-tracking config, theme, all
+     * credential-policy knobs. Callers should re-seed defaults if the
+     * user immediately re-enrolls.
+     */
+    fun clearAll() {
+        prefs.edit().clear().apply()
+        _themeFlow.value = AppTheme.AUTO
+        _locationTrackingFlow.value = false
+    }
+
     companion object {
         private const val PREFS_NAME = "app_preferences"
         private const val KEY_THEME = "app_theme"

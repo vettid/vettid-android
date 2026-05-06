@@ -32,7 +32,8 @@ class SecretsViewModel @Inject constructor(
     private val personalDataStore: PersonalDataStore,
     private val ownerSpaceClient: OwnerSpaceClient,
     private val credentialStore: CredentialStore,
-    private val natsAutoConnector: NatsAutoConnector
+    private val natsAutoConnector: NatsAutoConnector,
+    private val secureClipboard: com.vettid.app.core.security.SecureClipboard,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<SecretsState>(SecretsState.Loading)
@@ -186,11 +187,11 @@ class SecretsViewModel @Inject constructor(
             val secret = minorSecretsStore.getSecret(secretId)
             if (secret != null) {
                 try {
-                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    val clip = ClipData.newPlainText(secret.name, secret.value)
-                    clipboard.setPrimaryClip(clip)
+                    // SecureClipboard auto-clears after 30s and tags the
+                    // clip with EXTRA_IS_SENSITIVE on Android 13+ so the
+                    // system suppresses preview thumbnails / IME logging.
+                    secureClipboard.copySensitiveText(secret.value)
                     _effects.emit(SecretsEffect.SecretCopied)
-                    Log.d(TAG, "Copied secret to clipboard: ${secret.name}")
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to copy to clipboard", e)
                     _effects.emit(SecretsEffect.ShowError("Failed to copy"))

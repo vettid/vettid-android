@@ -185,16 +185,44 @@ class VaultPreferencesViewModel @Inject constructor(
     /**
      * Update session TTL. Requires password authentication and persists to vault.
      */
-    fun updateSessionTtl(seconds: Int, password: String, onResult: (Result<Unit>) -> Unit) {
+    fun updateSessionTtl(seconds: Int, password: com.vettid.app.core.security.SecurePassword, onResult: (Result<Unit>) -> Unit) {
         viewModelScope.launch {
             try {
-                // Send to vault for persistence
+                // Phase E: settings.credential.update is gated on fresh
+                // password verification — encrypt the password hash with
+                // a UTK and send the credential blob along with the new
+                // value.
+                val salt = credentialStore.getPasswordSaltBytes()
+                if (salt == null) {
+                    onResult(Result.failure(Exception("Password salt missing — please re-enroll")))
+                    return@launch
+                }
+                val utk = credentialStore.getUtkPool().firstOrNull()
+                if (utk == null) {
+                    onResult(Result.failure(Exception("No transaction keys available")))
+                    return@launch
+                }
+                val encryptedBlob = credentialStore.getEncryptedBlob()
+                if (encryptedBlob == null) {
+                    onResult(Result.failure(Exception("No credential blob — please re-enroll")))
+                    return@launch
+                }
+                val enc = cryptoManager.encryptPasswordForServer(password, salt, utk.publicKey)
+
                 val payload = JsonObject().apply {
                     addProperty("session_ttl_seconds", seconds)
+                    addProperty("encrypted_credential", encryptedBlob)
+                    addProperty("encrypted_password_hash", enc.encryptedPasswordHash)
+                    addProperty("ephemeral_public_key", enc.ephemeralPublicKey)
+                    addProperty("nonce", enc.nonce)
+                    addProperty("key_id", utk.keyId)
                 }
                 val response = ownerSpaceClient.sendAndAwaitResponse(
                     "settings.credential.update", payload, 10000L
                 )
+
+                // UTKs are single-use regardless of outcome.
+                credentialStore.removeUtk(utk.keyId)
 
                 // Check response for success
                 when (response) {
@@ -224,6 +252,10 @@ class VaultPreferencesViewModel @Inject constructor(
                 Log.e(TAG, "Failed to update TTL", e)
                 _effects.emit(VaultPreferencesEffect.ShowError("Failed to update TTL"))
                 onResult(Result.failure(e))
+            } finally {
+                // VM took ownership of the SecurePassword; wipe before
+                // returning so it's not heap-resident past the call.
+                password.wipe()
             }
         }
     }
@@ -322,9 +354,11 @@ class VaultPreferencesViewModel @Inject constructor(
      * Change the vault unlock PIN.
      * Delegates to OwnerSpaceClient for encrypted communication with enclave.
      */
-    fun changePIN(currentPin: String, newPin: String, onResult: (Result<Unit>) -> Unit) {
+    fun changePIN(currentPin: com.vettid.app.core.security.SecurePassword, newPin: com.vettid.app.core.security.SecurePassword, onResult: (Result<Unit>) -> Unit) {
         viewModelScope.launch {
             try {
+                // ownerSpaceClient.changePIN (SecurePassword variant)
+                // wipes the inputs before returning.
                 val result = ownerSpaceClient.changePIN(currentPin, newPin, cryptoManager)
                 result.fold(
                     onSuccess = { pinChangeResult ->
@@ -353,9 +387,11 @@ class VaultPreferencesViewModel @Inject constructor(
      * Change the credential password stored in the Protean Credential.
      * Delegates to OwnerSpaceClient for encrypted communication with enclave.
      */
-    fun changePassword(currentPassword: String, newPassword: String, onResult: (Result<Unit>) -> Unit) {
+    fun changePassword(currentPassword: com.vettid.app.core.security.SecurePassword, newPassword: com.vettid.app.core.security.SecurePassword, onResult: (Result<Unit>) -> Unit) {
         viewModelScope.launch {
             try {
+                // ownerSpaceClient.changePassword (SecurePassword variant)
+                // wipes the inputs before returning.
                 val result = ownerSpaceClient.changePassword(currentPassword, newPassword, cryptoManager)
                 result.fold(
                     onSuccess = { passwordChangeResult ->

@@ -168,7 +168,7 @@ class SendBtcViewModel @Inject constructor(
         toAddress: String,
         amountSats: Long,
         feeRate: Int,
-        password: String? = null,
+        password: com.vettid.app.core.security.SecurePassword? = null,
     ) {
         viewModelScope.launch {
             try {
@@ -181,7 +181,7 @@ class SendBtcViewModel @Inject constructor(
                     addProperty("fee_rate", feeRate)
                 }
 
-                if (!password.isNullOrEmpty()) {
+                if (password != null && password.isNotEmpty()) {
                     val authed = attachCredentialAuth(payload, password)
                     if (!authed) {
                         _sendState.value = SendState.Error("Could not unlock credential — try again")
@@ -216,6 +216,8 @@ class SendBtcViewModel @Inject constructor(
             } catch (e: Exception) {
                 Log.e(TAG, "Error sending transaction", e)
                 _sendState.value = SendState.Error("Error: ${e.message}")
+            } finally {
+                password?.wipe()
             }
         }
     }
@@ -267,7 +269,7 @@ class SendBtcViewModel @Inject constructor(
      * helper for credential.secret.* mutations. Returns false if any
      * prerequisite (salt, UTKs, blob) is missing.
      */
-    private fun attachCredentialAuth(payload: JsonObject, password: String): Boolean {
+    private fun attachCredentialAuth(payload: JsonObject, password: com.vettid.app.core.security.SecurePassword): Boolean {
         return try {
             val saltBytes = credentialStore.getPasswordSaltBytes() ?: return false
             val utkPool = credentialStore.getUtkPool()

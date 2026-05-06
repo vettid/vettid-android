@@ -44,14 +44,20 @@ sealed class CriticalSecretsState {
  * Events for the critical secrets screen.
  */
 sealed class CriticalSecretsScreenEvent {
-    /** Submit password for authentication. */
-    data class SubmitPassword(val password: String) : CriticalSecretsScreenEvent()
+    /**
+     * Submit password for authentication. The viewmodel takes
+     * ownership of the SecurePassword and wipes it on completion.
+     */
+    data class SubmitPassword(val password: com.vettid.app.core.security.SecurePassword) : CriticalSecretsScreenEvent()
 
     /** Tap a secret to reveal its value. */
     data class RevealSecret(val secretId: String, val secretName: String) : CriticalSecretsScreenEvent()
 
-    /** Submit password for secret reveal. */
-    data class SubmitRevealPassword(val password: String) : CriticalSecretsScreenEvent()
+    /**
+     * Submit password for secret reveal. The viewmodel takes
+     * ownership of the SecurePassword and wipes it on completion.
+     */
+    data class SubmitRevealPassword(val password: com.vettid.app.core.security.SecurePassword) : CriticalSecretsScreenEvent()
 
     /** Timer expired, hide value. */
     object TimerExpired : CriticalSecretsScreenEvent()

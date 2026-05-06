@@ -119,10 +119,17 @@ class PersonalDataViewModel @Inject constructor(
             is PersonalDataState.Loaded -> state.items
                 .filter { !it.hideFromCatalog }
                 .map { item ->
+                    // Carry the alias through so the dialog's
+                    // alias-grouping path engages the same way it does
+                    // on a peer's view of this catalog. Without alias
+                    // every item collapses into the bare category
+                    // bucket and the self-side dialog drifts away from
+                    // what peers see during invite preview.
                     PublicMetadataItem(
                         name = item.name,
                         type = item.type.name,
-                        category = item.category?.displayName ?: "Other"
+                        category = item.category?.displayName ?: "Other",
+                        alias = item.alias,
                     )
                 }
             else -> emptyList()
@@ -904,9 +911,17 @@ class PersonalDataViewModel @Inject constructor(
      * already running.
      */
     private val isPublishing = java.util.concurrent.atomic.AtomicBoolean(false)
+    // Set when a publish was requested while another was in flight. The
+    // in-flight publish drains this on completion and re-publishes once
+    // — coalesces a burst of toggles (e.g. flipping every address field
+    // to "show on profile" in quick succession) into one final publish
+    // that reflects the latest state. Without this, only the very first
+    // toggle's payload reached the vault and the rest were dropped.
+    private val publishPending = java.util.concurrent.atomic.AtomicBoolean(false)
     fun publishProfile() {
         if (!isPublishing.compareAndSet(false, true)) {
-            Log.d(TAG, "publishProfile() ignored — a publish is already in flight")
+            publishPending.set(true)
+            Log.d(TAG, "publishProfile() coalesced — flagged pending re-publish after in-flight one finishes")
             return
         }
         viewModelScope.launch {
@@ -980,6 +995,10 @@ class PersonalDataViewModel @Inject constructor(
                 _effects.emit(PersonalDataEffect.ShowError(e.message ?: "Failed to publish"))
             } finally {
                 isPublishing.set(false)
+                if (publishPending.compareAndSet(true, false)) {
+                    Log.d(TAG, "publishProfile() re-running queued publish")
+                    publishProfile()
+                }
             }
         }
     }
@@ -2320,25 +2339,22 @@ class PersonalDataViewModel @Inject constructor(
             val secrets = minorSecretsStore.getAllSecrets()
                 .filter { !it.hideFromCatalog }
             val secretItems = secrets.map { secret ->
+                // Carry the alias so a minor secret tagged with one
+                // groups by alias on the dialog the same way it does
+                // peer-side via the vault's secret_catalog.
                 PublicMetadataItem(
                     name = secret.name,
                     type = secret.type.name,
                     category = secret.category.displayName,
+                    alias = secret.alias,
                 )
             }
-            // Public wallets live on the published profile (vault
-            // emits `wallets[]`), not in MinorSecretsStore, so merge
-            // them in so the Secrets badge matches what peers see.
-            val walletItems = _publishedProfile.value?.items
-                ?.filter { it.category == DataCategory.WALLET }
-                ?.map { wallet ->
-                    PublicMetadataItem(
-                        name = wallet.name,
-                        type = "PUBLIC_KEY",
-                        category = DataCategory.WALLET.displayName,
-                    )
-                }
-                .orEmpty()
+            // Wallets are already in `_criticalSecretCatalog` (the
+            // vault's secret_catalog includes them with alias "BTC ·
+            // <label>"). Adding them again here would produce a
+            // duplicate row in the Secrets dialog and drift away from
+            // the peer view, so leave that source authoritative.
+            val walletItems = emptyList<PublicMetadataItem>()
             // Critical-secret metadata: vault emits `secret_catalog`
             // when discoverability is "cataloged". Values never appear
             // here — only that the user has the secret. The published-

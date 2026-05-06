@@ -106,9 +106,10 @@ android {
     productFlavors {
         create("production") {
             dimension = "environment"
-            // Production settings - real attestation, real biometrics
+            // Production settings — real attestation. Biometrics were
+            // removed; the app gates sensitive operations on password
+            // verification (credential.identity-unlock).
             buildConfigField("Boolean", "SKIP_ATTESTATION", "false")
-            buildConfigField("Boolean", "AUTO_BIOMETRIC", "false")
             buildConfigField("Boolean", "TEST_MODE", "false")
             buildConfigField("String", "API_BASE_URL", "\"https://api.vettid.dev\"")
             buildConfigField("String", "PCR_MANIFEST_URL", "\"https://pcr-manifest.vettid.dev/pcr-manifest.json\"")
@@ -117,9 +118,8 @@ android {
             dimension = "environment"
             applicationIdSuffix = ".automation"
             versionNameSuffix = "-automation"
-            // Automation settings - mock attestation, auto-bypass biometrics
+            // Automation settings — mock attestation only.
             buildConfigField("Boolean", "SKIP_ATTESTATION", "true")
-            buildConfigField("Boolean", "AUTO_BIOMETRIC", "true")
             buildConfigField("Boolean", "TEST_MODE", "true")
             buildConfigField("String", "API_BASE_URL", "\"https://api.vettid.dev\"")
             buildConfigField("String", "PCR_MANIFEST_URL", "\"https://pcr-manifest.vettid.dev/pcr-manifest.json\"")
@@ -130,6 +130,26 @@ android {
     // Enable build config fields
     buildFeatures {
         buildConfig = true
+    }
+
+    // Refuse to produce an automation+release APK. SKIP_ATTESTATION=true
+    // combined with the prod release signing key would yield a binary that
+    // looks signed-and-released to users / playstore but bypasses attestation
+    // entirely. Keep automation strictly debug-only.
+    applicationVariants.all {
+        val flavor = productFlavors.firstOrNull()?.name ?: ""
+        if (flavor == "automation" && buildType.name == "release") {
+            tasks.matching { it.name.startsWith("assemble") && it.name.contains("AutomationRelease") }
+                .configureEach {
+                    doFirst {
+                        throw GradleException(
+                            "automationRelease is not a valid build target. " +
+                            "automation flavor sets SKIP_ATTESTATION=true and must " +
+                            "remain debug-only — never sign with the release keystore."
+                        )
+                    }
+                }
+        }
     }
 
     compileOptions {

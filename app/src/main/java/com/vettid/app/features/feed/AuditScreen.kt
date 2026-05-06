@@ -608,9 +608,11 @@ private fun ErrorAuditContent(
 // Helper functions
 
 private fun copyToClipboard(context: Context, text: String) {
-    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    val clip = ClipData.newPlainText("Audit Log Export", text)
-    clipboard.setPrimaryClip(clip)
+    // Audit logs may contain peer GUIDs / event metadata — treat as
+    // sensitive (auto-clear, IS_SENSITIVE flag).
+    com.vettid.app.core.security.SecureClipboardEntryPoint::class.java.let { ep ->
+        dagger.hilt.android.EntryPointAccessors.fromApplication(context.applicationContext, ep)
+    }.secureClipboard().copySensitiveText(text)
 }
 
 private fun getEventTypeDisplayName(type: String): String {

@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.util.Log
+import com.vettid.app.core.security.secureClipboard
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -228,8 +229,9 @@ fun TransactionDetailScreen(
                     tx = currentState.tx,
                     confirmations = currentState.confirmations,
                     onCopyTxid = {
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("Transaction ID", currentState.tx.txid))
+                        // TXIDs are public — auto-clear keeps the
+                        // clipboard tidy but no sensitivity flag.
+                        context.secureClipboard().copyText(currentState.tx.txid)
                     },
                     modifier = Modifier.padding(padding)
                 )

@@ -8,6 +8,7 @@ import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.vettid.app.core.actions.*
+import com.vettid.app.core.crypto.CryptoManager
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.nats.VaultResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -34,8 +35,28 @@ private const val TAG = "ActionsViewModel"
 @HiltViewModel
 class ActionsViewModel @Inject constructor(
     private val ownerSpaceClient: OwnerSpaceClient,
+    private val cryptoManager: CryptoManager,
 ) : ViewModel() {
     private val gson = Gson()
+
+    /** Pending invoke arguments held while we prompt for re-auth. */
+    private data class PendingInvoke(
+        val connectionId: String,
+        val action: PublishedAction,
+        val params: JsonElement,
+        val onSent: (invocationId: String) -> Unit,
+    )
+
+    private var pendingInvoke: PendingInvoke? = null
+
+    /**
+     * Set when the vault returns identity_locked on a signed op. The
+     * UI observes this to surface a password dialog; once the user
+     * supplies their password, [submitReauthPassword] re-runs the
+     * deferred op.
+     */
+    private val _identityLocked = MutableStateFlow(false)
+    val identityLocked: StateFlow<Boolean> = _identityLocked.asStateFlow()
 
     private val _myActions = MutableStateFlow<List<MyActionEntry>>(emptyList())
     val myActions: StateFlow<List<MyActionEntry>> = _myActions.asStateFlow()
@@ -133,23 +154,100 @@ class ActionsViewModel @Inject constructor(
             return
         }
         viewModelScope.launch {
-            _busy.value = true
-            try {
-                val resp = ownerSpaceClient.sendAndAwaitResponse(
-                    "action.invoke-on-peer",
-                    ActionRequests.invokeOnPeer(connectionId, action.id, action.version, params),
-                    15000L
-                )
-                if (resp is VaultResponse.HandlerResult && resp.success && resp.result != null) {
-                    val invocationId = resp.result.get("invocation_id")?.asString ?: ""
-                    onSent(invocationId)
-                } else {
-                    _error.value = "invoke failed: ${(resp as? VaultResponse.Error)?.message ?: "unknown"}"
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "invokeOnPeer", e); _error.value = e.message
-            } finally { _busy.value = false }
+            performInvoke(PendingInvoke(connectionId, action, params, onSent))
         }
+    }
+
+    private suspend fun performInvoke(pending: PendingInvoke) {
+        _busy.value = true
+        try {
+            val resp = ownerSpaceClient.sendAndAwaitResponse(
+                "action.invoke-on-peer",
+                ActionRequests.invokeOnPeer(
+                    pending.connectionId, pending.action.id, pending.action.version, pending.params
+                ),
+                15000L
+            )
+            when {
+                resp is VaultResponse.HandlerResult && resp.success && resp.result != null -> {
+                    pending.onSent(resp.result.get("invocation_id")?.asString ?: "")
+                    pendingInvoke = null
+                }
+                isIdentityLocked(resp) -> {
+                    // Hold the args, raise the prompt; UI calls
+                    // submitReauthPassword which calls performInvoke again.
+                    pendingInvoke = pending
+                    _identityLocked.value = true
+                }
+                else -> {
+                    val msg = (resp as? VaultResponse.HandlerResult)?.error
+                        ?: (resp as? VaultResponse.Error)?.message
+                        ?: "unknown"
+                    _error.value = "invoke failed: $msg"
+                    pendingInvoke = null
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "invokeOnPeer", e); _error.value = e.message
+            pendingInvoke = null
+        } finally { _busy.value = false }
+    }
+
+    private fun isIdentityLocked(resp: VaultResponse?): Boolean {
+        val msg = when (resp) {
+            is VaultResponse.HandlerResult -> resp.error
+            is VaultResponse.Error -> resp.message
+            else -> null
+        } ?: return false
+        return msg.contains("identity_locked", ignoreCase = true)
+    }
+
+    /**
+     * Called by the UI once the user has supplied their password in
+     * response to an [identityLocked] prompt. Refreshes the
+     * identity-key TTL window and replays the deferred invoke.
+     *
+     * SECURITY: takes ownership of [password] and wipes it before
+     * returning. Caller must NOT use [password] afterwards. The
+     * String overload below is provided for migration; new callers
+     * should build a SecurePassword and call this directly so the
+     * String constructor never runs.
+     */
+    fun submitReauthPassword(password: com.vettid.app.core.security.SecurePassword) {
+        val pending = pendingInvoke ?: run {
+            _identityLocked.value = false
+            password.wipe()
+            return
+        }
+        viewModelScope.launch {
+            _busy.value = true
+            val result = try {
+                ownerSpaceClient.unlockIdentity(password, cryptoManager)
+            } catch (e: Exception) {
+                password.wipe()
+                throw e
+            }
+            // unlockIdentity (SecurePassword variant) wipes on completion.
+            _identityLocked.value = false
+            result.onSuccess {
+                performInvoke(pending)
+            }.onFailure { e ->
+                _error.value = "re-auth failed: ${e.message}"
+                pendingInvoke = null
+                _busy.value = false
+            }
+        }
+    }
+
+    /** Legacy String overload — wraps + wipes. */
+    fun submitReauthPassword(password: String) {
+        val pw = com.vettid.app.core.security.SecurePassword.fromString(password)
+        submitReauthPassword(pw)
+    }
+
+    fun cancelReauth() {
+        pendingInvoke = null
+        _identityLocked.value = false
     }
 
     fun loadPending() {

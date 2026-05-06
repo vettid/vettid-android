@@ -389,20 +389,11 @@ private fun generateQrCode(content: String, size: Int): Bitmap? {
 }
 
 private fun copyToClipboard(context: Context, text: String) {
-    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-    val clip = ClipData.newPlainText("VettID Invitation", text)
-    clipboard.setPrimaryClip(clip)
-
-    // Auto-clear clipboard after 30 seconds for security
-    Handler(Looper.getMainLooper()).postDelayed({
-        try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                clipboard.clearPrimaryClip()
-            }
-        } catch (e: Exception) {
-            // Ignore - clipboard may have changed
-        }
-    }, 30_000)
+    // Centralised SecureClipboard handles auto-clear (30s for sensitive
+    // payloads) and tags the clip with EXTRA_IS_SENSITIVE on Android 13+.
+    com.vettid.app.core.security.SecureClipboardEntryPoint::class.java.let { ep ->
+        dagger.hilt.android.EntryPointAccessors.fromApplication(context.applicationContext, ep)
+    }.secureClipboard().copySensitiveText(text)
 }
 
 private fun shareViaIntent(context: Context, deepLink: String, displayName: String) {

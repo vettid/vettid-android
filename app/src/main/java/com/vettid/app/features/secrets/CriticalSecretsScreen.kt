@@ -188,11 +188,22 @@ private fun SearchBar(
 private fun PasswordPromptContent(
     title: String,
     subtitle: String,
-    onSubmit: (String) -> Unit,
+    onSubmit: (com.vettid.app.core.security.SecurePassword) -> Unit,
     onCancel: () -> Unit
 ) {
+    // String at the IME boundary; copied to SecurePassword on submit
+    // and the local String reference dropped immediately. The wipe on
+    // dispose covers nav-away / back-press paths.
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) {
+        onDispose { password = "" }
+    }
+    val submit: () -> Unit = {
+        val pw = com.vettid.app.core.security.SecurePassword.fromString(password)
+        password = ""
+        onSubmit(pw)
+    }
 
     Column(
         modifier = Modifier
@@ -242,7 +253,7 @@ private fun PasswordPromptContent(
                 imeAction = ImeAction.Done
             ),
             keyboardActions = KeyboardActions(
-                onDone = { if (password.isNotEmpty()) onSubmit(password) }
+                onDone = { if (password.isNotEmpty()) submit() }
             ),
             singleLine = true,
             modifier = Modifier.fillMaxWidth()
@@ -259,7 +270,7 @@ private fun PasswordPromptContent(
             }
             Spacer(modifier = Modifier.width(8.dp))
             Button(
-                onClick = { onSubmit(password) },
+                onClick = { submit() },
                 enabled = password.isNotEmpty()
             ) {
                 Text("Authenticate")

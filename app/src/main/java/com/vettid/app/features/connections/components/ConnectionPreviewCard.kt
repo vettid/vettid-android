@@ -729,10 +729,9 @@ private fun CopyableKeyField(
     }
 
     if (showQrDialog) {
+        val secureClipboard = com.vettid.app.core.security.rememberSecureClipboard()
         val copyToClipboard = {
-            val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-                as android.content.ClipboardManager
-            clipboard.setPrimaryClip(android.content.ClipData.newPlainText(label, value))
+            secureClipboard.copySensitiveText(value)
             android.widget.Toast.makeText(
                 context,
                 "Copied to clipboard",

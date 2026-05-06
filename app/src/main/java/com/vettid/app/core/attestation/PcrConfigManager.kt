@@ -378,14 +378,19 @@ class PcrConfigManager @Inject constructor(
             val keyFactory = KeyFactory.getInstance("EC")
             val publicKey = keyFactory.generatePublic(keySpec)
 
-            // Build the exact data that was signed: {version, timestamp, pcr_sets}
-            // Must match backend: JSON.stringify({version, timestamp, pcr_sets})
-            val dataToSign = com.google.gson.JsonObject().apply {
+            // Build the exact data that was signed and serialize using
+            // RFC 8785 canonical JSON. The producer (publish-pcr-set.ts)
+            // canonicalizes the same {version, timestamp, pcr_sets}
+            // tree before signing, so both sides hash byte-for-byte
+            // identical input regardless of insertion order or
+            // serializer quirks. Without this, future manifests with
+            // re-arranged keys would silently fail verification.
+            val canonicalTree = com.google.gson.JsonObject().apply {
                 addProperty("version", manifest.version)
                 addProperty("timestamp", manifest.timestamp)
                 add("pcr_sets", gson.toJsonTree(manifest.pcrSets))
             }
-            val messageBytes = gson.toJson(dataToSign).toByteArray(Charsets.UTF_8)
+            val messageBytes = canonicalizeJson(canonicalTree).toByteArray(Charsets.UTF_8)
 
             // Compute SHA-256 hash (same as backend: createHash('sha256').update(data).digest())
             val digest = java.security.MessageDigest.getInstance("SHA-256")
@@ -741,3 +746,39 @@ class PcrUpdateException(
     message: String,
     cause: Throwable? = null
 ) : Exception(message, cause)
+
+/**
+ * RFC 8785 (JSON Canonicalization Scheme) — minimal recursive
+ * serializer that mirrors the TypeScript producer
+ * (`cdk/lib/canonical-json.ts`). Object keys are sorted
+ * lexicographically; whitespace is suppressed; strings, numbers,
+ * booleans, and null are emitted via standard JSON encoding.
+ *
+ * Numbers in this codepath are integers (manifest version) and
+ * integer-shaped values (timestamps are strings); float
+ * normalization edge cases don't apply.
+ */
+private fun canonicalizeJson(element: com.google.gson.JsonElement): String {
+    if (element.isJsonNull) return "null"
+    if (element.isJsonPrimitive) {
+        val p = element.asJsonPrimitive
+        return when {
+            p.isString -> com.google.gson.Gson().toJson(p.asString)
+            p.isBoolean -> if (p.asBoolean) "true" else "false"
+            p.isNumber -> p.asNumber.toString()
+            else -> p.toString()
+        }
+    }
+    if (element.isJsonArray) {
+        val arr = element.asJsonArray
+        val parts = arr.map { canonicalizeJson(it) }
+        return "[" + parts.joinToString(",") + "]"
+    }
+    val obj = element.asJsonObject
+    val sortedKeys = obj.keySet().sorted()
+    val parts = sortedKeys.map { k ->
+        val keyJson = com.google.gson.Gson().toJson(k)
+        keyJson + ":" + canonicalizeJson(obj[k])
+    }
+    return "{" + parts.joinToString(",") + "}"
+}

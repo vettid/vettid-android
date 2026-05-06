@@ -28,7 +28,7 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun CreateWalletSheet(
     onDismiss: () -> Unit,
-    onCreateWallet: (label: String, network: String, password: String) -> Unit
+    onCreateWallet: (label: String, network: String, password: com.vettid.app.core.security.SecurePassword) -> Unit
 ) {
     var label by remember { mutableStateOf("") }
     var selectedNetwork by remember { mutableStateOf("mainnet") }
@@ -145,10 +145,10 @@ fun CreateWalletSheet(
 
     if (pendingPasswordPrompt) {
         WalletPasswordDialog(
-            onConfirm = { password ->
+            onConfirm = { securePw ->
                 pendingPasswordPrompt = false
                 isCreating = true
-                onCreateWallet(label.trim(), selectedNetwork, password)
+                onCreateWallet(label.trim(), selectedNetwork, securePw)
             },
             onCancel = { pendingPasswordPrompt = false },
         )
@@ -157,11 +157,12 @@ fun CreateWalletSheet(
 
 @Composable
 private fun WalletPasswordDialog(
-    onConfirm: (String) -> Unit,
+    onConfirm: (com.vettid.app.core.security.SecurePassword) -> Unit,
     onCancel: () -> Unit,
 ) {
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
+    DisposableEffect(Unit) { onDispose { password = "" } }
     AlertDialog(
         onDismissRequest = onCancel,
         icon = { Icon(Icons.Default.Lock, contentDescription = null) },
@@ -194,7 +195,11 @@ private fun WalletPasswordDialog(
         },
         confirmButton = {
             Button(
-                onClick = { onConfirm(password) },
+                onClick = {
+                    val pw = com.vettid.app.core.security.SecurePassword.fromString(password)
+                    password = ""
+                    onConfirm(pw)
+                },
                 enabled = password.isNotEmpty(),
             ) { Text("Create") }
         },

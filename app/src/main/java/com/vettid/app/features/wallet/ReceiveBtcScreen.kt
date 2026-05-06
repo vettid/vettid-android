@@ -3,6 +3,7 @@ package com.vettid.app.features.wallet
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import com.vettid.app.core.security.secureClipboard
 import android.content.Intent
 import android.graphics.Bitmap
 import android.util.Log
@@ -102,8 +103,7 @@ fun ReceiveBtcScreen(
                 ReceiveContent(
                     wallet = currentState.wallet,
                     onCopy = {
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("Bitcoin Address", currentState.wallet.address))
+                        context.secureClipboard().copySensitiveText(currentState.wallet.address)
                     },
                     onShare = {
                         val sendIntent = Intent().apply {

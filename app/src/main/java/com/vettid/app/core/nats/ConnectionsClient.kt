@@ -586,6 +586,7 @@ class ConnectionsClient @Inject constructor(
                     name = name,
                     type = obj.get("type")?.asString ?: "",
                     category = obj.get("category")?.asString ?: "",
+                    alias = obj.get("alias")?.asString ?: "",
                 )
             }.orEmpty()
 
@@ -608,6 +609,7 @@ class ConnectionsClient @Inject constructor(
                     name = name,
                     type = obj.get("type")?.asString ?: "",
                     category = obj.get("category")?.asString ?: "",
+                    alias = obj.get("alias")?.asString ?: "",
                 )
             }.orEmpty()
 
@@ -783,6 +785,7 @@ class ConnectionsClient @Inject constructor(
                                         name = name,
                                         type = obj.get("type")?.asString ?: "",
                                         category = obj.get("category")?.asString ?: "",
+                                        alias = obj.get("alias")?.asString ?: "",
                                     )
                                 )
                             }
@@ -811,6 +814,7 @@ class ConnectionsClient @Inject constructor(
                                         name = name,
                                         type = obj.get("type")?.asString ?: "",
                                         category = obj.get("category")?.asString ?: "",
+                                        alias = obj.get("alias")?.asString ?: "",
                                     )
                                 )
                             }
@@ -991,6 +995,11 @@ data class PeerPublicSecretMetadata(
     val name: String,
     val type: String,
     val category: String,
+    // Optional grouping alias (e.g. "BTC · MyWallet"). Carried through
+    // so the peer-side catalog dialog can collapse a wallet, its seed
+    // phrase, and its signing key into one card the same way the own-
+    // profile preview does.
+    val alias: String = "",
 )
 
 /**

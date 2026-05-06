@@ -178,11 +178,19 @@ class ConnectionsViewModel @Inject constructor(
                 onSuccess = { listResult ->
                     // Map ConnectionRecord to ConnectionWithLastMessage for UI
                     val connectionsWithMessages = listResult.items.map { record ->
+                        // The vault uses a parallel-review handshake with
+                        // intermediate statuses (peer_reviewing,
+                        // our_accept_pending, peer_accept_pending,
+                        // invited). Mapping unknown states to ACTIVE
+                        // showed half-handshaked records as fully active,
+                        // letting the user tap through to a chat that
+                        // can't actually send. Default to PENDING and
+                        // explicitly map terminal-decline / revocation.
                         val status = when (record.status.lowercase()) {
                             "active" -> ConnectionStatus.ACTIVE
-                            "pending" -> ConnectionStatus.PENDING
-                            "revoked" -> ConnectionStatus.REVOKED
-                            else -> ConnectionStatus.ACTIVE
+                            "revoked", "expired",
+                            "declined_by_us", "declined_by_peer", "rejected" -> ConnectionStatus.REVOKED
+                            else -> ConnectionStatus.PENDING
                         }
                         // Parse ISO8601 timestamp to epoch millis
                         val createdAtMillis = try {

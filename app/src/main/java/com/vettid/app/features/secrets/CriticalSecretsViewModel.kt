@@ -137,7 +137,7 @@ class CriticalSecretsViewModel @Inject constructor(
         }
     }
 
-    private fun authenticateAndLoadMetadata(password: String) {
+    private fun authenticateAndLoadMetadata(password: com.vettid.app.core.security.SecurePassword) {
         viewModelScope.launch {
             _state.value = CriticalSecretsState.Authenticating
 
@@ -212,11 +212,13 @@ class CriticalSecretsViewModel @Inject constructor(
                 _state.value = CriticalSecretsState.Error(
                     e.message ?: "Authentication failed"
                 )
+            } finally {
+                password.wipe()
             }
         }
     }
 
-    private fun revealSecretValue(secretId: String, password: String) {
+    private fun revealSecretValue(secretId: String, password: com.vettid.app.core.security.SecurePassword) {
         viewModelScope.launch {
             val currentState = _state.value
             val secretName = when (currentState) {
@@ -307,6 +309,8 @@ class CriticalSecretsViewModel @Inject constructor(
                 _state.value = CriticalSecretsState.Error(
                     e.message ?: "Failed to retrieve secret"
                 )
+            } finally {
+                password.wipe()
             }
         }
     }

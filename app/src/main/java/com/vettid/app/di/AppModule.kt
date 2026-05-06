@@ -37,7 +37,6 @@ import com.vettid.app.core.storage.ProteanCredentialManager
 import com.vettid.app.core.crypto.ContractSigner
 import com.vettid.app.core.crypto.ServiceMessageCrypto
 import com.vettid.app.core.nats.ServiceNatsManager
-import com.vettid.app.features.auth.BiometricAuthManager
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -98,12 +97,6 @@ object AppModule {
     @Singleton
     fun provideProteanCredentialManager(@ApplicationContext context: Context): ProteanCredentialManager {
         return ProteanCredentialManager(context)
-    }
-
-    @Provides
-    @Singleton
-    fun provideBiometricAuthManager(@ApplicationContext context: Context): BiometricAuthManager {
-        return BiometricAuthManager(context)
     }
 
     // NATS Dependencies
