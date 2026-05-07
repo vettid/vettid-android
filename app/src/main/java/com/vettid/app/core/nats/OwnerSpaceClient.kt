@@ -11,12 +11,16 @@ import com.vettid.app.core.crypto.SessionInfo
 import com.vettid.app.core.crypto.SessionKeyPair
 import com.vettid.app.core.network.TransactionKeyInfo
 import com.vettid.app.core.storage.CredentialStore
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import java.time.Instant
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -142,6 +146,22 @@ class OwnerSpaceClient @Inject constructor(
     private var eventTypesSubscription: NatsSubscription? = null
 
     /**
+     * In-flight request map for the inbox-based request-response path.
+     *
+     * sendAndAwaitResponse registers a deferred here keyed by requestId
+     * before publishing, then awaits. handleVaultResponse routes any
+     * `*.{requestId}.response` message to its matching deferred. This
+     * replaces the old per-request JetStream consumer create/delete
+     * dance — saves two NATS round-trips per vault call (typically
+     * ~200-500ms each on a phone over cellular).
+     *
+     * If the connection drops between publish and response, the deferred
+     * times out via the withTimeout wrapper; callers see the same
+     * TIMEOUT VaultResponse.Error they'd see from the old path.
+     */
+    private val inflightRequests = ConcurrentHashMap<String, CompletableDeferred<NatsMessage>>()
+
+    /**
      * Get the current OwnerSpace ID for constructing topic names.
      */
     fun getOwnerSpace(): String? = connectionManager.getOwnerSpaceId()
@@ -195,6 +215,13 @@ class OwnerSpaceClient @Inject constructor(
         appSubscription = null
         eventTypesSubscription?.unsubscribe()
         eventTypesSubscription = null
+        // Don't drain inflightRequests here. unsubscribeFromVault is
+        // most often called as the first half of a subscribe-resubscribe
+        // sequence (PIN unlock issues new creds, reconnect handlers,
+        // etc.) and the new subscription comes up within milliseconds.
+        // Any in-flight request will see its response on the new sub
+        // and complete normally. If the resubscribe never happens, the
+        // per-request withTimeout(timeoutMs) wrapper handles it.
     }
 
     /**
@@ -286,9 +313,13 @@ class OwnerSpaceClient @Inject constructor(
 
         val requestId = UUID.randomUUID().toString()
         val requestSubject = "$ownerSpaceId.forVault.$messageType"
-        // Unique per-request response subject — includes requestId to prevent
-        // stale response pickup from previous requests on the same message type
-        val responseSubject = "$ownerSpaceId.forApp.$messageType.$requestId.response"
+
+        // Register a deferred BEFORE publishing so a response that comes
+        // back faster than the publish coroutine returns still finds its
+        // slot. handleVaultResponse will complete it when the matching
+        // .response message lands on the existing forApp.> subscription.
+        val deferred = CompletableDeferred<NatsMessage>()
+        inflightRequests[requestId] = deferred
 
         try {
             // Encrypt payload if E2E session is established (skip for bootstrap)
@@ -307,27 +338,29 @@ class OwnerSpaceClient @Inject constructor(
 
             val json = gson.toJson(message)
 
-            // Use JetStream for reliable request-response
-            val result = JetStreamRequestHelper.sendAndFetchResponse(
-                client = androidClient,
-                requestSubject = requestSubject,
-                responseSubject = responseSubject,
-                requestPayload = json.toByteArray(Charsets.UTF_8),
-                expectedEventId = requestId,
-                timeoutMs = timeoutMs
-            )
-
-            if (result.isFailure) {
-                val error = result.exceptionOrNull()
-                android.util.Log.w(TAG, "JetStream request failed for $messageType: ${error?.message}")
+            val pubResult = androidClient.publish(requestSubject, json.toByteArray(Charsets.UTF_8))
+            if (pubResult.isFailure) {
+                android.util.Log.w(TAG, "Publish failed for $messageType: ${pubResult.exceptionOrNull()?.message}")
                 return VaultResponse.Error(
                     requestId = requestId,
-                    code = if (error?.message?.contains("timed out") == true) "TIMEOUT" else "REQUEST_FAILED",
-                    message = error?.message ?: "Request failed"
+                    code = "PUBLISH_FAILED",
+                    message = pubResult.exceptionOrNull()?.message ?: "Publish failed"
+                )
+            }
+            androidClient.flush()
+
+            val responseMessage = try {
+                withTimeout(timeoutMs) { deferred.await() }
+            } catch (e: TimeoutCancellationException) {
+                android.util.Log.w(TAG, "Request $messageType timed out after ${timeoutMs}ms")
+                return VaultResponse.Error(
+                    requestId = requestId,
+                    code = "TIMEOUT",
+                    message = "Request timed out"
                 )
             }
 
-            return parseJetStreamResponse(requestId, result.getOrThrow())
+            return parseJetStreamResponse(requestId, responseMessage)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "sendAndAwaitResponse($messageType) exception", e)
             return VaultResponse.Error(
@@ -335,6 +368,11 @@ class OwnerSpaceClient @Inject constructor(
                 code = "EXCEPTION",
                 message = e.message ?: "Unknown error"
             )
+        } finally {
+            // Drop the slot whether we succeeded, timed out, or errored.
+            // A late response after a timeout simply has no deferred to
+            // complete and is dropped by handleVaultResponse.
+            inflightRequests.remove(requestId)
         }
     }
 
@@ -1816,6 +1854,26 @@ class OwnerSpaceClient @Inject constructor(
     private fun handleVaultResponse(message: NatsMessage) {
         try {
             val subject = message.subject
+
+            // --- INBOX DISPATCH ---
+            // Request-response messages have the requestId as the
+            // second-to-last subject token, e.g.:
+            //   OwnerSpace.{guid}.forApp.{messageType}.{requestId}.response
+            // If sendAndAwaitResponse is currently awaiting that requestId,
+            // hand the message to its deferred and stop. Avoids the cost
+            // of going through every push-notification branch for what is
+            // really a private reply.
+            if (subject.endsWith(".response")) {
+                val parts = subject.split('.')
+                if (parts.size >= 2) {
+                    val requestId = parts[parts.size - 2]
+                    val deferred = inflightRequests.remove(requestId)
+                    if (deferred != null) {
+                        deferred.complete(message)
+                        return
+                    }
+                }
+            }
 
             // --- PUSH NOTIFICATIONS ---
             // Use contains() to match regardless of .response suffix from JetStream

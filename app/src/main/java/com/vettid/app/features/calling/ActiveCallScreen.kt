@@ -198,13 +198,53 @@ fun ActiveCallScreen(
                         onClick = { viewModel.toggleMute() }
                     )
 
-                    // Speaker button
-                    ControlButton(
-                        icon = if (activeState.isSpeakerOn) Icons.AutoMirrored.Filled.VolumeUp else Icons.AutoMirrored.Filled.VolumeDown,
-                        label = "Speaker",
-                        isActive = activeState.isSpeakerOn,
-                        onClick = { viewModel.toggleSpeaker() }
-                    )
+                    // Audio output picker — speaker / earpiece / Bluetooth /
+                    // wired headset. Tapping opens a dropdown listing the
+                    // currently-available communication devices.
+                    var showAudioMenu by remember { mutableStateOf(false) }
+                    Box {
+                        ControlButton(
+                            icon = if (activeState.isSpeakerOn)
+                                Icons.AutoMirrored.Filled.VolumeUp
+                            else
+                                Icons.AutoMirrored.Filled.VolumeDown,
+                            label = "Audio",
+                            isActive = activeState.isSpeakerOn,
+                            onClick = { showAudioMenu = true }
+                        )
+                        DropdownMenu(
+                            expanded = showAudioMenu,
+                            onDismissRequest = { showAudioMenu = false }
+                        ) {
+                            // Read fresh each time the menu opens — devices
+                            // can come and go (BT pairing/un-pairing) during
+                            // a call.
+                            val devices = remember(showAudioMenu) {
+                                viewModel.getAudioOutputDevices()
+                            }
+                            if (devices.isEmpty()) {
+                                DropdownMenuItem(
+                                    text = { Text("Phone") },
+                                    onClick = {
+                                        showAudioMenu = false
+                                        viewModel.toggleSpeaker()
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.PhoneInTalk, null) }
+                                )
+                            }
+                            devices.forEach { device ->
+                                val (icon, label) = audioDeviceInfo(device)
+                                DropdownMenuItem(
+                                    text = { Text(label) },
+                                    onClick = {
+                                        showAudioMenu = false
+                                        viewModel.setAudioOutputDevice(device)
+                                    },
+                                    leadingIcon = { Icon(icon, null) }
+                                )
+                            }
+                        }
+                    }
 
                     // Video toggle (only for video calls)
                     if (isVideoCall) {

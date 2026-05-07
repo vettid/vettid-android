@@ -118,7 +118,36 @@ class FeedViewModel @Inject constructor(
         observeFilterChanges()
         observeGuideReadState()
         observePresence()
+        observeCallEnded()
         refreshProposalsCacheForBadge()
+    }
+
+    /**
+     * Refresh the connection card whenever a call ends so the feed's
+     * "last activity" line picks up the new outcome (completed / missed
+     * / rejected) right away. The vault may push a feed.new for the
+     * call event, but if the push lags the row sticks on whatever the
+     * previous activity was — which is how a stale "Missed" can
+     * survive a successful follow-up call.
+     */
+    private fun observeCallEnded() {
+        viewModelScope.launch {
+            callManager.callState
+                .filter { it is com.vettid.app.features.calling.CallState.Idle }
+                .drop(1) // skip the initial Idle on construction
+                .collect {
+                    val current = _state.value
+                    if (current is FeedState.Loaded) {
+                        // Pull fresh connections AND update the cache so
+                        // buildDisplayItems sees the new last_activity_*
+                        // fields. getConnections() alone doesn't cache,
+                        // so use refreshConnections which does both.
+                        refreshConnections()
+                        val events = feedRepository.getCachedEvents()
+                        _state.value = current.copy(items = buildDisplayItems(events))
+                    }
+                }
+        }
     }
 
     /**

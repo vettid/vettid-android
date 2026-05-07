@@ -37,7 +37,8 @@ class CallManager @Inject constructor(
     private val callSignalingClient: CallSignalingClient,
     private val vaultServiceClient: VaultServiceClient,
     private val credentialStore: CredentialStore,
-    private val feedRepository: com.vettid.app.features.feed.FeedRepository
+    private val feedRepository: com.vettid.app.features.feed.FeedRepository,
+    private val notificationService: com.vettid.app.features.feed.FeedNotificationService
 ) : WebRTCListener {
 
     /** Look up a peer's cached profile photo (base64 JPEG) by their GUID. */
@@ -196,60 +197,71 @@ class CallManager @Inject constructor(
             // Enrich with the locally-cached peer photo so the outgoing call
             // screen matches what the user sees elsewhere in the app.
             val call = rawCall.copy(peerPhotoBase64 = peerPhotoFor(rawCall.peerGuid))
-            // Initialize WebRTC after vault confirms call initiation
-            initializeWebRTC()
-            val iceServers = fetchIceServers()
-            if (!webRTCClient!!.createPeerConnection(iceServers)) {
-                disposeWebRTC()
-                return Result.failure(IllegalStateException("Failed to create peer connection"))
-            }
 
-            webRTCClient!!.addAudioTrack()
-            if (callType == CallType.VIDEO) {
-                val videoTrack = webRTCClient!!.addVideoTrack(null)
-                Log.d(TAG, "startCall: localVideoTrack id=${videoTrack?.id()}")
-                _localVideoTrack.value = videoTrack
-                // Enable capture + track forwarding. Without this the track
-                // stays disabled and pushes black frames to every sink — no
-                // local preview, black video to the peer. The camera-toggle
-                // workaround worked only because toggling called setVideoEnabled.
-                webRTCClient!!.setVideoEnabled(true)
-            }
-
+            // Show the calling screen *immediately* so the tap feels instant.
+            // Previously we waited for ICE-server fetch, peer-connection
+            // creation, and audio capture init before emitting ShowOutgoing,
+            // which compounded into multi-second perceived latency. The
+            // vault has already accepted call.start by this point, so the
+            // callee is already in a ringing state — no signalling races
+            // with starting WebRTC asynchronously below.
             _callState.value = CallState.Outgoing(call = call)
             _showCallUI.emit(CallUIEvent.ShowOutgoing(call))
-            // Ask other apps to pause as soon as we start dialing — don't
-            // wait for pickup.
             requestCallAudioFocus()
             startRingBackTone()
             startRingingTimer()
 
-            // Create SDP offer and send to peer via vault so the callee can set remote
-            // description before its createAnswer runs.
+            // Bring up WebRTC + send SDP offer in the background. If this
+            // fails we tear down cleanly via handleCallFailed.
             scope.launch {
-                val offerDeferred = CompletableDeferred<SessionDescription?>()
-                webRTCClient?.createOffer(wantsVideo = callType == CallType.VIDEO) { sdp ->
-                    offerDeferred.complete(sdp)
-                }
-                val offer = offerDeferred.await()
-                if (offer == null) {
-                    Log.e(TAG, "Failed to create SDP offer for call ${call.callId}")
-                    return@launch
-                }
-                callSignalingClient.sendOffer(call.callId, call.peerGuid, offer.description)
-                    .onFailure { Log.e(TAG, "Failed to send SDP offer", it) }
-            }
+                try {
+                    initializeWebRTC()
+                    val iceServers = fetchIceServers()
+                    if (!webRTCClient!!.createPeerConnection(iceServers)) {
+                        Log.e(TAG, "Failed to create peer connection for call ${call.callId}")
+                        disposeWebRTC()
+                        handleCallFailed(CallEvent.CallFailed(call.callId, "Failed to create peer connection"))
+                        return@launch
+                    }
+                    webRTCClient!!.addAudioTrack()
+                    if (callType == CallType.VIDEO) {
+                        val videoTrack = webRTCClient!!.addVideoTrack(null)
+                        Log.d(TAG, "startCall: localVideoTrack id=${videoTrack?.id()}")
+                        _localVideoTrack.value = videoTrack
+                        // Enable capture + track forwarding. Without this the
+                        // track stays disabled and pushes black frames to every
+                        // sink — no local preview, black video to the peer.
+                        webRTCClient!!.setVideoEnabled(true)
+                    }
 
-            // Collect ICE candidates and send to peer via vault
-            scope.launch {
-                webRTCClient?.iceCandidates?.collect { candidate ->
-                    callSignalingClient.sendIceCandidate(
-                        callId = call.callId,
-                        peerGuid = call.peerGuid,
-                        candidate = candidate.sdp,
-                        sdpMid = candidate.sdpMid,
-                        sdpMLineIndex = candidate.sdpMLineIndex
-                    )
+                    // Pipe local ICE candidates out to peer via vault.
+                    scope.launch {
+                        webRTCClient?.iceCandidates?.collect { candidate ->
+                            callSignalingClient.sendIceCandidate(
+                                callId = call.callId,
+                                peerGuid = call.peerGuid,
+                                candidate = candidate.sdp,
+                                sdpMid = candidate.sdpMid,
+                                sdpMLineIndex = candidate.sdpMLineIndex
+                            )
+                        }
+                    }
+
+                    // Create + send SDP offer.
+                    val offerDeferred = CompletableDeferred<SessionDescription?>()
+                    webRTCClient?.createOffer(wantsVideo = callType == CallType.VIDEO) { sdp ->
+                        offerDeferred.complete(sdp)
+                    }
+                    val offer = offerDeferred.await()
+                    if (offer == null) {
+                        Log.e(TAG, "Failed to create SDP offer for call ${call.callId}")
+                        return@launch
+                    }
+                    callSignalingClient.sendOffer(call.callId, call.peerGuid, offer.description)
+                        .onFailure { Log.e(TAG, "Failed to send SDP offer", it) }
+                } catch (e: Exception) {
+                    Log.e(TAG, "WebRTC bring-up failed for call ${call.callId}", e)
+                    handleCallFailed(CallEvent.CallFailed(call.callId, "WebRTC setup failed: ${e.message}"))
                 }
             }
         }
@@ -980,6 +992,24 @@ class CallManager @Inject constructor(
         delay(600)
         _callState.value = CallState.Idle
         _showCallUI.emit(CallUIEvent.DismissCall)
+        // Cache refresh is handled by FeedViewModel.observeCallEnded()
+        // which calls refreshConnections() AND rebuilds display items.
+        // We also dismiss any stale missed-call notifications still in
+        // the shade — once the user has had a successful call (or
+        // intentionally hung up) the prior "Missed" notification is no
+        // longer informative.
+        if (event.reason == CallEndReason.COMPLETED) {
+            notificationService.clearCallNotifications()
+            // Mark any prior unseen missed calls from this peer as
+            // seen — having a successful call with them is a stronger
+            // signal of acknowledgement than opening call history.
+            if (call.connectionId.isNotEmpty()) {
+                scope.launch {
+                    callSignalingClient.markCallsSeen(call.connectionId)
+                        .onFailure { Log.w(TAG, "markCallsSeen(${call.connectionId}) failed: ${it.message}") }
+                }
+            }
+        }
     }
 
     private suspend fun handleCallFailed(event: CallEvent.CallFailed) {

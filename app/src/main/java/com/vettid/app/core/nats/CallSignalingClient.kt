@@ -350,6 +350,30 @@ class CallSignalingClient @Inject constructor(
     }
 
     /**
+     * Mark missed calls as seen, clearing the bold "Missed call" badge
+     * on a connection card. The vault sets SeenAt=now() on every
+     * incoming-missed CallRecord that's still unseen and matches the
+     * (optional) connection filter.
+     *
+     * Call sites:
+     *  - CallHistoryViewModel.init: pass null connectionId → mark all
+     *    (user opening the global Calls tab is implicit acknowledgement)
+     *  - CallManager.handleCallEnded(COMPLETED): pass call.connectionId
+     *    so a successful follow-up call clears the prior missed badge
+     *    for that peer.
+     *
+     * @return number of records the vault marked, or failure
+     */
+    suspend fun markCallsSeen(connectionId: String? = null): Result<Int> {
+        val payload = JsonObject().apply {
+            connectionId?.let { addProperty("connection_id", it) }
+        }
+        return sendAndAwait("call.mark-seen", payload) { result ->
+            result.get("marked")?.asInt ?: 0
+        }
+    }
+
+    /**
      * Handle incoming call event from vault.
      * Call this when receiving call-related messages on the forApp subject.
      */

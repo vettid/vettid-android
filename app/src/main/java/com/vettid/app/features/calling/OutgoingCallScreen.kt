@@ -295,7 +295,7 @@ fun OutgoingCallScreen(
     }
 }
 
-private fun audioDeviceInfo(device: AudioDeviceInfo): Pair<androidx.compose.ui.graphics.vector.ImageVector, String> {
+internal fun audioDeviceInfo(device: AudioDeviceInfo): Pair<androidx.compose.ui.graphics.vector.ImageVector, String> {
     return when (device.type) {
         AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> Icons.Default.Speaker to "Speaker"
         AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> Icons.Default.PhoneInTalk to "Phone"

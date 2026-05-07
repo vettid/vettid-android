@@ -41,6 +41,14 @@ class CallHistoryViewModel @Inject constructor(
         // Once the user is looking at call history, any missed-call
         // notifications still in the shade have served their purpose.
         notificationService.clearCallNotifications()
+        // Tell the vault that any unseen incoming-missed calls have
+        // now been acknowledged. The vault zeros MissedCallCount on
+        // those records, so the bold "Missed call" badge on the
+        // connection card clears on the next refresh.
+        viewModelScope.launch {
+            callSignalingClient.markCallsSeen()
+                .onFailure { Log.w(TAG, "Failed to mark calls seen: ${it.message}") }
+        }
     }
 
     /**
