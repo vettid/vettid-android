@@ -85,6 +85,7 @@ class PinUnlockViewModel @Inject constructor(
     private val personalDataStore: PersonalDataStore,
     private val pcrConfigManager: PcrConfigManager,
     private val migrationConsentTracker: com.vettid.app.features.migration.MigrationConsentTracker,
+    private val migrationCompletionRecorder: com.vettid.app.features.migration.MigrationCompletionRecorder,
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context
 ) : ViewModel() {
 
@@ -92,6 +93,14 @@ class PinUnlockViewModel @Inject constructor(
         const val MIN_PIN_LENGTH = 4
         const val MAX_PIN_LENGTH = 8
         private const val RESPONSE_TIMEOUT_MS = 30000L
+
+        // M1 PIN-coupled migration retry policy. When the vault returns
+        // `pending_new_enclave`, the request landed on the OLD enclave
+        // and the routing handoff was emitted. The vault-routing KV
+        // typically reclaims within one heartbeat, so a short retry
+        // budget is enough; we never want to loop forever.
+        private const val MIGRATION_RETRY_MAX = 3
+        private const val MIGRATION_RETRY_DELAY_MS = 1500L
     }
 
     private val _state = MutableStateFlow<PinUnlockState>(PinUnlockState.Idle)
@@ -237,30 +246,72 @@ class PinUnlockViewModel @Inject constructor(
             // Verify PIN with enclave using OwnerSpaceClient (event_id correlation)
             _state.value = PinUnlockState.Verifying
 
-            // Retry up to 3 times if vault is not ready (just started)
+            // M1: pre-PIN approval drives migrate_consent in the very
+            // first request. The OLD-branch retry loop below also keeps
+            // sending it so the eventual NEW landing completes the
+            // re-seal. A wrong PIN never advances past the InvalidPin
+            // arm in the result switch, so consent can't be acted on
+            // unauthenticated.
+            val migrateConsent = _pendingMigrationApproval
+
+            // Retry up to 3 times if vault is not ready (just started).
+            // Independent of the migration retry budget below — that
+            // one runs only when the vault returned a successful unlock
+            // with migration_status=pending_new_enclave.
             var retryCount = 0
             val maxRetries = 3
+            var migrationRetries = 0
             while (true) {
-                val result = verifyPinWithEnclave(pin)
+                val result = verifyPinWithEnclave(pin, migrateConsent = migrateConsent)
 
                 when (result) {
-                    PinVerificationResult.Success -> {
-                        Log.i(TAG, "PIN verification successful")
+                    is PinVerificationResult.Success -> {
+                        Log.i(TAG, "PIN verification successful (migration_status=${result.migrationStatus.ifEmpty { "<none>" }})")
 
-                        // Now that PIN actually succeeded, arm the
-                        // pre-PIN migration approval (if user had said
-                        // "approve" on the EnclaveUpdateRequired screen).
-                        // VaultUpdateViewModel.checkForUpdate() consumes
-                        // this on the next screen and runs the auto-apply
-                        // migration. Doing this BEFORE PIN success used to
-                        // wipe vaults: a wrong-PIN approval armed migration,
-                        // which then ran post-unlock against an enclave
-                        // that hadn't loaded the user's data, persisting
-                        // empty state to S3.
+                        // M1: act on the response's migration_status.
+                        // The unlock itself already succeeded — these
+                        // branches only decide whether to retry
+                        // (pending_new_enclave) or record completion.
+                        when (result.migrationStatus) {
+                            "pending_new_enclave" -> {
+                                if (migrationRetries < MIGRATION_RETRY_MAX) {
+                                    migrationRetries++
+                                    Log.i(TAG, "Migration landed on OLD enclave; retrying ${migrationRetries}/${MIGRATION_RETRY_MAX} in ${MIGRATION_RETRY_DELAY_MS}ms")
+                                    kotlinx.coroutines.delay(MIGRATION_RETRY_DELAY_MS)
+                                    continue
+                                }
+                                // Out of retries — accept the unlock and
+                                // log a warning. The user will see a new
+                                // PCR0 prompt on next session if needed,
+                                // or the routing reclaim will eventually
+                                // settle.
+                                Log.w(TAG, "Migration retry budget exhausted; accepting unlock without re-seal")
+                            }
+                            "completed" -> {
+                                Log.i(TAG, "Migration re-seal completed inline (version=${result.migrationVersion})")
+                                if (result.migrationVersion.isNotEmpty()) {
+                                    migrationCompletionRecorder.recordCompletion(result.migrationVersion)
+                                }
+                            }
+                            "failed" -> {
+                                Log.w(TAG, "Migration re-seal failed; user remains on prior PCR0 binding (will retry next session)")
+                            }
+                            "not_requested", "" -> {
+                                // No migration in flight or no consent — nothing to do.
+                            }
+                        }
+
                         if (_pendingMigrationApproval) {
+                            // Pre-PIN consent has been acted on by the vault
+                            // (migrate_consent was passed above). Clear the
+                            // local flag so a later unlock in the same session
+                            // doesn't redundantly re-arm it.
                             _pendingMigrationApproval = false
+                            // Bridge to legacy VaultUpdateViewModel for
+                            // backward compat: post-unlock card path
+                            // suppresses the action card on APPROVED. The
+                            // recorder + pin-unlock handled the actual work.
                             migrationConsentTracker.recordApproval()
-                            Log.i(TAG, "Migration approval armed (post-PIN-success)")
                         }
 
                         // Reconnect with vault-issued credentials if available
@@ -335,9 +386,16 @@ class PinUnlockViewModel @Inject constructor(
 
     /**
      * Result of PIN verification attempt.
+     *
+     * Success carries the M1 migration_status / migration_version from
+     * the vault response so the submit loop can decide whether to
+     * retry (pending_new_enclave) or record completion.
      */
     private sealed class PinVerificationResult {
-        data object Success : PinVerificationResult()
+        data class Success(
+            val migrationStatus: String = "",
+            val migrationVersion: String = ""
+        ) : PinVerificationResult()
         data object InvalidPin : PinVerificationResult()
         data object VaultNotReady : PinVerificationResult()
         data class Error(val message: String = "Verification error") : PinVerificationResult()
@@ -460,7 +518,7 @@ class PinUnlockViewModel @Inject constructor(
         }
     }
 
-    private suspend fun verifyPinWithEnclave(pin: String): PinVerificationResult = withContext(Dispatchers.IO) {
+    private suspend fun verifyPinWithEnclave(pin: String, migrateConsent: Boolean = false): PinVerificationResult = withContext(Dispatchers.IO) {
         // Verify owner space is set (connection was established)
         if (ownerSpace == null) {
             Log.e(TAG, "Owner space not set - connection not established")
@@ -507,6 +565,14 @@ class PinUnlockViewModel @Inject constructor(
             val requestPayload = JsonObject().apply {
                 addProperty("utk_id", availableUtk.keyId)
                 addProperty("encrypted_payload", encryptedPayloadBase64)
+                if (migrateConsent) {
+                    // M1: PIN-coupled migration. The vault re-seals
+                    // sealed_material.bin against the running PCR0 only
+                    // if running_pcr0 == config.NewPCR0; otherwise it
+                    // emits a routing handoff and reports
+                    // pending_new_enclave so the app retries.
+                    addProperty("migrate_consent", true)
+                }
             }
 
             Log.d(TAG, "Sending PIN unlock request via OwnerSpaceClient (event_id correlation)")
@@ -565,6 +631,12 @@ class PinUnlockViewModel @Inject constructor(
                             return@withContext PinVerificationResult.VaultNotReady
                         }
 
+                        // M1: vault echoes migration_status / migration_version
+                        // when migrate_consent was set (and even when it
+                        // wasn't — fields are simply empty in that case).
+                        val migrationStatus = responseJson.get("migration_status")?.asString ?: ""
+                        val migrationVersion = responseJson.get("migration_version")?.asString ?: ""
+
                         if (status == "unlocked" || status == "success" || status == "vault_ready" || isAlreadyUnlocked) {
                             // Store any new UTKs from response (format: "ID:base64PublicKey")
                             val newUtksArray = responseJson.getAsJsonArray("new_utks")
@@ -603,7 +675,10 @@ class PinUnlockViewModel @Inject constructor(
                                 Log.i(TAG, "Stored vault-issued NATS credentials (TTL: ${credsTtl}s)")
                             }
 
-                            return@withContext PinVerificationResult.Success
+                            return@withContext PinVerificationResult.Success(
+                                migrationStatus = migrationStatus,
+                                migrationVersion = migrationVersion
+                            )
                         } else {
                             val error = responseJson.get("error")?.asString
                             Log.w(TAG, "PIN unlock failed: $error")

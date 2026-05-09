@@ -4,8 +4,6 @@ import android.content.Context
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
 import com.vettid.app.core.attestation.PcrConfigManager
 import com.vettid.app.core.nats.FeedEvent
 import com.vettid.app.core.nats.MigrationClient
@@ -34,16 +32,20 @@ class VaultUpdateViewModel @Inject constructor(
     private val pcrConfigManager: PcrConfigManager,
     private val feedRepository: FeedRepository,
     private val consentTracker: MigrationConsentTracker,
+    private val completionRecorder: MigrationCompletionRecorder,
     @ApplicationContext private val context: Context
 ) : ViewModel() {
 
     companion object {
         private const val TAG = "VaultUpdateVM"
-        private const val PREFS_NAME = "vault_migration_prefs"
-        private const val KEY_REMINDED_AT = "migration_reminded_at"
-        private const val KEY_DISMISSED = "migration_dismissed"
-        private const val KEY_DISMISSED_VERSION = "migration_dismissed_version"
-        private const val KEY_COMPLETED_VERSION = "migration_completed_version"
+        // Pref keys are kept in sync with MigrationCompletionRecorder
+        // so legacy reads here still resolve. New writes route through
+        // the recorder; this ViewModel only reads.
+        private const val PREFS_NAME = MigrationCompletionRecorder.PREFS_NAME
+        private const val KEY_REMINDED_AT = MigrationCompletionRecorder.KEY_REMINDED_AT
+        private const val KEY_DISMISSED = MigrationCompletionRecorder.KEY_DISMISSED
+        private const val KEY_DISMISSED_VERSION = MigrationCompletionRecorder.KEY_DISMISSED_VERSION
+        private const val KEY_COMPLETED_VERSION = MigrationCompletionRecorder.KEY_COMPLETED_VERSION
     }
 
     private val _state = MutableStateFlow<VaultUpdateState>(VaultUpdateState.Checking)
@@ -91,15 +93,15 @@ class VaultUpdateViewModel @Inject constructor(
 
                 // Pre-PIN consent recorded in this session short-circuits
                 // the post-unlock flow so the user isn't asked twice about
-                // the same update.
+                // the same update. Post-M1 redesign: APPROVED no longer
+                // requires the legacy migration.start round-trip — the
+                // pin-unlock response with migrate_consent=true did the
+                // re-seal inline and MigrationCompletionRecorder already
+                // wrote KEY_COMPLETED_VERSION. Treat as no-op.
                 when (consentTracker.consume()) {
                     MigrationIntent.APPROVED -> {
-                        Log.i(TAG, "Pre-PIN approval recorded — auto-applying migration with visible state")
-                        // autoApplied=true tells the UI to render a slim
-                        // progress indicator instead of the full card, so
-                        // the user doesn't see the action card flash up
-                        // for a second before the success card replaces it.
-                        startUpdate(autoApplied = true)
+                        Log.i(TAG, "Pre-PIN approval consumed — migration handled inline by pin-unlock; no card needed")
+                        _state.value = VaultUpdateState.NoUpdate
                         return@launch
                     }
                     MigrationIntent.SKIPPED -> {
@@ -166,26 +168,10 @@ class VaultUpdateViewModel @Inject constructor(
                         Log.i(TAG, "Added new enclave PCR0 to trusted set after migration consent")
                     }
 
-                    getPrefs().edit()
-                        .putString(KEY_COMPLETED_VERSION, version.ifEmpty { config.version })
-                        .putBoolean(KEY_DISMISSED, false)
-                        .remove(KEY_REMINDED_AT)
-                        .apply()
-                    // Clear any leftover deferred-update entries from the
-                    // local feed cache. pushDeferredUpdateToFeed seeds
-                    // them on Remind Me Later; without this, the row
-                    // stays in the Connections screen as unread after
-                    // the update is applied. Sweep every version we've
-                    // written so stale entries from prior deploys go
-                    // away too.
-                    val sweepIds = listOf(
-                        "local-migration-${config.version}",
-                        "local-migration-${version.ifEmpty { config.version }}",
-                    ).distinct()
-                    sweepIds.forEach { feedRepository.removeEventLocally(it) }
-                    // Also purge any local-migration-* entry from earlier
-                    // versions — the completed update supersedes them.
-                    feedRepository.removeEventsLocallyWhere { it.eventId.startsWith("local-migration-") }
+                    completionRecorder.recordCompletion(
+                        version = version.ifEmpty { config.version },
+                        fallbackVersion = config.version
+                    )
                     _state.value = VaultUpdateState.Updated
                     return@launch
                 }
@@ -305,18 +291,7 @@ class VaultUpdateViewModel @Inject constructor(
         }
     }
 
-    private fun getPrefs(): android.content.SharedPreferences {
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-        return EncryptedSharedPreferences.create(
-            context,
-            PREFS_NAME,
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
-    }
+    private fun getPrefs(): android.content.SharedPreferences = completionRecorder.getPrefs()
 }
 
 /**
