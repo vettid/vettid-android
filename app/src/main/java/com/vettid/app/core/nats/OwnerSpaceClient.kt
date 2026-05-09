@@ -311,6 +311,33 @@ class OwnerSpaceClient @Inject constructor(
             }
         }
 
+        // Wait for the forApp.> Core subscription to be established before
+        // publishing. The inbox dispatcher (handleVaultResponse) only runs
+        // for messages that land on this sub; publishing before sub is
+        // ready means the response gets discarded by the server (no
+        // matching subscriber), the deferred sits for 30s, and the call
+        // times out. Common path that hits this: notification tap →
+        // ConversationViewModel.init fires multiple vault calls during
+        // the post-PIN-unlock window where the sub is still being
+        // established. Wait up to 5s for the sub to come up.
+        if (appSubscription == null) {
+            android.util.Log.w(TAG, "forApp.> sub not yet established for $messageType, waiting...")
+            var waited = 0L
+            while (appSubscription == null && waited < 5000L) {
+                kotlinx.coroutines.delay(100L)
+                waited += 100L
+            }
+            if (appSubscription == null) {
+                android.util.Log.e(TAG, "forApp.> sub still not established after ${waited}ms — request would hang")
+                return VaultResponse.Error(
+                    requestId = "",
+                    code = "NOT_SUBSCRIBED",
+                    message = "Vault subscription not ready"
+                )
+            }
+            android.util.Log.i(TAG, "forApp.> sub ready after ${waited}ms")
+        }
+
         val requestId = UUID.randomUUID().toString()
         val requestSubject = "$ownerSpaceId.forVault.$messageType"
 

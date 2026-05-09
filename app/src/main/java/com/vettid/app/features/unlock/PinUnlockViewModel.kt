@@ -117,6 +117,10 @@ class PinUnlockViewModel @Inject constructor(
     private var _pendingPin: String? = null
     // Skip PCR0 check for this session (user chose "Not Now")
     private var _skipPcr0Check = false
+    // Set in approveEnclaveUpdate(); consumed (and migrationConsentTracker
+    // armed) only after a successful PIN unlock so a wrong-PIN attempt
+    // can't trigger an auto-migration on an unauthenticated session.
+    private var _pendingMigrationApproval = false
 
     init {
         // Start in PIN entry mode
@@ -243,6 +247,22 @@ class PinUnlockViewModel @Inject constructor(
                     PinVerificationResult.Success -> {
                         Log.i(TAG, "PIN verification successful")
 
+                        // Now that PIN actually succeeded, arm the
+                        // pre-PIN migration approval (if user had said
+                        // "approve" on the EnclaveUpdateRequired screen).
+                        // VaultUpdateViewModel.checkForUpdate() consumes
+                        // this on the next screen and runs the auto-apply
+                        // migration. Doing this BEFORE PIN success used to
+                        // wipe vaults: a wrong-PIN approval armed migration,
+                        // which then ran post-unlock against an enclave
+                        // that hadn't loaded the user's data, persisting
+                        // empty state to S3.
+                        if (_pendingMigrationApproval) {
+                            _pendingMigrationApproval = false
+                            migrationConsentTracker.recordApproval()
+                            Log.i(TAG, "Migration approval armed (post-PIN-success)")
+                        }
+
                         // Reconnect with vault-issued credentials if available
                         // The vault issues full credentials after PIN verification;
                         // the initial connection may have used narrow bootstrap creds
@@ -339,11 +359,17 @@ class PinUnlockViewModel @Inject constructor(
             Log.i(TAG, "User approved enclave update — PCR0 added to trusted set")
             _pendingUntrustedPcr0 = null
         }
-        // Signal to VaultUpdateViewModel that this session's consent is
-        // already given — it will auto-apply the migration with a visible
-        // "Updating" state so the user sees the outcome rather than being
-        // prompted again by a post-PIN card.
-        migrationConsentTracker.recordApproval()
+        // CRITICAL: do NOT call migrationConsentTracker.recordApproval()
+        // here. It used to fire pre-PIN — meaning a wrong PIN attempt that
+        // happened to coincide with an untrusted PCR0 would still arm
+        // auto-migration. The post-PIN flow then auto-applied migration
+        // even though the user had not actually unlocked their vault, and
+        // on a multi-instance ASG the migration handler can land on a
+        // different enclave than the one that loaded their data —
+        // persisting empty state to S3 and wiping the vault. Defer the
+        // consent record to the PIN-success path below; if PIN never
+        // succeeds, migration never auto-runs.
+        _pendingMigrationApproval = true
         val pendingPin = _pendingPin
         _pendingPin = null
         if (!pendingPin.isNullOrEmpty()) {
