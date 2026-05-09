@@ -89,7 +89,18 @@ fun peerProfileToPublishedProfileData(
         )
     }
 
-    peer.fields?.forEach { (namespace, fieldData) ->
+    // Iterate fields in user-intended order when the vault provided
+    // fieldOrder; fall back to map-iteration order otherwise. Without
+    // this branch the BusinessCardView the review screen renders
+    // through would silently re-sort the peer's reordered address /
+    // contact rows by Go's alphabetical map encoding (the 2026-05-09
+    // testing observation that motivated M3's field_order field).
+    val orderedFieldKeys = peer.fieldOrder
+        ?.filter { peer.fields?.containsKey(it) == true }
+        ?: peer.fields?.keys?.toList()
+        ?: emptyList()
+    orderedFieldKeys.forEach { namespace ->
+        val fieldData = peer.fields?.get(namespace) ?: return@forEach
         if (namespace.startsWith("_system_")) return@forEach
         val value = fieldData["value"].orEmpty()
         if (value.isBlank()) return@forEach

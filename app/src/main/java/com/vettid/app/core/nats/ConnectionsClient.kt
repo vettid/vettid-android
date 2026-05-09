@@ -613,12 +613,19 @@ class ConnectionsClient @Inject constructor(
                 )
             }.orEmpty()
 
+            // M3 / 2026-05-09: vault emits field_order so the user's
+            // drag-to-reorder propagates to peer rendering. Falls back
+            // to null if the published profile predates the change —
+            // callers must then iterate fields' insertion order.
+            val fieldOrder = profileObj.getAsJsonArray("field_order")?.mapNotNull { it?.asString }
+
             PeerProfileData(
                 firstName = profileObj.get("_system_first_name")?.asString,
                 lastName = profileObj.get("_system_last_name")?.asString,
                 email = profileObj.get("_system_email")?.asString,
                 photo = profileObj.get("photo")?.takeIf { !it.isJsonNull }?.asString,
                 fields = fields,
+                fieldOrder = fieldOrder?.takeIf { it.isNotEmpty() },
                 publicKey = profileObj.get("public_key")?.takeIf { !it.isJsonNull }?.asString,
                 userGuid = profileObj.get("user_guid")?.takeIf { !it.isJsonNull }?.asString,
                 wallets = wallets?.takeIf { it.isNotEmpty() },
@@ -724,6 +731,7 @@ class ConnectionsClient @Inject constructor(
             // Extract inviter profile from broker payload
             val inviterProfile = mutableMapOf<String, String>()
             var inviterFields: Map<String, Map<String, String>>? = null
+            var inviterFieldOrder: List<String>? = null
             val inviterWallets = mutableListOf<Map<String, String>>()
             val inviterHandlers = mutableListOf<PeerHandlerInfo>()
             val inviterPublicSecrets = mutableListOf<PeerPublicSecretMetadata>()
@@ -745,6 +753,11 @@ class ConnectionsClient @Inject constructor(
                                 }
                             }
                             inviterFields = fieldsMap.ifEmpty { null }
+                        }
+                        key == "field_order" && value.isJsonArray -> {
+                            // M3 / 2026-05-09: render fields in user-intended order.
+                            inviterFieldOrder = value.asJsonArray.mapNotNull { it?.asString }
+                                .takeIf { it.isNotEmpty() }
                         }
                         key == "wallets" && value.isJsonArray -> {
                             value.asJsonArray.forEach { walletEl ->
@@ -835,6 +848,7 @@ class ConnectionsClient @Inject constructor(
                 label = result.get("label")?.asString ?: "",
                 inviterProfile = inviterProfile.ifEmpty { null },
                 inviterFields = inviterFields,
+                inviterFieldOrder = inviterFieldOrder,
                 inviterWallets = inviterWallets,
                 inviterHandlers = inviterHandlers.takeIf { it.isNotEmpty() },
                 inviterPublicSecrets = inviterPublicSecrets.takeIf { it.isNotEmpty() },
@@ -861,6 +875,8 @@ data class ResolvedInvitation(
     val label: String,
     val inviterProfile: Map<String, String>? = null,
     val inviterFields: Map<String, Map<String, String>>? = null,
+    /** User-intended display order of [inviterFields]; may be null on older vaults. */
+    val inviterFieldOrder: List<String>? = null,
     val inviterWallets: List<Map<String, String>> = emptyList(),
     val inviterHandlers: List<PeerHandlerInfo>? = null,
     val inviterPublicSecrets: List<PeerPublicSecretMetadata>? = null,
@@ -932,6 +948,13 @@ data class PeerProfileData(
     val email: String? = null,
     val photo: String? = null,
     val fields: Map<String, Map<String, String>>? = null,
+    /**
+     * User-intended display order of [fields]. Backend emits this
+     * when present so peer + own preview render in the same order
+     * the user established via drag-to-reorder. Absent on older
+     * vaults — callers must fall back to fields' insertion order.
+     */
+    val fieldOrder: List<String>? = null,
     val publicKey: String? = null,
     val userGuid: String? = null,
     val wallets: List<PeerWalletInfo>? = null,

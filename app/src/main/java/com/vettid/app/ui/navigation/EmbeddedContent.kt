@@ -120,7 +120,8 @@ fun ConnectionsContentEmbedded(
                     displayName = peerDisplayName,
                     email = peerEmail,
                     photoBase64 = peerPhoto,
-                    profileFields = peerFields
+                    profileFields = peerFields,
+                    profileFieldOrder = profileData?.fieldOrder
                 ),
                 onAccept = {
                     viewModel.respondToConnection(review.connectionId, true)

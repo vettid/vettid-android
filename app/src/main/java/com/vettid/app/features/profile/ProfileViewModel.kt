@@ -238,9 +238,21 @@ class ProfileViewModel @Inject constructor(
                     val result = response.result!!
                     val items = mutableListOf<PublishedProfileItem>()
 
-                    // Parse published fields
-                    result.getAsJsonObject("fields")?.entrySet()?.forEach { (key, value) ->
-                        val fieldObj = value?.asJsonObject ?: return@forEach
+                    // Parse published fields. M3 / 2026-05-09: vault
+                    // emits field_order so the user's drag-to-reorder
+                    // propagates here. Iterate field_order if present;
+                    // otherwise fall back to JSON-map insertion order.
+                    val fieldsObj = result.getAsJsonObject("fields")
+                    val fieldOrder = result.getAsJsonArray("field_order")
+                        ?.mapNotNull { it?.asString }
+                        ?.takeIf { it.isNotEmpty() }
+                    val orderedKeys = if (fieldOrder != null && fieldsObj != null) {
+                        fieldOrder.filter { fieldsObj.has(it) }
+                    } else {
+                        fieldsObj?.entrySet()?.map { it.key } ?: emptyList()
+                    }
+                    orderedKeys.forEach { key ->
+                        val fieldObj = fieldsObj?.get(key)?.asJsonObject ?: return@forEach
                         val displayName = fieldObj.get("display_name")?.asString ?: key
                         val fieldValue = fieldObj.get("value")?.asString ?: ""
                         if (fieldValue.isNotBlank()) {

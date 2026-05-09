@@ -81,6 +81,7 @@ class ConnectionReviewViewModel @Inject constructor(
                             photoBase64 = profile?.photo,
                             publicKey = profile?.publicKey ?: record.e2ePublicKey,
                             profileFields = profileFields.ifEmpty { null },
+                            profileFieldOrder = profile?.fieldOrder,
                             wallets = wallets
                         )
 

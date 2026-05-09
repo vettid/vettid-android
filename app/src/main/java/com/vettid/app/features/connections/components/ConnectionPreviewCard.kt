@@ -41,6 +41,13 @@ data class PeerProfilePreview(
     val capabilities: List<CapabilityInfo> = emptyList(),
     val sharedDataTypes: List<SharedDataType> = emptyList(),
     val profileFields: Map<String, Map<String, String>>? = null,
+    /**
+     * User-intended display order of [profileFields]. When present
+     * the rendering iterates this list and looks up each name in the
+     * map so the user's drag-to-reorder reaches peer surfaces. Null
+     * on older vaults — fall back to map insertion order.
+     */
+    val profileFieldOrder: List<String>? = null,
     val wallets: List<WalletPreview> = emptyList()
 )
 
@@ -189,7 +196,14 @@ fun ConnectionPreviewCard(
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(bottom = 12.dp)
                         )
-                        profile.profileFields!!.entries.forEachIndexed { index, (_, fieldData) ->
+                        // Render in user-intended order when the
+                        // vault supplied profileFieldOrder; fall back
+                        // to map insertion order otherwise.
+                        val orderedKeys = profile.profileFieldOrder
+                            ?.filter { profile.profileFields!!.containsKey(it) }
+                            ?: profile.profileFields!!.keys.toList()
+                        orderedKeys.forEachIndexed { index, key ->
+                            val fieldData = profile.profileFields[key] ?: return@forEachIndexed
                             if (index > 0) {
                                 HorizontalDivider(
                                     modifier = Modifier.padding(vertical = 6.dp),
