@@ -290,12 +290,29 @@ class ConversationViewModel @Inject constructor(
     /**
      * Send read receipts for all unread incoming messages in this conversation.
      * Called when conversation opens to catch messages that arrived while closed.
+     *
+     * Wait for state to actually become Loaded before checking — earlier this
+     * had a hard 1s delay and exited if loadMessages hadn't finished yet, which
+     * meant on slow networks (5+s for the transport-key + message-list pair)
+     * the first incoming message of every fresh conversation open was missed
+     * and never got a read receipt.
      */
     private fun sendPendingReadReceipts() {
         viewModelScope.launch {
-            // Wait for messages to load first
-            kotlinx.coroutines.delay(1000)
-            val loaded = _state.value as? ConversationState.Loaded ?: return@launch
+            // Wait up to 30s for messages to actually load. If loadMessages
+            // never produces a Loaded state, give up — but don't bail at a
+            // hard 1s mark like the previous version.
+            val loaded = try {
+                kotlinx.coroutines.withTimeoutOrNull(30_000L) {
+                    _state.first { it is ConversationState.Loaded }
+                } as? ConversationState.Loaded
+            } catch (e: Exception) {
+                null
+            }
+            if (loaded == null) {
+                android.util.Log.w("ConversationVM", "sendPendingReadReceipts: state never became Loaded")
+                return@launch
+            }
             val unreadFromPeer = loaded.messages.filter { msg ->
                 msg.senderId != currentUserGuid &&
                 msg.status != MessageStatus.READ
