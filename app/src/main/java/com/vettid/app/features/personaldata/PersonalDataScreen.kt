@@ -1584,16 +1584,30 @@ internal fun PublicMetadataDialog(
                     //      alone, so unaliased secrets render as one
                     //      card per bucket ("Critical Secret", etc.)
                     //      instead of a loose list.
+                    // Preserve the order the vault returned (M3 /
+                    // 2026-05-09: vault applies the user's saved
+                    // sort_order). Sorting by alias/category here
+                    // alphabetically would silently override the
+                    // user's drag-to-reorder. Group by alias /
+                    // category but rank each group by the FIRST
+                    // occurrence of its key in the items list, so
+                    // user order flows through to dialog rendering.
+                    val firstAliasIndex = items.withIndex()
+                        .filter { it.value.alias.isNotBlank() }
+                        .associate { it.value.alias to it.index }
+                    val firstCategoryIndex = items.withIndex()
+                        .filter { it.value.alias.isBlank() }
+                        .associate { it.value.category to it.index }
                     val aliasGroups = items
                         .filter { it.alias.isNotBlank() }
                         .groupBy { it.alias }
                         .toList()
-                        .sortedBy { (alias, _) -> alias }
+                        .sortedBy { (alias, _) -> firstAliasIndex[alias] ?: Int.MAX_VALUE }
                     val categoryGroups = items
                         .filter { it.alias.isBlank() }
                         .groupBy { it.category }
                         .toList()
-                        .sortedBy { (cat, _) -> cat }
+                        .sortedBy { (cat, _) -> firstCategoryIndex[cat] ?: Int.MAX_VALUE }
                     LazyColumn(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                         modifier = Modifier.heightIn(max = 400.dp)
