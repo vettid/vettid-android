@@ -2213,22 +2213,63 @@ class OwnerSpaceClient @Inject constructor(
 
     /**
      * Handle profile update from peer vault.
+     *
+     * Vault broadcast schema (BroadcastPublishedProfile in
+     * notifications.go): {fields, updated_at, profile,
+     * from_owner_space}. There is NO `connection_id` or
+     * `peer_guid` at the top level — the sender's connection_id
+     * wouldn't match ours anyway (each side assigns its own).
+     *
+     * Earlier versions of this parser called payload.getString(
+     * "connection_id") which threw JSONException on every broadcast,
+     * dropping the live UI refresh signal entirely. The cache update
+     * still happened on the vault side (HandleIncomingProfileUpdate
+     * in notifications.go writes connections/<id>/_peer_profile), but
+     * subscribers waiting on _profileUpdates never fired so the UI
+     * showed stale data until the next manual reload.
+     *
+     * Identified 2026-05-09 testing: peer profile fields + identity
+     * key appeared missing on the receiving phone after a republish.
      */
     private fun handleProfileUpdate(message: NatsMessage) {
         try {
             val json = JSONObject(String(message.data, Charsets.UTF_8))
             val payload = if (json.has("payload")) json.getJSONObject("payload") else json
 
+            // Use from_owner_space as the peer GUID. The connection_id
+            // is unknown to us at this layer; downstream consumers
+            // resolve it from peer_guid via their local connection
+            // index. Pass empty string for now (was previously the
+            // sender's id which we can't use).
+            val peerGuid = payload.optString("from_owner_space", "").takeIf { it.isNotBlank() } ?: ""
+
+            // Pull display_name + photo from the embedded profile
+            // snapshot when present so live UI updates get the
+            // freshest header rendering without waiting for a
+            // connection.list reload.
+            var displayName: String? = null
+            var avatarUrl: String? = null
+            payload.optJSONObject("profile")?.let { snapshot ->
+                val first = snapshot.optString("first_name", "")
+                val last = snapshot.optString("last_name", "")
+                val combined = listOf(first, last).filter { it.isNotBlank() }.joinToString(" ").trim()
+                if (combined.isNotEmpty()) displayName = combined
+                snapshot.optString("photo", "").takeIf { it.isNotBlank() }?.let { avatarUrl = it }
+            }
+
             val profileUpdate = ProfileUpdate(
-                connectionId = payload.getString("connection_id"),
-                peerGuid = payload.getString("peer_guid"),
-                displayName = if (payload.has("display_name")) payload.getString("display_name") else null,
-                avatarUrl = if (payload.has("avatar_url")) payload.getString("avatar_url") else null,
-                status = if (payload.has("status")) payload.getString("status") else null,
+                // connection_id isn't in the broadcast (sender's id
+                // wouldn't match ours). Empty string; consumers must
+                // resolve via peerGuid.
+                connectionId = "",
+                peerGuid = peerGuid,
+                displayName = displayName,
+                avatarUrl = avatarUrl,
+                status = null,
                 updatedAt = payload.optString("updated_at", "")
             )
 
-            android.util.Log.d(TAG, "Received profile update from: ${profileUpdate.peerGuid}")
+            android.util.Log.d(TAG, "Received profile update from: $peerGuid")
             _profileUpdates.tryEmit(profileUpdate)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to parse profile-update event", e)
