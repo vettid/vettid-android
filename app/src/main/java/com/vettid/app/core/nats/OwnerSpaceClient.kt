@@ -2233,7 +2233,15 @@ class OwnerSpaceClient @Inject constructor(
      */
     private fun handleProfileUpdate(message: NatsMessage) {
         try {
-            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val rawString = String(message.data, Charsets.UTF_8).trim()
+            if (rawString.isEmpty() || !rawString.startsWith("{")) {
+                // JetStream redeliveries / heartbeats / malformed pushes
+                // can land here as empty bytes. Don't try to parse;
+                // logging an exception every 30 seconds for these is just
+                // noise. Same defensive pattern as handleNewMessage.
+                return
+            }
+            val json = JSONObject(rawString)
             val payload = if (json.has("payload")) json.getJSONObject("payload") else json
 
             // Use from_owner_space as the peer GUID. The connection_id

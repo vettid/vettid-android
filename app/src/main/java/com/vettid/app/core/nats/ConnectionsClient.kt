@@ -619,7 +619,7 @@ class ConnectionsClient @Inject constructor(
             // callers must then iterate fields' insertion order.
             val fieldOrder = profileObj.getAsJsonArray("field_order")?.mapNotNull { it?.asString }
 
-            PeerProfileData(
+            val profileData = PeerProfileData(
                 firstName = profileObj.get("_system_first_name")?.asString,
                 lastName = profileObj.get("_system_last_name")?.asString,
                 email = profileObj.get("_system_email")?.asString,
@@ -634,6 +634,15 @@ class ConnectionsClient @Inject constructor(
                 dataCatalog = dataCatalog.takeIf { it.isNotEmpty() },
                 secretCatalog = secretCatalog.takeIf { it.isNotEmpty() },
             )
+            // Diagnostic (2026-05-10): single-line summary of what we
+            // got from the cached peer_profile, so we can see whether
+            // the broadcast carried the expected keys without fighting
+            // logcat truncation on the full connection.list response.
+            android.util.Log.i(
+                TAG,
+                "PeerProfileData parsed: peer=${profileData.userGuid?.take(8)} pk=${profileData.publicKey?.take(8) ?: "<null>"} fields=${profileData.fields?.keys ?: "<null>"} catalog=${profileData.dataCatalog?.size ?: 0} fieldOrder=${profileData.fieldOrder ?: "<null>"}"
+            )
+            profileData
         }
 
         return ConnectionRecord(
