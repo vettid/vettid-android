@@ -77,6 +77,7 @@ class ProfileClient @Inject constructor(
             addProperty("id", requestId)
             addProperty("type", "profile.get")
             addProperty("timestamp", java.time.Instant.now().toString())
+            addReplayHeaders()
         }
 
         val topic = "$ownerSpace.forVault.profile.get"
@@ -161,6 +162,7 @@ class ProfileClient @Inject constructor(
             addProperty("type", "profile.update")
             addProperty("timestamp", java.time.Instant.now().toString())
             add("data", gson.toJsonTree(data))
+            addReplayHeaders()
         }
 
         val topic = "$ownerSpace.forVault.profile.update"

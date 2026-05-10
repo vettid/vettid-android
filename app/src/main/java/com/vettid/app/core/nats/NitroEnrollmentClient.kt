@@ -849,6 +849,7 @@ class NitroEnrollmentClient @Inject constructor(
             addProperty("type", messageType)
             add("payload", payload)
             addProperty("timestamp", java.time.Instant.now().toString())
+            addReplayHeaders()
         }
 
         Log.d(TAG, "sendToVault: $messageType to $subject")

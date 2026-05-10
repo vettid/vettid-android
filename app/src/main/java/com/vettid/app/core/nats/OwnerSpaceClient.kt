@@ -255,11 +255,9 @@ class OwnerSpaceClient @Inject constructor(
             payload
         }
 
-        val message = VaultMessage(
+        val message = VaultMessage.create(messageType, effectivePayload).copy(
             id = requestId,
-            type = messageType,
-            payload = effectivePayload,
-            timestamp = Instant.now().toString()  // ISO 8601 format
+            payload = effectivePayload
         )
 
         val json = gson.toJson(message)
@@ -356,11 +354,9 @@ class OwnerSpaceClient @Inject constructor(
                 payload
             }
 
-            val message = VaultMessage(
+            val message = VaultMessage.create(messageType, effectivePayload).copy(
                 id = requestId,
-                type = messageType,
-                payload = effectivePayload,
-                timestamp = Instant.now().toString()
+                payload = effectivePayload
             )
 
             val json = gson.toJson(message)
@@ -1285,11 +1281,9 @@ class OwnerSpaceClient @Inject constructor(
             }
         }
 
-        val message = VaultMessage(
+        val message = VaultMessage.create(messageType, enrichedPayload).copy(
             id = requestId,
-            type = messageType,
-            payload = enrichedPayload,
-            timestamp = Instant.now().toString()
+            payload = enrichedPayload
         )
 
         val json = gson.toJson(message)
@@ -2877,6 +2871,22 @@ class OwnerSpaceClient @Inject constructor(
 
 // MARK: - Message Types
 
+private val replayNonceRandom = java.security.SecureRandom()
+
+/**
+ * Stamps `timestamp_ms` and a fresh random `nonce` onto a vault-bound request
+ * envelope. The parent's replay-cache hashes the raw NATS bytes; a fresh
+ * nonce keeps the hash unique even when the rest of the payload is stable
+ * (periodic `connection.list`, `wallet.list`, `feed.sync` polls otherwise
+ * collide and get dropped as replay attacks).
+ */
+fun JsonObject.addReplayHeaders() {
+    addProperty("timestamp_ms", java.time.Instant.now().toEpochMilli())
+    val bytes = ByteArray(8)
+    replayNonceRandom.nextBytes(bytes)
+    addProperty("nonce", bytes.joinToString("") { "%02x".format(it) })
+}
+
 /**
  * Message sent TO the vault.
  *
@@ -2885,20 +2895,37 @@ class OwnerSpaceClient @Inject constructor(
  * - type: Handler/event type (e.g., "profile.get", "secrets.datastore.add")
  * - timestamp: ISO 8601 string (not epoch milliseconds)
  * - payload: Handler-specific data
+ * - timestamp_ms: epoch millis; read by parent for replay freshness gate
+ * - nonce: random 16-char hex; guarantees outer JSON is byte-unique per call
+ *   so the parent replay-cache never sees two identical-payload reads (e.g.
+ *   periodic connection.list / wallet.list / feed.sync polls) as duplicates.
  */
 data class VaultMessage(
     val id: String,
     val type: String,
     val payload: JsonObject,
-    val timestamp: String  // ISO 8601 format
+    val timestamp: String,
+    @com.google.gson.annotations.SerializedName("timestamp_ms") val timestampMs: Long,
+    val nonce: String
 ) {
     companion object {
+        private val secureRandom = java.security.SecureRandom()
+
+        private fun freshNonce(): String {
+            val bytes = ByteArray(8)
+            secureRandom.nextBytes(bytes)
+            return bytes.joinToString("") { "%02x".format(it) }
+        }
+
         fun create(type: String, payload: JsonObject = JsonObject()): VaultMessage {
+            val now = Instant.now()
             return VaultMessage(
                 id = UUID.randomUUID().toString(),
                 type = type,
                 payload = payload,
-                timestamp = Instant.now().toString()
+                timestamp = now.toString(),
+                timestampMs = now.toEpochMilli(),
+                nonce = freshNonce()
             )
         }
     }
