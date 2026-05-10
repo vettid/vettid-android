@@ -308,8 +308,32 @@ class PersonalDataViewModel @Inject constructor(
         val now = Instant.now()
         Log.d(TAG, "Parsing profile response: ${result.keySet()}")
 
-        // Load public profile fields set
-        loadPublicProfileSettings()
+        // Authoritative public-fields list comes from the vault on every
+        // profile.get (vault-side ProfileGetResponse.PublicFields). The
+        // local EncryptedSharedPreferences cache exists as an offline
+        // fallback only — drift between the two surfaced as the data
+        // tab's visibility indicator showing "in catalog" for a field
+        // the profile preview rendered as on-profile (vault knew it was
+        // public; local cache didn't). Working principle: vault is the
+        // single source of truth.
+        val vaultPublicFields = result.getAsJsonArray("public_fields")
+        if (vaultPublicFields != null) {
+            publicProfileFields.clear()
+            vaultPublicFields.forEach { el ->
+                el?.takeIf { !it.isJsonNull }?.asString?.let { publicProfileFields.add(it) }
+            }
+            // Keep local cache in step so other code paths reading it
+            // (offline summary, etc.) see the same set on next launch.
+            personalDataStore.updatePublicProfileFields(publicProfileFields.toList())
+            Log.d(TAG, "Loaded ${publicProfileFields.size} public fields from vault")
+        } else {
+            Log.w(TAG, "profile.get response missing public_fields — falling back to local cache (vault build pre-2026-05-10?)")
+            loadPublicProfileSettings()
+        }
+        // Hidden-from-catalog still uses local cache for now; vault
+        // round-trip for it is a separate fix.
+        hiddenFromCatalogFields.clear()
+        hiddenFromCatalogFields.addAll(personalDataStore.getHiddenFromCatalogFields())
 
         // Load saved sort order from local storage
         val savedSortOrder = personalDataStore.getFieldSortOrder()
