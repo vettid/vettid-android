@@ -2497,13 +2497,23 @@ class OwnerSpaceClient @Inject constructor(
             val json = JSONObject(String(message.data, Charsets.UTF_8))
             val payload = if (json.has("payload")) json.getJSONObject("payload") else json
 
+            // Sender's wire schema renamed `timestamp` → `captured_at`
+            // to dodge the parent's replay-prevention layer (which
+            // drops any message whose top-level `timestamp` is older
+            // than 5 min). Read both for backwards-compat with any
+            // sender still on the old wire.
+            val capturedAt = when {
+                payload.has("captured_at") -> payload.getLong("captured_at")
+                payload.has("timestamp") -> payload.getLong("timestamp")
+                else -> 0L
+            }
             val update = SharedLocationUpdate(
                 connectionId = payload.getString("connection_id"),
                 latitude = payload.getDouble("latitude"),
                 longitude = payload.getDouble("longitude"),
                 accuracy = if (payload.has("accuracy") && !payload.isNull("accuracy"))
                     payload.getDouble("accuracy").toFloat() else null,
-                timestamp = payload.getLong("timestamp"),
+                timestamp = capturedAt,
                 updatedAt = payload.optString("updated_at", "")
             )
 
