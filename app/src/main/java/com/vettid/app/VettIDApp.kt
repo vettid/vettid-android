@@ -92,11 +92,6 @@ import com.vettid.app.features.transfer.TransferApprovalScreen
 import com.vettid.app.features.postenrollment.PostEnrollmentScreen
 import com.vettid.app.features.postenrollment.PersonalDataCollectionScreen
 import com.vettid.app.features.migration.SecurityAuditLogScreen
-import com.vettid.app.features.migration.VaultUpdateCard
-import com.vettid.app.features.migration.VaultUpdateSuccessCard
-import com.vettid.app.features.migration.VaultUpdatingInlineCard
-import com.vettid.app.features.migration.VaultUpdateViewModel
-import com.vettid.app.features.migration.VaultUpdateState
 import com.vettid.app.features.enrollmentwizard.EnrollmentWizardScreen
 import com.vettid.app.features.feed.GuideDetailScreen
 import com.vettid.app.features.settings.AppDetailsScreen
@@ -1755,16 +1750,11 @@ fun MainScreen(
     onNavigateToHandlerAuthorization: () -> Unit = {},
     appViewModel: AppViewModel = hiltViewModel(),
     badgeCountsViewModel: BadgeCountsViewModel = hiltViewModel(),
-    vaultUpdateViewModel: VaultUpdateViewModel = hiltViewModel()
 ) {
-    // Check for vault security updates after vault unlock
-    val vaultUpdateState by vaultUpdateViewModel.state.collectAsState()
-    LaunchedEffect(Unit) {
-        vaultUpdateViewModel.checkForUpdate()
-    }
-
-    // Handle "Review Details" — open browser
-    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+    // (Removed 2026-05-11) VaultUpdateCard / VaultUpdateViewModel.
+    // The pre-PIN consent prompt + inline re-seal during PIN unlock is
+    // now the single canonical migration path; the post-PIN action
+    // card was the second prompt for the same task.
 
     var isSettingsOpen by rememberSaveable { mutableStateOf(false) }
 
@@ -1815,57 +1805,7 @@ fun MainScreen(
         )
     }
 
-    // Vault security update card (shown above main content)
     Column(modifier = Modifier.fillMaxSize()) {
-        when (val updateState = vaultUpdateState) {
-            is VaultUpdateState.UpdateAvailable -> {
-                VaultUpdateCard(
-                    config = updateState.config,
-                    isMandatory = updateState.isMandatory,
-                    isUpdating = false,
-                    onUpdateNow = { vaultUpdateViewModel.startUpdate() },
-                    onRemindLater = { vaultUpdateViewModel.remindLater() },
-                    onReviewDetails = {
-                        val url = updateState.config.detailsUrl
-                        if (!url.isNullOrEmpty()) {
-                            uriHandler.openUri(url)
-                        }
-                    }
-                )
-            }
-            is VaultUpdateState.Updating -> {
-                if (updateState.autoApplied) {
-                    // Pre-PIN consent path — skip the action card so it
-                    // doesn't flash between Checking and Updated.
-                    VaultUpdatingInlineCard()
-                } else {
-                    VaultUpdateCard(
-                        config = updateState.config,
-                        isMandatory = true,
-                        isUpdating = true,
-                        onUpdateNow = {},
-                        onRemindLater = {},
-                        onReviewDetails = {}
-                    )
-                }
-            }
-            is VaultUpdateState.Updated -> {
-                VaultUpdateSuccessCard(
-                    onDismiss = { vaultUpdateViewModel.dismissSuccess() }
-                )
-            }
-            is VaultUpdateState.Error -> {
-                VaultUpdateCard(
-                    config = updateState.config,
-                    isMandatory = true,
-                    isUpdating = false,
-                    onUpdateNow = { vaultUpdateViewModel.retry() },
-                    onRemindLater = {},
-                    onReviewDetails = {}
-                )
-            }
-            else -> { /* No update card for Checking/NoUpdate */ }
-        }
 
     MainActivityScaffold(
         isSettingsOpen = isSettingsOpen,
@@ -1890,7 +1830,7 @@ fun MainScreen(
                 onNavigateToScanInvitation = onNavigateToScanInvitation,
                 onNavigateToCreateAgentInvitation = onNavigateToCreateAgentInvitation,
                 onNavigateToConnectDesktop = onNavigateToConnectDesktop,
-                onResurfaceVaultUpdate = { vaultUpdateViewModel.resurface() },
+                onResurfaceVaultUpdate = { /* no-op: post-PIN update card removed 2026-05-11 */ },
                 onBtcSend = onNavigateToBtcSend,
                 onBtcRequest = onNavigateToBtcRequest,
                 onNavigateToVaultMessages = onNavigateToVaultMessages,

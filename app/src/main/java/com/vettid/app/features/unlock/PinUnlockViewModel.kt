@@ -84,7 +84,6 @@ class PinUnlockViewModel @Inject constructor(
     private val natsAutoConnector: NatsAutoConnector,
     private val personalDataStore: PersonalDataStore,
     private val pcrConfigManager: PcrConfigManager,
-    private val migrationConsentTracker: com.vettid.app.features.migration.MigrationConsentTracker,
     private val migrationCompletionRecorder: com.vettid.app.features.migration.MigrationCompletionRecorder,
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context
 ) : ViewModel() {
@@ -94,13 +93,12 @@ class PinUnlockViewModel @Inject constructor(
         const val MAX_PIN_LENGTH = 8
         private const val RESPONSE_TIMEOUT_MS = 30000L
 
-        // M1 PIN-coupled migration retry policy. When the vault returns
-        // `pending_new_enclave`, the request landed on the OLD enclave
-        // and the routing handoff was emitted. The vault-routing KV
-        // typically reclaims within one heartbeat, so a short retry
-        // budget is enough; we never want to loop forever.
-        private const val MIGRATION_RETRY_MAX = 3
-        private const val MIGRATION_RETRY_DELAY_MS = 1500L
+        // (Removed 2026-05-11) MIGRATION_RETRY_MAX / MIGRATION_RETRY_DELAY_MS.
+        // The single PIN-unlock now decides migration status definitively
+        // because deploy.sh Phase 4.6 reclaims routing before publishing
+        // the config — every consenting request lands on NEW. Any
+        // pending_new_enclave response is surfaced as a user-actionable
+        // error, not silently retried.
     }
 
     private val _state = MutableStateFlow<PinUnlockState>(PinUnlockState.Idle)
@@ -126,9 +124,10 @@ class PinUnlockViewModel @Inject constructor(
     private var _pendingPin: String? = null
     // Skip PCR0 check for this session (user chose "Not Now")
     private var _skipPcr0Check = false
-    // Set in approveEnclaveUpdate(); consumed (and migrationConsentTracker
-    // armed) only after a successful PIN unlock so a wrong-PIN attempt
-    // can't trigger an auto-migration on an unauthenticated session.
+    // Set in approveEnclaveUpdate(); rides on the next submitPin() as
+    // migrate_consent=true. Cleared on "completed". A wrong-PIN attempt
+    // can't trigger an auto-migration because consent is only acted on
+    // by the vault after PIN verification succeeds.
     private var _pendingMigrationApproval = false
 
     init {
@@ -246,21 +245,26 @@ class PinUnlockViewModel @Inject constructor(
             // Verify PIN with enclave using OwnerSpaceClient (event_id correlation)
             _state.value = PinUnlockState.Verifying
 
-            // M1: pre-PIN approval drives migrate_consent in the very
-            // first request. The OLD-branch retry loop below also keeps
-            // sending it so the eventual NEW landing completes the
-            // re-seal. A wrong PIN never advances past the InvalidPin
-            // arm in the result switch, so consent can't be acted on
-            // unauthenticated.
+            // M1 (simplified 2026-05-11): pre-PIN consent rides on the
+            // single PIN-unlock request. With deploy.sh Phase 4.6 eager
+            // reclaim working (requires parent.p.pcr0 populated — see
+            // vsock_client.GetExpectedPCR0Hex), every user's routing
+            // claim is on NEW by the time the migration config publishes,
+            // so this request lands on NEW and the vault re-seals inline.
+            //
+            // Anything other than "completed" when migrate_consent was
+            // sent is a real error — surface it. The previous design's
+            // silent retry loop + sticky _pendingMigrationApproval
+            // produced a two-prompt UX (pre-PIN approve, then a
+            // post-PIN VaultUpdateCard) because the retry kept consent
+            // armed across unlocks and the card path saw it as unhandled.
             val migrateConsent = _pendingMigrationApproval
 
-            // Retry up to 3 times if vault is not ready (just started).
-            // Independent of the migration retry budget below — that
-            // one runs only when the vault returned a successful unlock
-            // with migration_status=pending_new_enclave.
+            // Bounded retry budget exists solely for VaultNotReady
+            // (enclave still warming up). Migration status is no
+            // longer retried here.
             var retryCount = 0
             val maxRetries = 3
-            var migrationRetries = 0
             while (true) {
                 val result = verifyPinWithEnclave(pin, migrateConsent = migrateConsent)
 
@@ -268,71 +272,54 @@ class PinUnlockViewModel @Inject constructor(
                     is PinVerificationResult.Success -> {
                         Log.i(TAG, "PIN verification successful (migration_status=${result.migrationStatus.ifEmpty { "<none>" }})")
 
-                        // M1: act on the response's migration_status.
-                        // The unlock itself already succeeded — these
-                        // branches only decide whether to retry
-                        // (pending_new_enclave) or record completion.
-                        //
-                        // CRITICAL: only "completed" consumes the
-                        // pre-PIN consent. The earlier code cleared
-                        // _pendingMigrationApproval on every Success
-                        // branch including "not_requested" and
-                        // "failed", which silently no-opped multiple
-                        // in-the-wild migrations: a broken OLD vault
-                        // returned "not_requested" because config
-                        // verification failed, Android treated the
-                        // user's accept as consumed, and subsequent
-                        // unlocks never re-armed consent. The user
-                        // had to terminate OLD via ASG to force
-                        // routing failover (incident 2026-05-11).
-                        // Now the flag stays set until the vault
-                        // actually returns "completed" — so any
-                        // failure mode (transient KMS, signature
-                        // verify, OLD-branch handoff) keeps consent
-                        // armed for the next unlock to retry.
-                        var migrationCompletedThisUnlock = false
-                        when (result.migrationStatus) {
-                            "pending_new_enclave" -> {
-                                if (migrationRetries < MIGRATION_RETRY_MAX) {
-                                    migrationRetries++
-                                    Log.i(TAG, "Migration landed on OLD enclave; retrying ${migrationRetries}/${MIGRATION_RETRY_MAX} in ${MIGRATION_RETRY_DELAY_MS}ms")
-                                    kotlinx.coroutines.delay(MIGRATION_RETRY_DELAY_MS)
-                                    continue
+                        // M1 simplified: act on migration_status once,
+                        // no retries. If migrate_consent was sent we
+                        // expect "completed"; any other value is an
+                        // error path the user should know about.
+                        if (migrateConsent) {
+                            when (result.migrationStatus) {
+                                "completed" -> {
+                                    Log.i(TAG, "Migration re-seal completed inline (version=${result.migrationVersion})")
+                                    if (result.migrationVersion.isNotEmpty()) {
+                                        migrationCompletionRecorder.recordCompletion(result.migrationVersion)
+                                    }
+                                    _pendingMigrationApproval = false
                                 }
-                                // Out of retries — accept the unlock and
-                                // log a warning. Leave _pendingMigrationApproval
-                                // set so next session retries the migration.
-                                Log.w(TAG, "Migration retry budget exhausted; accepting unlock without re-seal — consent stays armed for next session")
-                            }
-                            "completed" -> {
-                                Log.i(TAG, "Migration re-seal completed inline (version=${result.migrationVersion})")
-                                if (result.migrationVersion.isNotEmpty()) {
-                                    migrationCompletionRecorder.recordCompletion(result.migrationVersion)
+                                "pending_new_enclave" -> {
+                                    // Phase 4.6 reclaim should prevent this; if it
+                                    // happens, the deploy hit a routing race the
+                                    // user has to retry through. Tell them.
+                                    Log.w(TAG, "Migration request landed on OLD enclave despite Phase 4.6 reclaim — surfacing retry hint")
+                                    _state.value = PinUnlockState.Error(
+                                        "Vault update isn't ready yet on this server — please try unlocking again in a moment."
+                                    )
+                                    return
                                 }
-                                migrationCompletedThisUnlock = true
+                                "failed" -> {
+                                    Log.e(TAG, "Migration re-seal failed inline; surfacing error to user")
+                                    _state.value = PinUnlockState.Error(
+                                        "Vault update failed. Please try again or contact support."
+                                    )
+                                    return
+                                }
+                                "not_requested", "" -> {
+                                    // Vault didn't see a migration to apply (config
+                                    // missing or unverifiable). Treat as completed
+                                    // since there's nothing to do — but log loudly
+                                    // because the user only sees this path when the
+                                    // pre-PIN prompt fired, which means the app
+                                    // thought there WAS a migration.
+                                    Log.w(TAG, "migrate_consent=true but vault returned ${result.migrationStatus.ifEmpty { "empty" }} — config drift?")
+                                    _pendingMigrationApproval = false
+                                }
+                                else -> {
+                                    Log.e(TAG, "Unknown migration_status: ${result.migrationStatus}")
+                                    _state.value = PinUnlockState.Error(
+                                        "Vault update returned an unexpected state: ${result.migrationStatus}"
+                                    )
+                                    return
+                                }
                             }
-                            "failed" -> {
-                                Log.w(TAG, "Migration re-seal failed; user remains on prior PCR0 binding — consent stays armed for next session")
-                            }
-                            "not_requested", "" -> {
-                                // No migration in flight (or vault couldn't
-                                // verify the config and bailed). If consent
-                                // was set, leave it set so a retry against
-                                // a healthy enclave can actually re-seal.
-                            }
-                        }
-
-                        if (_pendingMigrationApproval && migrationCompletedThisUnlock) {
-                            // Pre-PIN consent has been acted on by the vault
-                            // and re-seal landed. Clear the local flag so a
-                            // later unlock in the same session doesn't
-                            // redundantly re-arm it.
-                            _pendingMigrationApproval = false
-                            // Bridge to legacy VaultUpdateViewModel for
-                            // backward compat: post-unlock card path
-                            // suppresses the action card on APPROVED. The
-                            // recorder + pin-unlock handled the actual work.
-                            migrationConsentTracker.recordApproval()
                         }
 
                         // Reconnect with vault-issued credentials if available
@@ -438,16 +425,11 @@ class PinUnlockViewModel @Inject constructor(
             Log.i(TAG, "User approved enclave update — PCR0 added to trusted set")
             _pendingUntrustedPcr0 = null
         }
-        // CRITICAL: do NOT call migrationConsentTracker.recordApproval()
-        // here. It used to fire pre-PIN — meaning a wrong PIN attempt that
-        // happened to coincide with an untrusted PCR0 would still arm
-        // auto-migration. The post-PIN flow then auto-applied migration
-        // even though the user had not actually unlocked their vault, and
-        // on a multi-instance ASG the migration handler can land on a
-        // different enclave than the one that loaded their data —
-        // persisting empty state to S3 and wiping the vault. Defer the
-        // consent record to the PIN-success path below; if PIN never
-        // succeeds, migration never auto-runs.
+        // _pendingMigrationApproval is consulted by submitPin() to set
+        // migrate_consent=true on the next verify. Migration is now
+        // resolved inline by that single request (success or surfaced
+        // error); the legacy post-PIN VaultUpdateCard was removed
+        // 2026-05-11 along with MigrationConsentTracker.
         _pendingMigrationApproval = true
         val pendingPin = _pendingPin
         _pendingPin = null
@@ -474,10 +456,10 @@ class PinUnlockViewModel @Inject constructor(
         _pendingUntrustedPcr0 = null
         _skipPcr0Check = true
 
-        // Session-scoped signal to VaultUpdateViewModel that the user
-        // already said "not now" — suppresses the post-unlock card and
-        // writes a feed entry so the pending update stays discoverable.
-        migrationConsentTracker.recordSkip()
+        // (Removed 2026-05-11) migrationConsentTracker.recordSkip().
+        // The post-PIN VaultUpdateCard that consumed this signal is
+        // gone; users who skip the pre-PIN prompt simply unlock against
+        // OLD and re-see the prompt on the next session.
 
         val pendingPin = _pendingPin
         _pendingPin = null
