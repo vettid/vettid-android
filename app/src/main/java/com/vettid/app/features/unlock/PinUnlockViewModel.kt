@@ -272,6 +272,25 @@ class PinUnlockViewModel @Inject constructor(
                         // The unlock itself already succeeded — these
                         // branches only decide whether to retry
                         // (pending_new_enclave) or record completion.
+                        //
+                        // CRITICAL: only "completed" consumes the
+                        // pre-PIN consent. The earlier code cleared
+                        // _pendingMigrationApproval on every Success
+                        // branch including "not_requested" and
+                        // "failed", which silently no-opped multiple
+                        // in-the-wild migrations: a broken OLD vault
+                        // returned "not_requested" because config
+                        // verification failed, Android treated the
+                        // user's accept as consumed, and subsequent
+                        // unlocks never re-armed consent. The user
+                        // had to terminate OLD via ASG to force
+                        // routing failover (incident 2026-05-11).
+                        // Now the flag stays set until the vault
+                        // actually returns "completed" — so any
+                        // failure mode (transient KMS, signature
+                        // verify, OLD-branch handoff) keeps consent
+                        // armed for the next unlock to retry.
+                        var migrationCompletedThisUnlock = false
                         when (result.migrationStatus) {
                             "pending_new_enclave" -> {
                                 if (migrationRetries < MIGRATION_RETRY_MAX) {
@@ -281,31 +300,33 @@ class PinUnlockViewModel @Inject constructor(
                                     continue
                                 }
                                 // Out of retries — accept the unlock and
-                                // log a warning. The user will see a new
-                                // PCR0 prompt on next session if needed,
-                                // or the routing reclaim will eventually
-                                // settle.
-                                Log.w(TAG, "Migration retry budget exhausted; accepting unlock without re-seal")
+                                // log a warning. Leave _pendingMigrationApproval
+                                // set so next session retries the migration.
+                                Log.w(TAG, "Migration retry budget exhausted; accepting unlock without re-seal — consent stays armed for next session")
                             }
                             "completed" -> {
                                 Log.i(TAG, "Migration re-seal completed inline (version=${result.migrationVersion})")
                                 if (result.migrationVersion.isNotEmpty()) {
                                     migrationCompletionRecorder.recordCompletion(result.migrationVersion)
                                 }
+                                migrationCompletedThisUnlock = true
                             }
                             "failed" -> {
-                                Log.w(TAG, "Migration re-seal failed; user remains on prior PCR0 binding (will retry next session)")
+                                Log.w(TAG, "Migration re-seal failed; user remains on prior PCR0 binding — consent stays armed for next session")
                             }
                             "not_requested", "" -> {
-                                // No migration in flight or no consent — nothing to do.
+                                // No migration in flight (or vault couldn't
+                                // verify the config and bailed). If consent
+                                // was set, leave it set so a retry against
+                                // a healthy enclave can actually re-seal.
                             }
                         }
 
-                        if (_pendingMigrationApproval) {
+                        if (_pendingMigrationApproval && migrationCompletedThisUnlock) {
                             // Pre-PIN consent has been acted on by the vault
-                            // (migrate_consent was passed above). Clear the
-                            // local flag so a later unlock in the same session
-                            // doesn't redundantly re-arm it.
+                            // and re-seal landed. Clear the local flag so a
+                            // later unlock in the same session doesn't
+                            // redundantly re-arm it.
                             _pendingMigrationApproval = false
                             // Bridge to legacy VaultUpdateViewModel for
                             // backward compat: post-unlock card path
