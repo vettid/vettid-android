@@ -98,8 +98,6 @@ class CredentialStore @Inject constructor(
         private const val KEY_PCR_VERSION = "pcr_version"
         private const val KEY_PCR0_HASH = "pcr0_hash"
         private const val KEY_ENROLLMENT_PCR_VERSION = "enrollment_pcr_version"
-        // Emergency recovery (for enclave migration disaster scenarios)
-        private const val KEY_EMERGENCY_RECOVERY_PUBLIC_KEY = "emergency_recovery_public_key"
         // Offline mode
         private const val KEY_OFFLINE_MODE = "offline_mode"
         // Credential key pair (for enrollment public key in secrets)
@@ -1156,27 +1154,6 @@ class CredentialStore @Inject constructor(
      */
     fun isNitroCredential(): Boolean {
         return encryptedPrefs.getBoolean("is_nitro_credential", false)
-    }
-
-    // MARK: - Emergency Recovery (Enclave Migration)
-
-    /**
-     * Get the emergency recovery public key for disaster scenarios.
-     * This key is used when both old and new enclaves are unavailable.
-     * Returns null if not configured (backend hasn't provided it).
-     */
-    fun getEmergencyRecoveryPublicKey(): String? {
-        return encryptedPrefs.getString(KEY_EMERGENCY_RECOVERY_PUBLIC_KEY, null)
-    }
-
-    /**
-     * Store the emergency recovery public key.
-     * This is typically set during enrollment or backend config update.
-     */
-    fun setEmergencyRecoveryPublicKey(publicKey: String) {
-        encryptedPrefs.edit()
-            .putString(KEY_EMERGENCY_RECOVERY_PUBLIC_KEY, publicKey)
-            .apply()
     }
 
     // MARK: - Offline Mode

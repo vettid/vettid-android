@@ -91,7 +91,6 @@ import com.vettid.app.features.transfer.TransferRequestScreen
 import com.vettid.app.features.transfer.TransferApprovalScreen
 import com.vettid.app.features.postenrollment.PostEnrollmentScreen
 import com.vettid.app.features.postenrollment.PersonalDataCollectionScreen
-import com.vettid.app.features.migration.EmergencyRecoveryScreen
 import com.vettid.app.features.migration.SecurityAuditLogScreen
 import com.vettid.app.features.migration.VaultUpdateCard
 import com.vettid.app.features.migration.VaultUpdateSuccessCard
@@ -238,7 +237,6 @@ sealed class Screen(val route: String) {
     object PersonalDataCollection : Screen("personal-data-collection")
     // Migration screens (Issue #18: Enclave migration support)
     object SecurityAuditLog : Screen("security-audit-log")
-    object EmergencyRecovery : Screen("emergency-recovery")
     // Critical Secrets full screen
     object CriticalSecrets : Screen("critical-secrets")
     // App details screen
@@ -1476,16 +1474,6 @@ fun VettIDApp(
         composable(Screen.SecurityAuditLog.route) {
             SecurityAuditLogScreen(
                 onBack = { navController.safePopBackStack() }
-            )
-        }
-        // Emergency Recovery screen (Issue #18: Enclave migration - disaster scenario)
-        composable(Screen.EmergencyRecovery.route) {
-            EmergencyRecoveryScreen(
-                onRecoveryComplete = {
-                    navController.navigate(Screen.Main.route) {
-                        popUpTo(0) { inclusive = true }
-                    }
-                }
             )
         }
         // Critical Secrets full screen

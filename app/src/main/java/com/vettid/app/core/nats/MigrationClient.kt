@@ -15,12 +15,12 @@ import javax.inject.Singleton
  * Handles:
  * - Checking migration status on app startup
  * - Acknowledging migration notifications
- * - Emergency recovery (when both enclaves are unavailable)
  *
- * Migration happens server-side without user action. The app:
- * 1. Checks status on startup
- * 2. Shows notification banner if migration completed
- * 3. Handles emergency recovery if both enclaves are down
+ * Migration is driven by the PIN-unlock-coupled flow in
+ * PinUnlockViewModel; this client mostly observes status + records
+ * acknowledgements. The emergency-recovery surface that used to live
+ * here was removed 2026-05-11 per architect §6 (vault never emitted
+ * the status; whole branch was dead UI).
  */
 @Singleton
 class MigrationClient @Inject constructor(
@@ -98,60 +98,13 @@ class MigrationClient @Inject constructor(
         }
     }
 
-    /**
-     * Perform emergency recovery when both enclaves are unavailable.
-     *
-     * This is only used in disaster scenarios where the user must provide
-     * their PIN to re-derive the DEK.
-     *
-     * @param encryptedPinHash Base64-encoded encrypted PIN hash
-     * @param ephemeralPublicKey Base64-encoded ephemeral public key
-     * @param nonce Base64-encoded nonce
-     */
-    suspend fun performEmergencyRecovery(
-        encryptedPinHash: String,
-        ephemeralPublicKey: String,
-        nonce: String
-    ): Result<Unit> {
-        Log.i(TAG, "Performing emergency recovery")
-
-        val payload = JsonObject().apply {
-            addProperty("encrypted_pin_hash", encryptedPinHash)
-            addProperty("ephemeral_public_key", ephemeralPublicKey)
-            addProperty("nonce", nonce)
-        }
-
-        val response = ownerSpaceClient.sendAndAwaitResponse(
-            "credential.emergency_recovery", payload, 30_000L
-        )
-
-        return when (response) {
-            is VaultResponse.HandlerResult -> {
-                if (response.success) {
-                    Log.i(TAG, "Emergency recovery successful")
-                    _migrationEvents.tryEmit(MigrationEvent.RecoveryCompleted)
-                    Result.success(Unit)
-                } else {
-                    val error = response.error ?: "Recovery failed"
-                    Log.e(TAG, "Emergency recovery failed: $error")
-                    _migrationEvents.tryEmit(MigrationEvent.RecoveryFailed(error))
-                    Result.failure(Exception(error))
-                }
-            }
-            is VaultResponse.Error -> {
-                val error = "${response.code}: ${response.message}"
-                Log.e(TAG, "Emergency recovery error: $error")
-                _migrationEvents.tryEmit(MigrationEvent.RecoveryFailed(error))
-                Result.failure(Exception(error))
-            }
-            else -> {
-                val error = "Timeout waiting for recovery response"
-                Log.e(TAG, error)
-                _migrationEvents.tryEmit(MigrationEvent.RecoveryFailed(error))
-                Result.failure(Exception(error))
-            }
-        }
-    }
+    // performEmergencyRecovery was removed 2026-05-11. The vault-side
+    // credential.emergency_recovery handler never existed; the call
+    // would always 404. Per architect §6 decision: real recovery
+    // today is decommission-vault.sh + re-enroll. A proper escape
+    // hatch would need a recovery secret stamped at enrollment +
+    // a new vault handler — design that as its own feature when
+    // prioritized.
 
     /**
      * Get audit log entries for migrations.
@@ -296,7 +249,6 @@ class MigrationClient @Inject constructor(
                 fromPcrVersion = json.get("from_pcr_version")?.asString,
                 toPcrVersion = json.get("to_pcr_version")?.asString
             )
-            "emergency_recovery_required" -> MigrationStatus.EmergencyRecoveryRequired
             else -> {
                 Log.w(TAG, "Unknown migration status: $status")
                 MigrationStatus.Unknown
@@ -330,7 +282,6 @@ class MigrationClient @Inject constructor(
             "migration_sealed_material" -> "Credential Migration Started"
             "migration_verified" -> "Credential Migration Completed"
             "migration_old_version_deleted" -> "Old Credential Version Removed"
-            "emergency_recovery" -> "Emergency Recovery Performed"
             else -> type.replace("_", " ").replaceFirstChar { it.uppercase() }
         }
     }
@@ -354,9 +305,6 @@ sealed class MigrationStatus {
     /** Migration is currently in progress (server-side) */
     data class InProgress(val progress: Float) : MigrationStatus()
 
-    /** Both enclaves unavailable - user must provide PIN for recovery */
-    object EmergencyRecoveryRequired : MigrationStatus()
-
     /** Could not determine migration status */
     object Unknown : MigrationStatus()
 }
@@ -379,8 +327,6 @@ data class MigrationConfig(
 sealed class MigrationEvent {
     data class MigrationCompleted(val version: String) : MigrationEvent()
     data class MigrationFailed(val error: String) : MigrationEvent()
-    object RecoveryCompleted : MigrationEvent()
-    data class RecoveryFailed(val error: String) : MigrationEvent()
 }
 
 /**
