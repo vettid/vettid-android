@@ -143,8 +143,71 @@ class ConnectionDetailViewModel @Inject constructor(
     private val _presenceOverrideInFlight = MutableStateFlow(false)
     val presenceOverrideInFlight: StateFlow<Boolean> = _presenceOverrideInFlight.asStateFlow()
 
+    /**
+     * Cached peer location: written when the peer shares with us and
+     * cleared when they stop. null when no current cache row exists
+     * (peer is not sharing, or we haven't observed them yet).
+     * Backed by the vault's connections/<id>/_peer_location row;
+     * hydrated via location.peer.get at load time and refreshed by
+     * V3/V5 transition notifications + live location-update events
+     * that match this connection.
+     */
+    private val _peerLocation = MutableStateFlow<com.vettid.app.core.nats.CachedPeerLocation?>(null)
+    val peerLocation: StateFlow<com.vettid.app.core.nats.CachedPeerLocation?> = _peerLocation.asStateFlow()
+
+    private val _isRequestingPeerLocation = MutableStateFlow(false)
+    val isRequestingPeerLocation: StateFlow<Boolean> = _isRequestingPeerLocation.asStateFlow()
+
     init {
         loadConnection()
+        observePeerLocationStream()
+    }
+
+    /**
+     * Wire up the three vault-driven flows that mutate the peer
+     * location cache:
+     *   - Live location-update broadcasts (vault already caches them
+     *     under connections/<id>/_peer_location, but the app needs to
+     *     refresh its in-memory copy to keep the UI live).
+     *   - V3 start-sharing transition — re-fetch.
+     *   - V5 stop-sharing transition — clear in-memory.
+     * Each filters to events for THIS connection.
+     */
+    private fun observePeerLocationStream() {
+        viewModelScope.launch {
+            ownerSpaceClient.locationUpdates
+                .filter { it.connectionId == connectionId }
+                .collect { update ->
+                    _peerLocation.value = com.vettid.app.core.nats.CachedPeerLocation(
+                        latitude = update.latitude,
+                        longitude = update.longitude,
+                        accuracy = update.accuracy,
+                        timestamp = update.timestamp,
+                        updatedAt = update.updatedAt,
+                        firstReceivedAt = _peerLocation.value?.firstReceivedAt ?: update.updatedAt
+                    )
+                }
+        }
+        viewModelScope.launch {
+            ownerSpaceClient.peerLocationTransitions
+                .filter { it.connectionId == connectionId }
+                .collect { transition ->
+                    when (transition.transition) {
+                        com.vettid.app.core.nats.PeerLocationShareTransition.Transition.STARTED -> {
+                            loadPeerLocation()
+                        }
+                        com.vettid.app.core.nats.PeerLocationShareTransition.Transition.STOPPED -> {
+                            _peerLocation.value = null
+                        }
+                        com.vettid.app.core.nats.PeerLocationShareTransition.Transition.REQUESTED -> {
+                            // Handled by the screen-level effect — the
+                            // peer is asking for OUR location, not
+                            // signaling that they've shared theirs.
+                            _effects.emit(ConnectionDetailEffect.PeerRequestedLocation)
+                        }
+                    }
+                }
+        }
     }
 
     /**
@@ -217,6 +280,10 @@ class ConnectionDetailViewModel @Inject constructor(
                         )
                         // Load location sharing status after connection loads
                         loadLocationSharingStatus()
+                        // Hydrate the peer-location cache (V2) so the
+                        // Location row renders without waiting for the
+                        // next live update.
+                        loadPeerLocation()
                         // Load handler grants for this peer + the catalog so
                         // the Shared Capabilities section has its data.
                         loadShareHandlers()
@@ -445,6 +512,64 @@ class ConnectionDetailViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Read the cached peer location for this connection. Sets
+     * peerLocation to null if the peer isn't currently sharing.
+     */
+    fun loadPeerLocation() {
+        viewModelScope.launch {
+            try {
+                _peerLocation.value = ownerSpaceClient.getPeerLocation(connectionId)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to load peer location", e)
+                _peerLocation.value = null
+            }
+        }
+    }
+
+    /**
+     * Send a one-shot location-request ping to this peer (V6).
+     * The peer's app receives a `connection.peer-location-requested`
+     * notification and may fulfill via `location.send-once`.
+     */
+    fun requestPeerLocation() {
+        viewModelScope.launch {
+            _isRequestingPeerLocation.value = true
+            try {
+                ownerSpaceClient.requestPeerLocation(connectionId).fold(
+                    onSuccess = {
+                        _effects.emit(ConnectionDetailEffect.ShowSuccess("Location request sent"))
+                    },
+                    onFailure = { err ->
+                        _effects.emit(ConnectionDetailEffect.ShowError(err.message ?: "Failed to request location"))
+                    }
+                )
+            } finally {
+                _isRequestingPeerLocation.value = false
+            }
+        }
+    }
+
+    /**
+     * Fulfill an inbound peer-location-requested notification by
+     * sending our latest cached location once to the requester. Does
+     * NOT modify the sharing index — the peer gets a single point
+     * and no further updates unless continuous sharing is enabled
+     * separately.
+     */
+    fun fulfillPeerLocationRequest() {
+        viewModelScope.launch {
+            ownerSpaceClient.sendLocationOnce(connectionId).fold(
+                onSuccess = {
+                    _effects.emit(ConnectionDetailEffect.ShowSuccess("Location sent"))
+                },
+                onFailure = { err ->
+                    _effects.emit(ConnectionDetailEffect.ShowError(err.message ?: "Failed to send location"))
+                }
+            )
+        }
+    }
+
     private fun loadLocationSharingStatus() {
         viewModelScope.launch {
             try {
@@ -551,4 +676,6 @@ sealed class ConnectionDetailEffect {
     object NavigateBack : ConnectionDetailEffect()
     data class ShowSuccess(val message: String) : ConnectionDetailEffect()
     data class ShowError(val message: String) : ConnectionDetailEffect()
+    /** Peer asked us to share our location once (V6). Screen prompts the user. */
+    object PeerRequestedLocation : ConnectionDetailEffect()
 }

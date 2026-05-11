@@ -3,6 +3,7 @@ package com.vettid.app.features.connections
 import android.Manifest
 import android.graphics.BitmapFactory
 import android.util.Base64
+import androidx.compose.ui.platform.LocalContext
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -99,10 +100,27 @@ fun ConnectionDetailScreen(
                     onBack()
                 }
                 is ConnectionDetailEffect.ShowSuccess -> {
-                    // Show snackbar
+                    scope.launch { snackbarHostState.showSnackbar(effect.message) }
                 }
                 is ConnectionDetailEffect.ShowError -> {
-                    // Show snackbar
+                    scope.launch { snackbarHostState.showSnackbar(effect.message) }
+                }
+                is ConnectionDetailEffect.PeerRequestedLocation -> {
+                    // V6: peer pinged us for our location. Surface a
+                    // confirmable snackbar — "Send" fulfills via
+                    // location.send-once without enabling continuous
+                    // sharing; dismiss is a silent decline.
+                    val peerName = (state as? ConnectionDetailState.Loaded)?.connection?.peerDisplayName ?: "Peer"
+                    scope.launch {
+                        val result = snackbarHostState.showSnackbar(
+                            message = "$peerName is asking for your location",
+                            actionLabel = "Send",
+                            withDismissAction = true,
+                        )
+                        if (result == SnackbarResult.ActionPerformed) {
+                            viewModel.fulfillPeerLocationRequest()
+                        }
+                    }
                 }
             }
         }
@@ -176,6 +194,8 @@ fun ConnectionDetailScreen(
                 val peerDataCatalog by viewModel.peerDataCatalog.collectAsState()
                 val peerSecretCatalog by viewModel.peerSecretCatalog.collectAsState()
                 val isPeerOnline by viewModel.isPeerOnline.collectAsState()
+                val peerLocation by viewModel.peerLocation.collectAsState()
+                val isRequestingPeerLocation by viewModel.isRequestingPeerLocation.collectAsState()
                 LoadedContent(
                     connection = currentState.connection,
                     profile = currentState.profile,
@@ -217,6 +237,9 @@ fun ConnectionDetailScreen(
                     onShowHistory = onShowHistory,
                     onNavigateToPeerCatalog = onNavigateToPeerCatalog,
                     onNavigateToMySharing = onNavigateToMySharing,
+                    peerLocation = peerLocation,
+                    isRequestingPeerLocation = isRequestingPeerLocation,
+                    onRequestPeerLocation = { viewModel.requestPeerLocation() },
                     modifier = Modifier.padding(padding)
                 )
             }
@@ -272,6 +295,9 @@ private fun LoadedContent(
     onShowHistory: () -> Unit = {},
     onNavigateToPeerCatalog: (String) -> Unit = {},
     onNavigateToMySharing: (String) -> Unit = {},
+    peerLocation: com.vettid.app.core.nats.CachedPeerLocation? = null,
+    isRequestingPeerLocation: Boolean = false,
+    onRequestPeerLocation: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val connectedDateFormatter = java.text.SimpleDateFormat("MMMM d, yyyy 'at' h:mm a", java.util.Locale.getDefault())
@@ -344,6 +370,14 @@ private fun LoadedContent(
                     supportingContent = { Text("Online presence, location, and what $peerShortName can request from you") },
                     leadingContent = { Icon(Icons.Default.Outbox, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
                     trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                )
+                HorizontalDivider()
+                PeerLocationRow(
+                    peerName = peerShortName,
+                    peerLocation = peerLocation,
+                    isRequesting = isRequestingPeerLocation,
+                    enabled = connection.status == ConnectionStatus.ACTIVE,
+                    onRequestPeerLocation = onRequestPeerLocation,
                 )
             }
         }
@@ -497,6 +531,132 @@ private fun KeyFingerprint(label: String, value: String, mono: Boolean = true) {
     }
 }
 
+
+/**
+ * SHARING-card row for the peer's location. Three states:
+ *
+ *  - shared, fresh        → "<peer> shared their location" + freshness
+ *                           label + Map icon, taps open the map view (A5).
+ *  - not shared           → "<peer> isn't sharing" + a "Request" affordance
+ *                           that fires location.request (V6 / A6).
+ *  - request in flight    → spinner, disabled, "Requesting…" supporting text.
+ */
+@Composable
+private fun PeerLocationRow(
+    peerName: String,
+    peerLocation: com.vettid.app.core.nats.CachedPeerLocation?,
+    isRequesting: Boolean,
+    enabled: Boolean,
+    onRequestPeerLocation: () -> Unit,
+) {
+    if (peerLocation != null) {
+        val freshness = remember(peerLocation.updatedAt) {
+            formatLocationFreshness(peerLocation.updatedAt)
+        }
+        val context = LocalContext.current
+        ListItem(
+            modifier = Modifier.clickable(enabled = enabled) {
+                // A5: hand off to the user's default maps app via a
+                // geo: intent. Avoids adding a maps SDK dependency
+                // and respects the user's choice of map app
+                // (Google Maps, OsmAnd, Organic Maps, etc.).
+                openLocationInMaps(context, peerLocation.latitude, peerLocation.longitude, peerName)
+            },
+            headlineContent = { Text("$peerName's location") },
+            supportingContent = {
+                val coords = "%.5f, %.5f".format(peerLocation.latitude, peerLocation.longitude)
+                Text("Shared $freshness · $coords")
+            },
+            leadingContent = {
+                Icon(
+                    Icons.Default.LocationOn,
+                    null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            },
+            trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+        )
+    } else {
+        ListItem(
+            modifier = Modifier.clickable(enabled = enabled && !isRequesting) {
+                onRequestPeerLocation()
+            },
+            headlineContent = { Text("Request $peerName's location") },
+            supportingContent = {
+                Text(
+                    if (isRequesting) "Requesting…"
+                    else "$peerName isn't sharing right now. Send a one-time request.",
+                )
+            },
+            leadingContent = {
+                if (isRequesting) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(
+                        Icons.Default.LocationOff,
+                        null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            trailingContent = {
+                if (!isRequesting) {
+                    Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+        )
+    }
+}
+
+/**
+ * Launch the user's default maps app with a marker at the shared
+ * coordinates. Uses the standard `geo:` schema with a `q=` query that
+ * carries a human label so the map pin reads "Alice's location"
+ * instead of just the raw coordinates. Falls back silently if no
+ * matching activity is registered.
+ */
+private fun openLocationInMaps(
+    context: android.content.Context,
+    latitude: Double,
+    longitude: Double,
+    label: String,
+) {
+    val uri = android.net.Uri.parse(
+        "geo:%1\$f,%2\$f?q=%1\$f,%2\$f(%3\$s's location)".format(
+            latitude,
+            longitude,
+            android.net.Uri.encode(label),
+        )
+    )
+    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, uri)
+    try {
+        context.startActivity(intent)
+    } catch (_: Exception) {
+        // No maps app installed — silent no-op; the row will still
+        // show the coordinates inline so the data isn't trapped.
+    }
+}
+
+/**
+ * Format an RFC3339 timestamp as a human "shared X ago" label.
+ * Falls back to the raw string if parsing fails so we never lose the
+ * source-of-truth in the UI.
+ */
+private fun formatLocationFreshness(updatedAt: String): String {
+    if (updatedAt.isBlank()) return "just now"
+    return try {
+        val parsed = java.time.Instant.parse(updatedAt)
+        val elapsedSec = java.time.Duration.between(parsed, java.time.Instant.now()).seconds
+        when {
+            elapsedSec < 60 -> "just now"
+            elapsedSec < 3600 -> "${elapsedSec / 60} min ago"
+            elapsedSec < 86400 -> "${elapsedSec / 3600} hr ago"
+            else -> "${elapsedSec / 86400} day(s) ago"
+        }
+    } catch (_: Exception) {
+        updatedAt
+    }
+}
 
 @Composable
 private fun ErrorContent(

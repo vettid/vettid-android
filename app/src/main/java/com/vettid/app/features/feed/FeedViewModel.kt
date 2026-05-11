@@ -95,6 +95,15 @@ class FeedViewModel @Inject constructor(
     // Cached connections from connection.list (primary data source for cards)
     private var cachedConnections: List<com.vettid.app.core.nats.ConnectionRecord> = emptyList()
 
+    // A4: per-connection snapshot of the most recent peer-location share
+    // transition (V3 start / V5 stop). Drives the PeerLocationShare
+    // PendingRow on the activity feed. Entries older than the TTL below
+    // are filtered out when buildPendingRows reads the map so the feed
+    // doesn't keep stale lifecycle events around forever.
+    private data class PeerLocationShareSnapshot(val started: Boolean, val timestampMs: Long)
+    private var peerLocationShareStateByConn: Map<String, PeerLocationShareSnapshot> = emptyMap()
+    private val peerLocationShareTtlMs = 30L * 60 * 1000 // 30 min
+
     // Event types that belong in activity feed (not grouped under connections)
     private val activityEventTypes = setOf(
         EventTypes.GUIDE,
@@ -586,6 +595,18 @@ class FeedViewModel @Inject constructor(
         if (needsReview) {
             rows += PendingRow.PendingReview(timestamp = activityAtMs)
         }
+
+        // A4: peer-location share lifecycle row. Only the most recent
+        // transition matters; either kind disappears after the TTL.
+        peerLocationShareStateByConn[conn.connectionId]?.let { snap ->
+            val ageMs = System.currentTimeMillis() - snap.timestampMs
+            if (ageMs in 0..peerLocationShareTtlMs) {
+                rows += PendingRow.PeerLocationShare(
+                    started = snap.started,
+                    timestamp = snap.timestampMs,
+                )
+            }
+        }
         if (conn.missedCallCount > 0) {
             rows += PendingRow.MissedCall(
                 count = conn.missedCallCount,
@@ -896,6 +917,23 @@ class FeedViewModel @Inject constructor(
             ownerSpaceClient.connectionStatusUpdates.collect { update ->
                 Log.d(TAG, "Connection status update: ${update.connectionId} -> ${update.type}")
                 refreshConnections()
+                rebuildDisplayItems()
+            }
+        }
+
+        // A4: peer location share-start / share-stop transitions land
+        // as system-card rows on the affected connection. Stale entries
+        // (>30 min) are dropped when buildPendingRows reads the map.
+        viewModelScope.launch {
+            ownerSpaceClient.peerLocationTransitions.collect { transition ->
+                val nowMs = System.currentTimeMillis()
+                peerLocationShareStateByConn = peerLocationShareStateByConn + (
+                    transition.connectionId to PeerLocationShareSnapshot(
+                        started = transition.transition ==
+                            com.vettid.app.core.nats.PeerLocationShareTransition.Transition.STARTED,
+                        timestampMs = nowMs,
+                    )
+                )
                 rebuildDisplayItems()
             }
         }
@@ -1537,6 +1575,25 @@ class FeedViewModel @Inject constructor(
     /**
      * Accept a pending connection directly via connection.respond.
      */
+    /**
+     * Send a one-shot location-request ping to the peer (A6).
+     * Wraps OwnerSpaceClient.requestPeerLocation so the feed card's
+     * "Request location" menu entry can fire without each card
+     * carrying its own ViewModel.
+     */
+    fun requestPeerLocation(connectionId: String) {
+        viewModelScope.launch {
+            ownerSpaceClient.requestPeerLocation(connectionId).fold(
+                onSuccess = {
+                    _effects.emit(FeedEffect.ShowActionSuccess("Location request sent"))
+                },
+                onFailure = { err ->
+                    _effects.emit(FeedEffect.ShowError(err.message ?: "Failed to request location"))
+                }
+            )
+        }
+    }
+
     /**
      * Start a voice call with a connection.
      * Called after permission is granted by the UI.

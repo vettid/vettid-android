@@ -275,6 +275,7 @@ fun ConnectionsScreen(
                 }
 
                 is ConnectionsState.Loaded -> {
+                    val connectionsSharingLocation by viewModel.connectionsSharingLocation.collectAsState()
                     if (currentState.connections.isEmpty() && currentState.isSearchResult) {
                         NoSearchResultsContent(query = searchQuery)
                     } else {
@@ -282,7 +283,8 @@ fun ConnectionsScreen(
                             connections = currentState.connections,
                             isRefreshing = isRefreshing,
                             onRefresh = { viewModel.refresh() },
-                            onConnectionClick = { viewModel.onConnectionClick(it) }
+                            onConnectionClick = { viewModel.onConnectionClick(it) },
+                            connectionsSharingLocation = connectionsSharingLocation,
                         )
                     }
                 }
@@ -335,7 +337,8 @@ private fun ConnectionsList(
     connections: List<ConnectionWithLastMessage>,
     isRefreshing: Boolean,
     onRefresh: () -> Unit,
-    onConnectionClick: (String) -> Unit
+    onConnectionClick: (String) -> Unit,
+    connectionsSharingLocation: Set<String> = emptySet(),
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
@@ -350,6 +353,7 @@ private fun ConnectionsList(
                     connection = connectionWithMessage.connection,
                     lastMessage = connectionWithMessage.lastMessage,
                     peerPhotoBase64 = connectionWithMessage.peerPhotoBase64,
+                    isLocationShared = connectionWithMessage.connection.connectionId in connectionsSharingLocation,
                     onClick = { onConnectionClick(connectionWithMessage.connection.connectionId) }
                 )
             }
@@ -372,6 +376,7 @@ fun ConnectionListItem(
     connection: Connection,
     lastMessage: Message?,
     peerPhotoBase64: String? = null,
+    isLocationShared: Boolean = false,
     onClick: () -> Unit
 ) {
     val photoBitmap = remember(peerPhotoBase64) {
@@ -432,13 +437,22 @@ fun ConnectionListItem(
         },
         trailingContent = {
             Column(
-                horizontalAlignment = Alignment.End
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                // Unread badge only
+                // A3: peer is currently sharing their location — small
+                // pin glyph so the user can see at a glance which
+                // connections are reachable on the map.
+                if (isLocationShared) {
+                    Icon(
+                        imageVector = Icons.Default.LocationOn,
+                        contentDescription = "Sharing location",
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
 
-                // Unread badge
                 if (connection.unreadCount > 0) {
-                    Spacer(modifier = Modifier.height(4.dp))
                     Badge(
                         containerColor = MaterialTheme.colorScheme.primary
                     ) {

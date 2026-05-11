@@ -15,6 +15,8 @@ import com.vettid.app.features.connections.models.*
 import com.vettid.app.features.connections.offline.OfflineQueueManager
 import com.vettid.app.features.connections.offline.SyncStatus
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import java.time.Instant
@@ -86,6 +88,25 @@ class ConnectionsViewModel @Inject constructor(
     private val _pendingReview = MutableStateFlow<ConnectionsEffect.ReviewConnection?>(null)
     val pendingReview: StateFlow<ConnectionsEffect.ReviewConnection?> = _pendingReview.asStateFlow()
 
+    /**
+     * Set of connection ids that are currently sharing location with
+     * us. Drives the pin indicator on each card (A3).
+     *
+     * Population strategy:
+     *  - On loadConnections, query location.peer.get for each ACTIVE
+     *    connection in parallel and seed the set with the ones whose
+     *    response is {shared:true}.
+     *  - Observe peerLocationTransitions and live location updates to
+     *    keep the set in sync within a session (no poll needed).
+     *
+     * Cold-start gap: the set is empty until the parallel seed
+     * completes. That's typically a sub-second blip after
+     * loadConnections; the indicator just appears when the
+     * vault responses land.
+     */
+    private val _connectionsSharingLocation = MutableStateFlow<Set<String>>(emptySet())
+    val connectionsSharingLocation: StateFlow<Set<String>> = _connectionsSharingLocation.asStateFlow()
+
     // Full list of connections (for filtering)
     private var allConnections: List<ConnectionWithLastMessage> = emptyList()
     private var lastListResult: List<ConnectionRecord>? = null
@@ -130,6 +151,33 @@ class ConnectionsViewModel @Inject constructor(
                 )
                 _pendingReview.value = review
                 _effects.emit(review)
+            }
+        }
+
+        // A3: track peer-location sharing transitions so the
+        // pin indicator on each connection card updates live.
+        viewModelScope.launch {
+            ownerSpaceClient.peerLocationTransitions.collect { transition ->
+                when (transition.transition) {
+                    com.vettid.app.core.nats.PeerLocationShareTransition.Transition.STARTED -> {
+                        _connectionsSharingLocation.value = _connectionsSharingLocation.value + transition.connectionId
+                    }
+                    com.vettid.app.core.nats.PeerLocationShareTransition.Transition.STOPPED -> {
+                        _connectionsSharingLocation.value = _connectionsSharingLocation.value - transition.connectionId
+                    }
+                    com.vettid.app.core.nats.PeerLocationShareTransition.Transition.REQUESTED -> {
+                        // No-op for the list — requests don't change
+                        // who is currently sharing with us.
+                    }
+                }
+            }
+        }
+        // A3: a live location-update event also implies the peer is
+        // sharing, even if the vault's V3 transition fired before
+        // this app session subscribed.
+        viewModelScope.launch {
+            ownerSpaceClient.locationUpdates.collect { update ->
+                _connectionsSharingLocation.value = _connectionsSharingLocation.value + update.connectionId
             }
         }
 
@@ -223,6 +271,16 @@ class ConnectionsViewModel @Inject constructor(
 
                     allConnections = connectionsWithMessages
                     lastListResult = listResult.items
+
+                    // A3: parallel-seed the shared-location set for
+                    // each active connection. Each call is small and
+                    // they run concurrently, so even with several
+                    // dozen active connections this is quick.
+                    seedConnectionsSharingLocation(
+                        connectionsWithMessages
+                            .filter { it.connection.status == ConnectionStatus.ACTIVE }
+                            .map { it.connection.connectionId }
+                    )
 
                     // Check for stale key rotation (> 30 days)
                     val thirtyDaysAgo = Instant.now().minusSeconds(30L * 24 * 60 * 60)
@@ -564,6 +622,32 @@ class ConnectionsViewModel @Inject constructor(
     /**
      * Filter connections by search query.
      */
+    /**
+     * Query the vault for each connection's cached peer location in
+     * parallel and merge the truthy responses into
+     * connectionsSharingLocation. Idempotent — re-running it (e.g.,
+     * after a reload) refreshes without dropping live updates that
+     * arrived in between.
+     */
+    private fun seedConnectionsSharingLocation(connectionIds: List<String>) {
+        if (connectionIds.isEmpty()) return
+        viewModelScope.launch {
+            val sharing = connectionIds.map { id ->
+                async {
+                    try {
+                        if (ownerSpaceClient.getPeerLocation(id) != null) id else null
+                    } catch (e: Exception) {
+                        null
+                    }
+                }
+            }.awaitAll().filterNotNull()
+            // Merge rather than replace so live transitions that fired
+            // during the seed aren't dropped.
+            _connectionsSharingLocation.value =
+                _connectionsSharingLocation.value + sharing.toSet()
+        }
+    }
+
     private fun filterConnections(
         connections: List<ConnectionWithLastMessage>,
         query: String

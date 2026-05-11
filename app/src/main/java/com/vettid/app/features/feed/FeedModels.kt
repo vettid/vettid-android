@@ -159,6 +159,17 @@ sealed class PendingRow {
     ) : PendingRow()
 
     /**
+     * Peer started or stopped sharing their location (V3/V5). One row
+     * per transition; the previous row is replaced when a new one
+     * arrives for the same connection so the feed doesn't accumulate
+     * stale lifecycle events. Tap → ConnectionDetail.
+     */
+    data class PeerLocationShare(
+        val started: Boolean,
+        override val timestamp: Long,
+    ) : PendingRow()
+
+    /**
      * Passive last-activity row shown when nothing is pending. Not
      * interactive beyond opening the default card destination.
      */

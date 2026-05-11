@@ -266,6 +266,7 @@ fun FeedContent(
                     },
                     onOpenProposalById = onNavigateToProposalDetail,
                     onNavigateToArchivedConnections = onNavigateToArchivedConnections,
+                    onRequestPeerLocation = { connectionId -> viewModel.requestPeerLocation(connectionId) },
                 )
                 is FeedState.Error -> {
                     // If in offline mode, show friendly offline content instead of error
@@ -409,6 +410,7 @@ private fun FeedList(
     onOpenGuideById: (guideId: String) -> Unit = {},
     onOpenProposalById: (proposalId: String) -> Unit = {},
     onNavigateToArchivedConnections: () -> Unit = {},
+    onRequestPeerLocation: (String) -> Unit = {},
 ) {
     // Shared-action layer state — one ActionsViewModel for the whole
     // feed. When the user taps "Available actions" on a card's More
@@ -525,6 +527,7 @@ private fun FeedList(
                         onSystemGuidesClick = onSystemGuides,
                         onOpenGuide = onOpenGuideById,
                         onOpenProposal = onOpenProposalById,
+                        onRequestLocation = { onRequestPeerLocation(item.connectionId) },
                     )
             }
 
@@ -719,6 +722,7 @@ private fun StatusAwareConnectionCard(
     onOpenGuide: (guideId: String) -> Unit = {},
     onOpenProposal: (proposalId: String) -> Unit = {},
     onShowAvailableActions: () -> Unit = {},
+    onRequestLocation: () -> Unit = {},
 ) {
     // Render different card variants based on connection status
     when {
@@ -734,7 +738,7 @@ private fun StatusAwareConnectionCard(
             onCallClick, onVideoCallClick, onBtcClick, onBtcRequestClick,
             onNavigateToConnectionReview, onOpenMigration,
             onSystemVaultMessagesClick, onSystemVotesClick, onSystemGuidesClick,
-            onOpenGuide, onOpenProposal, onShowAvailableActions,
+            onOpenGuide, onOpenProposal, onShowAvailableActions, onRequestLocation,
         )
         item.connectionStatus == "revoked"
             || item.connectionStatus == "rejected"
@@ -746,7 +750,7 @@ private fun StatusAwareConnectionCard(
             onCallClick, onVideoCallClick, onBtcClick, onBtcRequestClick,
             onNavigateToConnectionReview, onOpenMigration,
             onSystemVaultMessagesClick, onSystemVotesClick, onSystemGuidesClick,
-            onOpenGuide, onOpenProposal, onShowAvailableActions,
+            onOpenGuide, onOpenProposal, onShowAvailableActions, onRequestLocation,
         )
     }
 }
@@ -991,6 +995,7 @@ private fun ActiveConnectionCard(
     onOpenGuide: (guideId: String) -> Unit = {},
     onOpenProposal: (proposalId: String) -> Unit = {},
     onShowAvailableActions: () -> Unit = {},
+    onRequestLocation: () -> Unit = {},
 ) {
     val haptic = LocalHapticFeedback.current
 
@@ -1139,6 +1144,13 @@ private fun ActiveConnectionCard(
                                     Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
                                 },
                             )
+                            DropdownMenuItem(
+                                text = { Text("Request location") },
+                                onClick = { showMoreMenu = false; onRequestLocation() },
+                                leadingIcon = {
+                                    Icon(Icons.Default.LocationSearching, contentDescription = null, modifier = Modifier.size(20.dp))
+                                },
+                            )
                             // History moved to the connection detail
                             // screen's 3-dot menu — see
                             // ConnectionDetailScreen.kt. Keep
@@ -1189,6 +1201,13 @@ private fun ActiveConnectionCard(
                                 }
                                 is PendingRow.ProposalUnvoted -> {
                                     onOpenProposal(row.proposalId)
+                                }
+                                is PendingRow.PeerLocationShare -> {
+                                    // Tap → ConnectionDetail (card's
+                                    // default onClick). The peer-location
+                                    // row on that screen has the freshness
+                                    // label and (when shipped) the map entry.
+                                    onClick()
                                 }
                             }
                         }
@@ -1293,6 +1312,10 @@ private fun pendingRowIcon(row: PendingRow): Pair<ImageVector?, Color> {
             Icons.Default.MenuBook to MaterialTheme.colorScheme.secondary
         is PendingRow.ProposalUnvoted ->
             Icons.Default.HowToVote to MaterialTheme.colorScheme.primary
+        is PendingRow.PeerLocationShare ->
+            (if (row.started) Icons.Default.LocationOn else Icons.Default.LocationOff) to
+                if (row.started) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant
         is PendingRow.LastActivity -> lastActivityIcon(
             activityType = row.activityType,
             direction = row.direction,
@@ -1313,6 +1336,8 @@ private fun pendingRowLabel(row: PendingRow): String = when (row) {
     is PendingRow.PendingMigration -> "Vault security update available"
     is PendingRow.GuideUnread -> "Guide: ${row.title}"
     is PendingRow.ProposalUnvoted -> "Vote: ${row.title}"
+    is PendingRow.PeerLocationShare ->
+        if (row.started) "Started sharing location" else "Stopped sharing location"
     is PendingRow.LastActivity -> row.text.ifEmpty { "Connected" }
 }
 

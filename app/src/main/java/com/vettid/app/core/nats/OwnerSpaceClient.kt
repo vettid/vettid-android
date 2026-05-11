@@ -130,6 +130,15 @@ class OwnerSpaceClient @Inject constructor(
     /** Flow of location updates from connections sharing their location. */
     val locationUpdates: SharedFlow<SharedLocationUpdate> = _locationUpdates.asSharedFlow()
 
+    // Transition notifications fired by the vault when a peer flips
+    // their sharing toggle (V3/V5) or pings for a one-shot (V6).
+    // ConnectionDetailViewModel observes these to drive UI badge
+    // refreshes without poll. Activity-feed system cards observe
+    // them too (A4) so the timeline reflects the lifecycle.
+    private val _peerLocationTransitions = MutableSharedFlow<PeerLocationShareTransition>(extraBufferCapacity = 16)
+    /** Flow of peer location-share start/stop/request transitions. */
+    val peerLocationTransitions: SharedFlow<PeerLocationShareTransition> = _peerLocationTransitions.asSharedFlow()
+
     // Agent approval request events
     private val _agentApprovalRequests = MutableSharedFlow<AgentApprovalRequest>(extraBufferCapacity = 16)
     /** Flow of agent approval requests (secret/action requests needing owner approval). */
@@ -1986,6 +1995,15 @@ class OwnerSpaceClient @Inject constructor(
                 subject.contains(".forApp.location-update") -> {
                     handleLocationUpdate(message); return
                 }
+                subject.contains(".forApp.connection.peer-location-share-started") -> {
+                    handlePeerLocationTransition(message, PeerLocationShareTransition.Transition.STARTED); return
+                }
+                subject.contains(".forApp.connection.peer-location-share-stopped") -> {
+                    handlePeerLocationTransition(message, PeerLocationShareTransition.Transition.STOPPED); return
+                }
+                subject.contains(".forApp.connection.peer-location-requested") -> {
+                    handlePeerLocationTransition(message, PeerLocationShareTransition.Transition.REQUESTED); return
+                }
 
                 // Feed notifications
                 subject.contains(".forApp.feed.new") ||
@@ -2493,6 +2511,92 @@ class OwnerSpaceClient @Inject constructor(
             _locationUpdates.tryEmit(update)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to parse location-update event", e)
+        }
+    }
+
+    private fun handlePeerLocationTransition(
+        message: NatsMessage,
+        transition: PeerLocationShareTransition.Transition
+    ) {
+        try {
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+            val connectionId = payload.optString("connection_id", "")
+            if (connectionId.isEmpty()) {
+                android.util.Log.w(TAG, "peer-location transition missing connection_id; dropping")
+                return
+            }
+            val fromOwnerSpace = payload.optString("from_owner_space", "")
+            val at = when (transition) {
+                PeerLocationShareTransition.Transition.STARTED -> payload.optString("started_at", "")
+                PeerLocationShareTransition.Transition.STOPPED -> payload.optString("stopped_at", "")
+                PeerLocationShareTransition.Transition.REQUESTED -> payload.optString("requested_at", "")
+            }
+            _peerLocationTransitions.tryEmit(
+                PeerLocationShareTransition(
+                    connectionId = connectionId,
+                    fromOwnerSpace = fromOwnerSpace,
+                    transition = transition,
+                    at = at
+                )
+            )
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse peer-location transition", e)
+        }
+    }
+
+    /**
+     * Fetch the cached peer location for one connection. Returns null
+     * when the peer is not currently sharing (vault responds
+     * `{shared:false}`). Wraps `location.peer.get`.
+     */
+    suspend fun getPeerLocation(connectionId: String): CachedPeerLocation? {
+        val payload = JsonObject().apply { addProperty("connection_id", connectionId) }
+        val response = sendAndAwaitResponse("location.peer.get", payload, 10_000L)
+        if (response !is VaultResponse.HandlerResult || !response.success) return null
+        val result = response.result ?: return null
+        if (!result.has("shared") || !result.get("shared").asBoolean) return null
+        val locElem = result.get("location") ?: return null
+        if (!locElem.isJsonObject) return null
+        val loc = locElem.asJsonObject
+        return CachedPeerLocation(
+            latitude = loc.get("latitude").asDouble,
+            longitude = loc.get("longitude").asDouble,
+            accuracy = if (loc.has("accuracy") && !loc.get("accuracy").isJsonNull)
+                loc.get("accuracy").asFloat else null,
+            timestamp = if (loc.has("timestamp")) loc.get("timestamp").asLong else 0L,
+            updatedAt = if (loc.has("updated_at")) loc.get("updated_at").asString else "",
+            firstReceivedAt = if (loc.has("first_received_at")) loc.get("first_received_at").asString else ""
+        )
+    }
+
+    /**
+     * Send a one-shot location-request ping to a peer (V6). The peer's
+     * app will see a `connection.peer-location-requested` notification
+     * and may respond via `location.send-once`.
+     */
+    suspend fun requestPeerLocation(connectionId: String): Result<Unit> {
+        val payload = JsonObject().apply { addProperty("connection_id", connectionId) }
+        val response = sendAndAwaitResponse("location.request", payload, 10_000L)
+        return if (response is VaultResponse.HandlerResult && response.success) {
+            Result.success(Unit)
+        } else {
+            Result.failure(Exception("Failed to request peer location"))
+        }
+    }
+
+    /**
+     * Send the owner's latest cached location to a single peer once,
+     * without modifying the sharing index (V6). Used to fulfill a
+     * `peer-location-requested` notification.
+     */
+    suspend fun sendLocationOnce(connectionId: String): Result<Unit> {
+        val payload = JsonObject().apply { addProperty("connection_id", connectionId) }
+        val response = sendAndAwaitResponse("location.send-once", payload, 10_000L)
+        return if (response is VaultResponse.HandlerResult && response.success) {
+            Result.success(Unit)
+        } else {
+            Result.failure(Exception("Failed to send one-shot location"))
         }
     }
 
@@ -3419,6 +3523,37 @@ data class SharedLocationUpdate(
     val accuracy: Float?,
     val timestamp: Long,
     val updatedAt: String
+)
+
+/**
+ * Notification: peer just started sharing their location with us (V3),
+ * or just stopped (V5). `startedAt`/`stoppedAt` are RFC3339 UTC
+ * timestamps from the vault. The receiver-side connection id is what
+ * the UI uses to route the notification — the peer's own connection
+ * id is hidden inside `fromOwnerSpace` and not surfaced.
+ */
+data class PeerLocationShareTransition(
+    val connectionId: String,
+    val fromOwnerSpace: String,
+    val transition: Transition,
+    val at: String
+) {
+    enum class Transition { STARTED, STOPPED, REQUESTED }
+}
+
+/**
+ * Cached peer location returned by `location.peer.get`. Mirrors the
+ * vault's CachedPeerLocation struct. `firstReceivedAt` distinguishes
+ * a fresh share (recent FirstReceivedAt) from a long-running one and
+ * is used by the UI to format the "shared X minutes ago" label.
+ */
+data class CachedPeerLocation(
+    val latitude: Double,
+    val longitude: Double,
+    val accuracy: Float?,
+    val timestamp: Long,
+    val updatedAt: String,
+    val firstReceivedAt: String
 )
 
 /**
