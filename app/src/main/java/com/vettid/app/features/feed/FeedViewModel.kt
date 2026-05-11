@@ -926,6 +926,15 @@ class FeedViewModel @Inject constructor(
         // (>30 min) are dropped when buildPendingRows reads the map.
         viewModelScope.launch {
             ownerSpaceClient.peerLocationTransitions.collect { transition ->
+                // REQUESTED is a peer asking US for our location — it
+                // does not represent a change in the peer's sharing
+                // state, so don't record it as a share row. The
+                // global PeerLocationRequestPrompt handler shows the
+                // user-facing affordance for it.
+                if (transition.transition ==
+                    com.vettid.app.core.nats.PeerLocationShareTransition.Transition.REQUESTED) {
+                    return@collect
+                }
                 val nowMs = System.currentTimeMillis()
                 peerLocationShareStateByConn = peerLocationShareStateByConn + (
                     transition.connectionId to PeerLocationShareSnapshot(

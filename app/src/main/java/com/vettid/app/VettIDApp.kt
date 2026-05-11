@@ -280,11 +280,46 @@ sealed class Screen(val route: String) {
 fun VettIDApp(
     navController: NavHostController = rememberNavController(),
     appViewModel: AppViewModel = hiltViewModel(),
+    locationRequestPromptViewModel: com.vettid.app.features.location.PeerLocationRequestPromptViewModel = hiltViewModel(),
     callManager: CallManager? = null,
     deepLinkData: DeepLinkData = DeepLinkData(DeepLinkType.NONE),
     onDeepLinkConsumed: () -> Unit = {}
 ) {
     val appState by appViewModel.appState.collectAsState()
+
+    // Global peer-location-request prompt — V6. The vault forwards
+    // every incoming `connection.peer-location-requested` event into
+    // locationRequestPromptViewModel.pendingRequest; we render an
+    // AlertDialog at the top of the navigation graph so the user
+    // sees the prompt wherever they are when the ping arrives.
+    val pendingLocationRequest by locationRequestPromptViewModel.pendingRequest.collectAsState()
+    val isSendingLocationOnce by locationRequestPromptViewModel.isSending.collectAsState()
+    pendingLocationRequest?.let { req ->
+        AlertDialog(
+            onDismissRequest = { locationRequestPromptViewModel.dismiss() },
+            title = { Text("Share your location?") },
+            text = {
+                Text(
+                    text = "${req.peerLabel ?: "A connection"} is asking for your location. " +
+                        "Send the current location once? They won't receive future updates unless you turn on continuous sharing."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { locationRequestPromptViewModel.fulfill() },
+                    enabled = !isSendingLocationOnce,
+                ) {
+                    Text(if (isSendingLocationOnce) "Sending…" else "Send")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { locationRequestPromptViewModel.dismiss() },
+                    enabled = !isSendingLocationOnce,
+                ) { Text("Ignore") }
+            },
+        )
+    }
 
     // Handle call UI events. showCallUI now has replay=1 so a
     // late-arriving collector (e.g. the Activity recreated after the
