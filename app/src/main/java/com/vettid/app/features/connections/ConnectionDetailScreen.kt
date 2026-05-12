@@ -50,6 +50,8 @@ fun ConnectionDetailScreen(
     onNavigateToPeerCatalog: (connectionId: String) -> Unit = {},
     onNavigateToMySharing: (connectionId: String) -> Unit = {},
     onNavigateToGrants: (connectionId: String) -> Unit = {},
+    onVerifyIdentity: () -> Unit = {},
+    isVerifyingIdentity: Boolean = false,
     onBack: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsState()
@@ -197,6 +199,14 @@ fun ConnectionDetailScreen(
                 val isPeerOnline by viewModel.isPeerOnline.collectAsState()
                 val peerLocation by viewModel.peerLocation.collectAsState()
                 val isRequestingPeerLocation by viewModel.isRequestingPeerLocation.collectAsState()
+                val verifyResult by viewModel.verifyResult.collectAsState()
+                val isVerifying by viewModel.verifying.collectAsState()
+                // Surface connection.authenticate verdict as a Snackbar.
+                LaunchedEffect(verifyResult) {
+                    val r = verifyResult ?: return@LaunchedEffect
+                    snackbarHostState.showSnackbar(message = r.message)
+                    viewModel.dismissVerifyResult()
+                }
                 LoadedContent(
                     connection = currentState.connection,
                     profile = currentState.profile,
@@ -239,6 +249,8 @@ fun ConnectionDetailScreen(
                     onNavigateToPeerCatalog = onNavigateToPeerCatalog,
                     onNavigateToMySharing = onNavigateToMySharing,
                     onNavigateToGrants = onNavigateToGrants,
+                    onVerifyIdentity = { viewModel.verifyIdentity() },
+                    isVerifyingIdentity = isVerifying,
                     peerLocation = peerLocation,
                     isRequestingPeerLocation = isRequestingPeerLocation,
                     onRequestPeerLocation = { viewModel.requestPeerLocation() },
@@ -298,6 +310,8 @@ private fun LoadedContent(
     onNavigateToPeerCatalog: (String) -> Unit = {},
     onNavigateToMySharing: (String) -> Unit = {},
     onNavigateToGrants: (String) -> Unit = {},
+    onVerifyIdentity: () -> Unit = {},
+    isVerifyingIdentity: Boolean = false,
     peerLocation: com.vettid.app.core.nats.CachedPeerLocation? = null,
     isRequestingPeerLocation: Boolean = false,
     onRequestPeerLocation: () -> Unit = {},
@@ -383,6 +397,27 @@ private fun LoadedContent(
                     supportingContent = { Text("Active grants, pending requests, and what $peerShortName has shared with you") },
                     leadingContent = { Icon(Icons.Default.Inbox, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
                     trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                )
+                HorizontalDivider()
+                ListItem(
+                    modifier = Modifier.clickable(
+                        enabled = connection.status == ConnectionStatus.ACTIVE && !isVerifyingIdentity,
+                    ) { onVerifyIdentity() },
+                    headlineContent = { Text("Verify identity") },
+                    supportingContent = {
+                        Text(
+                            if (isVerifyingIdentity) "Waiting for $peerShortName's vault to sign…"
+                            else "Send a challenge so $peerShortName's vault proves it holds the credential."
+                        )
+                    },
+                    leadingContent = { Icon(Icons.Default.VerifiedUser, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                    trailingContent = {
+                        if (isVerifyingIdentity) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    },
                 )
                 HorizontalDivider()
                 PeerLocationRow(

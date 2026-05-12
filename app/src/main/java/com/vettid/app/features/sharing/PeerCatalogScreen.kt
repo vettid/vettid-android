@@ -13,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.vettid.app.features.grants.CriticalUseRequestSheet
 import com.vettid.app.features.grants.RequestAccessSheet
 
 /**
@@ -57,10 +58,35 @@ fun PeerCatalogScreen(
                 }
                 is PeerCatalogState.Loaded -> {
                     var requestTarget by remember { mutableStateOf<SharedItem?>(null) }
+                    var useTarget by remember { mutableStateOf<SharedItem?>(null) }
+                    val criticalResult by viewModel.lastCriticalResult.collectAsState()
+                    criticalResult?.let { res ->
+                        AlertDialog(
+                            onDismissRequest = { viewModel.dismissCriticalResult() },
+                            title = { Text(if (res.status == "ok") "Operation result" else "Operation failed") },
+                            text = {
+                                Text(
+                                    if (res.status == "ok") res.result
+                                    else "Status: ${res.status}\n${res.error}"
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(onClick = { viewModel.dismissCriticalResult() }) { Text("Close") }
+                            },
+                        )
+                    }
                     Loaded(
                         state = s,
                         onRequest = { key ->
-                            requestTarget = s.items.firstOrNull { it.key == key }
+                            val item = s.items.firstOrNull { it.key == key } ?: return@Loaded
+                            if (item.useOnly) {
+                                // Cataloged-for-use rows branch to the
+                                // use-on-behalf flow — never offer
+                                // "give me a copy" for these.
+                                useTarget = item
+                            } else {
+                                requestTarget = item
+                            }
                         },
                     )
                     requestTarget?.let { item ->
@@ -78,6 +104,23 @@ fun PeerCatalogScreen(
                                     )
                                 )
                                 requestTarget = null
+                            },
+                        )
+                    }
+                    useTarget?.let { item ->
+                        CriticalUseRequestSheet(
+                            secretLabel = item.displayName,
+                            onDismiss = { useTarget = null },
+                            onSubmit = { op, payload, ctx ->
+                                viewModel.onEvent(
+                                    PeerCatalogEvent.RequestCriticalUse(
+                                        key = item.key,
+                                        operation = op,
+                                        payloadBase64 = payload,
+                                        context = ctx,
+                                    )
+                                )
+                                useTarget = null
                             },
                         )
                     }

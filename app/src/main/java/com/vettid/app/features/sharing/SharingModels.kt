@@ -12,6 +12,12 @@ data class SharedItem(
     val kind: Kind,
     val status: RequestStatus,
     val requestId: String?,     // last request id, used for retries / detail
+    // Cataloged-for-use critical secrets — peer can ASK the owner to
+    // perform an operation (sign/decrypt/derive/auth) but never gets
+    // the value. The UI swaps the Request button for "Ask to use"
+    // when this is true. Inferred from the catalog row's category
+    // containing "Use-only".
+    val useOnly: Boolean = false,
 ) {
     enum class Kind { DATA, SECRET, WALLET }
 }

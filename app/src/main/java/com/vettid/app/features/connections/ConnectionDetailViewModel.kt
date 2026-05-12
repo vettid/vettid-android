@@ -15,8 +15,10 @@ import com.vettid.app.core.network.ConnectionStatus
 import com.vettid.app.core.network.Profile
 import com.vettid.app.features.calling.CallManager
 import com.vettid.app.features.calling.CallType
+import com.vettid.app.features.grants.GrantsRepository
 import com.vettid.app.features.personaldata.PublishedProfileData
 import com.vettid.app.features.personaldata.peerProfileToPublishedProfileData
+import com.vettid.app.core.nats.GrantEvent
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -42,8 +44,54 @@ class ConnectionDetailViewModel @Inject constructor(
     private val connectionCryptoManager: ConnectionCryptoManager,
     private val callManager: CallManager,
     private val presenceAggregator: com.vettid.app.core.nats.PresenceAggregator,
+    private val grants: GrantsRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
+
+    private val _verifyResult = MutableStateFlow<VerifyResult?>(null)
+    /**
+     * Latest connection.authenticate result for this connection.
+     * Surfaces on the detail screen as a Snackbar; UI clears it on
+     * dismiss. Null = no recent challenge.
+     */
+    val verifyResult: StateFlow<VerifyResult?> = _verifyResult.asStateFlow()
+
+    private val _verifying = MutableStateFlow(false)
+    val verifying: StateFlow<Boolean> = _verifying.asStateFlow()
+
+    init {
+        // Listen for connection.authenticate verdicts so the snackbar
+        // surfaces as soon as the peer's response lands.
+        viewModelScope.launch {
+            ownerSpaceClient.grantEvents.collect { ev ->
+                if (ev is GrantEvent.AuthenticateResult && ev.connectionId == connectionId) {
+                    _verifyResult.value = VerifyResult(
+                        ok = ev.authenticated,
+                        message = if (ev.authenticated) "Identity verified"
+                            else "Verification failed: ${ev.failureReason.ifEmpty { "unknown" }}",
+                    )
+                    _verifying.value = false
+                }
+            }
+        }
+    }
+
+    /** Fire a connection.authenticate challenge to this peer. */
+    fun verifyIdentity() {
+        if (_verifying.value) return
+        viewModelScope.launch {
+            _verifying.value = true
+            grants.requestAuthenticate(connectionId, "user-initiated verification")
+                .onFailure {
+                    _verifyResult.value = VerifyResult(ok = false, message = it.message ?: "Verify failed")
+                    _verifying.value = false
+                }
+        }
+    }
+
+    fun dismissVerifyResult() { _verifyResult.value = null }
+
+    data class VerifyResult(val ok: Boolean, val message: String)
 
     private val connectionId: String = savedStateHandle["connectionId"]
         ?: throw IllegalArgumentException("connectionId is required")

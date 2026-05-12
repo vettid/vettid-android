@@ -8,8 +8,11 @@ import com.google.gson.JsonObject
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.features.feed.FeedRepository
+import com.vettid.app.core.nats.GrantEvent
 import com.vettid.app.features.grants.GrantItemKinds
 import com.vettid.app.features.grants.GrantsRepository
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.launchIn
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -37,13 +40,52 @@ class PeerCatalogViewModel @Inject constructor(
     private val _state = MutableStateFlow<PeerCatalogState>(PeerCatalogState.Loading)
     val state: StateFlow<PeerCatalogState> = _state.asStateFlow()
 
-    init { load() }
+    private val _lastCriticalResult = MutableStateFlow<CriticalUseResult?>(null)
+    /** Latest critical-secret use response — surfaces as a result dialog. */
+    val lastCriticalResult: StateFlow<CriticalUseResult?> = _lastCriticalResult.asStateFlow()
+
+    init {
+        load()
+        // Subscribe to critical-secret use responses so the result
+        // dialog appears as soon as the owner's vault returns.
+        ownerSpaceClient.grantEvents
+            .onEach { ev ->
+                if (ev is GrantEvent.CriticalUseResponse && ev.connectionId == connectionId) {
+                    _lastCriticalResult.value = CriticalUseResult(
+                        requestId = ev.requestId,
+                        status = ev.status,
+                        result = ev.result,
+                        error = ev.error,
+                    )
+                }
+            }
+            .launchIn(viewModelScope)
+    }
+
+    fun dismissCriticalResult() { _lastCriticalResult.value = null }
 
     fun onEvent(event: PeerCatalogEvent) {
         when (event) {
             is PeerCatalogEvent.Request -> request(event.key)
             is PeerCatalogEvent.RequestGrant -> requestGrant(event)
+            is PeerCatalogEvent.RequestCriticalUse -> requestCriticalUse(event)
             PeerCatalogEvent.Refresh -> load()
+        }
+    }
+
+    private fun requestCriticalUse(event: PeerCatalogEvent.RequestCriticalUse) {
+        viewModelScope.launch {
+            val ref = event.key.removePrefix("secret:")
+            val item = (_state.value as? PeerCatalogState.Loaded)?.items
+                ?.firstOrNull { it.key == event.key } ?: return@launch
+            grantsRepository.requestCriticalUse(
+                connectionId = connectionId,
+                itemRef = ref,
+                itemLabel = item.displayName,
+                operation = event.operation,
+                payloadBase64 = event.payloadBase64,
+                context = event.context,
+            ).onFailure { Log.w(TAG, "critical-use request: ${it.message}") }
         }
     }
 
@@ -136,13 +178,17 @@ class PeerCatalogViewModel @Inject constructor(
         }
         conn.peerProfile?.secretCatalog?.forEach { entry ->
             val key = "secret:${entry.name}"
+            val cat = entry.category.ifEmpty { entry.type }
             out += SharedItem(
                 key = key,
                 displayName = entry.name,
-                category = entry.category.ifEmpty { entry.type },
+                category = cat,
                 kind = SharedItem.Kind.SECRET,
                 status = outstanding[key]?.status ?: RequestStatus.AVAILABLE,
                 requestId = outstanding[key]?.requestId,
+                // "Critical Secret · Use-only" is how the vault tags
+                // cataloged-for-use rows in buildSecretCatalog.
+                useOnly = cat.contains("Use-only", ignoreCase = true),
             )
         }
         return out
@@ -211,6 +257,13 @@ class PeerCatalogViewModel @Inject constructor(
         val requestId: String,
         val status: RequestStatus,
     )
+
+    data class CriticalUseResult(
+        val requestId: String,
+        val status: String,
+        val result: String,
+        val error: String,
+    )
 }
 
 sealed class PeerCatalogState {
@@ -230,6 +283,12 @@ sealed class PeerCatalogEvent {
         val expiresAt: Long,
         val maxUses: Int,
         val reason: String,
+    ) : PeerCatalogEvent()
+    data class RequestCriticalUse(
+        val key: String,
+        val operation: String,
+        val payloadBase64: String,
+        val context: String,
     ) : PeerCatalogEvent()
     object Refresh : PeerCatalogEvent()
 }
