@@ -13,6 +13,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.vettid.app.features.grants.RequestAccessSheet
 
 /**
  * "Their catalog" — the peer's published items the local user can
@@ -54,10 +55,33 @@ fun PeerCatalogScreen(
                         )
                     }
                 }
-                is PeerCatalogState.Loaded -> Loaded(
-                    state = s,
-                    onRequest = { viewModel.onEvent(PeerCatalogEvent.Request(it)) },
-                )
+                is PeerCatalogState.Loaded -> {
+                    var requestTarget by remember { mutableStateOf<SharedItem?>(null) }
+                    Loaded(
+                        state = s,
+                        onRequest = { key ->
+                            requestTarget = s.items.firstOrNull { it.key == key }
+                        },
+                    )
+                    requestTarget?.let { item ->
+                        RequestAccessSheet(
+                            itemLabel = item.displayName,
+                            onDismiss = { requestTarget = null },
+                            onSubmit = { mode, expiresAt, maxUses, reason ->
+                                viewModel.onEvent(
+                                    PeerCatalogEvent.RequestGrant(
+                                        key = item.key,
+                                        mode = mode,
+                                        expiresAt = expiresAt,
+                                        maxUses = maxUses,
+                                        reason = reason,
+                                    )
+                                )
+                                requestTarget = null
+                            },
+                        )
+                    }
+                }
             }
         }
     }

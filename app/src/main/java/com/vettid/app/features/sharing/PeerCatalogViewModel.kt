@@ -8,6 +8,8 @@ import com.google.gson.JsonObject
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.features.feed.FeedRepository
+import com.vettid.app.features.grants.GrantItemKinds
+import com.vettid.app.features.grants.GrantsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -26,6 +28,7 @@ private const val TAG = "PeerCatalogVM"
 class PeerCatalogViewModel @Inject constructor(
     private val ownerSpaceClient: OwnerSpaceClient,
     private val feedRepository: FeedRepository,
+    private val grantsRepository: GrantsRepository,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -39,7 +42,41 @@ class PeerCatalogViewModel @Inject constructor(
     fun onEvent(event: PeerCatalogEvent) {
         when (event) {
             is PeerCatalogEvent.Request -> request(event.key)
+            is PeerCatalogEvent.RequestGrant -> requestGrant(event)
             PeerCatalogEvent.Refresh -> load()
+        }
+    }
+
+    private fun requestGrant(event: PeerCatalogEvent.RequestGrant) {
+        viewModelScope.launch {
+            // Catalog key shape: "data:<name>" or "secret:<name>".
+            val (kindPrefix, ref) = event.key.split(':', limit = 2).let {
+                if (it.size == 2) it[0] to it[1] else "data" to event.key
+            }
+            val kind = if (kindPrefix == "secret") GrantItemKinds.SECRET else GrantItemKinds.DATA
+            val current = _state.value
+            val label = (current as? PeerCatalogState.Loaded)?.items
+                ?.firstOrNull { it.key == event.key }?.displayName.orEmpty()
+            val result = grantsRepository.sendRequest(
+                connectionId = connectionId,
+                itemKind = kind,
+                itemRef = ref,
+                itemLabel = label,
+                mode = event.mode,
+                deliverTo = "self",
+                requestedExpiresAt = event.expiresAt,
+                requestedMaxUses = event.maxUses,
+                reason = event.reason,
+            )
+            result.onSuccess { rid ->
+                if (current is PeerCatalogState.Loaded) {
+                    _state.value = current.copy(
+                        items = current.items.map {
+                            if (it.key == event.key) it.copy(status = RequestStatus.PENDING, requestId = rid) else it
+                        }
+                    )
+                }
+            }.onFailure { Log.w(TAG, "grant.request: ${it.message}") }
         }
     }
 
@@ -187,5 +224,12 @@ sealed class PeerCatalogState {
 
 sealed class PeerCatalogEvent {
     data class Request(val key: String) : PeerCatalogEvent()
+    data class RequestGrant(
+        val key: String,
+        val mode: String,
+        val expiresAt: Long,
+        val maxUses: Int,
+        val reason: String,
+    ) : PeerCatalogEvent()
     object Refresh : PeerCatalogEvent()
 }

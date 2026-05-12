@@ -49,6 +49,7 @@ fun ConnectionDetailScreen(
     onShowHistory: () -> Unit = {},
     onNavigateToPeerCatalog: (connectionId: String) -> Unit = {},
     onNavigateToMySharing: (connectionId: String) -> Unit = {},
+    onNavigateToGrants: (connectionId: String) -> Unit = {},
     onBack: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsState()
@@ -237,6 +238,7 @@ fun ConnectionDetailScreen(
                     onShowHistory = onShowHistory,
                     onNavigateToPeerCatalog = onNavigateToPeerCatalog,
                     onNavigateToMySharing = onNavigateToMySharing,
+                    onNavigateToGrants = onNavigateToGrants,
                     peerLocation = peerLocation,
                     isRequestingPeerLocation = isRequestingPeerLocation,
                     onRequestPeerLocation = { viewModel.requestPeerLocation() },
@@ -295,6 +297,7 @@ private fun LoadedContent(
     onShowHistory: () -> Unit = {},
     onNavigateToPeerCatalog: (String) -> Unit = {},
     onNavigateToMySharing: (String) -> Unit = {},
+    onNavigateToGrants: (String) -> Unit = {},
     peerLocation: com.vettid.app.core.nats.CachedPeerLocation? = null,
     isRequestingPeerLocation: Boolean = false,
     onRequestPeerLocation: () -> Unit = {},
@@ -369,6 +372,16 @@ private fun LoadedContent(
                     headlineContent = { Text("My sharing") },
                     supportingContent = { Text("Online presence, location, and what $peerShortName can request from you") },
                     leadingContent = { Icon(Icons.Default.Outbox, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                    trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                )
+                HorizontalDivider()
+                ListItem(
+                    modifier = Modifier.clickable(enabled = connection.status == ConnectionStatus.ACTIVE) {
+                        onNavigateToGrants(connection.connectionId)
+                    },
+                    headlineContent = { Text("Data sharing") },
+                    supportingContent = { Text("Active grants, pending requests, and what $peerShortName has shared with you") },
+                    leadingContent = { Icon(Icons.Default.Inbox, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
                     trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
                 )
                 HorizontalDivider()
