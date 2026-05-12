@@ -3,6 +3,7 @@ package com.vettid.app.core.nats
 import android.util.Log
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
+import com.vettid.app.core.attestation.PcrInitializationService
 import com.vettid.app.core.storage.AppPreferencesStore
 import com.vettid.app.core.storage.CredentialStore
 import kotlinx.coroutines.CoroutineScope
@@ -30,6 +31,7 @@ class AppLifecycleObserver @Inject constructor(
     private val credentialStore: CredentialStore,
     private val appPreferencesStore: AppPreferencesStore,
     private val ownerSpaceClient: OwnerSpaceClient,
+    private val pcrInitializationService: PcrInitializationService,
 ) : DefaultLifecycleObserver {
 
     companion object {
@@ -68,6 +70,13 @@ class AppLifecycleObserver @Inject constructor(
     }
 
     override fun onStart(owner: LifecycleOwner) {
+        // Refresh PCR manifest if it's stale. An enclave migration that
+        // landed while we were backgrounded would otherwise stay invisible
+        // until the next process launch — the cached PCR0 still attests
+        // OK against the (now-gone) old enclave, so the migration prompt
+        // never fires on PIN-unlock.
+        pcrInitializationService.maybeRefreshOnForeground()
+
         // Check session TTL expiry
         if (backgroundedAtMillis > 0) {
             val elapsedSeconds = (System.currentTimeMillis() - backgroundedAtMillis) / 1000

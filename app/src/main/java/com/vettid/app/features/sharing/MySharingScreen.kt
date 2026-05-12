@@ -42,6 +42,7 @@ fun MySharingScreen(
     // capture a fix and downstream work blows up with a permissions
     // error. Off can flip without a permission check.
     var pendingLocationEnable by remember { mutableStateOf(false) }
+    var showDisableHint by remember { mutableStateOf(false) }
     val locationLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -59,7 +60,14 @@ fun MySharingScreen(
 
     fun handleLocationToggle(enabled: Boolean) {
         if (!enabled) {
-            // Turning off — no permission needed.
+            // Turning off — no permission needed. If auto-respond is still on,
+            // disabling continuous sharing doesn't stop on-demand replies; surface
+            // that so the user can disable both in one tap if they want to.
+            val s = state
+            if (s is MySharingState.Loaded && s.isAutoFulfillLocationEnabled) {
+                showDisableHint = true
+                return
+            }
             viewModel.onEvent(MySharingEvent.SetLocationSharing(false))
             return
         }
@@ -116,6 +124,33 @@ fun MySharingScreen(
                 )
             }
         }
+    }
+
+    if (showDisableHint) {
+        val peerName = (state as? MySharingState.Loaded)?.peerName ?: "this connection"
+        AlertDialog(
+            onDismissRequest = { showDisableHint = false },
+            title = { Text("Also turn off auto-respond?") },
+            text = {
+                Text(
+                    "$peerName can still ask for your location and your vault will reply automatically. " +
+                        "Turn that off too, or just stop continuous sharing?"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDisableHint = false
+                    viewModel.onEvent(MySharingEvent.SetAutoFulfillLocation(false))
+                    viewModel.onEvent(MySharingEvent.SetLocationSharing(false))
+                }) { Text("Turn off both") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showDisableHint = false
+                    viewModel.onEvent(MySharingEvent.SetLocationSharing(false))
+                }) { Text("Just sharing") }
+            },
+        )
     }
 }
 

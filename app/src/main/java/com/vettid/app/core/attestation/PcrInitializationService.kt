@@ -26,6 +26,12 @@ class PcrInitializationService @Inject constructor(
 ) {
     companion object {
         private const val TAG = "PcrInitService"
+        // How stale the cached PCR manifest can get before a foreground transition
+        // forces a refresh. 30 min is a compromise: long enough that a backgrounded
+        // app doesn't hammer the manifest endpoint on every brief foreground, short
+        // enough that an enclave migration completed during background time is
+        // detected the next time the user wakes the app.
+        private const val FOREGROUND_REFRESH_THRESHOLD_MS = 30 * 60 * 1000L
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -110,6 +116,28 @@ class PcrInitializationService @Inject constructor(
 
         if (pcrConfigManager.isUsingBundledDefaults()) {
             Log.w(TAG, "WARNING: Using bundled default PCRs - may be outdated")
+        }
+    }
+
+    /**
+     * Refresh PCRs if the cached manifest is older than [FOREGROUND_REFRESH_THRESHOLD_MS].
+     * Call this from app foreground transitions so an enclave migration that completed
+     * while we were backgrounded is detected before the user's next vault interaction.
+     */
+    fun maybeRefreshOnForeground() {
+        val lastUpdate = pcrConfigManager.getLastUpdateTimestamp()
+        val ageMs = System.currentTimeMillis() - lastUpdate
+        if (lastUpdate > 0 && ageMs < FOREGROUND_REFRESH_THRESHOLD_MS) {
+            Log.d(TAG, "PCR manifest is ${ageMs / 1000}s old, foreground refresh skipped")
+            return
+        }
+        Log.i(TAG, "PCR manifest is ${ageMs / 1000}s old, refreshing on foreground")
+        serviceScope.launch {
+            try {
+                forceRefresh()
+            } catch (e: Exception) {
+                Log.w(TAG, "Foreground PCR refresh failed: ${e.message}")
+            }
         }
     }
 
