@@ -1145,13 +1145,6 @@ private fun ActiveConnectionCard(
                                     },
                                 )
                             }
-                            DropdownMenuItem(
-                                text = { Text("Available actions") },
-                                onClick = { showMoreMenu = false; onShowAvailableActions() },
-                                leadingIcon = {
-                                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
-                                },
-                            )
                             // Adaptive: when we have a cached peer
                             // location, this entry becomes "View
                             // location (X min ago)" and opens the
@@ -1193,6 +1186,18 @@ private fun ActiveConnectionCard(
                                     },
                                 )
                             }
+                            // "Available actions" lives last in the
+                            // menu — it's the catch-all "what else
+                            // can I do with this peer" entry, so
+                            // first-class actions (Send/Request BTC,
+                            // View/Request location) come above it.
+                            DropdownMenuItem(
+                                text = { Text("Available actions") },
+                                onClick = { showMoreMenu = false; onShowAvailableActions() },
+                                leadingIcon = {
+                                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
+                                },
+                            )
                             // History moved to the connection detail
                             // screen's 3-dot menu — see
                             // ConnectionDetailScreen.kt. Keep
