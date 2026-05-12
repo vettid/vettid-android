@@ -106,6 +106,14 @@ class FeedViewModel @Inject constructor(
     private var peerLocationShareStateByConn: Map<String, PeerLocationShareSnapshot> = emptyMap()
     private val peerLocationShareTtlMs = 30L * 60 * 1000 // 30 min
 
+    // Incoming grant requests awaiting owner decision. Keyed by
+    // (connectionId, requestId) → label + arrival time. Drives the
+    // IncomingGrantRequest PendingRow. Cleared when the user approves
+    // or denies via the Grants screen, OR when the vault confirms a
+    // grant.created / grant.denied event on the same request_id.
+    private data class IncomingGrantSnapshot(val requestId: String, val label: String, val timestampMs: Long)
+    private var incomingGrantsByConn: Map<String, List<IncomingGrantSnapshot>> = emptyMap()
+
     // Per-connection cached peer location (mirrors what location.peer.get
     // returns from the vault). Drives the adaptive "View/Request location"
     // dropdown action: if a fresh entry exists, dropdown renders "View
@@ -140,7 +148,48 @@ class FeedViewModel @Inject constructor(
         observeGuideReadState()
         observePresence()
         observeCallEnded()
+        observeGrantEvents()
         refreshProposalsCacheForBadge()
+    }
+
+    /**
+     * Track incoming data-access requests as IncomingGrantRequest
+     * PendingRow entries. The vault emits forApp.connection.data-
+     * request-received on each new request and data-grant-created /
+     * data-grant-denied when the user decides — we add on the first
+     * and remove on the second so the feed reflects only outstanding
+     * pending requests.
+     */
+    private fun observeGrantEvents() {
+        viewModelScope.launch {
+            ownerSpaceClient.grantEvents.collect { ev ->
+                when (ev) {
+                    is com.vettid.app.core.nats.GrantEvent.RequestReceived -> {
+                        val list = (incomingGrantsByConn[ev.connectionId] ?: emptyList())
+                            .filter { it.requestId != ev.requestId } +
+                            IncomingGrantSnapshot(ev.requestId, ev.itemLabel.ifEmpty { ev.itemRef }, System.currentTimeMillis())
+                        incomingGrantsByConn = incomingGrantsByConn + (ev.connectionId to list)
+                        rebuildDisplayItems()
+                    }
+                    is com.vettid.app.core.nats.GrantEvent.GrantCreated -> {
+                        // Owner just approved (us) — clear by request_id.
+                        val existing = incomingGrantsByConn[ev.connectionId] ?: return@collect
+                        val filtered = existing.filter { it.requestId != ev.requestId }
+                        incomingGrantsByConn = if (filtered.isEmpty()) incomingGrantsByConn - ev.connectionId
+                            else incomingGrantsByConn + (ev.connectionId to filtered)
+                        rebuildDisplayItems()
+                    }
+                    is com.vettid.app.core.nats.GrantEvent.GrantDenied -> {
+                        val existing = incomingGrantsByConn[ev.connectionId] ?: return@collect
+                        val filtered = existing.filter { it.requestId != ev.requestId }
+                        incomingGrantsByConn = if (filtered.isEmpty()) incomingGrantsByConn - ev.connectionId
+                            else incomingGrantsByConn + (ev.connectionId to filtered)
+                        rebuildDisplayItems()
+                    }
+                    else -> Unit
+                }
+            }
+        }
     }
 
     /**
@@ -618,6 +667,17 @@ class FeedViewModel @Inject constructor(
                     timestamp = snap.timestampMs,
                 )
             }
+        }
+        // Phase 2: incoming data-access requests awaiting decision.
+        // One row per pending request_id; auto-clears when the user
+        // approves / denies or when grant.created/grant.denied is
+        // observed.
+        incomingGrantsByConn[conn.connectionId]?.forEach { snap ->
+            rows += PendingRow.IncomingGrantRequest(
+                requestId = snap.requestId,
+                itemLabel = snap.label,
+                timestamp = snap.timestampMs,
+            )
         }
         if (conn.missedCallCount > 0) {
             rows += PendingRow.MissedCall(

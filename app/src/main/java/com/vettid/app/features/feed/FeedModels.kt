@@ -170,6 +170,17 @@ sealed class PendingRow {
     ) : PendingRow()
 
     /**
+     * Incoming data-access request from this peer. Tap → opens the
+     * connection's Grants screen on the Pending tab. One row per
+     * pending request; auto-clears when the user approves / denies.
+     */
+    data class IncomingGrantRequest(
+        val requestId: String,
+        val itemLabel: String,
+        override val timestamp: Long,
+    ) : PendingRow()
+
+    /**
      * Passive last-activity row shown when nothing is pending. Not
      * interactive beyond opening the default card destination.
      */

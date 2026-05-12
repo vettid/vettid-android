@@ -1278,6 +1278,14 @@ private fun ActiveConnectionCard(
                                     onAcknowledgePeerLocationShare(item.connectionId)
                                     onHistoryClick()
                                 }
+                                is PendingRow.IncomingGrantRequest -> {
+                                    // Route to the connection's history for
+                                    // now — Phase 2 polish would open the
+                                    // Grants screen's Pending tab directly.
+                                    // The user can reach it via Connection
+                                    // Detail → Data sharing.
+                                    onHistoryClick()
+                                }
                             }
                         }
                     )
@@ -1385,6 +1393,8 @@ private fun pendingRowIcon(row: PendingRow): Pair<ImageVector?, Color> {
             (if (row.started) Icons.Default.LocationOn else Icons.Default.LocationOff) to
                 if (row.started) MaterialTheme.colorScheme.primary
                 else MaterialTheme.colorScheme.onSurfaceVariant
+        is PendingRow.IncomingGrantRequest ->
+            Icons.Default.Inbox to MaterialTheme.colorScheme.primary
         is PendingRow.LastActivity -> lastActivityIcon(
             activityType = row.activityType,
             direction = row.direction,
@@ -1407,6 +1417,8 @@ private fun pendingRowLabel(row: PendingRow): String = when (row) {
     is PendingRow.ProposalUnvoted -> "Vote: ${row.title}"
     is PendingRow.PeerLocationShare ->
         if (row.started) "Started sharing location" else "Stopped sharing location"
+    is PendingRow.IncomingGrantRequest ->
+        "Wants access to ${row.itemLabel.ifEmpty { "an item" }}"
     is PendingRow.LastActivity -> row.text.ifEmpty { "Connected" }
 }
 
