@@ -133,13 +133,15 @@ class MinorSecretsStore @Inject constructor(
             addProperty("type", type.name)
             if (!alias.isNullOrBlank()) addProperty("alias", alias)
             if (!notes.isNullOrBlank()) addProperty("description", notes)
-            // New entries default to cataloged — peers see metadata,
-            // values stay in the vault. Toggling to public puts the
-            // metadata on the calling card; toggling to private hides
-            // it from peers entirely.
+            // Default-hidden 2026-05-12 (plans/data-request-grants.md
+            // Phase 3): new entries land as `private` unless the user
+            // explicitly opts the metadata onto the calling card. Peers
+            // see nothing until the user flips the per-row toggle. The
+            // SecretsScreen nudge banner prompts a review for items
+            // already visible to peers.
             addProperty(
                 "discoverability",
-                if (isInPublicProfile) "public" else "cataloged",
+                if (isInPublicProfile) "public" else "private",
             )
         }
         val resp = ownerSpaceClient.sendAndAwaitResponse(
