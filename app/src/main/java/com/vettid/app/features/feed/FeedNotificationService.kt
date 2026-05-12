@@ -225,6 +225,22 @@ class FeedNotificationService @Inject constructor(
                 }
             }
         }
+        // Peer asked for our location while the app was backgrounded —
+        // the in-app AlertDialog only renders once the app is open, so
+        // a heads-up notification ensures the user sees the request in
+        // a reasonable timeframe. Foreground requests fall through to
+        // PeerLocationRequestPromptViewModel's dialog.
+        scope.launch {
+            ownerSpaceClient.peerLocationTransitions.collect { transition ->
+                if (transition.transition !=
+                    com.vettid.app.core.nats.PeerLocationShareTransition.Transition.REQUESTED) {
+                    return@collect
+                }
+                if (!isInForeground) {
+                    showPeerLocationRequestedNotification(transition.connectionId, transition.fromOwnerSpace)
+                }
+            }
+        }
     }
 
     private suspend fun handleNotification(notification: FeedNotification) {
@@ -587,6 +603,53 @@ class FeedNotificationService @Inject constructor(
             Log.d(TAG, "Showed peer-accepted notification for connection ${acceptance.connectionId}")
         } catch (e: SecurityException) {
             Log.w(TAG, "Notification permission not granted for peer-accepted", e)
+        }
+    }
+
+    /**
+     * Show a heads-up notification when a peer requests our location
+     * while the app is backgrounded. The notification deep-links into
+     * MainActivity, which surfaces the AlertDialog managed by
+     * PeerLocationRequestPromptViewModel (the dialog has Send / Ignore
+     * actions — we deliberately don't put those on the notification to
+     * keep the consent flow inside the trusted UI).
+     */
+    private fun showPeerLocationRequestedNotification(connectionId: String, fromOwnerSpace: String) {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(EXTRA_OPEN_FEED, true)
+            putExtra(EXTRA_EVENT_TYPE, "connection.peer-location-requested")
+            putExtra(EXTRA_SOURCE_ID, connectionId)
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            ("location-request:$connectionId").hashCode(),
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val peerName = resolveSenderName(connectionId) ?: "A connection"
+        val notification = NotificationCompat.Builder(context, CHANNEL_ID_DEFAULT)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("$peerName is asking for your location")
+            .setContentText("Open VettID to send or ignore the request.")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .setGroup("vettid_location_requests")
+            .setCategory(NotificationCompat.CATEGORY_SOCIAL)
+            .build()
+
+        val notifManager = NotificationManagerCompat.from(context)
+        if (!notifManager.areNotificationsEnabled()) return
+        try {
+            notifManager.notify(
+                ("location-request:$connectionId").hashCode(),
+                notification,
+            )
+            Log.d(TAG, "Showed peer-location-requested notification for connection $connectionId")
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Notification permission not granted for peer-location-requested", e)
         }
     }
 

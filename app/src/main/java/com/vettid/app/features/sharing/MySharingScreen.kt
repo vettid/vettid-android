@@ -111,6 +111,7 @@ fun MySharingScreen(
                     state = s,
                     onPresenceChange = { viewModel.onEvent(MySharingEvent.SetPresenceOverride(it)) },
                     onLocationToggle = ::handleLocationToggle,
+                    onAutoFulfillToggle = { viewModel.onEvent(MySharingEvent.SetAutoFulfillLocation(it)) },
                     onUpdatePolicy = { viewModel.onEvent(MySharingEvent.UpdatePolicy(it)) },
                 )
             }
@@ -122,6 +123,7 @@ fun MySharingScreen(
 private fun Loaded(
     state: MySharingState.Loaded,
     onPresenceChange: (Boolean?) -> Unit,
+    onAutoFulfillToggle: (Boolean) -> Unit,
     onLocationToggle: (Boolean) -> Unit,
     onUpdatePolicy: (SharePolicyRow) -> Unit,
 ) {
@@ -173,6 +175,28 @@ private fun Loaded(
                             Switch(
                                 checked = state.isLocationSharingEnabled,
                                 onCheckedChange = onLocationToggle,
+                            )
+                        }
+                    },
+                )
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                ListItem(
+                    headlineContent = { Text("Auto-respond to location requests") },
+                    supportingContent = {
+                        Text(
+                            if (state.isAutoFulfillLocationEnabled)
+                                "${state.peerName} will get your current location without prompting you"
+                            else
+                                "You'll see a prompt each time ${state.peerName} asks"
+                        )
+                    },
+                    trailingContent = {
+                        if (state.isTogglingAutoFulfill) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        } else {
+                            Switch(
+                                checked = state.isAutoFulfillLocationEnabled,
+                                onCheckedChange = onAutoFulfillToggle,
                             )
                         }
                     },

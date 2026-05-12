@@ -13,6 +13,8 @@ import com.vettid.app.core.storage.PersonalDataStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.isActive
@@ -103,6 +105,16 @@ class FeedViewModel @Inject constructor(
     private data class PeerLocationShareSnapshot(val started: Boolean, val timestampMs: Long)
     private var peerLocationShareStateByConn: Map<String, PeerLocationShareSnapshot> = emptyMap()
     private val peerLocationShareTtlMs = 30L * 60 * 1000 // 30 min
+
+    // Per-connection cached peer location (mirrors what location.peer.get
+    // returns from the vault). Drives the adaptive "View/Request location"
+    // dropdown action: if a fresh entry exists, dropdown renders "View
+    // location (X min ago)" and opens the map directly; otherwise it
+    // renders "Request location" and fires the ping.
+    private val _connectionPeerLocations =
+        MutableStateFlow<Map<String, com.vettid.app.core.nats.CachedPeerLocation>>(emptyMap())
+    val connectionPeerLocations: StateFlow<Map<String, com.vettid.app.core.nats.CachedPeerLocation>> =
+        _connectionPeerLocations.asStateFlow()
 
     // Event types that belong in activity feed (not grouped under connections)
     private val activityEventTypes = setOf(
@@ -943,7 +955,47 @@ class FeedViewModel @Inject constructor(
                         timestampMs = nowMs,
                     )
                 )
+                // Adaptive-action map mirrors the share-state map: on
+                // STOPPED, drop the cached location; on STARTED, fetch
+                // it so the dropdown can render with freshness.
+                when (transition.transition) {
+                    com.vettid.app.core.nats.PeerLocationShareTransition.Transition.STOPPED -> {
+                        _connectionPeerLocations.value =
+                            _connectionPeerLocations.value - transition.connectionId
+                    }
+                    com.vettid.app.core.nats.PeerLocationShareTransition.Transition.STARTED -> {
+                        viewModelScope.launch {
+                            val loc = runCatching { ownerSpaceClient.getPeerLocation(transition.connectionId) }.getOrNull()
+                            if (loc != null) {
+                                _connectionPeerLocations.value =
+                                    _connectionPeerLocations.value + (transition.connectionId to loc)
+                            }
+                        }
+                    }
+                    else -> {}
+                }
                 rebuildDisplayItems()
+            }
+        }
+
+        // Live location-update flow keeps the cache fresh between
+        // explicit transitions. Each update overwrites the cache entry
+        // so "View location (X min ago)" reflects the most recent
+        // broadcast, not just the first share-started transition.
+        viewModelScope.launch {
+            ownerSpaceClient.locationUpdates.collect { update ->
+                _connectionPeerLocations.value = _connectionPeerLocations.value + (
+                    update.connectionId to com.vettid.app.core.nats.CachedPeerLocation(
+                        latitude = update.latitude,
+                        longitude = update.longitude,
+                        accuracy = update.accuracy,
+                        timestamp = update.timestamp,
+                        updatedAt = update.updatedAt,
+                        firstReceivedAt =
+                            _connectionPeerLocations.value[update.connectionId]?.firstReceivedAt
+                                ?: update.updatedAt,
+                    )
+                )
             }
         }
 
@@ -1105,12 +1157,34 @@ class FeedViewModel @Inject constructor(
                 cachedConnections = connections
                 feedRepository.cacheConnections(connections)
                 Log.d(TAG, "Loaded ${connections.size} connections")
+                // Seed peer-location cache in parallel — drives the
+                // adaptive "View location (X min ago)" / "Request
+                // location" dropdown label without waiting for a live
+                // peerLocationTransitions event after a cold start.
+                seedConnectionPeerLocations(
+                    connections.filter { it.status == "active" }.map { it.connectionId }
+                )
             }
             .onFailure { error ->
                 if (error is kotlinx.coroutines.CancellationException) throw error
                 Log.w(TAG, "Failed to load connections: ${error.message}")
             }
             .isSuccess
+    }
+
+    private fun seedConnectionPeerLocations(connectionIds: List<String>) {
+        if (connectionIds.isEmpty()) return
+        viewModelScope.launch {
+            val pairs = connectionIds.map { id ->
+                async {
+                    val loc = runCatching { ownerSpaceClient.getPeerLocation(id) }.getOrNull()
+                    if (loc != null) id to loc else null
+                }
+            }.awaitAll().filterNotNull().toMap()
+            // Merge so any live updates that arrived during the seed
+            // aren't clobbered by the older parallel-fetch result.
+            _connectionPeerLocations.value = _connectionPeerLocations.value + pairs
+        }
     }
 
     fun loadFeed() {

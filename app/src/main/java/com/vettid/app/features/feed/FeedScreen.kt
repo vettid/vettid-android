@@ -93,6 +93,7 @@ fun FeedContent(
     val state by viewModel.state.collectAsState()
     val isRefreshing by viewModel.isRefreshing.collectAsState()
     val isOfflineModeEnabled by viewModel.isOfflineModeEnabled.collectAsState()
+    val peerLocations by viewModel.connectionPeerLocations.collectAsState()
 
     // Snackbar state for action feedback
     val snackbarHostState = remember { SnackbarHostState() }
@@ -267,6 +268,7 @@ fun FeedContent(
                     onOpenProposalById = onNavigateToProposalDetail,
                     onNavigateToArchivedConnections = onNavigateToArchivedConnections,
                     onRequestPeerLocation = { connectionId -> viewModel.requestPeerLocation(connectionId) },
+                    connectionPeerLocations = peerLocations,
                 )
                 is FeedState.Error -> {
                     // If in offline mode, show friendly offline content instead of error
@@ -411,6 +413,7 @@ private fun FeedList(
     onOpenProposalById: (proposalId: String) -> Unit = {},
     onNavigateToArchivedConnections: () -> Unit = {},
     onRequestPeerLocation: (String) -> Unit = {},
+    connectionPeerLocations: Map<String, com.vettid.app.core.nats.CachedPeerLocation> = emptyMap(),
 ) {
     // Shared-action layer state — one ActionsViewModel for the whole
     // feed. When the user taps "Available actions" on a card's More
@@ -528,6 +531,7 @@ private fun FeedList(
                         onOpenGuide = onOpenGuideById,
                         onOpenProposal = onOpenProposalById,
                         onRequestLocation = { onRequestPeerLocation(item.connectionId) },
+                        peerLocation = connectionPeerLocations[item.connectionId],
                     )
             }
 
@@ -723,6 +727,7 @@ private fun StatusAwareConnectionCard(
     onOpenProposal: (proposalId: String) -> Unit = {},
     onShowAvailableActions: () -> Unit = {},
     onRequestLocation: () -> Unit = {},
+    peerLocation: com.vettid.app.core.nats.CachedPeerLocation? = null,
 ) {
     // Render different card variants based on connection status
     when {
@@ -739,6 +744,7 @@ private fun StatusAwareConnectionCard(
             onNavigateToConnectionReview, onOpenMigration,
             onSystemVaultMessagesClick, onSystemVotesClick, onSystemGuidesClick,
             onOpenGuide, onOpenProposal, onShowAvailableActions, onRequestLocation,
+            peerLocation,
         )
         item.connectionStatus == "revoked"
             || item.connectionStatus == "rejected"
@@ -751,6 +757,7 @@ private fun StatusAwareConnectionCard(
             onNavigateToConnectionReview, onOpenMigration,
             onSystemVaultMessagesClick, onSystemVotesClick, onSystemGuidesClick,
             onOpenGuide, onOpenProposal, onShowAvailableActions, onRequestLocation,
+            peerLocation,
         )
     }
 }
@@ -996,6 +1003,7 @@ private fun ActiveConnectionCard(
     onOpenProposal: (proposalId: String) -> Unit = {},
     onShowAvailableActions: () -> Unit = {},
     onRequestLocation: () -> Unit = {},
+    peerLocation: com.vettid.app.core.nats.CachedPeerLocation? = null,
 ) {
     val haptic = LocalHapticFeedback.current
 
@@ -1144,13 +1152,47 @@ private fun ActiveConnectionCard(
                                     Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
                                 },
                             )
-                            DropdownMenuItem(
-                                text = { Text("Request location") },
-                                onClick = { showMoreMenu = false; onRequestLocation() },
-                                leadingIcon = {
-                                    Icon(Icons.Default.LocationSearching, contentDescription = null, modifier = Modifier.size(20.dp))
-                                },
-                            )
+                            // Adaptive: when we have a cached peer
+                            // location, this entry becomes "View
+                            // location (X min ago)" and opens the
+                            // user's map app directly. Otherwise it
+                            // falls back to "Request location" which
+                            // fires the existing location.request
+                            // ping. The cache rows are populated by
+                            // peerLocationTransitions, live
+                            // locationUpdates, and the cold-start
+                            // parallel seed (see FeedViewModel).
+                            val cachedLoc = peerLocation
+                            if (cachedLoc != null) {
+                                val mapContext = androidx.compose.ui.platform.LocalContext.current
+                                val peerLabel = item.peerName.ifEmpty { "Peer" }
+                                val freshness = remember(cachedLoc.updatedAt) {
+                                    formatLocationFreshnessShort(cachedLoc.updatedAt)
+                                }
+                                DropdownMenuItem(
+                                    text = { Text("View location ($freshness)") },
+                                    onClick = {
+                                        showMoreMenu = false
+                                        openCachedLocationInMaps(
+                                            mapContext,
+                                            cachedLoc.latitude,
+                                            cachedLoc.longitude,
+                                            peerLabel,
+                                        )
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.LocationOn, contentDescription = null, modifier = Modifier.size(20.dp))
+                                    },
+                                )
+                            } else {
+                                DropdownMenuItem(
+                                    text = { Text("Request location") },
+                                    onClick = { showMoreMenu = false; onRequestLocation() },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.LocationSearching, contentDescription = null, modifier = Modifier.size(20.dp))
+                                    },
+                                )
+                            }
                             // History moved to the connection detail
                             // screen's 3-dot menu — see
                             // ConnectionDetailScreen.kt. Keep
@@ -1872,6 +1914,55 @@ private fun lastActivityIcon(
 
 private val DeclineRedColor = Color(0xFFE53935)
 private val AnswerGreenColor = Color(0xFF4CAF50)
+
+/**
+ * Compact "X min ago" formatter used in the adaptive location action
+ * label. Falls back to "just now" on parse failure rather than
+ * showing the raw RFC3339 string (which would blow out the menu width).
+ */
+private fun formatLocationFreshnessShort(updatedAt: String): String {
+    if (updatedAt.isBlank()) return "just now"
+    return try {
+        val parsed = java.time.Instant.parse(updatedAt)
+        val secs = java.time.Duration.between(parsed, java.time.Instant.now()).seconds
+        when {
+            secs < 60 -> "just now"
+            secs < 3600 -> "${secs / 60} min ago"
+            secs < 86400 -> "${secs / 3600} hr ago"
+            else -> "${secs / 86400}d ago"
+        }
+    } catch (_: Exception) {
+        "just now"
+    }
+}
+
+/**
+ * Open the user's default maps app at the cached peer coordinates.
+ * Mirrors the ConnectionDetailScreen helper — same geo: intent shape
+ * so the user's choice of map app applies in both surfaces. Silent
+ * no-op when no maps app is installed; the dropdown still shows
+ * "View location" so the user knows the cache exists.
+ */
+private fun openCachedLocationInMaps(
+    context: android.content.Context,
+    latitude: Double,
+    longitude: Double,
+    label: String,
+) {
+    val uri = android.net.Uri.parse(
+        "geo:%1\$f,%2\$f?q=%1\$f,%2\$f(%3\$s's location)".format(
+            latitude,
+            longitude,
+            android.net.Uri.encode(label),
+        )
+    )
+    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, uri)
+    try {
+        context.startActivity(intent)
+    } catch (_: Exception) {
+        // No maps app installed — leave silent.
+    }
+}
 
 private fun formatTimestamp(epochMillis: Long): String {
     val millis = com.vettid.app.util.toEpochMillis(epochMillis)

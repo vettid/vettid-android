@@ -43,6 +43,7 @@ class MySharingViewModel @Inject constructor(
         when (event) {
             is MySharingEvent.SetPresenceOverride -> setPresenceOverride(event.value)
             is MySharingEvent.SetLocationSharing -> setLocationSharing(event.enabled)
+            is MySharingEvent.SetAutoFulfillLocation -> setAutoFulfillLocation(event.enabled)
             is MySharingEvent.UpdatePolicy -> updatePolicy(event.row)
             MySharingEvent.Refresh -> load()
         }
@@ -70,7 +71,9 @@ class MySharingViewModel @Inject constructor(
                     peerName = peerName,
                     presenceOverride = conn.presenceShareOverride,
                     isLocationSharingEnabled = false,
+                    isAutoFulfillLocationEnabled = false,
                     isTogglingLocation = false,
+                    isTogglingAutoFulfill = false,
                     isPresenceUpdating = false,
                     rows = emptyList(),
                 )
@@ -84,14 +87,19 @@ class MySharingViewModel @Inject constructor(
                 // location) that triggered another state update.
                 supervisorScope {
                     val locationDeferred = async { runCatching { fetchLocationSharing() }.getOrDefault(false) }
+                    val autoFulfillDeferred = async { runCatching { fetchAutoFulfillLocation() }.getOrDefault(false) }
                     val storedPolicyDeferred = async { runCatching { fetchStoredPolicy() }.getOrDefault(emptyList()) }
                     val ownDataDeferred = async { runCatching { fetchOwnDataRows() }.getOrDefault(emptyList()) }
                     val ownSecretsDeferred = async { runCatching { fetchOwnSecretRows() }.getOrDefault(emptyList()) }
                     val handlerRowsDeferred = async { runCatching { fetchShareableHandlerRows() }.getOrDefault(emptyList()) }
 
                     val locationEnabled = locationDeferred.await()
+                    val autoFulfillEnabled = autoFulfillDeferred.await()
                     _state.update { s ->
-                        (s as? MySharingState.Loaded)?.copy(isLocationSharingEnabled = locationEnabled) ?: s
+                        (s as? MySharingState.Loaded)?.copy(
+                            isLocationSharingEnabled = locationEnabled,
+                            isAutoFulfillLocationEnabled = autoFulfillEnabled,
+                        ) ?: s
                     }
 
                     val seeded = ownDataDeferred.await() +
@@ -127,6 +135,21 @@ class MySharingViewModel @Inject constructor(
             } else false
         } catch (e: Exception) {
             Log.w(TAG, "fetchLocationSharing failed: ${e.message}")
+            false
+        }
+    }
+
+    private suspend fun fetchAutoFulfillLocation(): Boolean {
+        return try {
+            val payload = JsonObject().apply { addProperty("connection_id", connectionId) }
+            val resp = ownerSpaceClient.sendAndAwaitResponse(
+                "location.sharing.get-auto-fulfill", payload, 10_000L
+            )
+            if (resp is VaultResponse.HandlerResult && resp.success && resp.result != null) {
+                resp.result.get("enabled")?.asBoolean ?: false
+            } else false
+        } catch (e: Exception) {
+            Log.w(TAG, "fetchAutoFulfillLocation failed: ${e.message}")
             false
         }
     }
@@ -299,6 +322,36 @@ class MySharingViewModel @Inject constructor(
         }
     }
 
+    private fun setAutoFulfillLocation(enabled: Boolean) {
+        _state.update { s ->
+            (s as? MySharingState.Loaded)?.copy(isTogglingAutoFulfill = true) ?: s
+        }
+        viewModelScope.launch {
+            try {
+                val payload = JsonObject().apply {
+                    addProperty("connection_id", connectionId)
+                    addProperty("enabled", enabled)
+                }
+                val resp = ownerSpaceClient.sendAndAwaitResponse(
+                    "location.sharing.set-auto-fulfill", payload, 10_000L
+                )
+                val ok = resp is VaultResponse.HandlerResult && resp.success
+                _state.update { s ->
+                    val loaded = s as? MySharingState.Loaded ?: return@update s
+                    loaded.copy(
+                        isAutoFulfillLocationEnabled = if (ok) enabled else loaded.isAutoFulfillLocationEnabled,
+                        isTogglingAutoFulfill = false,
+                    )
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "setAutoFulfillLocation", e)
+                _state.update { s ->
+                    (s as? MySharingState.Loaded)?.copy(isTogglingAutoFulfill = false) ?: s
+                }
+            }
+        }
+    }
+
     private fun updatePolicy(row: SharePolicyRow) {
         viewModelScope.launch {
             try {
@@ -354,7 +407,9 @@ sealed class MySharingState {
         val peerName: String,
         val presenceOverride: Boolean?,
         val isLocationSharingEnabled: Boolean,
+        val isAutoFulfillLocationEnabled: Boolean,
         val isTogglingLocation: Boolean,
+        val isTogglingAutoFulfill: Boolean,
         val isPresenceUpdating: Boolean,
         val rows: List<SharePolicyRow>,
     ) : MySharingState()
@@ -364,6 +419,7 @@ sealed class MySharingState {
 sealed class MySharingEvent {
     data class SetPresenceOverride(val value: Boolean?) : MySharingEvent()
     data class SetLocationSharing(val enabled: Boolean) : MySharingEvent()
+    data class SetAutoFulfillLocation(val enabled: Boolean) : MySharingEvent()
     data class UpdatePolicy(val row: SharePolicyRow) : MySharingEvent()
     object Refresh : MySharingEvent()
 }
