@@ -1177,6 +1177,21 @@ private fun ActiveConnectionCard(
                                         Icon(Icons.Default.LocationOn, contentDescription = null, modifier = Modifier.size(20.dp))
                                     },
                                 )
+                                // Second entry: re-request a fresh
+                                // sample even when cached data is
+                                // available. Without this, once a
+                                // location lands the menu offered no
+                                // path to ask for an update — the
+                                // user had to wait for the peer's
+                                // continuous-share cadence (if any)
+                                // or for the cache TTL to expire.
+                                DropdownMenuItem(
+                                    text = { Text("Request fresh location") },
+                                    onClick = { showMoreMenu = false; onRequestLocation() },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(20.dp))
+                                    },
+                                )
                             } else {
                                 DropdownMenuItem(
                                     text = { Text("Request location") },

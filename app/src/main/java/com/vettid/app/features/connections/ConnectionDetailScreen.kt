@@ -556,10 +556,10 @@ private fun PeerLocationRow(
         val context = LocalContext.current
         ListItem(
             modifier = Modifier.clickable(enabled = enabled) {
-                // A5: hand off to the user's default maps app via a
-                // geo: intent. Avoids adding a maps SDK dependency
-                // and respects the user's choice of map app
-                // (Google Maps, OsmAnd, Organic Maps, etc.).
+                // Tap row body → open the user's default maps app via
+                // a geo: intent. The trailing refresh icon (below)
+                // sends a fresh location.request without leaving the
+                // screen; the row click stays focused on "view".
                 openLocationInMaps(context, peerLocation.latitude, peerLocation.longitude, peerName)
             },
             headlineContent = { Text("$peerName's location") },
@@ -574,7 +574,29 @@ private fun PeerLocationRow(
                     tint = MaterialTheme.colorScheme.primary,
                 )
             },
-            trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+            trailingContent = {
+                // Refresh button: ask the peer for a fresh sample.
+                // Replaces the chevron — peer-location is a leaf
+                // entry (it opens an external app, not another
+                // in-app screen) so the chevron didn't carry useful
+                // affordance anyway, and the refresh action is what
+                // the user needs once they've already seen the
+                // cached point.
+                if (isRequesting) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else {
+                    IconButton(
+                        onClick = onRequestPeerLocation,
+                        enabled = enabled,
+                    ) {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = "Request fresh location",
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            },
         )
     } else {
         ListItem(
