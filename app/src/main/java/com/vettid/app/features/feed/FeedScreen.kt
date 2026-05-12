@@ -269,6 +269,7 @@ fun FeedContent(
                     onNavigateToArchivedConnections = onNavigateToArchivedConnections,
                     onRequestPeerLocation = { connectionId -> viewModel.requestPeerLocation(connectionId) },
                     connectionPeerLocations = peerLocations,
+                    onAcknowledgePeerLocationShare = { connectionId -> viewModel.acknowledgePeerLocationShare(connectionId) },
                 )
                 is FeedState.Error -> {
                     // If in offline mode, show friendly offline content instead of error
@@ -414,6 +415,7 @@ private fun FeedList(
     onNavigateToArchivedConnections: () -> Unit = {},
     onRequestPeerLocation: (String) -> Unit = {},
     connectionPeerLocations: Map<String, com.vettid.app.core.nats.CachedPeerLocation> = emptyMap(),
+    onAcknowledgePeerLocationShare: (String) -> Unit = {},
 ) {
     // Shared-action layer state — one ActionsViewModel for the whole
     // feed. When the user taps "Available actions" on a card's More
@@ -532,6 +534,7 @@ private fun FeedList(
                         onOpenProposal = onOpenProposalById,
                         onRequestLocation = { onRequestPeerLocation(item.connectionId) },
                         peerLocation = connectionPeerLocations[item.connectionId],
+                        onAcknowledgePeerLocationShare = onAcknowledgePeerLocationShare,
                     )
             }
 
@@ -728,6 +731,7 @@ private fun StatusAwareConnectionCard(
     onShowAvailableActions: () -> Unit = {},
     onRequestLocation: () -> Unit = {},
     peerLocation: com.vettid.app.core.nats.CachedPeerLocation? = null,
+    onAcknowledgePeerLocationShare: (connectionId: String) -> Unit = {},
 ) {
     // Render different card variants based on connection status
     when {
@@ -744,7 +748,7 @@ private fun StatusAwareConnectionCard(
             onNavigateToConnectionReview, onOpenMigration,
             onSystemVaultMessagesClick, onSystemVotesClick, onSystemGuidesClick,
             onOpenGuide, onOpenProposal, onShowAvailableActions, onRequestLocation,
-            peerLocation,
+            peerLocation, onAcknowledgePeerLocationShare,
         )
         item.connectionStatus == "revoked"
             || item.connectionStatus == "rejected"
@@ -757,7 +761,7 @@ private fun StatusAwareConnectionCard(
             onNavigateToConnectionReview, onOpenMigration,
             onSystemVaultMessagesClick, onSystemVotesClick, onSystemGuidesClick,
             onOpenGuide, onOpenProposal, onShowAvailableActions, onRequestLocation,
-            peerLocation,
+            peerLocation, onAcknowledgePeerLocationShare,
         )
     }
 }
@@ -1004,6 +1008,7 @@ private fun ActiveConnectionCard(
     onShowAvailableActions: () -> Unit = {},
     onRequestLocation: () -> Unit = {},
     peerLocation: com.vettid.app.core.nats.CachedPeerLocation? = null,
+    onAcknowledgePeerLocationShare: (connectionId: String) -> Unit = {},
 ) {
     val haptic = LocalHapticFeedback.current
 
@@ -1265,11 +1270,13 @@ private fun ActiveConnectionCard(
                                     onOpenProposal(row.proposalId)
                                 }
                                 is PendingRow.PeerLocationShare -> {
-                                    // Tap → ConnectionDetail (card's
-                                    // default onClick). The peer-location
-                                    // row on that screen has the freshness
-                                    // label and (when shipped) the map entry.
-                                    onClick()
+                                    // Acknowledge: drop the snapshot so the
+                                    // bolded row disappears (otherwise it
+                                    // sticks around until the 30-min TTL),
+                                    // then open Interaction History where
+                                    // the full sharing trail lives.
+                                    onAcknowledgePeerLocationShare(item.connectionId)
+                                    onHistoryClick()
                                 }
                             }
                         }

@@ -1659,6 +1659,20 @@ class FeedViewModel @Inject constructor(
      * Accept a pending connection directly via connection.respond.
      */
     /**
+     * Acknowledge a peer-location-share row on the activity feed.
+     * Drops the snapshot from peerLocationShareStateByConn so the
+     * bolded notification row disappears immediately — without
+     * this, the row sticks around for the full peerLocationShareTtlMs
+     * (30 min) even after the user has tapped it.
+     */
+    fun acknowledgePeerLocationShare(connectionId: String) {
+        if (peerLocationShareStateByConn.containsKey(connectionId)) {
+            peerLocationShareStateByConn = peerLocationShareStateByConn - connectionId
+            rebuildDisplayItems()
+        }
+    }
+
+    /**
      * Send a one-shot location-request ping to the peer (A6).
      * Wraps OwnerSpaceClient.requestPeerLocation so the feed card's
      * "Request location" menu entry can fire without each card
