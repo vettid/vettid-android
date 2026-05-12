@@ -311,10 +311,49 @@ private fun SecretsList(
         }
     }
 
+    // Default visibility for new secrets flipped to "Hidden" on
+    // 2026-05-12 (plans/data-request-grants.md Phase 3). Surface a
+    // nudge so users with already-visible secrets can review them —
+    // it appears at the top of the list when there's at least one
+    // non-hidden minor secret, dismissable per-session.
+    var nudgeDismissed by remember { mutableStateOf(false) }
+    val visibleSecretsCount = remember(groupedByCategory) {
+        groupedByCategory.categories.values.flatten()
+            .count { !it.hideFromCatalog }
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
     ) {
+        if (!nudgeDismissed && visibleSecretsCount > 0) {
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                    ),
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            "$visibleSecretsCount secret${if (visibleSecretsCount == 1) "" else "s"} visible to connections",
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "New secrets now default to Hidden. Review your existing secrets and hide any you don't want peers to see.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
+                            TextButton(onClick = { nudgeDismissed = true }) { Text("Dismiss") }
+                        }
+                    }
+                }
+            }
+        }
+
         // "Unpublished Public Keys" banner is rendered by
         // VaultProfileSection above the tabs so the Data and Secrets
         // tabs share one consistent publish surface.

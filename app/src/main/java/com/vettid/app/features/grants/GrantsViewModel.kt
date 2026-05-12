@@ -3,6 +3,8 @@ package com.vettid.app.features.grants
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.app.core.nats.GrantEvent
+import com.vettid.app.core.nats.OwnerSpaceClient
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -10,6 +12,8 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -26,6 +30,7 @@ import javax.inject.Inject
 @HiltViewModel
 class GrantsViewModel @Inject constructor(
     private val repo: GrantsRepository,
+    private val ownerSpaceClient: OwnerSpaceClient,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -49,7 +54,28 @@ class GrantsViewModel @Inject constructor(
     private val _events = MutableSharedFlow<GrantsEvent>(extraBufferCapacity = 8)
     val events: SharedFlow<GrantsEvent> = _events.asSharedFlow()
 
-    init { refresh() }
+    init {
+        refresh()
+        // Subscribe to vault → app grant events. The fetch-response path
+        // is the load-bearing one: the plaintext value arrives via this
+        // flow and is dropped into _revealedValue for foreground render.
+        // Other events trigger a refresh so the list views catch up.
+        ownerSpaceClient.grantEvents
+            .onEach { ev ->
+                when (ev) {
+                    is GrantEvent.FetchResponse ->
+                        onFetchResponse(ev.grantId, ev.status, ev.value, ev.error)
+                    is GrantEvent.RequestReceived,
+                    is GrantEvent.GrantCreated,
+                    is GrantEvent.GrantDenied,
+                    is GrantEvent.GrantRevoked,
+                    is GrantEvent.CriticalUseRequested,
+                    is GrantEvent.CriticalUseResponse,
+                    is GrantEvent.AuthenticateResult -> refresh()
+                }
+            }
+            .launchIn(viewModelScope)
+    }
 
     fun refresh() {
         viewModelScope.launch {

@@ -111,6 +111,19 @@ class OwnerSpaceClient @Inject constructor(
     /** Flow of call signaling events (vault-routed). */
     val callEvents: SharedFlow<CallSignalEvent> = _callEvents.asSharedFlow()
 
+    private val _grantEvents = MutableSharedFlow<GrantEvent>(extraBufferCapacity = 64)
+    /**
+     * Flow of grant-flow events emitted by the vault — incoming data
+     * requests, grant created/denied/revoked, fetch responses with
+     * (transient) plaintext values, critical-secret use prompts +
+     * responses, and connection.authenticate verdicts. Subscribers
+     * are typically connection-scoped ViewModels that filter by
+     * connectionId. The fetch-response carries a plaintext value
+     * intended for foreground rendering only — viewmodels must NOT
+     * persist it.
+     */
+    val grantEvents: SharedFlow<GrantEvent> = _grantEvents.asSharedFlow()
+
     // Feed notification events (Issue #15)
     private val _feedNotifications = MutableSharedFlow<FeedNotification>(extraBufferCapacity = 64)
     /** Flow of feed notifications (new events, status updates). */
@@ -2005,6 +2018,29 @@ class OwnerSpaceClient @Inject constructor(
                     handlePeerLocationTransition(message, PeerLocationShareTransition.Transition.REQUESTED); return
                 }
 
+                // Grants (plans/data-request-grants.md Phase 2). These
+                // forward the vault's notifications to a SharedFlow that
+                // GrantsViewModel collects from. Keep handling here narrow:
+                // emit on the flow and return — UI threads do the rendering.
+                subject.contains(".forApp.connection.data-request-received") ||
+                subject.contains(".forApp.connection.data-grant-created") ||
+                subject.contains(".forApp.connection.data-grant-denied") ||
+                subject.contains(".forApp.connection.data-grant-revoked") ||
+                subject.contains(".forApp.connection.data-grant-fetch-response") -> {
+                    handleGrantEvent(message, subject); return
+                }
+
+                // Critical-secret use prompts (Phase 6).
+                subject.contains(".forApp.connection.critical-secret-use-requested") ||
+                subject.contains(".forApp.connection.critical-secret-use-response") -> {
+                    handleGrantEvent(message, subject); return
+                }
+
+                // connection.authenticate verdict.
+                subject.contains(".forApp.connection.authenticate-result") -> {
+                    handleGrantEvent(message, subject); return
+                }
+
                 // Feed notifications
                 subject.contains(".forApp.feed.new") ||
                 subject.contains(".forApp.feed.updated") -> {
@@ -2947,6 +2983,94 @@ class OwnerSpaceClient @Inject constructor(
         }
     }
 
+    /**
+     * Parses + dispatches a grant-flow event from the vault. Subject
+     * is what we got off the wire; the parser picks the right
+     * GrantEvent subtype by suffix. Plaintext fetch-response values
+     * pass through this method once and never get persisted.
+     */
+    private fun handleGrantEvent(message: NatsMessage, subject: String) {
+        try {
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+            val event: GrantEvent = when {
+                subject.contains(".data-request-received") -> GrantEvent.RequestReceived(
+                    connectionId = payload.optString("connection_id"),
+                    requesterGuid = payload.optString("requester_guid"),
+                    requestId = payload.optString("request_id"),
+                    itemKind = payload.optString("item_kind"),
+                    itemRef = payload.optString("item_ref"),
+                    itemLabel = payload.optString("item_label"),
+                    requestedMode = payload.optString("requested_mode"),
+                    requestedExpiresAt = payload.optLong("requested_expires_at"),
+                    requestedMaxUses = payload.optInt("requested_max_uses"),
+                    deliverTo = payload.optString("deliver_to"),
+                    reason = payload.optString("reason"),
+                )
+                subject.contains(".data-grant-created") -> GrantEvent.GrantCreated(
+                    connectionId = payload.optString("connection_id"),
+                    granterGuid = payload.optString("granter_guid"),
+                    grantId = payload.optString("grant_id"),
+                    requestId = payload.optString("request_id"),
+                    itemKind = payload.optString("item_kind"),
+                    itemLabel = payload.optString("item_label"),
+                    mode = payload.optString("mode"),
+                    expiresAt = payload.optLong("expires_at"),
+                    maxUses = payload.optInt("max_uses"),
+                )
+                subject.contains(".data-grant-denied") -> GrantEvent.GrantDenied(
+                    connectionId = payload.optString("connection_id"),
+                    granterGuid = payload.optString("granter_guid"),
+                    requestId = payload.optString("request_id"),
+                    reason = payload.optString("reason"),
+                )
+                subject.contains(".data-grant-revoked") -> GrantEvent.GrantRevoked(
+                    connectionId = payload.optString("connection_id"),
+                    granterGuid = payload.optString("granter_guid"),
+                    grantId = payload.optString("grant_id"),
+                    reason = payload.optString("reason"),
+                )
+                subject.contains(".data-grant-fetch-response") -> GrantEvent.FetchResponse(
+                    connectionId = payload.optString("connection_id"),
+                    granterGuid = payload.optString("granter_guid"),
+                    requestId = payload.optString("request_id"),
+                    grantId = payload.optString("grant_id"),
+                    status = payload.optString("status"),
+                    value = payload.optString("value"),
+                    error = payload.optString("error"),
+                )
+                subject.contains(".critical-secret-use-requested") -> GrantEvent.CriticalUseRequested(
+                    connectionId = payload.optString("connection_id"),
+                    requesterGuid = payload.optString("requester_guid"),
+                    requestId = payload.optString("request_id"),
+                    itemRef = payload.optString("item_ref"),
+                    itemLabel = payload.optString("item_label"),
+                    operation = payload.optString("operation"),
+                    context = payload.optString("context"),
+                )
+                subject.contains(".critical-secret-use-response") -> GrantEvent.CriticalUseResponse(
+                    connectionId = payload.optString("connection_id"),
+                    granterGuid = payload.optString("granter_guid"),
+                    requestId = payload.optString("request_id"),
+                    status = payload.optString("status"),
+                    result = payload.optString("result"),
+                    error = payload.optString("error"),
+                )
+                subject.contains(".authenticate-result") -> GrantEvent.AuthenticateResult(
+                    connectionId = payload.optString("connection_id"),
+                    peerGuid = payload.optString("peer_guid"),
+                    requestId = payload.optString("request_id"),
+                    authenticated = payload.optBoolean("authenticated"),
+                    failureReason = payload.optString("failure_reason"),
+                )
+                else -> return
+            }
+            _grantEvents.tryEmit(event)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse grant event: ${e.message}")
+        }
+    }
+
     companion object {
         private const val TAG = "OwnerSpaceClient"
 
@@ -3600,3 +3724,87 @@ data class AgentApprovalRequest(
     val action: String,
     val eventType: String  // "agent.secret.request" or "agent.action.request"
 )
+
+/**
+ * Vault → app event emitted by the grant flow. One sealed type per
+ * subject so ViewModels can `when`-exhaust. Plaintext lives only in
+ * memory; never persist FetchResponse.value.
+ */
+sealed class GrantEvent {
+    data class RequestReceived(
+        val connectionId: String,
+        val requesterGuid: String,
+        val requestId: String,
+        val itemKind: String,
+        val itemRef: String,
+        val itemLabel: String,
+        val requestedMode: String,
+        val requestedExpiresAt: Long,
+        val requestedMaxUses: Int,
+        val deliverTo: String,
+        val reason: String,
+    ) : GrantEvent()
+
+    data class GrantCreated(
+        val connectionId: String,
+        val granterGuid: String,
+        val grantId: String,
+        val requestId: String,
+        val itemKind: String,
+        val itemLabel: String,
+        val mode: String,
+        val expiresAt: Long,
+        val maxUses: Int,
+    ) : GrantEvent()
+
+    data class GrantDenied(
+        val connectionId: String,
+        val granterGuid: String,
+        val requestId: String,
+        val reason: String,
+    ) : GrantEvent()
+
+    data class GrantRevoked(
+        val connectionId: String,
+        val granterGuid: String,
+        val grantId: String,
+        val reason: String,
+    ) : GrantEvent()
+
+    data class FetchResponse(
+        val connectionId: String,
+        val granterGuid: String,
+        val requestId: String,
+        val grantId: String,
+        val status: String,
+        val value: String,
+        val error: String,
+    ) : GrantEvent()
+
+    data class CriticalUseRequested(
+        val connectionId: String,
+        val requesterGuid: String,
+        val requestId: String,
+        val itemRef: String,
+        val itemLabel: String,
+        val operation: String,
+        val context: String,
+    ) : GrantEvent()
+
+    data class CriticalUseResponse(
+        val connectionId: String,
+        val granterGuid: String,
+        val requestId: String,
+        val status: String,
+        val result: String,
+        val error: String,
+    ) : GrantEvent()
+
+    data class AuthenticateResult(
+        val connectionId: String,
+        val peerGuid: String,
+        val requestId: String,
+        val authenticated: Boolean,
+        val failureReason: String,
+    ) : GrantEvent()
+}
