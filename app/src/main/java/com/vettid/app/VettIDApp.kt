@@ -177,6 +177,13 @@ sealed class Screen(val route: String) {
     object Grants : Screen("connections/{connectionId}/grants") {
         fun createRoute(connectionId: String) = "connections/${encodeId(connectionId)}/grants"
     }
+    object CriticalUseApproval : Screen("grants/critical-use/{requestId}?itemLabel={itemLabel}&operation={operation}&context={context}") {
+        fun createRoute(requestId: String, itemLabel: String, operation: String, context: String): String {
+            val encL = java.net.URLEncoder.encode(itemLabel.ifEmpty { "?" }, "UTF-8")
+            val encC = java.net.URLEncoder.encode(context, "UTF-8")
+            return "grants/critical-use/$requestId?itemLabel=$encL&operation=$operation&context=$encC"
+        }
+    }
     companion object {
         // Connection IDs historically were UUIDs with no special chars,
         // but the VettID system connection shipped briefly under
@@ -322,6 +329,35 @@ fun VettIDApp(
                 ) { Text("Ignore") }
             },
         )
+    }
+
+    // Critical-secret use prompt — full-screen approval. When a peer
+    // requests an operation, the vault publishes a GrantEvent and we
+    // navigate to CriticalUseApproval automatically. The screen owns
+    // the password gate; user can dismiss or deny from there.
+    val rootContext = LocalContext.current
+    val grantsEntryPoint = remember(rootContext) {
+        dagger.hilt.android.EntryPointAccessors.fromApplication(
+            rootContext.applicationContext,
+            com.vettid.app.di.GrantsEntryPoint::class.java
+        )
+    }
+    LaunchedEffect(grantsEntryPoint) {
+        grantsEntryPoint.ownerSpaceClient().grantEvents.collect { ev ->
+            if (ev is com.vettid.app.core.nats.GrantEvent.CriticalUseRequested) {
+                val current = navController.currentDestination?.route
+                if (current?.startsWith("grants/critical-use/") != true) {
+                    navController.navigate(
+                        Screen.CriticalUseApproval.createRoute(
+                            requestId = ev.requestId,
+                            itemLabel = ev.itemLabel,
+                            operation = ev.operation,
+                            context = ev.context,
+                        )
+                    )
+                }
+            }
+        }
     }
 
     // Handle call UI events. showCallUI now has replay=1 so a
@@ -1051,6 +1087,19 @@ fun VettIDApp(
         ) {
             com.vettid.app.features.grants.GrantsScreen(
                 onBack = { navController.safePopBackStack() },
+            )
+        }
+        composable(
+            route = Screen.CriticalUseApproval.route,
+            arguments = listOf(
+                navArgument("requestId") { type = NavType.StringType },
+                navArgument("itemLabel") { type = NavType.StringType; defaultValue = "" },
+                navArgument("operation") { type = NavType.StringType; defaultValue = "" },
+                navArgument("context") { type = NavType.StringType; defaultValue = "" },
+            )
+        ) {
+            com.vettid.app.features.grants.CriticalUseApprovalScreen(
+                onDone = { navController.safePopBackStack() },
             )
         }
         // Profile route

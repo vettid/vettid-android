@@ -100,6 +100,79 @@ class GrantsRepository @Inject constructor(
         return parseGrants(resp, "received_grants")
     }
 
+    /** Receiver-side: ask the owner to perform an operation using a critical secret. */
+    suspend fun requestCriticalUse(
+        connectionId: String,
+        itemRef: String,
+        itemLabel: String,
+        operation: String,
+        payloadBase64: String,
+        context: String,
+    ): Result<String> {
+        val payload = JsonObject().apply {
+            addProperty("connection_id", connectionId)
+            addProperty("item_ref", itemRef)
+            addProperty("item_label", itemLabel)
+            addProperty("operation", operation)
+            addProperty("payload", payloadBase64)
+            if (context.isNotBlank()) addProperty("context", context)
+        }
+        return when (val resp = ownerSpaceClient.sendAndAwaitResponse("critical-secret-use.request-use", payload, 10_000L)) {
+            is VaultResponse.HandlerResult ->
+                if (resp.success) Result.success(resp.result?.get("request_id")?.asString.orEmpty())
+                else Result.failure(Exception("critical-secret-use.request failed"))
+            is VaultResponse.Error -> Result.failure(Exception(resp.message))
+            else -> Result.failure(Exception("unexpected response"))
+        }
+    }
+
+    /**
+     * Owner-side: approve a pending critical-secret use with password
+     * authorization. Caller supplies the password-derived fields
+     * (encrypted under a fresh UTK) — mirrors credential.secret.get.
+     */
+    suspend fun approveCriticalUse(
+        requestId: String,
+        encryptedCredential: String,
+        encryptedPasswordHash: String,
+        ephemeralPublicKey: String,
+        nonce: String,
+        keyId: String,
+    ): Result<Unit> {
+        val payload = JsonObject().apply {
+            addProperty("request_id", requestId)
+            addProperty("encrypted_credential", encryptedCredential)
+            addProperty("encrypted_password_hash", encryptedPasswordHash)
+            addProperty("ephemeral_public_key", ephemeralPublicKey)
+            addProperty("nonce", nonce)
+            addProperty("key_id", keyId)
+        }
+        return runSimple("critical-secret-use.approve", payload)
+    }
+
+    suspend fun denyCriticalUse(requestId: String, reason: String = ""): Result<Unit> {
+        val payload = JsonObject().apply {
+            addProperty("request_id", requestId)
+            if (reason.isNotEmpty()) addProperty("reason", reason)
+        }
+        return runSimple("critical-secret-use.deny", payload)
+    }
+
+    /** Issue an authentication challenge to a connection. Result arrives via GrantEvent.AuthenticateResult. */
+    suspend fun requestAuthenticate(connectionId: String, context: String): Result<String> {
+        val payload = JsonObject().apply {
+            addProperty("connection_id", connectionId)
+            if (context.isNotBlank()) addProperty("context", context)
+        }
+        return when (val resp = ownerSpaceClient.sendAndAwaitResponse("connection-authenticate.request", payload, 10_000L)) {
+            is VaultResponse.HandlerResult ->
+                if (resp.success) Result.success(resp.result?.get("request_id")?.asString.orEmpty())
+                else Result.failure(Exception("connection-authenticate.request failed"))
+            is VaultResponse.Error -> Result.failure(Exception(resp.message))
+            else -> Result.failure(Exception("unexpected response"))
+        }
+    }
+
     suspend fun listPending(): Result<List<PendingRequestSummary>> {
         val resp = ownerSpaceClient.sendAndAwaitResponse("grant.list-pending", JsonObject(), 10_000L)
         if (resp !is VaultResponse.HandlerResult || !resp.success || resp.result == null) {
