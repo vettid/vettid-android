@@ -254,6 +254,8 @@ class FeedNotificationService @Inject constructor(
                         showDataRequestReceivedNotification(ev.connectionId, ev.requestId, ev.itemLabel.ifEmpty { ev.itemRef })
                     is com.vettid.app.core.nats.GrantEvent.CriticalUseRequested ->
                         showCriticalUseRequestedNotification(ev.connectionId, ev.requestId, ev.itemLabel.ifEmpty { ev.itemRef }, ev.operation)
+                    is com.vettid.app.core.nats.GrantEvent.IdentityVerifyChallenged ->
+                        showIdentityVerifyChallengedNotification(ev.connectionId, ev.requestId, ev.context)
                     else -> Unit
                 }
             }
@@ -737,6 +739,39 @@ class FeedNotificationService @Inject constructor(
         if (!mgr.areNotificationsEnabled()) return
         try { mgr.notify(("critical-use:$requestId").hashCode(), n) }
         catch (e: SecurityException) { Log.w(TAG, "Notification permission not granted for critical-use", e) }
+    }
+
+    /**
+     * Informational: peer just challenged us with a connection.authenticate
+     * request. We auto-responded (signed) — this is just a heads-up so the
+     * user knows.
+     */
+    private fun showIdentityVerifyChallengedNotification(connectionId: String, requestId: String, challengeContext: String) {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(EXTRA_OPEN_FEED, true)
+            putExtra(EXTRA_EVENT_TYPE, "connection.identity-verify-challenged")
+            putExtra(EXTRA_SOURCE_ID, connectionId)
+        }
+        val pi = PendingIntent.getActivity(
+            context, ("identity-verify:$requestId").hashCode(), intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val peer = resolveSenderName(connectionId) ?: "A connection"
+        val n = NotificationCompat.Builder(context, CHANNEL_ID_DEFAULT)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("$peer verified your identity")
+            .setContentText(if (challengeContext.isNotBlank()) challengeContext else "Your vault signed a challenge proving credential possession.")
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .setGroup("vettid_verify")
+            .setCategory(NotificationCompat.CATEGORY_SOCIAL)
+            .build()
+        val mgr = NotificationManagerCompat.from(context)
+        if (!mgr.areNotificationsEnabled()) return
+        try { mgr.notify(("identity-verify:$requestId").hashCode(), n) }
+        catch (e: SecurityException) { Log.w(TAG, "Notification permission not granted for identity-verify", e) }
     }
 
     /**

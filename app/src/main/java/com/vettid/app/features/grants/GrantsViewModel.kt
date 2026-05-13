@@ -71,7 +71,8 @@ class GrantsViewModel @Inject constructor(
                     is GrantEvent.GrantRevoked,
                     is GrantEvent.CriticalUseRequested,
                     is GrantEvent.CriticalUseResponse,
-                    is GrantEvent.AuthenticateResult -> refresh()
+                    is GrantEvent.AuthenticateResult,
+                    is GrantEvent.IdentityVerifyChallenged -> refresh()
                 }
             }
             .launchIn(viewModelScope)

@@ -2036,8 +2036,15 @@ class OwnerSpaceClient @Inject constructor(
                     handleGrantEvent(message, subject); return
                 }
 
-                // connection.authenticate verdict.
+                // connection.authenticate verdict on requester side.
                 subject.contains(".forApp.connection.authenticate-result") -> {
+                    android.util.Log.i(TAG, "Received authenticate-result push: $subject (${message.data.size} bytes)")
+                    handleGrantEvent(message, subject); return
+                }
+                // Receiver-side notification: a peer just challenged us
+                // (auto-responded, but the user should know).
+                subject.contains(".forApp.connection.identity-verify-challenged") -> {
+                    android.util.Log.i(TAG, "Received identity-verify-challenged push: $subject")
                     handleGrantEvent(message, subject); return
                 }
 
@@ -2993,6 +3000,7 @@ class OwnerSpaceClient @Inject constructor(
         try {
             val json = JSONObject(String(message.data, Charsets.UTF_8))
             val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+            android.util.Log.i(TAG, "handleGrantEvent subject=$subject payload_keys=${payload.keys().asSequence().toList()}")
             val event: GrantEvent = when {
                 subject.contains(".data-request-received") -> GrantEvent.RequestReceived(
                     connectionId = payload.optString("connection_id"),
@@ -3062,6 +3070,12 @@ class OwnerSpaceClient @Inject constructor(
                     requestId = payload.optString("request_id"),
                     authenticated = payload.optBoolean("authenticated"),
                     failureReason = payload.optString("failure_reason"),
+                )
+                subject.contains(".identity-verify-challenged") -> GrantEvent.IdentityVerifyChallenged(
+                    connectionId = payload.optString("connection_id"),
+                    challengerGuid = payload.optString("challenger_guid"),
+                    requestId = payload.optString("request_id"),
+                    context = payload.optString("context"),
                 )
                 else -> return
             }
@@ -3806,5 +3820,12 @@ sealed class GrantEvent {
         val requestId: String,
         val authenticated: Boolean,
         val failureReason: String,
+    ) : GrantEvent()
+
+    data class IdentityVerifyChallenged(
+        val connectionId: String,
+        val challengerGuid: String,
+        val requestId: String,
+        val context: String,
     ) : GrantEvent()
 }
