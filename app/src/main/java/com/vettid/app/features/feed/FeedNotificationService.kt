@@ -42,6 +42,19 @@ import javax.inject.Singleton
  * - Emit in-app events when app is in foreground
  * - Manage badge count
  */
+/**
+ * Discriminator for the per-flow approval notifications. Each has a
+ * stable tag so notification IDs collide deterministically with the
+ * service's show* methods — clearApprovalNotification can then cancel
+ * the exact entry by request_id without callers having to know the
+ * hash collision scheme.
+ */
+enum class ApprovalNotificationKind(val tag: String) {
+    DataRequest("data-request"),
+    CriticalUse("critical-use"),
+    IdentityVerify("identity-verify"),
+}
+
 @Singleton
 class FeedNotificationService @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -682,6 +695,10 @@ class FeedNotificationService @Inject constructor(
      * sharing).
      */
     private fun showDataRequestReceivedNotification(connectionId: String, requestId: String, itemLabel: String) {
+        // App in foreground → VettIDApp's grantEvents collector
+        // navigates the user to the in-app approval screen already.
+        // Don't double-notify with a shade entry.
+        if (isAppForegrounded()) return
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra(EXTRA_OPEN_FEED, true)
@@ -716,6 +733,7 @@ class FeedNotificationService @Inject constructor(
      * GrantEvent collector already navigates to in-app.
      */
     private fun showCriticalUseRequestedNotification(connectionId: String, requestId: String, secretLabel: String, operation: String) {
+        if (isAppForegrounded()) return
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra(EXTRA_OPEN_FEED, true)
@@ -750,6 +768,7 @@ class FeedNotificationService @Inject constructor(
      * gate the GrantEvent collector already navigates to in-app.
      */
     private fun showIdentityVerifyChallengedNotification(connectionId: String, requestId: String, challengeContext: String) {
+        if (isAppForegrounded()) return
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra(EXTRA_OPEN_FEED, true)
@@ -838,6 +857,37 @@ class FeedNotificationService @Inject constructor(
     }
 
     private fun messageNotificationId(connectionId: String): Int = ("msg:$connectionId").hashCode()
+
+    /**
+     * Clear the OS notification that was fired for an in-flight
+     * approval prompt. Call this from the corresponding approval
+     * ViewModel once the user has approved or denied — otherwise the
+     * shade entry sticks around pointing at a stale screen.
+     */
+    fun clearApprovalNotification(kind: ApprovalNotificationKind, requestId: String) {
+        try {
+            NotificationManagerCompat.from(context)
+                .cancel(approvalNotificationId(kind, requestId))
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to clear ${kind.tag} notification for $requestId", e)
+        }
+    }
+
+    private fun approvalNotificationId(kind: ApprovalNotificationKind, requestId: String): Int =
+        ("${kind.tag}:$requestId").hashCode()
+
+    /**
+     * True if the app is currently in the foreground. Used to suppress
+     * heads-up notifications for approval prompts when the in-app
+     * navigator already routes the user to the approval screen — no
+     * need to double-notify.
+     */
+    private fun isAppForegrounded(): Boolean = try {
+        androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.currentState
+            .isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)
+    } catch (_: Exception) {
+        false
+    }
 
     /**
      * Resolve a human-readable sender name from the connection cache.

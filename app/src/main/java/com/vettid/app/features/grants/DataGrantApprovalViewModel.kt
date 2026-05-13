@@ -4,6 +4,8 @@ import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.app.features.feed.ApprovalNotificationKind
+import com.vettid.app.features.feed.FeedNotificationService
 import com.vettid.app.features.feed.FeedRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -28,6 +30,7 @@ private const val TAG = "DataGrantApprovalVM"
 class DataGrantApprovalViewModel @Inject constructor(
     private val grants: GrantsRepository,
     private val feedRepository: FeedRepository,
+    private val notificationService: FeedNotificationService,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -65,7 +68,10 @@ class DataGrantApprovalViewModel @Inject constructor(
         viewModelScope.launch {
             _state.value = State.Submitting
             grants.approve(requestId, requestedExpiresAt, requestedMaxUses, requestedMode)
-                .onSuccess { _state.value = State.Approved }
+                .onSuccess {
+                    notificationService.clearApprovalNotification(ApprovalNotificationKind.DataRequest, requestId)
+                    _state.value = State.Approved
+                }
                 .onFailure {
                     Log.e(TAG, "approve", it)
                     _state.value = State.Error(it.message ?: "Approve failed")
@@ -78,7 +84,10 @@ class DataGrantApprovalViewModel @Inject constructor(
         viewModelScope.launch {
             _state.value = State.Submitting
             grants.deny(requestId, "")
-                .onSuccess { _state.value = State.Denied }
+                .onSuccess {
+                    notificationService.clearApprovalNotification(ApprovalNotificationKind.DataRequest, requestId)
+                    _state.value = State.Denied
+                }
                 .onFailure {
                     Log.e(TAG, "deny", it)
                     _state.value = State.Error(it.message ?: "Deny failed")

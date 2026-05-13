@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.crypto.CryptoManager
 import com.vettid.app.core.security.SecurePassword
 import com.vettid.app.core.storage.CredentialStore
+import com.vettid.app.features.feed.ApprovalNotificationKind
+import com.vettid.app.features.feed.FeedNotificationService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -34,6 +36,7 @@ class CriticalUseApprovalViewModel @Inject constructor(
     private val grants: GrantsRepository,
     private val cryptoManager: CryptoManager,
     private val credentialStore: CredentialStore,
+    private val notificationService: FeedNotificationService,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -76,7 +79,10 @@ class CriticalUseApprovalViewModel @Inject constructor(
                 credentialStore.removeUtk(utk.keyId)
 
                 result
-                    .onSuccess { _state.value = State.Approved }
+                    .onSuccess {
+                        notificationService.clearApprovalNotification(ApprovalNotificationKind.CriticalUse, requestId)
+                        _state.value = State.Approved
+                    }
                     .onFailure { fail(it.message ?: "Approve failed") }
             } catch (e: Exception) {
                 Log.e(TAG, "approve", e)
@@ -89,7 +95,10 @@ class CriticalUseApprovalViewModel @Inject constructor(
         if (requestId.isEmpty()) return
         viewModelScope.launch {
             grants.denyCriticalUse(requestId)
-                .onSuccess { _state.value = State.Denied }
+                .onSuccess {
+                    notificationService.clearApprovalNotification(ApprovalNotificationKind.CriticalUse, requestId)
+                    _state.value = State.Denied
+                }
                 .onFailure { fail(it.message ?: "Deny failed") }
         }
     }
