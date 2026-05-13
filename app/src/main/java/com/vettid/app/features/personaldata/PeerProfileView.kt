@@ -78,12 +78,15 @@ fun PeerProfileView(
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
-        PublishedProfileBadges(
-            dataCatalog = dataCatalog,
-            secretCatalog = secretCatalog,
-            handlers = peerHandlers.orEmpty(),
-        )
-        Spacer(modifier = Modifier.height(8.dp))
+        // 2026-05-13: dropped PublishedProfileBadges from the hero.
+        // The Data / Secrets / Handlers chips duplicated information
+        // already reachable via Connection Detail → "Their catalog"
+        // and → "Data sharing" — every chip's dialog had a redundant
+        // counterpart on a dedicated screen. The vars above stay so
+        // future per-field rendering inside BusinessCardView can read
+        // the catalog without reconstructing it.
+        @Suppress("UNUSED_VARIABLE") val _dataCatalogRef = dataCatalog
+        @Suppress("UNUSED_VARIABLE") val _secretCatalogRef = secretCatalog
         BusinessCardView(
             profile = profile,
             isReadOnly = true,
