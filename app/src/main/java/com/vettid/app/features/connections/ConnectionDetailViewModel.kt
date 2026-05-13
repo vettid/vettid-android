@@ -59,9 +59,27 @@ class ConnectionDetailViewModel @Inject constructor(
     private val _verifying = MutableStateFlow(false)
     val verifying: StateFlow<Boolean> = _verifying.asStateFlow()
 
+    /**
+     * Persistent verify-identity state, hydrated from the vault and
+     * updated on every AuthenticateResult. Outlives screen entries
+     * (the vault is the source of truth) so the Detail row can render
+     * "Verified 3 minutes ago" without a fresh challenge.
+     */
+    private val _verifyState = MutableStateFlow<com.vettid.app.features.grants.VerifyStatePayload?>(null)
+    val verifyState: StateFlow<com.vettid.app.features.grants.VerifyStatePayload?> = _verifyState.asStateFlow()
+
     init {
-        // Listen for connection.authenticate verdicts so the snackbar
-        // surfaces as soon as the peer's response lands.
+        // Hydrate cached verify state on entry. Best-effort — a vault
+        // miss leaves verifyState null and the UI shows "Not yet verified".
+        viewModelScope.launch {
+            grants.getVerifyState(connectionId)
+                .onSuccess { _verifyState.value = it }
+                .onFailure { Log.d(TAG, "verify-state hydrate skipped: ${it.message}") }
+        }
+        // Listen for connection.authenticate verdicts. Updates two
+        // things: the transient Snackbar (still useful when the user is
+        // looking at the Detail screen) AND the persistent state row
+        // (which the row affordance reads on every recomposition).
         viewModelScope.launch {
             ownerSpaceClient.grantEvents.collect { ev ->
                 if (ev is GrantEvent.AuthenticateResult && ev.connectionId == connectionId) {
@@ -71,6 +89,20 @@ class ConnectionDetailViewModel @Inject constructor(
                             else "Verification failed: ${ev.failureReason.ifEmpty { "unknown" }}",
                     )
                     _verifying.value = false
+                    val nowIso = java.time.Instant.now().toString()
+                    val prior = _verifyState.value
+                    _verifyState.value = (prior ?: com.vettid.app.features.grants.VerifyStatePayload(
+                        lastOutboundAt = "",
+                        lastOutboundOk = false,
+                        lastOutboundReason = "",
+                        lastInboundAt = "",
+                        lastInboundOk = false,
+                        lastInboundReason = "",
+                    )).copy(
+                        lastOutboundAt = nowIso,
+                        lastOutboundOk = ev.authenticated,
+                        lastOutboundReason = ev.failureReason,
+                    )
                 }
             }
         }

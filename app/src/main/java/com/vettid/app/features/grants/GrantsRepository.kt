@@ -192,6 +192,33 @@ class GrantsRepository @Inject constructor(
         return runSimple("connection-authenticate.deny", payload)
     }
 
+    /**
+     * Read cached verify-identity state for a single connection. The
+     * vault persists last outcome + timestamp on both inbound and
+     * outbound sides; the detail screen primarily renders the
+     * outbound fields ("when did I last verify them?").
+     */
+    suspend fun getVerifyState(connectionId: String): Result<VerifyStatePayload?> {
+        val payload = JsonObject().apply { addProperty("connection_id", connectionId) }
+        return when (val resp = ownerSpaceClient.sendAndAwaitResponse("connection-authenticate.get", payload, 10_000L)) {
+            is VaultResponse.HandlerResult -> {
+                val state = resp.result?.getAsJsonObject("state") ?: return Result.success(null)
+                Result.success(
+                    VerifyStatePayload(
+                        lastOutboundAt = state.get("last_outbound_at")?.asString.orEmpty(),
+                        lastOutboundOk = state.get("last_outbound_ok")?.asBoolean ?: false,
+                        lastOutboundReason = state.get("last_outbound_reason")?.asString.orEmpty(),
+                        lastInboundAt = state.get("last_inbound_at")?.asString.orEmpty(),
+                        lastInboundOk = state.get("last_inbound_ok")?.asBoolean ?: false,
+                        lastInboundReason = state.get("last_inbound_reason")?.asString.orEmpty(),
+                    )
+                )
+            }
+            is VaultResponse.Error -> Result.failure(Exception(resp.message))
+            else -> Result.failure(Exception("unexpected response"))
+        }
+    }
+
     /** Issue an authentication challenge to a connection. Result arrives via GrantEvent.AuthenticateResult. */
     suspend fun requestAuthenticate(connectionId: String, context: String): Result<String> {
         val payload = JsonObject().apply {
@@ -280,6 +307,26 @@ class GrantsRepository @Inject constructor(
             else -> Result.failure(Exception("unexpected response"))
         }
     }
+}
+
+/**
+ * Persistent verify-identity state cached by the vault per connection.
+ * Outbound = we challenged them. Inbound = they challenged us. The
+ * Detail screen primarily renders the outbound fields (when did I last
+ * verify them?) but both are exposed so the same payload powers
+ * per-side audit displays.
+ */
+data class VerifyStatePayload(
+    val lastOutboundAt: String,
+    val lastOutboundOk: Boolean,
+    val lastOutboundReason: String,
+    val lastInboundAt: String,
+    val lastInboundOk: Boolean,
+    val lastInboundReason: String,
+) {
+    /** True if we have ever issued or received a verify challenge. */
+    val hasAnyHistory: Boolean
+        get() = lastOutboundAt.isNotBlank() || lastInboundAt.isNotBlank()
 }
 
 data class GrantSummary(

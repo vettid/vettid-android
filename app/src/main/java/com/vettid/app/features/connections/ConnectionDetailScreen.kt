@@ -163,11 +163,15 @@ fun ConnectionDetailScreen(
     val isActiveConnection = (state as? ConnectionDetailState.Loaded)?.connection?.status == ConnectionStatus.ACTIVE
     val connectionId = (state as? ConnectionDetailState.Loaded)?.connection?.connectionId
 
-    // Manage Connection rows replaced the top-bar overflow menu.
-    // Rotate / History / Remove are inline buttons in that section
-    // so they stay discoverable without a kebab.
+    // Manage actions moved to an overflow menu in the top bar so the
+    // detail body stays focused on Them/You content. The menu opens
+    // dialogs for the few rarely-used actions (rotate keys, remove
+    // connection, history) — primary in-screen flows now live on the
+    // two tabs instead.
     val isRotating = (state as? ConnectionDetailState.Loaded)?.isRotating == true
     val isRevoking = (state as? ConnectionDetailState.Loaded)?.isRevoking == true
+    var overflowOpen by remember { mutableStateOf(false) }
+    var showRotateInfo by remember { mutableStateOf(false) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -178,6 +182,50 @@ fun ConnectionDetailScreen(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back"
                         )
+                    }
+                },
+                actions = {
+                    if (isActiveConnection) {
+                        IconButton(onClick = { overflowOpen = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "More")
+                        }
+                        DropdownMenu(
+                            expanded = overflowOpen,
+                            onDismissRequest = { overflowOpen = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("History") },
+                                onClick = {
+                                    overflowOpen = false
+                                    onShowHistory()
+                                },
+                                leadingIcon = { Icon(Icons.Default.History, null) },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Rotate keys") },
+                                onClick = {
+                                    overflowOpen = false
+                                    showRotateInfo = true
+                                },
+                                enabled = !isRotating,
+                                leadingIcon = {
+                                    if (isRotating) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                                    else Icon(Icons.Default.Refresh, null)
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Remove connection", color = MaterialTheme.colorScheme.error) },
+                                onClick = {
+                                    overflowOpen = false
+                                    viewModel.onRevokeClick()
+                                },
+                                enabled = !isRevoking,
+                                leadingIcon = {
+                                    if (isRevoking) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.error)
+                                    else Icon(Icons.Default.PersonRemove, null, tint = MaterialTheme.colorScheme.error)
+                                },
+                            )
+                        }
                     }
                 },
             )
@@ -201,6 +249,7 @@ fun ConnectionDetailScreen(
                 val isRequestingPeerLocation by viewModel.isRequestingPeerLocation.collectAsState()
                 val verifyResult by viewModel.verifyResult.collectAsState()
                 val isVerifying by viewModel.verifying.collectAsState()
+                val verifyState by viewModel.verifyState.collectAsState()
                 // Surface connection.authenticate verdict as a Snackbar.
                 LaunchedEffect(verifyResult) {
                     val r = verifyResult ?: return@LaunchedEffect
@@ -251,9 +300,12 @@ fun ConnectionDetailScreen(
                     onNavigateToGrants = onNavigateToGrants,
                     onVerifyIdentity = { viewModel.verifyIdentity() },
                     isVerifyingIdentity = isVerifying,
+                    verifyState = verifyState,
                     peerLocation = peerLocation,
                     isRequestingPeerLocation = isRequestingPeerLocation,
                     onRequestPeerLocation = { viewModel.requestPeerLocation() },
+                    showRotateInfo = showRotateInfo,
+                    onDismissRotateInfo = { showRotateInfo = false },
                     modifier = Modifier.padding(padding)
                 )
             }
@@ -312,15 +364,21 @@ private fun LoadedContent(
     onNavigateToGrants: (String) -> Unit = {},
     onVerifyIdentity: () -> Unit = {},
     isVerifyingIdentity: Boolean = false,
+    verifyState: com.vettid.app.features.grants.VerifyStatePayload? = null,
     peerLocation: com.vettid.app.core.nats.CachedPeerLocation? = null,
     isRequestingPeerLocation: Boolean = false,
     onRequestPeerLocation: () -> Unit = {},
+    showRotateInfo: Boolean = false,
+    onDismissRotateInfo: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val connectedDateFormatter = java.text.SimpleDateFormat("MMMM d, yyyy 'at' h:mm a", java.util.Locale.getDefault())
     val connectedDate = connectedDateFormatter.format(java.util.Date(
         if (connection.createdAt < 10000000000L) connection.createdAt * 1000 else connection.createdAt
     ))
+    val peerShortName = connection.peerDisplayName.takeIf { it.isNotBlank() }?.substringBefore(' ') ?: "this connection"
+    val isActive = connection.status == ConnectionStatus.ACTIVE
+    var selectedTab by remember { mutableStateOf(0) }
 
     Column(
         modifier = modifier
@@ -328,12 +386,11 @@ private fun LoadedContent(
             .verticalScroll(rememberScrollState()),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        // === 1. PUBLIC PROFILE ===
-        // Rendered through the same BusinessCardView used for the
-        // user's own public-profile preview so both sides show the
-        // same hero avatar / clickable contact card / categorized
-        // fields / public keys layout. PublishedProfileData is built
-        // in ConnectionDetailViewModel from the cached peer profile.
+        // === 1. PUBLIC PROFILE (header, always visible) ===
+        // Same BusinessCardView used for the user's own public-profile
+        // preview — hero avatar + clickable contact card + public keys
+        // header so the page identity is unambiguous regardless of
+        // which tab is active.
         com.vettid.app.features.personaldata.PeerProfileView(
             profile = peerPublishedProfile,
             modifier = Modifier.fillMaxWidth(),
@@ -344,177 +401,232 @@ private fun LoadedContent(
             isPeerOnline = isPeerOnline,
         )
 
-        // Action buttons + detail sections below the profile use the
-        // screen's side padding. PeerProfileView handles its own
-        // horizontal padding internally, so we only pad the rest.
+        // === 2. TABS — Them / You ===
+        // Split the page by data-ownership boundary: "Them" surfaces
+        // peer-sourced content + actions on the peer (verify their
+        // identity, view their location). "You" surfaces what you
+        // share + grants + your sharing toggles. Rare manage actions
+        // (rotate, remove, history) moved to the top-bar overflow.
+        Spacer(modifier = Modifier.height(8.dp))
+        TabRow(selectedTabIndex = selectedTab, modifier = Modifier.fillMaxWidth()) {
+            Tab(
+                selected = selectedTab == 0,
+                onClick = { selectedTab = 0 },
+                text = { Text("Them") },
+            )
+            Tab(
+                selected = selectedTab == 1,
+                onClick = { selectedTab = 1 },
+                text = { Text("You") },
+            )
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-
-        // === 2. SHARING ===
-        // Two scoped entries: peer's catalog (request flow) and the
-        // user's outbound sharing settings (presence + location +
-        // policy editor). Each one navigates to its own focused
-        // screen so the actions on each side stay unambiguous.
-        Spacer(modifier = Modifier.height(24.dp))
-        Text(
-            text = "SHARING",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
-        )
-        val peerShortName = connection.peerDisplayName.takeIf { it.isNotBlank() }?.substringBefore(' ') ?: "this connection"
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column {
-                ListItem(
-                    modifier = Modifier.clickable(enabled = connection.status == ConnectionStatus.ACTIVE) {
-                        onNavigateToPeerCatalog(connection.connectionId)
-                    },
-                    headlineContent = { Text("Their catalog") },
-                    supportingContent = { Text("Items $peerShortName has published — request access here") },
-                    leadingContent = { Icon(Icons.Default.Inbox, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                    trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                )
-                HorizontalDivider()
-                ListItem(
-                    modifier = Modifier.clickable(enabled = connection.status == ConnectionStatus.ACTIVE) {
-                        onNavigateToMySharing(connection.connectionId)
-                    },
-                    headlineContent = { Text("My sharing") },
-                    supportingContent = { Text("Online presence, location, and what $peerShortName can request from you") },
-                    leadingContent = { Icon(Icons.Default.Outbox, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                    trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                )
-                HorizontalDivider()
-                ListItem(
-                    modifier = Modifier.clickable(enabled = connection.status == ConnectionStatus.ACTIVE) {
-                        onNavigateToGrants(connection.connectionId)
-                    },
-                    headlineContent = { Text("Data sharing") },
-                    supportingContent = { Text("Active grants, pending requests, and what $peerShortName has shared with you") },
-                    leadingContent = { Icon(Icons.Default.Inbox, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                    trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                )
-                HorizontalDivider()
-                PeerLocationRow(
-                    peerName = peerShortName,
+            Spacer(modifier = Modifier.height(16.dp))
+            when (selectedTab) {
+                0 -> ThemTabContent(
+                    peerShortName = peerShortName,
+                    connectionId = connection.connectionId,
+                    isActive = isActive,
+                    verifyState = verifyState,
+                    isVerifyingIdentity = isVerifyingIdentity,
+                    onVerifyIdentity = onVerifyIdentity,
                     peerLocation = peerLocation,
-                    isRequesting = isRequestingPeerLocation,
-                    enabled = connection.status == ConnectionStatus.ACTIVE,
+                    isRequestingPeerLocation = isRequestingPeerLocation,
                     onRequestPeerLocation = onRequestPeerLocation,
+                    onNavigateToPeerCatalog = onNavigateToPeerCatalog,
+                )
+                1 -> YouTabContent(
+                    peerShortName = peerShortName,
+                    connectionId = connection.connectionId,
+                    isActive = isActive,
+                    connectedDate = connectedDate,
+                    onNavigateToMySharing = onNavigateToMySharing,
+                    onNavigateToGrants = onNavigateToGrants,
                 )
             }
-        }
 
-        // === 3. MANAGE CONNECTION ===
-        Spacer(modifier = Modifier.height(24.dp))
-        Text(
-            text = "MANAGE CONNECTION",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 8.dp)
-        )
-
-        var showRotateInfo by remember { mutableStateOf(false) }
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column {
-                // Connected date stays at the top — it's a passive
-                // info row and the natural mental anchor for the
-                // section.
-                ListItem(
-                    headlineContent = { Text("Connected") },
-                    supportingContent = { Text(connectedDate) },
-                    leadingContent = { Icon(Icons.Default.Event, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                )
-                HorizontalDivider()
-                ListItem(
-                    modifier = Modifier.clickable(enabled = connection.status == ConnectionStatus.ACTIVE) { onShowHistory() },
-                    headlineContent = { Text("History") },
-                    supportingContent = { Text("Calls, messages, and other interactions") },
-                    leadingContent = { Icon(Icons.Default.History, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                    trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                )
-                HorizontalDivider()
-                ListItem(
-                    modifier = Modifier.clickable(
-                        enabled = connection.status == ConnectionStatus.ACTIVE && !isVerifyingIdentity,
-                    ) { onVerifyIdentity() },
-                    headlineContent = { Text("Verify identity") },
-                    supportingContent = {
-                        Text(
-                            if (isVerifyingIdentity) "Waiting for $peerShortName's vault to sign…"
-                            else "Send a challenge so $peerShortName's vault proves it holds the credential."
-                        )
+            if (showRotateInfo) {
+                RotateKeysDialog(
+                    peerIdentityKey = peerIdentityKey,
+                    peerPublicKey = peerPublicKey,
+                    peerUserGuid = peerUserGuid,
+                    isRotating = isRotating,
+                    onConfirm = {
+                        onDismissRotateInfo()
+                        onRotateKeysClick()
                     },
-                    leadingContent = { Icon(Icons.Default.VerifiedUser, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                    trailingContent = {
-                        if (isVerifyingIdentity) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        else Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    },
-                )
-                HorizontalDivider()
-                ListItem(
-                    modifier = Modifier.clickable(enabled = !isRotating && connection.status == ConnectionStatus.ACTIVE) {
-                        showRotateInfo = true
-                    },
-                    headlineContent = { Text("Rotate keys") },
-                    supportingContent = {
-                        Column {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Lock, null, modifier = Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary)
-                                Spacer(Modifier.width(4.dp))
-                                Text("End-to-end encrypted", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-                            }
-                            Text(
-                                "Generate a fresh shared encryption key with this peer",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    },
-                    leadingContent = {
-                        if (isRotating) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        else Icon(Icons.Default.Refresh, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    },
-                    trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
-                )
-                HorizontalDivider()
-                ListItem(
-                    modifier = Modifier.clickable(enabled = !isRevoking && connection.status == ConnectionStatus.ACTIVE) {
-                        onRevokeClick()
-                    },
-                    headlineContent = { Text("Remove connection", color = MaterialTheme.colorScheme.error) },
-                    supportingContent = { Text("Revoke this connection and zero out shared keys", color = MaterialTheme.colorScheme.error.copy(alpha = 0.7f)) },
-                    leadingContent = {
-                        if (isRevoking) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.error)
-                        else Icon(Icons.Default.PersonRemove, null, tint = MaterialTheme.colorScheme.error)
-                    },
+                    onDismiss = onDismissRotateInfo,
                 )
             }
-        }
 
-        if (showRotateInfo) {
-            RotateKeysDialog(
-                peerIdentityKey = peerIdentityKey,
-                peerPublicKey = peerPublicKey,
-                peerUserGuid = peerUserGuid,
-                isRotating = isRotating,
-                onConfirm = {
-                    showRotateInfo = false
-                    onRotateKeysClick()
+            Spacer(modifier = Modifier.height(32.dp))
+        }
+    }
+}
+
+/**
+ * "Them" tab — peer-sourced data and actions on the peer.
+ * Verify identity row mirrors the location-row pattern: persistent
+ * status line with a re-request affordance, no fleeting Snackbar UX.
+ */
+@Composable
+private fun ThemTabContent(
+    peerShortName: String,
+    connectionId: String,
+    isActive: Boolean,
+    verifyState: com.vettid.app.features.grants.VerifyStatePayload?,
+    isVerifyingIdentity: Boolean,
+    onVerifyIdentity: () -> Unit,
+    peerLocation: com.vettid.app.core.nats.CachedPeerLocation?,
+    isRequestingPeerLocation: Boolean,
+    onRequestPeerLocation: () -> Unit,
+    onNavigateToPeerCatalog: (String) -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column {
+            ListItem(
+                modifier = Modifier.clickable(enabled = isActive) {
+                    onNavigateToPeerCatalog(connectionId)
                 },
-                onDismiss = { showRotateInfo = false },
+                headlineContent = { Text("Their catalog") },
+                supportingContent = { Text("Items $peerShortName has published — request access here") },
+                leadingContent = { Icon(Icons.Default.Inbox, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+            )
+            HorizontalDivider()
+            PeerLocationRow(
+                peerName = peerShortName,
+                peerLocation = peerLocation,
+                isRequesting = isRequestingPeerLocation,
+                enabled = isActive,
+                onRequestPeerLocation = onRequestPeerLocation,
+            )
+            HorizontalDivider()
+            VerifyIdentityRow(
+                peerName = peerShortName,
+                verifyState = verifyState,
+                isVerifying = isVerifyingIdentity,
+                enabled = isActive,
+                onVerifyIdentity = onVerifyIdentity,
             )
         }
-
-        Spacer(modifier = Modifier.height(32.dp))
-        } // end padded inner Column
     }
+}
+
+/**
+ * "You" tab — what you share with the peer + management of that
+ * sharing relationship. The connected-date row stays here as a
+ * passive info anchor.
+ */
+@Composable
+private fun YouTabContent(
+    peerShortName: String,
+    connectionId: String,
+    isActive: Boolean,
+    connectedDate: String,
+    onNavigateToMySharing: (String) -> Unit,
+    onNavigateToGrants: (String) -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column {
+            ListItem(
+                modifier = Modifier.clickable(enabled = isActive) {
+                    onNavigateToMySharing(connectionId)
+                },
+                headlineContent = { Text("My sharing") },
+                supportingContent = { Text("Online presence, location, and what $peerShortName can request from you") },
+                leadingContent = { Icon(Icons.Default.Outbox, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+            )
+            HorizontalDivider()
+            ListItem(
+                modifier = Modifier.clickable(enabled = isActive) {
+                    onNavigateToGrants(connectionId)
+                },
+                headlineContent = { Text("Data sharing") },
+                supportingContent = { Text("Active grants, pending requests, and what $peerShortName has shared with you") },
+                leadingContent = { Icon(Icons.Default.Inbox, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+            )
+            HorizontalDivider()
+            ListItem(
+                headlineContent = { Text("Connected") },
+                supportingContent = { Text(connectedDate) },
+                leadingContent = { Icon(Icons.Default.Event, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+            )
+        }
+    }
+}
+
+/**
+ * "Verify identity" row — mirrors PeerLocationRow's freshness pattern.
+ *
+ *   - never verified    → "Verify $peer's identity" + tap-to-request,
+ *                          shield icon, chevron trailing
+ *   - last verified ok  → "Verified $freshness" + a refresh affordance
+ *                          to challenge again
+ *   - last failed       → "Verification failed $freshness" + refresh
+ *                          affordance to retry
+ *   - in flight         → spinner, disabled body, "Waiting…" subtitle
+ */
+@Composable
+private fun VerifyIdentityRow(
+    peerName: String,
+    verifyState: com.vettid.app.features.grants.VerifyStatePayload?,
+    isVerifying: Boolean,
+    enabled: Boolean,
+    onVerifyIdentity: () -> Unit,
+) {
+    val hasOutbound = !verifyState?.lastOutboundAt.isNullOrBlank()
+    val freshness = remember(verifyState?.lastOutboundAt) {
+        verifyState?.lastOutboundAt?.takeIf { it.isNotBlank() }?.let { formatLocationFreshness(it) } ?: ""
+    }
+    ListItem(
+        modifier = Modifier.clickable(enabled = enabled && !isVerifying) { onVerifyIdentity() },
+        headlineContent = {
+            Text(if (hasOutbound) "$peerName's identity" else "Verify $peerName's identity")
+        },
+        supportingContent = {
+            when {
+                isVerifying -> Text("Waiting for $peerName's vault to sign…")
+                !hasOutbound -> Text("Send a challenge so $peerName's vault proves it holds the credential")
+                verifyState?.lastOutboundOk == true -> Text("Verified $freshness")
+                else -> {
+                    val reason = verifyState?.lastOutboundReason?.takeIf { it.isNotBlank() }?.let { " ($it)" } ?: ""
+                    Text("Verification failed $freshness$reason")
+                }
+            }
+        },
+        leadingContent = {
+            if (isVerifying) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+            } else {
+                Icon(
+                    Icons.Default.VerifiedUser,
+                    null,
+                    tint = if (verifyState?.lastOutboundOk == true) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        trailingContent = {
+            if (isVerifying) {
+                // Body spinner already showing — no trailing affordance.
+            } else if (hasOutbound) {
+                IconButton(onClick = onVerifyIdentity, enabled = enabled) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Verify again", tint = MaterialTheme.colorScheme.primary)
+                }
+            } else {
+                Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        },
+    )
 }
 
 @Composable
