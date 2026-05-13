@@ -10,6 +10,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -34,6 +37,8 @@ fun SecurityAuditLogScreen(
     viewModel: SecurityAuditLogViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
+    val filters by viewModel.filters.collectAsState()
+    var showFilters by remember { mutableStateOf(false) }
 
     Scaffold(
         topBar = {
@@ -45,6 +50,13 @@ fun SecurityAuditLogScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { showFilters = !showFilters }) {
+                        Icon(
+                            if (filters.hasActive) Icons.Default.FilterAlt else Icons.Default.FilterAltOff,
+                            contentDescription = if (showFilters) "Hide filters" else "Show filters",
+                            tint = if (filters.hasActive) MaterialTheme.colorScheme.primary else LocalContentColor.current,
+                        )
+                    }
                     IconButton(onClick = { viewModel.refresh() }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                     }
@@ -52,46 +64,93 @@ fun SecurityAuditLogScreen(
             )
         }
     ) { padding ->
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            when (val currentState = state) {
-                is SecurityAuditLogState.Loading -> {
-                    CircularProgressIndicator(
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                }
+            if (showFilters || filters.hasActive) {
+                FilterChipRow(
+                    filters = filters,
+                    onToggle = { id -> viewModel.toggleCategory(id) },
+                    onClear = { viewModel.clearFilters() },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                when (val currentState = state) {
+                    is SecurityAuditLogState.Loading -> {
+                        CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                    }
 
-                is SecurityAuditLogState.Empty -> {
-                    EmptyAuditLogContent(
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                }
+                    is SecurityAuditLogState.Empty -> {
+                        EmptyAuditLogContent(modifier = Modifier.align(Alignment.Center))
+                    }
 
-                is SecurityAuditLogState.Success -> {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        ChainStatusPill(
-                            status = currentState.chainStatus,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                        )
-                        AuditLogList(
-                            entries = currentState.entries,
-                            modifier = Modifier.fillMaxSize()
+                    is SecurityAuditLogState.Success -> {
+                        Column(modifier = Modifier.fillMaxSize()) {
+                            ChainStatusPill(
+                                status = currentState.chainStatus,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                            )
+                            AuditLogList(
+                                entries = currentState.entries,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+
+                    is SecurityAuditLogState.Error -> {
+                        ErrorContent(
+                            message = currentState.message,
+                            onRetry = { viewModel.refresh() },
+                            modifier = Modifier.align(Alignment.Center)
                         )
                     }
                 }
+            }
+        }
+    }
+}
 
-                is SecurityAuditLogState.Error -> {
-                    ErrorContent(
-                        message = currentState.message,
-                        onRetry = { viewModel.refresh() },
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                }
+/**
+ * Horizontal scroll of chips, one per category. Selected chips fill;
+ * the trailing Clear pill resets all filters. Visibility controlled
+ * by the parent so the row hides itself when no filter is active and
+ * the user hasn't asked to see it.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun FilterChipRow(
+    filters: SecurityAuditFilters,
+    onToggle: (String) -> Unit,
+    onClear: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = modifier,
+    ) {
+        FlowRow(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            SECURITY_AUDIT_CATEGORIES.forEach { cat ->
+                FilterChip(
+                    selected = cat.id in filters.selectedCategories,
+                    onClick = { onToggle(cat.id) },
+                    label = { Text(cat.label) },
+                )
+            }
+            if (filters.hasActive) {
+                AssistChip(
+                    onClick = onClear,
+                    label = { Text("Clear all") },
+                    leadingIcon = { Icon(Icons.Default.Close, null, modifier = Modifier.size(16.dp)) },
+                )
             }
         }
     }

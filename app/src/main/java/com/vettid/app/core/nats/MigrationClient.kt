@@ -123,11 +123,29 @@ class MigrationClient @Inject constructor(
      * @param limit Maximum number of entries to return
      * @return List of audit log entries
      */
-    suspend fun getAuditLog(limit: Int = 50): Result<AuditLogPage> {
+    suspend fun getAuditLog(
+        limit: Int = 50,
+        eventTypes: List<String>? = null,
+        startTime: Long? = null,
+        endTime: Long? = null,
+    ): Result<AuditLogPage> {
         Log.d(TAG, "Fetching audit log")
 
         val payload = JsonObject().apply {
             addProperty("limit", limit)
+            // event_types: Unix-second timestamps, no transformation
+            // needed — vault QueryAuditEvents accepts both filters.
+            if (!eventTypes.isNullOrEmpty()) {
+                val arr = com.google.gson.JsonArray()
+                eventTypes.forEach { arr.add(it) }
+                add("event_types", arr)
+            }
+            if (startTime != null && startTime > 0L) {
+                addProperty("start_time", startTime)
+            }
+            if (endTime != null && endTime > 0L) {
+                addProperty("end_time", endTime)
+            }
         }
 
         val response = ownerSpaceClient.sendAndAwaitResponse("audit.query", payload, TIMEOUT_MS)
