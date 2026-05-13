@@ -24,6 +24,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -409,9 +411,21 @@ private fun LoadedContent(
     // need to plumb a flag through three layers; the effect picks the
     // signal up and the row reads `pulseVerify` to animate.
     var pulseVerify by remember { mutableStateOf(false) }
-    LaunchedEffect(initialFocus) {
+    // y-position of the verify row in the scrollable column so we can
+    // scroll-anchor on focus=verify. Reported by an onGloballyPositioned
+    // modifier on the row itself.
+    var verifyRowY by remember { mutableStateOf<Int?>(null) }
+    val scrollState = rememberScrollState()
+    LaunchedEffect(initialFocus, verifyRowY) {
         if (initialFocus == "verify") {
             selectedTab = 0
+            // Wait until the Them tab has rendered the verify row and
+            // reported its y-position. If we got both signals (focus +
+            // y), scroll the column so the verify row is in view, then
+            // start the pulse.
+            verifyRowY?.let { target ->
+                scrollState.animateScrollTo((target - 80).coerceAtLeast(0))
+            }
             pulseVerify = true
             onFocusConsumed()
             kotlinx.coroutines.delay(2400)
@@ -422,7 +436,7 @@ private fun LoadedContent(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState()),
+            .verticalScroll(scrollState),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         // === 1. PUBLIC PROFILE (header, always visible) ===
@@ -476,6 +490,7 @@ private fun LoadedContent(
                     isVerifyingIdentity = isVerifyingIdentity,
                     onVerifyIdentity = onVerifyIdentity,
                     pulseVerify = pulseVerify,
+                    onVerifyRowPositioned = { y -> verifyRowY = y },
                     peerLocation = peerLocation,
                     isRequestingPeerLocation = isRequestingPeerLocation,
                     onRequestPeerLocation = onRequestPeerLocation,
@@ -524,6 +539,7 @@ private fun ThemTabContent(
     isVerifyingIdentity: Boolean,
     onVerifyIdentity: () -> Unit,
     pulseVerify: Boolean,
+    onVerifyRowPositioned: (Int) -> Unit,
     peerLocation: com.vettid.app.core.nats.CachedPeerLocation?,
     isRequestingPeerLocation: Boolean,
     onRequestPeerLocation: () -> Unit,
@@ -549,14 +565,20 @@ private fun ThemTabContent(
                 onRequestPeerLocation = onRequestPeerLocation,
             )
             HorizontalDivider()
-            VerifyIdentityRow(
-                peerName = peerShortName,
-                verifyState = verifyState,
-                isVerifying = isVerifyingIdentity,
-                enabled = isActive,
-                onVerifyIdentity = onVerifyIdentity,
-                pulse = pulseVerify,
-            )
+            Box(
+                modifier = Modifier.onGloballyPositioned { coords ->
+                    onVerifyRowPositioned(coords.positionInRoot().y.toInt())
+                },
+            ) {
+                VerifyIdentityRow(
+                    peerName = peerShortName,
+                    verifyState = verifyState,
+                    isVerifying = isVerifyingIdentity,
+                    enabled = isActive,
+                    onVerifyIdentity = onVerifyIdentity,
+                    pulse = pulseVerify,
+                )
+            }
         }
     }
 }

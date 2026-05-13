@@ -581,23 +581,21 @@ fun VettIDApp(
                     val sourceId = pendingNotificationSourceId!!
                     pendingNotificationEventType = null
                     pendingNotificationSourceId = null
-                    navController.navigate(Screen.Main.route) {
-                        popUpTo(0) { inclusive = true }
-                    }
                     // Events with a dedicated approval screen are already
-                    // routed by the grantEvents collector below — landing
-                    // on Main and letting that collector layer the approval
-                    // screen on top avoids the race that briefly flashed
-                    // the approval screen and then overwrote it with a
-                    // ConnectionDetail navigation here. Only events that
-                    // *don't* have an approval screen need an explicit
-                    // navigation in this block.
+                    // routed by the grantEvents collector below — leaving
+                    // the back stack alone here avoids stomping on an
+                    // approval screen the collector has already pushed
+                    // (or is about to push) when the user taps the
+                    // notification from the shade.
                     val approvalEvent = eventType in setOf(
                         "connection.identity-verify-challenged",
                         "connection.critical-secret-use-requested",
                         "connection.data-request-received",
                     )
                     if (!approvalEvent) {
+                        navController.navigate(Screen.Main.route) {
+                            popUpTo(0) { inclusive = true }
+                        }
                         when {
                             eventType?.startsWith("message.") == true ->
                                 navController.navigate(Screen.Conversation.createRoute(sourceId))
