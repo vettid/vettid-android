@@ -1,13 +1,23 @@
 package com.vettid.app.features.grants
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.vettid.app.core.security.SecurePassword
@@ -27,6 +37,14 @@ fun CriticalUseApprovalScreen(
 ) {
     val state by viewModel.state.collectAsState()
     var password by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
+    var detailsExpanded by remember { mutableStateOf(false) }
+    val submit: () -> Unit = submit@{
+        if (password.isBlank()) return@submit
+        if (state is CriticalUseApprovalViewModel.State.Authenticating) return@submit
+        viewModel.approve(SecurePassword.fromString(password))
+        password = ""
+    }
 
     LaunchedEffect(state) {
         if (state is CriticalUseApprovalViewModel.State.Approved ||
@@ -49,6 +67,7 @@ fun CriticalUseApprovalScreen(
             modifier = Modifier
                 .padding(padding)
                 .fillMaxSize()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 20.dp),
         ) {
             Icon(
@@ -70,26 +89,66 @@ fun CriticalUseApprovalScreen(
             if (viewModel.context.isNotBlank()) {
                 DetailRow("Context", viewModel.context)
             }
-            Spacer(Modifier.height(12.dp))
-
-            Text(
-                "Your password (encrypted) is sent to your vault enclave, which decrypts the secret, runs the operation, and wipes the key from memory. The secret material never exists outside the enclave — only the operation's result is shared with the peer.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(24.dp))
-
-            HorizontalDivider()
             Spacer(Modifier.height(16.dp))
+
+            // Collapsible privacy details — same pattern as verify
+            // approval so the screen stays light by default.
+            Surface(
+                onClick = { detailsExpanded = !detailsExpanded },
+                shape = MaterialTheme.shapes.medium,
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "What happens when I approve?",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Icon(
+                            imageVector = if (detailsExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = if (detailsExpanded) "Hide details" else "Show details",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (detailsExpanded) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Your password (encrypted) is sent to your vault enclave, which decrypts the secret, runs the operation, and wipes the key from memory. The secret material never exists outside the enclave — only the operation's result is shared with the peer.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(24.dp))
 
             OutlinedTextField(
                 value = password,
                 onValueChange = { password = it },
-                label = { Text("Enter your password to approve") },
-                visualTransformation = PasswordVisualTransformation(),
+                label = { Text("Your password") },
+                visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
                 enabled = state !is CriticalUseApprovalViewModel.State.Authenticating,
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    capitalization = KeyboardCapitalization.None,
+                    autoCorrect = false,
+                    imeAction = ImeAction.Done,
+                ),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                    onDone = { submit() },
+                ),
+                trailingIcon = {
+                    IconButton(onClick = { showPassword = !showPassword }) {
+                        Icon(
+                            imageVector = if (showPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                            contentDescription = if (showPassword) "Hide password" else "Show password",
+                        )
+                    }
+                },
             )
             Spacer(Modifier.height(4.dp))
             Text(
@@ -108,7 +167,7 @@ fun CriticalUseApprovalScreen(
                 )
             }
 
-            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.height(24.dp))
 
             if (state is CriticalUseApprovalViewModel.State.Authenticating) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
@@ -125,12 +184,7 @@ fun CriticalUseApprovalScreen(
                     modifier = Modifier.weight(1f),
                 ) { Text("Deny") }
                 Button(
-                    onClick = {
-                        if (password.isNotBlank()) {
-                            viewModel.approve(SecurePassword.fromString(password))
-                            password = ""
-                        }
-                    },
+                    onClick = submit,
                     enabled = password.isNotBlank() && state !is CriticalUseApprovalViewModel.State.Authenticating,
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(

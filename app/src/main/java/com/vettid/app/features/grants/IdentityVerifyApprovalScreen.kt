@@ -6,6 +6,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material.icons.filled.Visibility
@@ -16,6 +18,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
@@ -43,6 +47,17 @@ fun IdentityVerifyApprovalScreen(
     val state by viewModel.state.collectAsState()
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
+    var detailsExpanded by remember { mutableStateOf(false) }
+    // Click handler the password field's IME "Done" key fires — mirrors
+    // the Approve button so the user can finish entry without taking a
+    // hand off the keyboard. Disabled flow matches the button's enabled
+    // predicate (non-blank password, not currently submitting).
+    val submit: () -> Unit = submit@{
+        if (password.isBlank()) return@submit
+        if (state is IdentityVerifyApprovalViewModel.State.Authenticating) return@submit
+        viewModel.approve(SecurePassword.fromString(password))
+        password = ""
+    }
 
     LaunchedEffect(state) {
         if (state is IdentityVerifyApprovalViewModel.State.Approved ||
@@ -94,13 +109,42 @@ fun IdentityVerifyApprovalScreen(
                 fontWeight = FontWeight.SemiBold,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Approving sends your password (encrypted) to your vault enclave. The enclave decrypts your credential, signs the challenge with your Ed25519 identity key, then wipes the key from memory. The identity key never exists outside the enclave; only the signature is shared with ${viewModel.peerName}.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-            )
+
+            Spacer(Modifier.height(20.dp))
+
+            // Privacy details — collapsed by default to keep the screen
+            // light. Expanding shows what actually happens in the vault
+            // enclave for users who want the full story.
+            Surface(
+                onClick = { detailsExpanded = !detailsExpanded },
+                shape = MaterialTheme.shapes.medium,
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "What happens when I approve?",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Icon(
+                            imageVector = if (detailsExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = if (detailsExpanded) "Hide details" else "Show details",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (detailsExpanded) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Your password (encrypted) is sent to your vault enclave. The enclave decrypts your credential, signs the challenge with your Ed25519 identity key, then wipes the key from memory. The identity key never exists outside the enclave; only the signature is shared with ${viewModel.peerName}.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
 
             Spacer(Modifier.height(20.dp))
 
@@ -156,6 +200,14 @@ fun IdentityVerifyApprovalScreen(
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         enabled = state !is IdentityVerifyApprovalViewModel.State.Authenticating,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            capitalization = KeyboardCapitalization.None,
+                            autoCorrect = false,
+                            imeAction = ImeAction.Done,
+                        ),
+                        keyboardActions = androidx.compose.foundation.text.KeyboardActions(
+                            onDone = { submit() },
+                        ),
                         trailingIcon = {
                             IconButton(onClick = { showPassword = !showPassword }) {
                                 Icon(
@@ -202,12 +254,7 @@ fun IdentityVerifyApprovalScreen(
                     modifier = Modifier.weight(1f),
                 ) { Text("Deny") }
                 Button(
-                    onClick = {
-                        if (password.isNotBlank()) {
-                            viewModel.approve(SecurePassword.fromString(password))
-                            password = ""
-                        }
-                    },
+                    onClick = submit,
                     enabled = password.isNotBlank() && state !is IdentityVerifyApprovalViewModel.State.Authenticating,
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(
