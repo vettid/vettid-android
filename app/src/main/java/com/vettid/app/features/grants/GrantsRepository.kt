@@ -158,6 +158,40 @@ class GrantsRepository @Inject constructor(
         return runSimple("critical-secret-use.deny", payload)
     }
 
+    /**
+     * Receiver-side: approve a pending identity-verify challenge with
+     * password authorization. The vault decrypts the credential blob,
+     * signs the challenge nonce with the Ed25519 identity key, and
+     * publishes the result back to the challenger. No TTL caching —
+     * every approve re-prompts for the password.
+     */
+    suspend fun approveVerify(
+        requestId: String,
+        encryptedCredential: String,
+        encryptedPasswordHash: String,
+        ephemeralPublicKey: String,
+        nonce: String,
+        keyId: String,
+    ): Result<Unit> {
+        val payload = JsonObject().apply {
+            addProperty("request_id", requestId)
+            addProperty("encrypted_credential", encryptedCredential)
+            addProperty("encrypted_password_hash", encryptedPasswordHash)
+            addProperty("ephemeral_public_key", ephemeralPublicKey)
+            addProperty("nonce", nonce)
+            addProperty("key_id", keyId)
+        }
+        return runSimple("connection-authenticate.approve", payload)
+    }
+
+    suspend fun denyVerify(requestId: String, reason: String = ""): Result<Unit> {
+        val payload = JsonObject().apply {
+            addProperty("request_id", requestId)
+            if (reason.isNotEmpty()) addProperty("reason", reason)
+        }
+        return runSimple("connection-authenticate.deny", payload)
+    }
+
     /** Issue an authentication challenge to a connection. Result arrives via GrantEvent.AuthenticateResult. */
     suspend fun requestAuthenticate(connectionId: String, context: String): Result<String> {
         val payload = JsonObject().apply {

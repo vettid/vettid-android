@@ -742,9 +742,10 @@ class FeedNotificationService @Inject constructor(
     }
 
     /**
-     * Informational: peer just challenged us with a connection.authenticate
-     * request. We auto-responded (signed) — this is just a heads-up so the
-     * user knows.
+     * Heads-up when a peer challenges us with a connection.authenticate
+     * request. Tapping the notification opens VettIDApp which will
+     * navigate to IdentityVerifyApproval — same full-screen password
+     * gate the GrantEvent collector already navigates to in-app.
      */
     private fun showIdentityVerifyChallengedNotification(connectionId: String, requestId: String, challengeContext: String) {
         val intent = Intent(context, MainActivity::class.java).apply {
@@ -760,9 +761,12 @@ class FeedNotificationService @Inject constructor(
         val peer = resolveSenderName(connectionId) ?: "A connection"
         val n = NotificationCompat.Builder(context, CHANNEL_ID_DEFAULT)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("$peer verified your identity")
-            .setContentText(if (challengeContext.isNotBlank()) challengeContext else "Your vault signed a challenge proving credential possession.")
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setContentTitle("$peer wants to verify your identity")
+            .setContentText(
+                if (challengeContext.isNotBlank()) "$challengeContext — Password approval required."
+                else "Password approval required — open VettID."
+            )
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .setContentIntent(pi)
             .setGroup("vettid_verify")

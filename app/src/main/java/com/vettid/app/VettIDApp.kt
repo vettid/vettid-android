@@ -184,6 +184,12 @@ sealed class Screen(val route: String) {
             return "grants/critical-use/$requestId?itemLabel=$encL&operation=$operation&context=$encC"
         }
     }
+    object IdentityVerifyApproval : Screen("grants/identity-verify/{requestId}?context={context}") {
+        fun createRoute(requestId: String, context: String): String {
+            val encC = java.net.URLEncoder.encode(context, "UTF-8")
+            return "grants/identity-verify/$requestId?context=$encC"
+        }
+    }
     companion object {
         // Connection IDs historically were UUIDs with no special chars,
         // but the VettID system connection shipped briefly under
@@ -344,18 +350,32 @@ fun VettIDApp(
     }
     LaunchedEffect(grantsEntryPoint) {
         grantsEntryPoint.ownerSpaceClient().grantEvents.collect { ev ->
-            if (ev is com.vettid.app.core.nats.GrantEvent.CriticalUseRequested) {
-                val current = navController.currentDestination?.route
-                if (current?.startsWith("grants/critical-use/") != true) {
-                    navController.navigate(
-                        Screen.CriticalUseApproval.createRoute(
-                            requestId = ev.requestId,
-                            itemLabel = ev.itemLabel,
-                            operation = ev.operation,
-                            context = ev.context,
+            when (ev) {
+                is com.vettid.app.core.nats.GrantEvent.CriticalUseRequested -> {
+                    val current = navController.currentDestination?.route
+                    if (current?.startsWith("grants/critical-use/") != true) {
+                        navController.navigate(
+                            Screen.CriticalUseApproval.createRoute(
+                                requestId = ev.requestId,
+                                itemLabel = ev.itemLabel,
+                                operation = ev.operation,
+                                context = ev.context,
+                            )
                         )
-                    )
+                    }
                 }
+                is com.vettid.app.core.nats.GrantEvent.IdentityVerifyChallenged -> {
+                    val current = navController.currentDestination?.route
+                    if (current?.startsWith("grants/identity-verify/") != true) {
+                        navController.navigate(
+                            Screen.IdentityVerifyApproval.createRoute(
+                                requestId = ev.requestId,
+                                context = ev.context,
+                            )
+                        )
+                    }
+                }
+                else -> {}
             }
         }
     }
@@ -1099,6 +1119,17 @@ fun VettIDApp(
             )
         ) {
             com.vettid.app.features.grants.CriticalUseApprovalScreen(
+                onDone = { navController.safePopBackStack() },
+            )
+        }
+        composable(
+            route = Screen.IdentityVerifyApproval.route,
+            arguments = listOf(
+                navArgument("requestId") { type = NavType.StringType },
+                navArgument("context") { type = NavType.StringType; defaultValue = "" },
+            )
+        ) {
+            com.vettid.app.features.grants.IdentityVerifyApprovalScreen(
                 onDone = { navController.safePopBackStack() },
             )
         }
