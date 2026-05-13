@@ -89,6 +89,7 @@ fun PinUnlockScreen(
                     is PinUnlockState.Connecting -> "Connecting to vault..."
                     is PinUnlockState.Verifying -> "Verifying PIN..."
                     is PinUnlockState.Success -> "Unlocked!"
+                    is PinUnlockState.WarmingUp -> "Vault is updating..."
                     is PinUnlockState.Error -> "Error occurred"
                     is PinUnlockState.EnclaveUpdateRequired -> "Vault Update Available"
                 },
@@ -141,6 +142,10 @@ fun PinUnlockScreen(
 
                 is PinUnlockState.Success -> {
                     SuccessContent(firstName = currentState.firstName)
+                }
+
+                is PinUnlockState.WarmingUp -> {
+                    WarmingUpContent(message = currentState.message)
                 }
 
                 is PinUnlockState.Error -> {
@@ -347,6 +352,30 @@ private fun LoadingContent() {
     ) {
         CircularProgressIndicator(
             modifier = Modifier.size(48.dp)
+        )
+    }
+}
+
+@Composable
+private fun WarmingUpContent(message: String) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp)
+    ) {
+        CircularProgressIndicator(modifier = Modifier.size(48.dp))
+        Spacer(modifier = Modifier.height(20.dp))
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = "You don't need to do anything — we'll keep trying.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
         )
     }
 }

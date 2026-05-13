@@ -47,6 +47,10 @@ sealed class PinUnlockState {
     data object Verifying : PinUnlockState()
     data class Success(val firstName: String? = null) : PinUnlockState()
     data class Error(val message: String) : PinUnlockState()
+    // Transient state for "vault is in the middle of an update / just
+    // came up and isn't answering yet" — auto-retries behind the scenes,
+    // shows a calmer spinner-with-text instead of the red Error UI.
+    data class WarmingUp(val message: String) : PinUnlockState()
     data class EnclaveUpdateRequired(
         val currentPcr0: String,
         val summary: String? = null,
@@ -260,11 +264,14 @@ class PinUnlockViewModel @Inject constructor(
             // armed across unlocks and the card path saw it as unhandled.
             val migrateConsent = _pendingMigrationApproval
 
-            // Bounded retry budget exists solely for VaultNotReady
-            // (enclave still warming up). Migration status is no
-            // longer retried here.
+            // Bounded retry budget that covers both VaultNotReady (enclave
+            // warming up) and pending_new_enclave (Phase 4.6 routing race
+            // hasn't settled yet). Both paths are transient — surface a
+            // calm "Updating vault…" screen instead of a red error, and
+            // keep retrying with backoff. Total budget ~60s; per-attempt
+            // delay grows 2s → 5s.
             var retryCount = 0
-            val maxRetries = 3
+            val maxRetries = 15
             while (true) {
                 val result = verifyPinWithEnclave(pin, migrateConsent = migrateConsent)
 
@@ -286,14 +293,24 @@ class PinUnlockViewModel @Inject constructor(
                                     _pendingMigrationApproval = false
                                 }
                                 "pending_new_enclave" -> {
-                                    // Phase 4.6 reclaim should prevent this; if it
-                                    // happens, the deploy hit a routing race the
-                                    // user has to retry through. Tell them.
-                                    Log.w(TAG, "Migration request landed on OLD enclave despite Phase 4.6 reclaim — surfacing retry hint")
-                                    _state.value = PinUnlockState.Error(
-                                        "Vault update isn't ready yet on this server — please try unlocking again in a moment."
+                                    // Phase 4.6 reclaim should prevent this, but if
+                                    // the routing race hasn't settled the migration
+                                    // request lands on OLD. Treat as transient —
+                                    // show the calm WarmingUp state and retry.
+                                    retryCount++
+                                    if (retryCount >= maxRetries) {
+                                        Log.e(TAG, "Migration still pending after $maxRetries retries")
+                                        _state.value = PinUnlockState.Error(
+                                            "Vault update is taking longer than usual. Please try unlocking again in a minute."
+                                        )
+                                        return
+                                    }
+                                    Log.i(TAG, "pending_new_enclave, retrying (attempt $retryCount/$maxRetries)")
+                                    _state.value = PinUnlockState.WarmingUp(
+                                        "Finishing vault update… this usually takes a few seconds."
                                     )
-                                    return
+                                    kotlinx.coroutines.delay(retryBackoffMs(retryCount))
+                                    continue
                                 }
                                 "failed" -> {
                                     Log.e(TAG, "Migration re-seal failed inline; surfacing error to user")
@@ -361,11 +378,16 @@ class PinUnlockViewModel @Inject constructor(
                         retryCount++
                         if (retryCount >= maxRetries) {
                             Log.e(TAG, "Vault still not ready after $maxRetries retries")
-                            _state.value = PinUnlockState.Error("Vault is starting up. Please try again.")
+                            _state.value = PinUnlockState.Error(
+                                "Vault is taking longer than usual to start. Please try unlocking again in a minute."
+                            )
                             return
                         }
-                        Log.i(TAG, "Vault not ready, retrying in 2s (attempt ${retryCount + 1}/$maxRetries)")
-                        kotlinx.coroutines.delay(2000)
+                        Log.i(TAG, "Vault not ready, retrying (attempt $retryCount/$maxRetries)")
+                        _state.value = PinUnlockState.WarmingUp(
+                            "Vault is starting up… this usually takes a few seconds."
+                        )
+                        kotlinx.coroutines.delay(retryBackoffMs(retryCount))
                         // Continue loop to retry
                     }
                     PinVerificationResult.InvalidPin -> {
@@ -411,6 +433,18 @@ class PinUnlockViewModel @Inject constructor(
 
     private fun retry() {
         _state.value = PinUnlockState.EnteringPin()
+    }
+
+    /**
+     * Backoff for transient "vault not ready yet" retries. Starts at 2s,
+     * grows to 5s, holds there. Total budget across [maxRetries=15] is
+     * roughly 60-70s — enough to cover a Phase 4.6 routing-race window
+     * or a cold-start probe gap without bailing.
+     */
+    private fun retryBackoffMs(attempt: Int): Long = when {
+        attempt <= 1 -> 2000L
+        attempt <= 3 -> 3000L
+        else -> 5000L
     }
 
     /**
