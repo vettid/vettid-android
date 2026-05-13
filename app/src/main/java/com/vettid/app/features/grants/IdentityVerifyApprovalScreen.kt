@@ -96,7 +96,7 @@ fun IdentityVerifyApprovalScreen(
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                "Approving signs a challenge nonce with the Ed25519 identity key inside your vault. The key never leaves this device, and only the resulting signature is shared with ${viewModel.peerName}.",
+                "Approving sends your password (encrypted) to your vault enclave. The enclave decrypts your credential, signs the challenge with your Ed25519 identity key, then wipes the key from memory. The identity key never exists outside the enclave; only the signature is shared with ${viewModel.peerName}.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,

@@ -73,7 +73,7 @@ fun CriticalUseApprovalScreen(
             Spacer(Modifier.height(12.dp))
 
             Text(
-                "Your secret never leaves this device. Only the result of the operation is shared with the peer.",
+                "Your password (encrypted) is sent to your vault enclave, which decrypts the secret, runs the operation, and wipes the key from memory. The secret material never exists outside the enclave — only the operation's result is shared with the peer.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
