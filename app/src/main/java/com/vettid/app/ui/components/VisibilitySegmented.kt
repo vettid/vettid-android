@@ -14,6 +14,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.LocalOffer
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.HowToReg
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
@@ -26,17 +27,22 @@ import com.vettid.app.ui.theme.VettidBlack
 import com.vettid.app.ui.theme.VettidGold
 
 /**
- * Three-state visibility selector for a data field or secret. The
- * three states are mutually exclusive — picking one unsets the other
- * two. Used on both Personal Data rows and Minor Secret rows.
+ * Visibility selector for a data field or secret. States are mutually
+ * exclusive — picking one unsets the others. Used on Personal Data
+ * rows, Minor Secret rows, and (with allowUseOnly=true) Critical
+ * Secret rows.
  *
- * - PROFILE — value appears on the user's public calling card.
- *             Highest visibility tier.
- * - CATALOG — peers see the metadata and can request the value
- *             through the capability flow (default).
- * - PRIVATE — invisible to peers. Local-only.
+ * - PROFILE     — value appears on the user's public calling card.
+ *                 Highest visibility tier.
+ * - CATALOG     — peers see metadata and can request the value
+ *                 through the grant flow.
+ * - USE_ONLY    — critical-secret-only: peers see metadata and can
+ *                 ask the owner to USE the secret on their behalf
+ *                 (sign / decrypt / derive / auth). Value never
+ *                 leaves the vault. Not selectable for minor data.
+ * - PRIVATE     — invisible to peers. Local-only.
  */
-enum class FieldVisibility { PROFILE, CATALOG, PRIVATE }
+enum class FieldVisibility { PROFILE, CATALOG, USE_ONLY, PRIVATE }
 
 @Composable
 fun VisibilitySegmented(
@@ -44,6 +50,7 @@ fun VisibilitySegmented(
     onVisibilityChange: (FieldVisibility) -> Unit,
     modifier: Modifier = Modifier,
     allowProfile: Boolean = true,
+    allowUseOnly: Boolean = false,
 ) {
     val divider = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
     Row(
@@ -74,6 +81,16 @@ fun VisibilitySegmented(
             selectedTint = MaterialTheme.colorScheme.primary,
             onClick = { onVisibilityChange(FieldVisibility.CATALOG) },
         )
+        if (allowUseOnly) {
+            CellDivider(divider)
+            SegmentCell(
+                icon = Icons.Default.HowToReg,
+                contentDescription = "Use-only — peers can ask you to use this secret on their behalf; value never leaves your vault",
+                selected = visibility == FieldVisibility.USE_ONLY,
+                selectedTint = MaterialTheme.colorScheme.tertiary,
+                onClick = { onVisibilityChange(FieldVisibility.USE_ONLY) },
+            )
+        }
         CellDivider(divider)
         SegmentCell(
             icon = Icons.Default.Block,

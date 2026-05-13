@@ -465,6 +465,9 @@ private fun MinorSecretListItem(
             com.vettid.app.ui.components.VisibilitySegmented(
                 visibility = current,
                 allowProfile = secret.type == com.vettid.app.core.storage.SecretType.PUBLIC_KEY,
+                // USE_ONLY is a critical-secret-only state; minor
+                // secrets keep the 3-state selector.
+                allowUseOnly = false,
                 onVisibilityChange = { next ->
                     when (next) {
                         com.vettid.app.ui.components.FieldVisibility.PROFILE -> {
@@ -474,6 +477,10 @@ private fun MinorSecretListItem(
                         com.vettid.app.ui.components.FieldVisibility.CATALOG -> {
                             if (secret.hideFromCatalog) onToggleHideFromCatalog()
                             if (secret.isInPublicProfile) onTogglePublic()
+                        }
+                        com.vettid.app.ui.components.FieldVisibility.USE_ONLY -> {
+                            // Not reachable when allowUseOnly=false, but
+                            // when is exhaustive over the enum.
                         }
                         com.vettid.app.ui.components.FieldVisibility.PRIVATE -> {
                             if (secret.isInPublicProfile) onTogglePublic()

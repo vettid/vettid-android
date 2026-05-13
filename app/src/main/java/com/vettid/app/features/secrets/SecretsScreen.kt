@@ -839,6 +839,9 @@ private fun SecretRow(
                 com.vettid.app.ui.components.VisibilitySegmented(
                     visibility = current,
                     allowProfile = secret.type == SecretType.PUBLIC_KEY,
+                    // Minor secrets don't get USE_ONLY — that state is
+                    // specific to credential-bound critical secrets.
+                    allowUseOnly = false,
                     onVisibilityChange = { next ->
                         when (next) {
                             com.vettid.app.ui.components.FieldVisibility.PROFILE -> {
@@ -848,6 +851,9 @@ private fun SecretRow(
                             com.vettid.app.ui.components.FieldVisibility.CATALOG -> {
                                 if (secret.hideFromCatalog) onToggleHideFromCatalog()
                                 if (secret.isInPublicProfile) onTogglePublic()
+                            }
+                            com.vettid.app.ui.components.FieldVisibility.USE_ONLY -> {
+                                // Not reachable when allowUseOnly=false.
                             }
                             com.vettid.app.ui.components.FieldVisibility.PRIVATE -> {
                                 if (secret.isInPublicProfile) onTogglePublic()

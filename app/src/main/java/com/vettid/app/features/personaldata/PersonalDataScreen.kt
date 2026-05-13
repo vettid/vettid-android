@@ -771,6 +771,9 @@ private fun CompactDataRow(
                 }
                 com.vettid.app.ui.components.VisibilitySegmented(
                     visibility = current,
+                    // Personal-data rows don't get USE_ONLY — that's
+                    // a critical-secret-only state.
+                    allowUseOnly = false,
                     onVisibilityChange = { next ->
                         when (next) {
                             com.vettid.app.ui.components.FieldVisibility.PROFILE -> {
@@ -780,6 +783,9 @@ private fun CompactDataRow(
                             com.vettid.app.ui.components.FieldVisibility.CATALOG -> {
                                 if (item.hideFromCatalog) onToggleHideFromCatalog()
                                 if (item.isInPublicProfile) onTogglePublic()
+                            }
+                            com.vettid.app.ui.components.FieldVisibility.USE_ONLY -> {
+                                // Not reachable when allowUseOnly=false.
                             }
                             com.vettid.app.ui.components.FieldVisibility.PRIVATE -> {
                                 if (item.isInPublicProfile) onTogglePublic()

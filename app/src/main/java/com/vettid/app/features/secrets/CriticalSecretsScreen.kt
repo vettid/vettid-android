@@ -507,10 +507,15 @@ private fun SecretMetadataCard(
                 )
             }
             Spacer(modifier = Modifier.height(12.dp))
-            // Critical-secret values must NEVER appear on the published
-            // profile. Only metadata-presence is shareable, so the
-            // selector offers two states: "Catalog" (peers see this
-            // secret exists) or "Hide" (peers see nothing).
+            // Critical-secret values NEVER appear on the published
+            // profile. Three states are valid:
+            //   Catalog       — peers see this secret exists; they
+            //                   can request a copy, but the resolver
+            //                   hard-rejects the request anyway.
+            //   Use-only      — peers see it exists AND can ask the
+            //                   owner to USE it on their behalf
+            //                   (sign / decrypt / derive / auth).
+            //   Hide          — peers see nothing.
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -521,18 +526,21 @@ private fun SecretMetadataCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),
                 )
-                val current = if (secret.discoverability == "private") {
-                    com.vettid.app.ui.components.FieldVisibility.PRIVATE
-                } else {
-                    com.vettid.app.ui.components.FieldVisibility.CATALOG
+                val current = when (secret.discoverability) {
+                    "private" -> com.vettid.app.ui.components.FieldVisibility.PRIVATE
+                    "cataloged-for-use" -> com.vettid.app.ui.components.FieldVisibility.USE_ONLY
+                    else -> com.vettid.app.ui.components.FieldVisibility.CATALOG
                 }
                 com.vettid.app.ui.components.VisibilitySegmented(
                     visibility = current,
                     allowProfile = false,
+                    allowUseOnly = true,
                     onVisibilityChange = { next ->
                         val wire = when (next) {
                             com.vettid.app.ui.components.FieldVisibility.PRIVATE -> "private"
-                            else -> "cataloged"
+                            com.vettid.app.ui.components.FieldVisibility.USE_ONLY -> "cataloged-for-use"
+                            com.vettid.app.ui.components.FieldVisibility.PROFILE,
+                            com.vettid.app.ui.components.FieldVisibility.CATALOG -> "cataloged"
                         }
                         onSetDiscoverability(wire)
                     },
