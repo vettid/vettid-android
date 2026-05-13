@@ -584,29 +584,42 @@ fun VettIDApp(
                     navController.navigate(Screen.Main.route) {
                         popUpTo(0) { inclusive = true }
                     }
-                    // Navigate based on event type
-                    when {
-                        eventType?.startsWith("message.") == true ->
-                            navController.navigate(Screen.Conversation.createRoute(sourceId))
-                        eventType?.startsWith("agent.message") == true ->
-                            navController.navigate(Screen.Conversation.createRoute(sourceId))
-                        eventType?.startsWith("connection.") == true -> {
-                            // Pass a focus hint when the notification is a
-                            // verify-identity outcome — Detail screen reads
-                            // this, selects the Them tab, and pulses the
-                            // verify row so the user can see what just
-                            // happened without hunting.
-                            val focus = when (eventType) {
-                                "connection.authenticate-result" -> "verify"
-                                "connection.identity-verify-challenged" -> "verify"
-                                else -> null
+                    // Events with a dedicated approval screen are already
+                    // routed by the grantEvents collector below — landing
+                    // on Main and letting that collector layer the approval
+                    // screen on top avoids the race that briefly flashed
+                    // the approval screen and then overwrote it with a
+                    // ConnectionDetail navigation here. Only events that
+                    // *don't* have an approval screen need an explicit
+                    // navigation in this block.
+                    val approvalEvent = eventType in setOf(
+                        "connection.identity-verify-challenged",
+                        "connection.critical-secret-use-requested",
+                        "connection.data-request-received",
+                    )
+                    if (!approvalEvent) {
+                        when {
+                            eventType?.startsWith("message.") == true ->
+                                navController.navigate(Screen.Conversation.createRoute(sourceId))
+                            eventType?.startsWith("agent.message") == true ->
+                                navController.navigate(Screen.Conversation.createRoute(sourceId))
+                            eventType?.startsWith("connection.") == true -> {
+                                // Pass a focus hint when the notification is a
+                                // verify-identity outcome — Detail screen reads
+                                // this, selects the Them tab, and pulses the
+                                // verify row so the user can see what just
+                                // happened without hunting.
+                                val focus = when (eventType) {
+                                    "connection.authenticate-result" -> "verify"
+                                    else -> null
+                                }
+                                navController.navigate(Screen.ConnectionDetail.createRoute(sourceId, focus))
                             }
-                            navController.navigate(Screen.ConnectionDetail.createRoute(sourceId, focus))
+                            eventType?.startsWith("call.") == true ->
+                                navController.navigate(Screen.Conversation.createRoute(sourceId))
+                            else ->
+                                navController.navigate(Screen.Conversation.createRoute(sourceId))
                         }
-                        eventType?.startsWith("call.") == true ->
-                            navController.navigate(Screen.Conversation.createRoute(sourceId))
-                        else ->
-                            navController.navigate(Screen.Conversation.createRoute(sourceId))
                     }
                 }
                 // Check for pending connect data before going to Main
