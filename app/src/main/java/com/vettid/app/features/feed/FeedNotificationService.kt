@@ -241,6 +241,23 @@ class FeedNotificationService @Inject constructor(
                 }
             }
         }
+        // Grant flow — incoming data requests and critical-secret use
+        // prompts deserve a heads-up. Unlike location requests we fire
+        // even in foreground: the in-app surface is the Pending tab
+        // of Grants which the user may not be looking at. The receiver-
+        // side reveal value (FetchResponse) is foreground-only by
+        // design — no notification for that.
+        scope.launch {
+            ownerSpaceClient.grantEvents.collect { ev ->
+                when (ev) {
+                    is com.vettid.app.core.nats.GrantEvent.RequestReceived ->
+                        showDataRequestReceivedNotification(ev.connectionId, ev.requestId, ev.itemLabel.ifEmpty { ev.itemRef })
+                    is com.vettid.app.core.nats.GrantEvent.CriticalUseRequested ->
+                        showCriticalUseRequestedNotification(ev.connectionId, ev.requestId, ev.itemLabel.ifEmpty { ev.itemRef }, ev.operation)
+                    else -> Unit
+                }
+            }
+        }
     }
 
     private suspend fun handleNotification(notification: FeedNotification) {
@@ -651,6 +668,75 @@ class FeedNotificationService @Inject constructor(
         } catch (e: SecurityException) {
             Log.w(TAG, "Notification permission not granted for peer-location-requested", e)
         }
+    }
+
+    /**
+     * Heads-up when a peer asks for access to one of our cataloged
+     * items. Tap drops the user on the feed; in-app, the connection
+     * card's IncomingGrantRequest row routes to history (Grants
+     * screen's Pending tab is reachable from Connection Detail → Data
+     * sharing).
+     */
+    private fun showDataRequestReceivedNotification(connectionId: String, requestId: String, itemLabel: String) {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(EXTRA_OPEN_FEED, true)
+            putExtra(EXTRA_EVENT_TYPE, "connection.data-request-received")
+            putExtra(EXTRA_SOURCE_ID, connectionId)
+        }
+        val pi = PendingIntent.getActivity(
+            context, ("data-request:$requestId").hashCode(), intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val peer = resolveSenderName(connectionId) ?: "A connection"
+        val n = NotificationCompat.Builder(context, CHANNEL_ID_DEFAULT)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("$peer wants access to $itemLabel")
+            .setContentText("Open VettID to approve or deny.")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .setGroup("vettid_grant_requests")
+            .setCategory(NotificationCompat.CATEGORY_SOCIAL)
+            .build()
+        val mgr = NotificationManagerCompat.from(context)
+        if (!mgr.areNotificationsEnabled()) return
+        try { mgr.notify(("data-request:$requestId").hashCode(), n) }
+        catch (e: SecurityException) { Log.w(TAG, "Notification permission not granted for data-request", e) }
+    }
+
+    /**
+     * Heads-up when a peer asks us to perform an operation using one
+     * of our critical secrets. Tapping the notification opens VettIDApp
+     * which will navigate to CriticalUseApproval — same screen the
+     * GrantEvent collector already navigates to in-app.
+     */
+    private fun showCriticalUseRequestedNotification(connectionId: String, requestId: String, secretLabel: String, operation: String) {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(EXTRA_OPEN_FEED, true)
+            putExtra(EXTRA_EVENT_TYPE, "connection.critical-secret-use-requested")
+            putExtra(EXTRA_SOURCE_ID, connectionId)
+        }
+        val pi = PendingIntent.getActivity(
+            context, ("critical-use:$requestId").hashCode(), intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val peer = resolveSenderName(connectionId) ?: "A connection"
+        val n = NotificationCompat.Builder(context, CHANNEL_ID_DEFAULT)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("$peer wants to $operation with $secretLabel")
+            .setContentText("Password approval required — open VettID.")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .setGroup("vettid_critical_use")
+            .setCategory(NotificationCompat.CATEGORY_SOCIAL)
+            .build()
+        val mgr = NotificationManagerCompat.from(context)
+        if (!mgr.areNotificationsEnabled()) return
+        try { mgr.notify(("critical-use:$requestId").hashCode(), n) }
+        catch (e: SecurityException) { Log.w(TAG, "Notification permission not granted for critical-use", e) }
     }
 
     /**
