@@ -36,6 +36,16 @@ class GrantsViewModel @Inject constructor(
 
     private val connectionId: String = savedStateHandle["connectionId"] ?: ""
 
+    /**
+     * Pre-selected tab from the route's initialTab arg — wired from
+     * ConnectionDetail's Them/You entries so each side opens to the
+     * tab that matches the user's mental model:
+     *   0 = Held in trust (data they shared with you)
+     *   1 = Granted (data you shared with them)
+     *   2 = Pending (their requests of you)
+     */
+    val initialTab: Int = (savedStateHandle.get<Int>("initialTab") ?: 0).coerceIn(0, 2)
+
     private val _outbound = MutableStateFlow<List<GrantSummary>>(emptyList())
     val outbound: StateFlow<List<GrantSummary>> = _outbound.asStateFlow()
 

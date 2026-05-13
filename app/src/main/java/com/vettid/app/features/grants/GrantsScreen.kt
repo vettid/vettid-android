@@ -34,7 +34,7 @@ fun GrantsScreen(
     val revealedValue by viewModel.revealedValue.collectAsState()
     val busy by viewModel.busy.collectAsState()
 
-    var tab by remember { mutableStateOf(0) }
+    var tab by remember { mutableStateOf(viewModel.initialTab) }
 
     LaunchedEffect(Unit) { viewModel.refresh() }
 

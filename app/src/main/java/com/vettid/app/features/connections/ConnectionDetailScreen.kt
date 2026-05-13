@@ -52,7 +52,8 @@ fun ConnectionDetailScreen(
     onShowHistory: () -> Unit = {},
     onNavigateToPeerCatalog: (connectionId: String) -> Unit = {},
     onNavigateToMySharing: (connectionId: String) -> Unit = {},
-    onNavigateToGrants: (connectionId: String) -> Unit = {},
+    onNavigateToTheirGrants: (connectionId: String) -> Unit = {},
+    onNavigateToYourGrants: (connectionId: String) -> Unit = {},
     onVerifyIdentity: () -> Unit = {},
     isVerifyingIdentity: Boolean = false,
     onBack: () -> Unit = {}
@@ -319,7 +320,8 @@ fun ConnectionDetailScreen(
                     onShowHistory = onShowHistory,
                     onNavigateToPeerCatalog = onNavigateToPeerCatalog,
                     onNavigateToMySharing = onNavigateToMySharing,
-                    onNavigateToGrants = onNavigateToGrants,
+                    onNavigateToTheirGrants = onNavigateToTheirGrants,
+                    onNavigateToYourGrants = onNavigateToYourGrants,
                     onVerifyIdentity = { viewModel.verifyIdentity() },
                     isVerifyingIdentity = isVerifying,
                     verifyState = verifyState,
@@ -385,7 +387,8 @@ private fun LoadedContent(
     onShowHistory: () -> Unit = {},
     onNavigateToPeerCatalog: (String) -> Unit = {},
     onNavigateToMySharing: (String) -> Unit = {},
-    onNavigateToGrants: (String) -> Unit = {},
+    onNavigateToTheirGrants: (String) -> Unit = {},
+    onNavigateToYourGrants: (String) -> Unit = {},
     onVerifyIdentity: () -> Unit = {},
     isVerifyingIdentity: Boolean = false,
     verifyState: com.vettid.app.features.grants.VerifyStatePayload? = null,
@@ -495,6 +498,7 @@ private fun LoadedContent(
                     isRequestingPeerLocation = isRequestingPeerLocation,
                     onRequestPeerLocation = onRequestPeerLocation,
                     onNavigateToPeerCatalog = onNavigateToPeerCatalog,
+                    onNavigateToTheirGrants = onNavigateToTheirGrants,
                 )
                 1 -> YouTabContent(
                     peerShortName = peerShortName,
@@ -502,7 +506,7 @@ private fun LoadedContent(
                     isActive = isActive,
                     connectedDate = connectedDate,
                     onNavigateToMySharing = onNavigateToMySharing,
-                    onNavigateToGrants = onNavigateToGrants,
+                    onNavigateToYourGrants = onNavigateToYourGrants,
                 )
             }
 
@@ -544,6 +548,7 @@ private fun ThemTabContent(
     isRequestingPeerLocation: Boolean,
     onRequestPeerLocation: () -> Unit,
     onNavigateToPeerCatalog: (String) -> Unit,
+    onNavigateToTheirGrants: (String) -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column {
@@ -553,6 +558,16 @@ private fun ThemTabContent(
                 },
                 headlineContent = { Text("Their catalog") },
                 supportingContent = { Text("Items $peerShortName has published — request access here") },
+                leadingContent = { Icon(Icons.Default.Inbox, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+            )
+            HorizontalDivider()
+            ListItem(
+                modifier = Modifier.clickable(enabled = isActive) {
+                    onNavigateToTheirGrants(connectionId)
+                },
+                headlineContent = { Text("Data they've shared") },
+                supportingContent = { Text("Items $peerShortName granted access to — held in trust on their behalf") },
                 leadingContent = { Icon(Icons.Default.Inbox, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
                 trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
             )
@@ -595,7 +610,7 @@ private fun YouTabContent(
     isActive: Boolean,
     connectedDate: String,
     onNavigateToMySharing: (String) -> Unit,
-    onNavigateToGrants: (String) -> Unit,
+    onNavigateToYourGrants: (String) -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column {
@@ -611,11 +626,11 @@ private fun YouTabContent(
             HorizontalDivider()
             ListItem(
                 modifier = Modifier.clickable(enabled = isActive) {
-                    onNavigateToGrants(connectionId)
+                    onNavigateToYourGrants(connectionId)
                 },
-                headlineContent = { Text("Data sharing") },
-                supportingContent = { Text("Active grants, pending requests, and what $peerShortName has shared with you") },
-                leadingContent = { Icon(Icons.Default.Inbox, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                headlineContent = { Text("Data you've shared") },
+                supportingContent = { Text("Active grants you've given $peerShortName, plus their pending requests of you") },
+                leadingContent = { Icon(Icons.Default.Outbox, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
                 trailingContent = { Icon(Icons.Default.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
             )
             HorizontalDivider()

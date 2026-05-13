@@ -177,8 +177,14 @@ sealed class Screen(val route: String) {
     object MySharing : Screen("connections/{connectionId}/my-sharing") {
         fun createRoute(connectionId: String) = "connections/${encodeId(connectionId)}/my-sharing"
     }
-    object Grants : Screen("connections/{connectionId}/grants") {
-        fun createRoute(connectionId: String) = "connections/${encodeId(connectionId)}/grants"
+    object Grants : Screen("connections/{connectionId}/grants?initialTab={initialTab}") {
+        // initialTab: 0 = Held in trust (inbound), 1 = Granted (outbound),
+        // 2 = Pending (requests of you). The ConnectionDetail tabs split
+        // the entry across Them ("they shared with you") and You ("you
+        // shared with them + their requests") so the same screen pre-
+        // selects the right tab for each entry point.
+        fun createRoute(connectionId: String, initialTab: Int = 0) =
+            "connections/${encodeId(connectionId)}/grants?initialTab=$initialTab"
     }
     object CriticalUseApproval : Screen("grants/critical-use/{requestId}?itemLabel={itemLabel}&operation={operation}&context={context}") {
         fun createRoute(requestId: String, itemLabel: String, operation: String, context: String): String {
@@ -1100,8 +1106,13 @@ fun VettIDApp(
                 onNavigateToMySharing = { id ->
                     navController.navigate(Screen.MySharing.createRoute(id))
                 },
-                onNavigateToGrants = { id ->
-                    navController.navigate(Screen.Grants.createRoute(id))
+                onNavigateToTheirGrants = { id ->
+                    // From Them tab — show inbound grants (held in trust).
+                    navController.navigate(Screen.Grants.createRoute(id, initialTab = 0))
+                },
+                onNavigateToYourGrants = { id ->
+                    // From You tab — show outbound grants (granted).
+                    navController.navigate(Screen.Grants.createRoute(id, initialTab = 1))
                 },
                 onBack = { navController.safePopBackStack() }
             )
@@ -1176,7 +1187,10 @@ fun VettIDApp(
         }
         composable(
             route = Screen.Grants.route,
-            arguments = listOf(navArgument("connectionId") { type = NavType.StringType })
+            arguments = listOf(
+                navArgument("connectionId") { type = NavType.StringType },
+                navArgument("initialTab") { type = NavType.IntType; defaultValue = 0 },
+            )
         ) {
             com.vettid.app.features.grants.GrantsScreen(
                 onBack = { navController.safePopBackStack() },
