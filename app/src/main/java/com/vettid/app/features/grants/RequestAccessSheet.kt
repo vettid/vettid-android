@@ -1,18 +1,28 @@
 package com.vettid.app.features.grants
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
 /**
- * Sheet for requesting access to a peer's cataloged item. Collects
- * mode, expiry, max-uses, optional reason — caller supplies the
- * item kind/ref/label from the catalog row tapped.
+ * Bottom sheet for requesting access to a peer's cataloged item.
+ * Collects mode, expiry, max-uses, optional reason — caller supplies
+ * the item kind/ref/label from the catalog row tapped.
+ *
+ * Layout notes:
+ *   - Outer Column is `verticalScroll`ed so tall content stays
+ *     reachable on small screens and when the keyboard opens.
+ *   - Chip groups use FlowRow so each chip wraps to the next line
+ *     instead of running off the edge.
+ *   - imePadding pushes the action row above the soft keyboard.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun RequestAccessSheet(
     itemLabel: String,
@@ -26,66 +36,93 @@ fun RequestAccessSheet(
     var reason by remember { mutableStateOf("") }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
-        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .imePadding()
+                .padding(horizontal = 20.dp, vertical = 12.dp),
+        ) {
             Text(
                 "Request access",
                 style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                itemLabel,
+                itemLabel.ifBlank { "Item" },
                 style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(20.dp))
+
+            SectionLabel("Access mode")
+            Spacer(Modifier.height(6.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                FilterChip(
+                    selected = !renewable,
+                    onClick = { renewable = false },
+                    label = { Text("One-shot") },
+                )
+                FilterChip(
+                    selected = renewable,
+                    onClick = { renewable = true },
+                    label = { Text("Renewable") },
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (renewable) "Peer can re-fetch the value up to the max-uses limit."
+                else "Peer can fetch the value exactly once.",
+                style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(16.dp))
 
-            Text("Mode", style = MaterialTheme.typography.labelLarge)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                FilterChip(selected = !renewable, onClick = { renewable = false }, label = { Text("One-shot") })
-                Spacer(Modifier.width(8.dp))
-                FilterChip(selected = renewable, onClick = { renewable = true }, label = { Text("Renewable") })
-            }
-            Spacer(Modifier.height(12.dp))
-
-            Text("Expires", style = MaterialTheme.typography.labelLarge)
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+            SectionLabel("Expires")
+            Spacer(Modifier.height(6.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 ExpiryChoice.values().forEach { choice ->
                     FilterChip(
                         selected = expiryChoice == choice,
                         onClick = { expiryChoice = choice },
                         label = { Text(choice.label) },
-                        modifier = Modifier.padding(end = 6.dp),
                     )
                 }
             }
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(16.dp))
 
             if (renewable) {
-                Text("Max uses", style = MaterialTheme.typography.labelLarge)
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
+                SectionLabel("Max uses")
+                Spacer(Modifier.height(6.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     MaxUsesChoice.values().forEach { choice ->
                         FilterChip(
                             selected = maxUsesChoice == choice,
                             onClick = { maxUsesChoice = choice },
                             label = { Text(choice.label) },
-                            modifier = Modifier.padding(end = 6.dp),
                         )
                     }
                 }
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(16.dp))
             }
 
             OutlinedTextField(
                 value = reason,
                 onValueChange = { reason = it },
                 label = { Text("Reason (optional)") },
+                placeholder = { Text("e.g. proving age to a service") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = false,
                 maxLines = 3,
             )
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(20.dp))
 
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 TextButton(onClick = onDismiss) { Text("Cancel") }
                 Spacer(Modifier.width(8.dp))
                 Button(onClick = {
@@ -98,6 +135,15 @@ fun RequestAccessSheet(
             Spacer(Modifier.height(8.dp))
         }
     }
+}
+
+@Composable
+private fun SectionLabel(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.onSurface,
+    )
 }
 
 private enum class ExpiryChoice(val label: String, val seconds: Long) {

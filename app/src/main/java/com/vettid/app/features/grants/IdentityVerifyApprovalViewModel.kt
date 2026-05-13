@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.crypto.CryptoManager
 import com.vettid.app.core.security.SecurePassword
 import com.vettid.app.core.storage.CredentialStore
+import com.vettid.app.features.feed.FeedRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -29,14 +30,35 @@ class IdentityVerifyApprovalViewModel @Inject constructor(
     private val grants: GrantsRepository,
     private val cryptoManager: CryptoManager,
     private val credentialStore: CredentialStore,
+    private val feedRepository: FeedRepository,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
     val requestId: String = savedStateHandle["requestId"] ?: ""
     val context: String = savedStateHandle["context"] ?: ""
+    val connectionId: String = savedStateHandle["connectionId"] ?: ""
+
+    /**
+     * Resolved peer name for the connection that issued the challenge.
+     * Pulls from the same cached-connections store the notification
+     * service uses so the approval prompt always matches what the user
+     * just tapped in the shade.
+     */
+    val peerName: String = resolvePeerName(connectionId)
 
     private val _state = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = _state.asStateFlow()
+
+    private fun resolvePeerName(connID: String): String {
+        if (connID.isBlank()) return "A connection"
+        val connection = feedRepository.getCachedConnections()
+            .firstOrNull { it.connectionId == connID } ?: return "A connection"
+        val first = connection.peerProfile?.firstName.orEmpty().trim()
+        val last = connection.peerProfile?.lastName.orEmpty().trim()
+        val full = listOf(first, last).filter { it.isNotEmpty() }.joinToString(" ")
+        if (full.isNotEmpty()) return full
+        return connection.label.trim().takeIf { it.isNotEmpty() } ?: "A connection"
+    }
 
     fun approve(password: SecurePassword) {
         if (requestId.isEmpty()) {

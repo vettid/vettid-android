@@ -184,10 +184,36 @@ sealed class Screen(val route: String) {
             return "grants/critical-use/$requestId?itemLabel=$encL&operation=$operation&context=$encC"
         }
     }
-    object IdentityVerifyApproval : Screen("grants/identity-verify/{requestId}?context={context}") {
-        fun createRoute(requestId: String, context: String): String {
+    object DataGrantApproval : Screen("grants/data-approval/{requestId}?connectionId={connectionId}&itemKind={itemKind}&itemRef={itemRef}&itemLabel={itemLabel}&requestedMode={requestedMode}&requestedExpiresAt={requestedExpiresAt}&requestedMaxUses={requestedMaxUses}&reason={reason}") {
+        fun createRoute(
+            requestId: String,
+            connectionId: String,
+            itemKind: String,
+            itemRef: String,
+            itemLabel: String,
+            requestedMode: String,
+            requestedExpiresAt: Long,
+            requestedMaxUses: Int,
+            reason: String,
+        ): String {
+            val q = listOf(
+                "connectionId" to connectionId,
+                "itemKind" to itemKind,
+                "itemRef" to itemRef,
+                "itemLabel" to itemLabel.ifBlank { "?" },
+                "requestedMode" to requestedMode,
+                "requestedExpiresAt" to requestedExpiresAt.toString(),
+                "requestedMaxUses" to requestedMaxUses.toString(),
+                "reason" to reason,
+            ).joinToString("&") { (k, v) -> "$k=${java.net.URLEncoder.encode(v, "UTF-8")}" }
+            return "grants/data-approval/$requestId?$q"
+        }
+    }
+    object IdentityVerifyApproval : Screen("grants/identity-verify/{requestId}?connectionId={connectionId}&context={context}") {
+        fun createRoute(requestId: String, connectionId: String, context: String): String {
+            val encConn = java.net.URLEncoder.encode(connectionId, "UTF-8")
             val encC = java.net.URLEncoder.encode(context, "UTF-8")
-            return "grants/identity-verify/$requestId?context=$encC"
+            return "grants/identity-verify/$requestId?connectionId=$encConn&context=$encC"
         }
     }
     companion object {
@@ -370,7 +396,26 @@ fun VettIDApp(
                         navController.navigate(
                             Screen.IdentityVerifyApproval.createRoute(
                                 requestId = ev.requestId,
+                                connectionId = ev.connectionId,
                                 context = ev.context,
+                            )
+                        )
+                    }
+                }
+                is com.vettid.app.core.nats.GrantEvent.RequestReceived -> {
+                    val current = navController.currentDestination?.route
+                    if (current?.startsWith("grants/data-approval/") != true) {
+                        navController.navigate(
+                            Screen.DataGrantApproval.createRoute(
+                                requestId = ev.requestId,
+                                connectionId = ev.connectionId,
+                                itemKind = ev.itemKind,
+                                itemRef = ev.itemRef,
+                                itemLabel = ev.itemLabel,
+                                requestedMode = ev.requestedMode,
+                                requestedExpiresAt = ev.requestedExpiresAt,
+                                requestedMaxUses = ev.requestedMaxUses,
+                                reason = ev.reason,
                             )
                         )
                     }
@@ -1126,10 +1171,29 @@ fun VettIDApp(
             route = Screen.IdentityVerifyApproval.route,
             arguments = listOf(
                 navArgument("requestId") { type = NavType.StringType },
+                navArgument("connectionId") { type = NavType.StringType; defaultValue = "" },
                 navArgument("context") { type = NavType.StringType; defaultValue = "" },
             )
         ) {
             com.vettid.app.features.grants.IdentityVerifyApprovalScreen(
+                onDone = { navController.safePopBackStack() },
+            )
+        }
+        composable(
+            route = Screen.DataGrantApproval.route,
+            arguments = listOf(
+                navArgument("requestId") { type = NavType.StringType },
+                navArgument("connectionId") { type = NavType.StringType; defaultValue = "" },
+                navArgument("itemKind") { type = NavType.StringType; defaultValue = "" },
+                navArgument("itemRef") { type = NavType.StringType; defaultValue = "" },
+                navArgument("itemLabel") { type = NavType.StringType; defaultValue = "" },
+                navArgument("requestedMode") { type = NavType.StringType; defaultValue = "" },
+                navArgument("requestedExpiresAt") { type = NavType.LongType; defaultValue = 0L },
+                navArgument("requestedMaxUses") { type = NavType.IntType; defaultValue = 1 },
+                navArgument("reason") { type = NavType.StringType; defaultValue = "" },
+            )
+        ) {
+            com.vettid.app.features.grants.DataGrantApprovalScreen(
                 onDone = { navController.safePopBackStack() },
             )
         }
