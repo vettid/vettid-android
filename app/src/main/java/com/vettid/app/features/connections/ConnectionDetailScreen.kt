@@ -7,6 +7,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -70,6 +71,24 @@ fun ConnectionDetailScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var pendingCallType by remember { mutableStateOf<CallType?>(null) }
+
+    // Re-hydrate the persistent verify-state whenever this screen
+    // returns to the foreground. The VM's grantEvents collector only
+    // catches results that arrive while the VM is alive — if the
+    // user got a verify verdict via OS notification while backgrounded
+    // (or while on a different screen), the in-memory state is stale.
+    // The vault is the source of truth, so re-asking on resume keeps
+    // the row honest without forcing a fresh challenge.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshVerifyState()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
 
     val callPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -250,6 +269,7 @@ fun ConnectionDetailScreen(
                 val verifyResult by viewModel.verifyResult.collectAsState()
                 val isVerifying by viewModel.verifying.collectAsState()
                 val verifyState by viewModel.verifyState.collectAsState()
+                val initialFocus by viewModel.initialFocus.collectAsState()
                 // Surface connection.authenticate verdict as a Snackbar.
                 LaunchedEffect(verifyResult) {
                     val r = verifyResult ?: return@LaunchedEffect
@@ -306,6 +326,8 @@ fun ConnectionDetailScreen(
                     onRequestPeerLocation = { viewModel.requestPeerLocation() },
                     showRotateInfo = showRotateInfo,
                     onDismissRotateInfo = { showRotateInfo = false },
+                    initialFocus = initialFocus,
+                    onFocusConsumed = { viewModel.consumeFocus() },
                     modifier = Modifier.padding(padding)
                 )
             }
@@ -370,6 +392,8 @@ private fun LoadedContent(
     onRequestPeerLocation: () -> Unit = {},
     showRotateInfo: Boolean = false,
     onDismissRotateInfo: () -> Unit = {},
+    initialFocus: String? = null,
+    onFocusConsumed: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val connectedDateFormatter = java.text.SimpleDateFormat("MMMM d, yyyy 'at' h:mm a", java.util.Locale.getDefault())
@@ -379,6 +403,21 @@ private fun LoadedContent(
     val peerShortName = connection.peerDisplayName.takeIf { it.isNotBlank() }?.substringBefore(' ') ?: "this connection"
     val isActive = connection.status == ConnectionStatus.ACTIVE
     var selectedTab by remember { mutableStateOf(0) }
+
+    // Pulse highlight applied to the verify row when we land here from
+    // a verify-result OS notification. Compose-managed so we don't
+    // need to plumb a flag through three layers; the effect picks the
+    // signal up and the row reads `pulseVerify` to animate.
+    var pulseVerify by remember { mutableStateOf(false) }
+    LaunchedEffect(initialFocus) {
+        if (initialFocus == "verify") {
+            selectedTab = 0
+            pulseVerify = true
+            onFocusConsumed()
+            kotlinx.coroutines.delay(2400)
+            pulseVerify = false
+        }
+    }
 
     Column(
         modifier = modifier
@@ -436,6 +475,7 @@ private fun LoadedContent(
                     verifyState = verifyState,
                     isVerifyingIdentity = isVerifyingIdentity,
                     onVerifyIdentity = onVerifyIdentity,
+                    pulseVerify = pulseVerify,
                     peerLocation = peerLocation,
                     isRequestingPeerLocation = isRequestingPeerLocation,
                     onRequestPeerLocation = onRequestPeerLocation,
@@ -483,6 +523,7 @@ private fun ThemTabContent(
     verifyState: com.vettid.app.features.grants.VerifyStatePayload?,
     isVerifyingIdentity: Boolean,
     onVerifyIdentity: () -> Unit,
+    pulseVerify: Boolean,
     peerLocation: com.vettid.app.core.nats.CachedPeerLocation?,
     isRequestingPeerLocation: Boolean,
     onRequestPeerLocation: () -> Unit,
@@ -514,6 +555,7 @@ private fun ThemTabContent(
                 isVerifying = isVerifyingIdentity,
                 enabled = isActive,
                 onVerifyIdentity = onVerifyIdentity,
+                pulse = pulseVerify,
             )
         }
     }
@@ -582,13 +624,28 @@ private fun VerifyIdentityRow(
     isVerifying: Boolean,
     enabled: Boolean,
     onVerifyIdentity: () -> Unit,
+    pulse: Boolean = false,
 ) {
     val hasOutbound = !verifyState?.lastOutboundAt.isNullOrBlank()
     val freshness = remember(verifyState?.lastOutboundAt) {
         verifyState?.lastOutboundAt?.takeIf { it.isNotBlank() }?.let { formatLocationFreshness(it) } ?: ""
     }
+    // Pulse background when navigation arrives from a verify-result
+    // OS notification — fades in the primaryContainer tint, holds
+    // briefly, fades back out. Removes itself silently after the
+    // 2.4s window the parent screen controls.
+    val pulseAlpha by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = if (pulse) 1f else 0f,
+        animationSpec = androidx.compose.animation.core.tween(
+            durationMillis = if (pulse) 350 else 600
+        ),
+        label = "verify-pulse",
+    )
+    val highlightedColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = pulseAlpha * 0.45f)
     ListItem(
-        modifier = Modifier.clickable(enabled = enabled && !isVerifying) { onVerifyIdentity() },
+        modifier = Modifier
+            .background(highlightedColor)
+            .clickable(enabled = enabled && !isVerifying) { onVerifyIdentity() },
         headlineContent = {
             Text(if (hasOutbound) "$peerName's identity" else "Verify $peerName's identity")
         },

@@ -157,8 +157,11 @@ sealed class Screen(val route: String) {
         fun createRoute(connectionId: String, eventId: String? = null) =
             "connections/review/${encodeId(connectionId)}" + if (eventId != null) "?eventId=$eventId" else ""
     }
-    object ConnectionDetail : Screen("connections/{connectionId}") {
-        fun createRoute(connectionId: String) = "connections/${encodeId(connectionId)}"
+    object ConnectionDetail : Screen("connections/{connectionId}?focus={focus}") {
+        fun createRoute(connectionId: String, focus: String? = null): String {
+            val base = "connections/${encodeId(connectionId)}"
+            return if (focus != null) "$base?focus=$focus" else "$base?focus="
+        }
     }
     object Conversation : Screen("connections/{connectionId}/messages?openRequest={openRequest}") {
         fun createRoute(connectionId: String, openRequest: Boolean = false) =
@@ -587,8 +590,19 @@ fun VettIDApp(
                             navController.navigate(Screen.Conversation.createRoute(sourceId))
                         eventType?.startsWith("agent.message") == true ->
                             navController.navigate(Screen.Conversation.createRoute(sourceId))
-                        eventType?.startsWith("connection.") == true ->
-                            navController.navigate(Screen.ConnectionDetail.createRoute(sourceId))
+                        eventType?.startsWith("connection.") == true -> {
+                            // Pass a focus hint when the notification is a
+                            // verify-identity outcome — Detail screen reads
+                            // this, selects the Them tab, and pulses the
+                            // verify row so the user can see what just
+                            // happened without hunting.
+                            val focus = when (eventType) {
+                                "connection.authenticate-result" -> "verify"
+                                "connection.identity-verify-challenged" -> "verify"
+                                else -> null
+                            }
+                            navController.navigate(Screen.ConnectionDetail.createRoute(sourceId, focus))
+                        }
                         eventType?.startsWith("call.") == true ->
                             navController.navigate(Screen.Conversation.createRoute(sourceId))
                         else ->
@@ -1047,7 +1061,10 @@ fun VettIDApp(
         }
         composable(
             route = Screen.ConnectionDetail.route,
-            arguments = listOf(navArgument("connectionId") { type = NavType.StringType })
+            arguments = listOf(
+                navArgument("connectionId") { type = NavType.StringType },
+                navArgument("focus") { type = NavType.StringType; defaultValue = "" },
+            )
         ) { backStackEntry ->
             val connectionId = backStackEntry.arguments?.getString("connectionId") ?: return@composable
             ConnectionDetailScreen(

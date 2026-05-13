@@ -68,14 +68,23 @@ class ConnectionDetailViewModel @Inject constructor(
     private val _verifyState = MutableStateFlow<com.vettid.app.features.grants.VerifyStatePayload?>(null)
     val verifyState: StateFlow<com.vettid.app.features.grants.VerifyStatePayload?> = _verifyState.asStateFlow()
 
-    init {
-        // Hydrate cached verify state on entry. Best-effort — a vault
-        // miss leaves verifyState null and the UI shows "Not yet verified".
+    /**
+     * Re-fetch the cached verify state from the vault. Called on
+     * ON_RESUME so backgrounding + a verify result arriving while we
+     * were away still produces a fresh row when the user returns.
+     */
+    fun refreshVerifyState() {
         viewModelScope.launch {
             grants.getVerifyState(connectionId)
                 .onSuccess { _verifyState.value = it }
-                .onFailure { Log.d(TAG, "verify-state hydrate skipped: ${it.message}") }
+                .onFailure { Log.d(TAG, "verify-state refresh skipped: ${it.message}") }
         }
+    }
+
+    init {
+        // Hydrate cached verify state on entry. Best-effort — a vault
+        // miss leaves verifyState null and the UI shows "Not yet verified".
+        refreshVerifyState()
         // Listen for connection.authenticate verdicts. Updates two
         // things: the transient Snackbar (still useful when the user is
         // looking at the Detail screen) AND the persistent state row
@@ -127,6 +136,20 @@ class ConnectionDetailViewModel @Inject constructor(
 
     private val connectionId: String = savedStateHandle["connectionId"]
         ?: throw IllegalArgumentException("connectionId is required")
+
+    /**
+     * Optional focus hint passed via the route's `focus` query param.
+     * "verify" means the screen was opened from a verify-result OS
+     * notification — the UI should select the Them tab and pulse the
+     * verify row so the user sees what just happened. Cleared by the
+     * UI once the focus animation finishes so it doesn't re-pulse on
+     * configuration change.
+     */
+    private val _initialFocus = MutableStateFlow<String?>(
+        savedStateHandle.get<String>("focus")?.takeIf { it.isNotBlank() }
+    )
+    val initialFocus: StateFlow<String?> = _initialFocus.asStateFlow()
+    fun consumeFocus() { _initialFocus.value = null }
 
     private val _state = MutableStateFlow<ConnectionDetailState>(ConnectionDetailState.Loading)
     val state: StateFlow<ConnectionDetailState> = _state.asStateFlow()
