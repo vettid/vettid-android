@@ -27,6 +27,12 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.flow.collectLatest
 
+// Fallback for the "Review the changes" link on the enclave update
+// prompt when the manifest entry doesn't carry a per-release URL.
+// Points at the canonical commit history so the user can always
+// inspect what's in the new build before consenting.
+private const val DEFAULT_CHANGELOG_URL = "https://github.com/vettid/vettid-dev/commits/main"
+
 /**
  * PIN unlock screen for app authentication.
  *
@@ -506,21 +512,23 @@ private fun EnclaveUpdateContent(
                     }
                 }
 
-                // Changelog link
-                if (detailsUrl != null) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    TextButton(
-                        onClick = {
-                            try {
-                                context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(detailsUrl)))
-                            } catch (_: Exception) {}
-                        },
-                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                    ) {
-                        Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("View Changelog", style = MaterialTheme.typography.labelMedium)
-                    }
+                // Changelog link — always rendered. Falls back to the
+                // generic commit history if the manifest entry doesn't
+                // carry a per-release URL, so the user always has a way
+                // to inspect what changed before they consent.
+                Spacer(modifier = Modifier.height(8.dp))
+                val resolvedDetailsUrl = detailsUrl ?: DEFAULT_CHANGELOG_URL
+                TextButton(
+                    onClick = {
+                        try {
+                            context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(resolvedDetailsUrl)))
+                        } catch (_: Exception) {}
+                    },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                ) {
+                    Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(14.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Review the changes", style = MaterialTheme.typography.labelMedium)
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))

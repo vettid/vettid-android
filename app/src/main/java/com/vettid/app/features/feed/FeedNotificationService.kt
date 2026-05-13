@@ -256,6 +256,8 @@ class FeedNotificationService @Inject constructor(
                         showCriticalUseRequestedNotification(ev.connectionId, ev.requestId, ev.itemLabel.ifEmpty { ev.itemRef }, ev.operation)
                     is com.vettid.app.core.nats.GrantEvent.IdentityVerifyChallenged ->
                         showIdentityVerifyChallengedNotification(ev.connectionId, ev.requestId, ev.context)
+                    is com.vettid.app.core.nats.GrantEvent.AuthenticateResult ->
+                        showAuthenticateResultNotification(ev.connectionId, ev.requestId, ev.authenticated, ev.failureReason)
                     else -> Unit
                 }
             }
@@ -776,6 +778,49 @@ class FeedNotificationService @Inject constructor(
         if (!mgr.areNotificationsEnabled()) return
         try { mgr.notify(("identity-verify:$requestId").hashCode(), n) }
         catch (e: SecurityException) { Log.w(TAG, "Notification permission not granted for identity-verify", e) }
+    }
+
+    /**
+     * Heads-up for the requester after the peer's vault returns a
+     * verdict on a connection.authenticate challenge. The in-app
+     * Snackbar only renders on ConnectionDetailScreen, so a system
+     * notification fires regardless of which screen the user is on
+     * (or whether the app is foregrounded). Approve and deny both
+     * surface here — title + body shift on `authenticated`.
+     */
+    private fun showAuthenticateResultNotification(connectionId: String, requestId: String, authenticated: Boolean, failureReason: String) {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(EXTRA_OPEN_FEED, true)
+            putExtra(EXTRA_EVENT_TYPE, "connection.authenticate-result")
+            putExtra(EXTRA_SOURCE_ID, connectionId)
+        }
+        val pi = PendingIntent.getActivity(
+            context, ("authenticate-result:$requestId").hashCode(), intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val peer = resolveSenderName(connectionId) ?: "Your connection"
+        val title = if (authenticated) "$peer verified their identity" else "$peer didn't verify"
+        val body = when {
+            authenticated -> "Their vault signed the challenge — identity confirmed."
+            failureReason == "denied_by_user" -> "They declined the verification request."
+            failureReason.isNotBlank() -> "Verification failed: $failureReason"
+            else -> "Verification failed."
+        }
+        val n = NotificationCompat.Builder(context, CHANNEL_ID_DEFAULT)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .setGroup("vettid_verify")
+            .setCategory(NotificationCompat.CATEGORY_SOCIAL)
+            .build()
+        val mgr = NotificationManagerCompat.from(context)
+        if (!mgr.areNotificationsEnabled()) return
+        try { mgr.notify(("authenticate-result:$requestId").hashCode(), n) }
+        catch (e: SecurityException) { Log.w(TAG, "Notification permission not granted for authenticate-result", e) }
     }
 
     /**
