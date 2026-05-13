@@ -123,12 +123,11 @@ class MigrationClient @Inject constructor(
      * @param limit Maximum number of entries to return
      * @return List of audit log entries
      */
-    suspend fun getAuditLog(limit: Int = 50): Result<List<AuditLogEntry>> {
+    suspend fun getAuditLog(limit: Int = 50): Result<AuditLogPage> {
         Log.d(TAG, "Fetching audit log")
 
         val payload = JsonObject().apply {
             addProperty("limit", limit)
-            addProperty("filter", "migration")
         }
 
         val response = ownerSpaceClient.sendAndAwaitResponse("audit.query", payload, TIMEOUT_MS)
@@ -136,16 +135,14 @@ class MigrationClient @Inject constructor(
         return when (response) {
             is VaultResponse.HandlerResult -> {
                 if (response.success && response.result != null) {
-                    val entries = parseAuditLogEntries(response.result)
-                    Result.success(entries)
+                    Result.success(parseAuditLogPage(response.result))
                 } else {
                     Result.failure(Exception(response.error ?: "Failed to fetch audit log"))
                 }
             }
             is VaultResponse.Error -> {
                 if (response.code == "TIMEOUT") {
-                    // No audit logs yet is normal
-                    Result.success(emptyList())
+                    Result.success(AuditLogPage(emptyList()))
                 } else {
                     Result.failure(Exception("${response.code}: ${response.message}"))
                 }
@@ -280,6 +277,34 @@ class MigrationClient @Inject constructor(
      * stays focused: identity-key signings, critical-secret use,
      * connection verify outcomes, migrations, auth events.
      */
+    private fun parseAuditLogPage(json: JsonObject): AuditLogPage {
+        // First parse the entries, then run the chain verifier across
+        // them in one pass. Chain verification needs the response-level
+        // anchor (audit_pub + binding_sig + identity_pub) so do that
+        // here before returning entries to the screen.
+        val entries = parseAuditLogEntries(json)
+        if (entries.isEmpty()) return AuditLogPage(emptyList())
+        val verifier = com.vettid.app.core.audit.AuditChainVerifier()
+        val (perRow, chainStatus) = verifier.verifyChain(
+            rows = entries,
+            auditPubB64 = json.get("audit_pub")?.asString,
+            bindingSigB64 = json.get("binding_sig")?.asString,
+            identityPub = json.get("identity_pub")?.asString?.let { decodeBase64Safely(it) },
+            entryHashOf = { e -> Triple(e.entryHash, e.previousHash, e.entrySig) },
+        )
+        val verified = entries.mapIndexed { i, e ->
+            e.copy(verification = perRow.getOrNull(i)?.state ?: com.vettid.app.core.audit.AuditChainVerifier.RowState.Unsigned)
+        }
+        return AuditLogPage(entries = verified, chainStatus = chainStatus)
+    }
+
+    private fun decodeBase64Safely(s: String): ByteArray? = try {
+        android.util.Base64.decode(s, android.util.Base64.NO_WRAP or android.util.Base64.URL_SAFE)
+            ?: android.util.Base64.decode(s, android.util.Base64.NO_WRAP)
+    } catch (_: Exception) {
+        try { android.util.Base64.decode(s, android.util.Base64.NO_WRAP) } catch (_: Exception) { null }
+    }
+
     private fun parseAuditLogEntries(json: JsonObject): List<AuditLogEntry> {
         val eventsArray = json.getAsJsonArray("events") ?: return emptyList()
         // Resolve connection_id → peer display name from the cached
@@ -313,6 +338,9 @@ class MigrationClient @Inject constructor(
                     metadata = obj.getAsJsonObject("metadata"),
                     connectionId = sourceId.takeIf { sourceType == "connection" && it.isNotEmpty() },
                     peerName = peerName,
+                    entryHash = obj.get("entry_hash")?.asString?.takeIf { it.isNotBlank() },
+                    previousHash = obj.get("previous_hash")?.asString?.takeIf { it.isNotBlank() },
+                    entrySig = obj.get("entry_sig")?.asString?.takeIf { it.isNotBlank() },
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to parse audit log entry", e)
@@ -400,4 +428,23 @@ data class AuditLogEntry(
     val connectionId: String? = null,
     /** Resolved peer display name for connectionId. Null when source is system-wide or the connection isn't cached locally. */
     val peerName: String? = null,
+    /** Audit-chain anchors carried back to the verifier. Hex-encoded. Null for legacy / pre-chain rows. */
+    val entryHash: String? = null,
+    val previousHash: String? = null,
+    val entrySig: String? = null,
+    /** Verification state computed in MigrationClient after parsing the response. */
+    val verification: com.vettid.app.core.audit.AuditChainVerifier.RowState =
+        com.vettid.app.core.audit.AuditChainVerifier.RowState.Unsigned,
+)
+
+/**
+ * Page of audit entries + the chain status for the page. The screen
+ * uses ChainStatus to render the green "verified" / yellow "unsigned"
+ * / red "tampered" pill at the top of the list; per-row state lives
+ * on each AuditLogEntry.
+ */
+data class AuditLogPage(
+    val entries: List<AuditLogEntry>,
+    val chainStatus: com.vettid.app.core.audit.AuditChainVerifier.ChainStatus =
+        com.vettid.app.core.audit.AuditChainVerifier.ChainStatus.Empty,
 )

@@ -71,10 +71,18 @@ fun SecurityAuditLogScreen(
                 }
 
                 is SecurityAuditLogState.Success -> {
-                    AuditLogList(
-                        entries = currentState.entries,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        ChainStatusPill(
+                            status = currentState.chainStatus,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                        )
+                        AuditLogList(
+                            entries = currentState.entries,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
                 }
 
                 is SecurityAuditLogState.Error -> {
@@ -86,6 +94,87 @@ fun SecurityAuditLogScreen(
                 }
             }
         }
+    }
+}
+
+/**
+ * Aggregate chain integrity badge shown at the top of the log. Three
+ * states map to three colors: green (verified), amber (unsigned),
+ * red (tampered). Empty hides the pill entirely.
+ */
+@Composable
+private fun ChainStatusPill(
+    status: com.vettid.app.core.audit.AuditChainVerifier.ChainStatus,
+    modifier: Modifier = Modifier,
+) {
+    val (bg, fg, icon, text) = when (status) {
+        is com.vettid.app.core.audit.AuditChainVerifier.ChainStatus.Empty -> return
+        is com.vettid.app.core.audit.AuditChainVerifier.ChainStatus.Verified -> {
+            val unsignedPart = if (status.unsignedRows > 0) " · ${status.unsignedRows} unsigned" else ""
+            Quad(
+                MaterialTheme.colorScheme.primaryContainer,
+                MaterialTheme.colorScheme.onPrimaryContainer,
+                androidx.compose.material.icons.Icons.Default.Verified,
+                "Chain verified · ${status.signedRows} signed$unsignedPart",
+            )
+        }
+        is com.vettid.app.core.audit.AuditChainVerifier.ChainStatus.Unsigned -> Quad(
+            MaterialTheme.colorScheme.tertiaryContainer,
+            MaterialTheme.colorScheme.onTertiaryContainer,
+            androidx.compose.material.icons.Icons.Default.Info,
+            "Chain unsigned · unlock your vault to verify (${status.rows} entries)",
+        )
+        is com.vettid.app.core.audit.AuditChainVerifier.ChainStatus.Tampered -> Quad(
+            MaterialTheme.colorScheme.errorContainer,
+            MaterialTheme.colorScheme.onErrorContainer,
+            androidx.compose.material.icons.Icons.Default.Warning,
+            "Chain integrity broken: ${status.reason}",
+        )
+    }
+    Surface(
+        color = bg,
+        contentColor = fg,
+        shape = MaterialTheme.shapes.small,
+        modifier = modifier,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(text, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
+}
+
+/** Tuple of four — local helper for ChainStatusPill destructuring. */
+private data class Quad<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
+
+/** Per-row icon: verified ✓ / unsigned ? / tampered ⚠. Compact for inline use. */
+@Composable
+private fun VerificationBadge(state: com.vettid.app.core.audit.AuditChainVerifier.RowState) {
+    val (icon, tint, label) = when (state) {
+        com.vettid.app.core.audit.AuditChainVerifier.RowState.Verified -> Triple(
+            androidx.compose.material.icons.Icons.Default.Verified,
+            MaterialTheme.colorScheme.primary,
+            "Verified",
+        )
+        com.vettid.app.core.audit.AuditChainVerifier.RowState.Tampered -> Triple(
+            androidx.compose.material.icons.Icons.Default.Warning,
+            MaterialTheme.colorScheme.error,
+            "Tampered",
+        )
+        com.vettid.app.core.audit.AuditChainVerifier.RowState.Unsigned -> Triple(
+            androidx.compose.material.icons.Icons.Default.Info,
+            MaterialTheme.colorScheme.outline,
+            "Unsigned",
+        )
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, contentDescription = label, modifier = Modifier.size(14.dp), tint = tint)
+        Spacer(Modifier.width(4.dp))
+        Text(label, style = MaterialTheme.typography.labelSmall, color = tint)
     }
 }
 
@@ -152,11 +241,15 @@ private fun AuditLogItem(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            Text(
-                text = formatTimestamp(entry.timestamp),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = formatTimestamp(entry.timestamp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                    modifier = Modifier.weight(1f),
+                )
+                VerificationBadge(state = entry.verification)
+            }
         }
     }
 }

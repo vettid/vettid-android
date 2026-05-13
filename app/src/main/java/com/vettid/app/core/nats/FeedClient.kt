@@ -339,7 +339,13 @@ data class FeedEvent(
     @SerializedName("archived_at") val archivedAt: Long?,
     @SerializedName("expires_at") val expiresAt: Long?,
     @SerializedName("sync_sequence") val syncSequence: Long,
-    @SerializedName("retention_class") val retentionClass: String
+    @SerializedName("retention_class") val retentionClass: String,
+    // Audit chain — populated by the vault for security-relevant rows
+    // since the audit-key shipment. Verification logic lives in
+    // AuditChainVerifier.
+    @SerializedName("previous_hash") val previousHash: String? = null,
+    @SerializedName("entry_hash") val entryHash: String? = null,
+    @SerializedName("entry_sig") val entrySig: String? = null,
 ) {
     /**
      * Check if this event is unread.
@@ -400,7 +406,17 @@ data class FeedSyncResponse(
  */
 data class AuditQueryResponse(
     val events: List<FeedEvent>,
-    val total: Int
+    val total: Int,
+    // Anchor for chain verification: audit_pub is the per-session
+    // public key, binding_sig is identity_priv's signature over
+    // "vettid-audit-binding-v1" || audit_pub, identity_pub is the
+    // user's Ed25519 identity public key (trust root). All base64.
+    // Empty when the user hasn't unlocked their vault this session
+    // — clients render rows as "unsigned" in that case rather than
+    // claim verified.
+    @SerializedName("audit_pub") val auditPub: String? = null,
+    @SerializedName("binding_sig") val bindingSig: String? = null,
+    @SerializedName("identity_pub") val identityPub: String? = null,
 )
 
 /**

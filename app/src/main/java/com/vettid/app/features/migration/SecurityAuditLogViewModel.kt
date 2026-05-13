@@ -36,11 +36,11 @@ class SecurityAuditLogViewModel @Inject constructor(
             _state.value = SecurityAuditLogState.Loading
 
             migrationClient.getAuditLog(limit = 100)
-                .onSuccess { entries ->
-                    _state.value = if (entries.isEmpty()) {
+                .onSuccess { page ->
+                    _state.value = if (page.entries.isEmpty()) {
                         SecurityAuditLogState.Empty
                     } else {
-                        SecurityAuditLogState.Success(entries)
+                        SecurityAuditLogState.Success(page.entries, page.chainStatus)
                     }
                 }
                 .onFailure { error ->
@@ -62,6 +62,10 @@ class SecurityAuditLogViewModel @Inject constructor(
 sealed class SecurityAuditLogState {
     object Loading : SecurityAuditLogState()
     object Empty : SecurityAuditLogState()
-    data class Success(val entries: List<AuditLogEntry>) : SecurityAuditLogState()
+    data class Success(
+        val entries: List<AuditLogEntry>,
+        val chainStatus: com.vettid.app.core.audit.AuditChainVerifier.ChainStatus =
+            com.vettid.app.core.audit.AuditChainVerifier.ChainStatus.Empty,
+    ) : SecurityAuditLogState()
     data class Error(val message: String) : SecurityAuditLogState()
 }
