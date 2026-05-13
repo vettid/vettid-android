@@ -131,6 +131,14 @@ private fun AuditLogItem(
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Medium
                     )
+                    if (entry.peerName != null) {
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "with ${entry.peerName}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                     if (entry.description.isNotBlank()) {
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(

@@ -3,6 +3,7 @@ package com.vettid.app.core.nats
 import android.util.Log
 import com.google.gson.JsonObject
 import com.vettid.app.core.storage.CredentialStore
+import com.vettid.app.features.feed.FeedRepository
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -25,7 +26,8 @@ import javax.inject.Singleton
 @Singleton
 class MigrationClient @Inject constructor(
     private val ownerSpaceClient: OwnerSpaceClient,
-    private val credentialStore: CredentialStore
+    private val credentialStore: CredentialStore,
+    private val feedRepository: FeedRepository,
 ) {
     companion object {
         private const val TAG = "MigrationClient"
@@ -280,11 +282,27 @@ class MigrationClient @Inject constructor(
      */
     private fun parseAuditLogEntries(json: JsonObject): List<AuditLogEntry> {
         val eventsArray = json.getAsJsonArray("events") ?: return emptyList()
+        // Resolve connection_id → peer display name from the cached
+        // connections store, so each row can tag "Identity verified —
+        // Al Liebl" without a per-row vault round-trip. Built once per
+        // parse so a long list doesn't hit the store O(n) times.
+        val nameByConn: Map<String, String> = feedRepository.getCachedConnections()
+            .associate { conn ->
+                val first = conn.peerProfile?.firstName.orEmpty().trim()
+                val last = conn.peerProfile?.lastName.orEmpty().trim()
+                val full = listOf(first, last).filter { it.isNotEmpty() }.joinToString(" ")
+                conn.connectionId to (full.ifEmpty { conn.label.trim() })
+            }
         return eventsArray.mapNotNull { element ->
             try {
                 val obj = element.asJsonObject
                 val type = obj.get("event_type")?.asString ?: return@mapNotNull null
                 if (!isSecurityRelevantType(type)) return@mapNotNull null
+                val sourceId = obj.get("source_id")?.asString.orEmpty()
+                val sourceType = obj.get("source_type")?.asString.orEmpty()
+                val peerName = if (sourceType == "connection" && sourceId.isNotEmpty()) {
+                    nameByConn[sourceId]?.takeIf { it.isNotBlank() }
+                } else null
                 AuditLogEntry(
                     id = obj.get("event_id")?.asString ?: return@mapNotNull null,
                     type = type,
@@ -292,7 +310,9 @@ class MigrationClient @Inject constructor(
                         ?: getAuditLogTitle(type),
                     description = obj.get("message")?.asString.orEmpty(),
                     timestamp = (obj.get("created_at")?.asLong ?: 0L) * 1000L,
-                    metadata = obj.getAsJsonObject("metadata")
+                    metadata = obj.getAsJsonObject("metadata"),
+                    connectionId = sourceId.takeIf { sourceType == "connection" && it.isNotEmpty() },
+                    peerName = peerName,
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to parse audit log entry", e)
@@ -375,5 +395,9 @@ data class AuditLogEntry(
     val title: String,
     val description: String,
     val timestamp: Long,
-    val metadata: JsonObject?
+    val metadata: JsonObject?,
+    /** Source connection ID when the event was scoped to one. Null for system-wide events (migrations, security alerts). */
+    val connectionId: String? = null,
+    /** Resolved peer display name for connectionId. Null when source is system-wide or the connection isn't cached locally. */
+    val peerName: String? = null,
 )
