@@ -30,6 +30,15 @@ class MigrationClient @Inject constructor(
     companion object {
         private const val TAG = "MigrationClient"
         private const val TIMEOUT_MS = 10_000L
+        private val SECURITY_AUDIT_TYPES = setOf(
+            "identity.key.used",
+            "critical_secret.used",
+            "connection.verified",
+            "connection.verify.denied",
+            "security.alert",
+            "auth.attempt_failed",
+            "auth.success",
+        )
     }
 
     private val _migrationEvents = MutableSharedFlow<MigrationEvent>(extraBufferCapacity = 8)
@@ -256,18 +265,33 @@ class MigrationClient @Inject constructor(
         }
     }
 
+    /**
+     * Parse audit.query response. The vault returns
+     *   { "events": [{ event_id, event_type, title, created_at, metadata, ... }], ... }
+     *
+     * which is the same FeedEvent shape used everywhere else. The old
+     * code looked for `entries` (never existed in the response) — so
+     * this method silently returned an empty list for every call, which
+     * was the root cause of the "no audit log entries" report.
+     *
+     * Filter client-side to security-relevant types so the screen
+     * stays focused: identity-key signings, critical-secret use,
+     * connection verify outcomes, migrations, auth events.
+     */
     private fun parseAuditLogEntries(json: JsonObject): List<AuditLogEntry> {
-        val entriesArray = json.getAsJsonArray("entries") ?: return emptyList()
-
-        return entriesArray.mapNotNull { element ->
+        val eventsArray = json.getAsJsonArray("events") ?: return emptyList()
+        return eventsArray.mapNotNull { element ->
             try {
                 val obj = element.asJsonObject
+                val type = obj.get("event_type")?.asString ?: return@mapNotNull null
+                if (!isSecurityRelevantType(type)) return@mapNotNull null
                 AuditLogEntry(
-                    id = obj.get("id")?.asString ?: return@mapNotNull null,
-                    type = obj.get("type")?.asString ?: return@mapNotNull null,
-                    title = getAuditLogTitle(obj.get("type")?.asString ?: ""),
-                    description = obj.get("description")?.asString ?: "",
-                    timestamp = obj.get("timestamp")?.asLong ?: System.currentTimeMillis(),
+                    id = obj.get("event_id")?.asString ?: return@mapNotNull null,
+                    type = type,
+                    title = obj.get("title")?.asString?.takeIf { it.isNotBlank() }
+                        ?: getAuditLogTitle(type),
+                    description = obj.get("message")?.asString.orEmpty(),
+                    timestamp = (obj.get("created_at")?.asLong ?: 0L) * 1000L,
                     metadata = obj.getAsJsonObject("metadata")
                 )
             } catch (e: Exception) {
@@ -277,14 +301,27 @@ class MigrationClient @Inject constructor(
         }
     }
 
+    private fun isSecurityRelevantType(type: String): Boolean = type in SECURITY_AUDIT_TYPES ||
+        type.startsWith("migration_") ||
+        type.startsWith("auth.") ||
+        type.startsWith("security.")
+
     private fun getAuditLogTitle(type: String): String {
         return when (type) {
             "migration_sealed_material" -> "Credential Migration Started"
             "migration_verified" -> "Credential Migration Completed"
             "migration_old_version_deleted" -> "Old Credential Version Removed"
+            "identity.key.used" -> "Identity key used"
+            "critical_secret.used" -> "Critical secret used"
+            "connection.verified" -> "Identity verified"
+            "connection.verify.denied" -> "Identity verification denied"
+            "auth.attempt_failed" -> "Authentication attempt failed"
+            "auth.success" -> "Authentication succeeded"
+            "security.alert" -> "Security alert"
             else -> type.replace("_", " ").replaceFirstChar { it.uppercase() }
         }
     }
+
 }
 
 /**
