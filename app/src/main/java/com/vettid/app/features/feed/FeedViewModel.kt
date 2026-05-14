@@ -500,6 +500,9 @@ class FeedViewModel @Inject constructor(
                     val kind = if (conn.lastActivitySubtype == "video") "video call" else "voice call"
                     "$verb · $kind"
                 }
+                conn.lastActivityType == "verify" ->
+                    if (conn.lastActivityDirection == "outgoing") "You asked to verify their identity"
+                    else "Asked to verify your identity"
                 conn.lastMessagePreview != null -> conn.lastMessagePreview
                 conn.status == "active" -> "Connected"
                 conn.status == "revoked" -> "Connection revoked"
@@ -707,6 +710,7 @@ class FeedViewModel @Inject constructor(
                             }
                         }
                         "message" -> if (activityDirection == "outgoing") "You sent a message" else "Received a message"
+                        "verify" -> if (activityDirection == "outgoing") "You asked to verify their identity" else "Asked to verify your identity"
                         else -> ""
                     }
                 },

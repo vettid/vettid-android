@@ -1946,6 +1946,7 @@ private fun lastActivityIcon(
         activityType == "message" && direction == "incoming" ->
             Icons.AutoMirrored.Filled.Reply to MaterialTheme.colorScheme.outline
         activityType == "message" -> Icons.AutoMirrored.Filled.Chat to MaterialTheme.colorScheme.outline
+        activityType == "verify" -> Icons.Default.VerifiedUser to MaterialTheme.colorScheme.outline
         activityType == "connection" -> Icons.Default.Person to MaterialTheme.colorScheme.outline
         else -> null to MaterialTheme.colorScheme.outline
     }
