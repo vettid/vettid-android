@@ -173,6 +173,13 @@ class FeedViewModel @Inject constructor(
                     }
                     is com.vettid.app.core.nats.GrantEvent.GrantCreated -> {
                         // Owner just approved (us) — clear by request_id.
+                        // Also cancel the OS shade entry as a safety net:
+                        // covers approvals from either the full-screen
+                        // prompt or the Grants Pending tab regardless of
+                        // which ViewModel handled it.
+                        feedNotificationService.clearApprovalNotification(
+                            ApprovalNotificationKind.DataRequest, ev.requestId
+                        )
                         val existing = incomingGrantsByConn[ev.connectionId] ?: return@collect
                         val filtered = existing.filter { it.requestId != ev.requestId }
                         incomingGrantsByConn = if (filtered.isEmpty()) incomingGrantsByConn - ev.connectionId
@@ -180,6 +187,9 @@ class FeedViewModel @Inject constructor(
                         rebuildDisplayItems()
                     }
                     is com.vettid.app.core.nats.GrantEvent.GrantDenied -> {
+                        feedNotificationService.clearApprovalNotification(
+                            ApprovalNotificationKind.DataRequest, ev.requestId
+                        )
                         val existing = incomingGrantsByConn[ev.connectionId] ?: return@collect
                         val filtered = existing.filter { it.requestId != ev.requestId }
                         incomingGrantsByConn = if (filtered.isEmpty()) incomingGrantsByConn - ev.connectionId

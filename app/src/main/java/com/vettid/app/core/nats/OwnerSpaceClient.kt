@@ -3085,6 +3085,43 @@ class OwnerSpaceClient @Inject constructor(
         }
     }
 
+    /**
+     * Locally synthesize a grant-resolved event after the user approves
+     * or denies a request in-app. The vault echoes data-grant-created /
+     * data-grant-denied too, but that round-trip is not always reliable
+     * — emitting locally makes the feed's IncomingGrantRequest row and
+     * the OS notification clear immediately. FeedViewModel's removal is
+     * keyed by request_id and idempotent, so a later vault echo for the
+     * same request is a harmless no-op.
+     */
+    fun emitGrantCreatedLocally(connectionId: String, requestId: String) {
+        _grantEvents.tryEmit(
+            GrantEvent.GrantCreated(
+                connectionId = connectionId,
+                granterGuid = "",
+                grantId = "",
+                requestId = requestId,
+                itemKind = "",
+                itemLabel = "",
+                mode = "",
+                expiresAt = 0L,
+                maxUses = 0,
+            )
+        )
+    }
+
+    /** Counterpart to [emitGrantCreatedLocally] for the deny path. */
+    fun emitGrantDeniedLocally(connectionId: String, requestId: String) {
+        _grantEvents.tryEmit(
+            GrantEvent.GrantDenied(
+                connectionId = connectionId,
+                granterGuid = "",
+                requestId = requestId,
+                reason = "resolved-locally",
+            )
+        )
+    }
+
     companion object {
         private const val TAG = "OwnerSpaceClient"
 

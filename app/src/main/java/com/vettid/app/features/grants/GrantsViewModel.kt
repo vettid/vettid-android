@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.nats.GrantEvent
 import com.vettid.app.core.nats.OwnerSpaceClient
+import com.vettid.app.features.feed.ApprovalNotificationKind
+import com.vettid.app.features.feed.FeedNotificationService
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,20 +33,22 @@ import javax.inject.Inject
 class GrantsViewModel @Inject constructor(
     private val repo: GrantsRepository,
     private val ownerSpaceClient: OwnerSpaceClient,
+    private val notificationService: FeedNotificationService,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
     private val connectionId: String = savedStateHandle["connectionId"] ?: ""
 
     /**
-     * Pre-selected tab from the route's initialTab arg — wired from
-     * ConnectionDetail's Them/You entries so each side opens to the
-     * tab that matches the user's mental model:
-     *   0 = Held in trust (data they shared with you)
-     *   1 = Granted (data you shared with them)
-     *   2 = Pending (their requests of you)
+     * Which side of the sharing relationship this screen renders, from
+     * the route's `direction` arg. The ConnectionDetail Them/You tabs
+     * each open this screen scoped to one direction so a grant only
+     * ever appears under the side that owns it:
+     *   "inbound"  = data they've shared with you (Current / Expired)
+     *   "outbound" = data you share with them (Allowed / Expired / Pending)
      */
-    val initialTab: Int = (savedStateHandle.get<Int>("initialTab") ?: 0).coerceIn(0, 2)
+    val direction: String = savedStateHandle.get<String>("direction") ?: "inbound"
+    val isInbound: Boolean get() = direction != "outbound"
 
     private val _outbound = MutableStateFlow<List<GrantSummary>>(emptyList())
     val outbound: StateFlow<List<GrantSummary>> = _outbound.asStateFlow()
@@ -122,7 +126,16 @@ class GrantsViewModel @Inject constructor(
         viewModelScope.launch {
             _busy.value = true
             repo.approve(requestId, expiresAt, maxUses, mode)
-                .onSuccess { _events.tryEmit(GrantsEvent.Approved(it)) }
+                .onSuccess {
+                    // Approving from the Pending tab must clear the same
+                    // surfaces the full-screen prompt does: the OS shade
+                    // entry and the feed card's IncomingGrantRequest row.
+                    notificationService.clearApprovalNotification(
+                        ApprovalNotificationKind.DataRequest, requestId
+                    )
+                    ownerSpaceClient.emitGrantCreatedLocally(connectionId, requestId)
+                    _events.tryEmit(GrantsEvent.Approved(it))
+                }
                 .onFailure { _events.tryEmit(GrantsEvent.Error(it.message ?: "Approve failed")) }
             _busy.value = false
             refresh()
@@ -133,7 +146,13 @@ class GrantsViewModel @Inject constructor(
         viewModelScope.launch {
             _busy.value = true
             repo.deny(requestId, reason)
-                .onSuccess { _events.tryEmit(GrantsEvent.Denied(requestId)) }
+                .onSuccess {
+                    notificationService.clearApprovalNotification(
+                        ApprovalNotificationKind.DataRequest, requestId
+                    )
+                    ownerSpaceClient.emitGrantDeniedLocally(connectionId, requestId)
+                    _events.tryEmit(GrantsEvent.Denied(requestId))
+                }
                 .onFailure { _events.tryEmit(GrantsEvent.Error(it.message ?: "Deny failed")) }
             _busy.value = false
             refresh()

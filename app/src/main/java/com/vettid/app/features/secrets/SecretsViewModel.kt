@@ -25,6 +25,7 @@ import javax.inject.Inject
 
 private const val TAG = "SecretsViewModel"
 
+@OptIn(kotlinx.coroutines.FlowPreview::class)
 @HiltViewModel
 class SecretsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -77,9 +78,14 @@ class SecretsViewModel @Inject constructor(
         // markSyncComplete() after a successful publish — otherwise
         // the unpublished-changes banner stays stuck.
         viewModelScope.launch {
-            minorSecretsStore.publishDirtyTick.drop(1).collect {
-                loadSecrets()
-            }
+            // Debounce: a batch mutation (saveTemplate adding N fields)
+            // bumps publishDirtyTick once per field. Without debounce
+            // that's N back-to-back loadSecrets() calls — each a
+            // secret.list round-trip. Collapse the burst into one
+            // reload after the writes settle.
+            minorSecretsStore.publishDirtyTick.drop(1)
+                .debounce(400)
+                .collect { loadSecrets() }
         }
     }
 
@@ -103,7 +109,8 @@ class SecretsViewModel @Inject constructor(
     private fun loadSecrets() {
         viewModelScope.launch {
             // Only show full-screen loading on initial load, not on refresh
-            val isRefresh = _state.value !is SecretsState.Loading
+            val previous = _state.value
+            val isRefresh = previous !is SecretsState.Loading
             if (!isRefresh) {
                 _state.value = SecretsState.Loading
             } else {
@@ -126,7 +133,22 @@ class SecretsViewModel @Inject constructor(
                 Log.d(TAG, "Loaded ${secrets.size} secrets")
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to load secrets", e)
-                _state.value = SecretsState.Error(e.message ?: "Failed to load secrets")
+                // A transient vault/NATS failure must not wipe a list
+                // the user can still see — getAllSecrets() now throws
+                // on failure rather than returning an empty list, so an
+                // empty result here is genuine, not a timeout. Keep the
+                // last-known Loaded list and surface a non-destructive
+                // error; only show the Error screen when we had nothing
+                // to fall back to.
+                val prior = previous as? SecretsState.Loaded
+                if (prior != null) {
+                    _state.value = prior
+                    _effects.emit(
+                        SecretsEffect.ShowError("Couldn't refresh — showing last known secrets")
+                    )
+                } else {
+                    _state.value = SecretsState.Error(e.message ?: "Failed to load secrets")
+                }
             } finally {
                 // Brief delay ensures PullToRefreshBox indicator animates properly
                 kotlinx.coroutines.delay(300)
@@ -438,6 +460,10 @@ class SecretsViewModel @Inject constructor(
                     loadSecrets()
                     _effects.emit(SecretsEffect.ShowSuccess("Public profile updated"))
                 } else {
+                    // Vault rejected the change — re-sync so the
+                    // segmented control snaps back to the true state
+                    // instead of showing the optimistic (wrong) value.
+                    loadSecrets()
                     _effects.emit(SecretsEffect.ShowError("Only public keys can be shared to profile"))
                 }
             } catch (e: Exception) {
@@ -454,6 +480,9 @@ class SecretsViewModel @Inject constructor(
                 if (result) {
                     loadSecrets()
                 } else {
+                    // Re-sync so the segmented control reflects the
+                    // vault's actual state after a rejected change.
+                    loadSecrets()
                     _effects.emit(SecretsEffect.ShowError("Could not update catalog visibility"))
                 }
             } catch (e: Exception) {

@@ -51,9 +51,23 @@ class MinorSecretsStore @Inject constructor(
     suspend fun getAllSecrets(): List<MinorSecret> {
         val resp = ownerSpaceClient.sendAndAwaitResponse(
             "secret.list", JsonObject(), 10_000L
-        ) as? VaultResponse.HandlerResult ?: return emptyList()
-        if (!resp.success || resp.result == null) return emptyList()
-        val arr = resp.result.getAsJsonArray("secrets") ?: return emptyList()
+        )
+        // Distinguish a genuinely empty vault from a failed call. A null
+        // / non-HandlerResult response (timeout, NATS hiccup) or
+        // success=false must NOT look like "zero secrets" — that's how
+        // a transient failure during a burst of secret.list calls wiped
+        // the whole list to the Empty state and the user's secrets
+        // "disappeared". Throw so the caller can keep the last-known
+        // list instead of clearing it.
+        if (resp !is VaultResponse.HandlerResult) {
+            throw IllegalStateException("secret.list: no response from vault")
+        }
+        if (!resp.success) {
+            throw IllegalStateException("secret.list failed")
+        }
+        // success=true with no result / no array is a real empty vault.
+        val result = resp.result ?: return emptyList()
+        val arr = result.getAsJsonArray("secrets") ?: return emptyList()
         val out = mutableListOf<MinorSecret>()
         for (el in arr) {
             try {
@@ -150,9 +164,33 @@ class MinorSecretsStore @Inject constructor(
         if (!resp.success || resp.result == null) return null
         bumpPublishDirty()
         val id = resp.result.get("id")?.asString ?: return null
-        // Re-fetch to populate the full record with vault-assigned
-        // timestamps; cheap and keeps the return shape canonical.
-        return getSecret(id)
+        // Build the record locally from the inputs + the vault-assigned
+        // id. We deliberately do NOT re-fetch via getSecret() here — it
+        // runs a full secret.list, and a multi-field template save
+        // (credit card = 5 fields) turned into a secret.list storm that
+        // overwhelmed the response correlation. Callers reload the full
+        // list once after the batch; that's the canonical refresh.
+        return MinorSecret(
+            id = id,
+            name = name,
+            value = "",
+            category = category,
+            type = type,
+            alias = alias.orEmpty(),
+            notes = notes,
+            isShareable = isShareable,
+            isInPublicProfile = isInPublicProfile,
+            // Mirrors the discoverability we just sent: public entries
+            // are cataloged, everything else lands private (hidden).
+            hideFromCatalog = !isInPublicProfile,
+            isSystemField = isSystemField,
+            sortOrder = 0,
+            groupId = groupId,
+            groupLabel = groupLabel,
+            syncStatus = SyncStatus.SYNCED,
+            createdAt = System.currentTimeMillis(),
+            updatedAt = System.currentTimeMillis(),
+        )
     }
 
     suspend fun updateSecret(secret: MinorSecret): Boolean {

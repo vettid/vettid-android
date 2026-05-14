@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.features.feed.ApprovalNotificationKind
 import com.vettid.app.features.feed.FeedNotificationService
 import com.vettid.app.features.feed.FeedRepository
@@ -31,6 +32,7 @@ class DataGrantApprovalViewModel @Inject constructor(
     private val grants: GrantsRepository,
     private val feedRepository: FeedRepository,
     private val notificationService: FeedNotificationService,
+    private val ownerSpaceClient: OwnerSpaceClient,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -70,6 +72,10 @@ class DataGrantApprovalViewModel @Inject constructor(
             grants.approve(requestId, requestedExpiresAt, requestedMaxUses, requestedMode)
                 .onSuccess {
                     notificationService.clearApprovalNotification(ApprovalNotificationKind.DataRequest, requestId)
+                    // Drop the IncomingGrantRequest row from the feed
+                    // card immediately rather than waiting on the
+                    // vault's data-grant-created echo.
+                    ownerSpaceClient.emitGrantCreatedLocally(connectionId, requestId)
                     _state.value = State.Approved
                 }
                 .onFailure {
@@ -86,6 +92,7 @@ class DataGrantApprovalViewModel @Inject constructor(
             grants.deny(requestId, "")
                 .onSuccess {
                     notificationService.clearApprovalNotification(ApprovalNotificationKind.DataRequest, requestId)
+                    ownerSpaceClient.emitGrantDeniedLocally(connectionId, requestId)
                     _state.value = State.Denied
                 }
                 .onFailure {

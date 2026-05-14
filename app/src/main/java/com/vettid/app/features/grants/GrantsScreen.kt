@@ -18,9 +18,18 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Grant management — three tabs: Held in trust (inbound), Granted
- * (outbound), Pending (incoming requests awaiting decision). Scoped
- * to a single connection via SavedStateHandle["connectionId"].
+ * Grant management, scoped to one side of a connection's sharing
+ * relationship via the route's `direction` arg:
+ *
+ *   "inbound"  — "Data they've shared": items they granted you, split
+ *                into Current (active) / Expired (everything else).
+ *   "outbound" — "Data sharing": items you granted them, split into
+ *                Allowed (active) / Expired, plus Pending (their
+ *                requests of you awaiting your decision).
+ *
+ * Scoping by direction is deliberate — the old single screen showed
+ * all three direction tabs from both ConnectionDetail entry points, so
+ * "Granted" appeared under both Them and You.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -34,14 +43,22 @@ fun GrantsScreen(
     val revealedValue by viewModel.revealedValue.collectAsState()
     val busy by viewModel.busy.collectAsState()
 
-    var tab by remember { mutableStateOf(viewModel.initialTab) }
+    val isInbound = viewModel.isInbound
+
+    // Split this direction's grants into active vs ended (expired or
+    // revoked). The per-row status badge still shows the precise state.
+    val directionGrants = if (isInbound) inbound else outbound
+    val activeGrants = directionGrants.filter { it.status == "active" }
+    val endedGrants = directionGrants.filter { it.status != "active" }
+
+    var tab by remember { mutableStateOf(0) }
 
     LaunchedEffect(Unit) { viewModel.refresh() }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Data sharing") },
+                title = { Text(if (isInbound) "Data they've shared" else "Data sharing") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -52,16 +69,43 @@ fun GrantsScreen(
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
             TabRow(selectedTabIndex = tab) {
-                Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Held in trust (${inbound.size})") })
-                Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Granted (${outbound.size})") })
-                Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text("Pending (${pending.size})") })
+                if (isInbound) {
+                    // Them side. No Pending tab here — that would track
+                    // requests YOU sent them awaiting their approval,
+                    // which has no vault list op yet.
+                    Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Current (${activeGrants.size})") })
+                    Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Expired (${endedGrants.size})") })
+                } else {
+                    // You side.
+                    Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Allowed (${activeGrants.size})") })
+                    Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Expired (${endedGrants.size})") })
+                    Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text("Pending (${pending.size})") })
+                }
             }
             if (busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
 
-            when (tab) {
-                0 -> InboundList(inbound) { viewModel.reveal(it.grantId) }
-                1 -> OutboundList(outbound) { viewModel.revoke(it.grantId) }
-                2 -> PendingList(
+            when {
+                isInbound && tab == 0 -> InboundList(
+                    grants = activeGrants,
+                    emptyMessage = "Nothing currently held in trust from this connection.",
+                    onTap = { viewModel.reveal(it.grantId) },
+                )
+                isInbound && tab == 1 -> InboundList(
+                    grants = endedGrants,
+                    emptyMessage = "No expired or revoked items from this connection.",
+                    onTap = { viewModel.reveal(it.grantId) },
+                )
+                !isInbound && tab == 0 -> OutboundList(
+                    grants = activeGrants,
+                    emptyMessage = "You haven't granted any items to this connection.",
+                    onRevoke = { viewModel.revoke(it.grantId) },
+                )
+                !isInbound && tab == 1 -> OutboundList(
+                    grants = endedGrants,
+                    emptyMessage = "No expired or revoked grants for this connection.",
+                    onRevoke = { viewModel.revoke(it.grantId) },
+                )
+                else -> PendingList(
                     pending = pending,
                     onApprove = { viewModel.approve(it.requestId, it.requestedExpiresAt, it.requestedMaxUses, it.requestedMode) },
                     onDeny = { viewModel.deny(it.requestId, "") },
@@ -81,9 +125,13 @@ fun GrantsScreen(
 }
 
 @Composable
-private fun InboundList(grants: List<GrantSummary>, onTap: (GrantSummary) -> Unit) {
+private fun InboundList(
+    grants: List<GrantSummary>,
+    emptyMessage: String,
+    onTap: (GrantSummary) -> Unit,
+) {
     if (grants.isEmpty()) {
-        EmptyState("Nothing held in trust from this connection.")
+        EmptyState(emptyMessage)
         return
     }
     LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp)) {
@@ -100,9 +148,13 @@ private fun InboundList(grants: List<GrantSummary>, onTap: (GrantSummary) -> Uni
 }
 
 @Composable
-private fun OutboundList(grants: List<GrantSummary>, onRevoke: (GrantSummary) -> Unit) {
+private fun OutboundList(
+    grants: List<GrantSummary>,
+    emptyMessage: String,
+    onRevoke: (GrantSummary) -> Unit,
+) {
     if (grants.isEmpty()) {
-        EmptyState("You haven't granted any items to this connection.")
+        EmptyState(emptyMessage)
         return
     }
     LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp)) {

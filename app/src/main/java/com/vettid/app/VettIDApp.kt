@@ -177,14 +177,15 @@ sealed class Screen(val route: String) {
     object MySharing : Screen("connections/{connectionId}/my-sharing") {
         fun createRoute(connectionId: String) = "connections/${encodeId(connectionId)}/my-sharing"
     }
-    object Grants : Screen("connections/{connectionId}/grants?initialTab={initialTab}") {
-        // initialTab: 0 = Held in trust (inbound), 1 = Granted (outbound),
-        // 2 = Pending (requests of you). The ConnectionDetail tabs split
-        // the entry across Them ("they shared with you") and You ("you
-        // shared with them + their requests") so the same screen pre-
-        // selects the right tab for each entry point.
-        fun createRoute(connectionId: String, initialTab: Int = 0) =
-            "connections/${encodeId(connectionId)}/grants?initialTab=$initialTab"
+    object Grants : Screen("connections/{connectionId}/grants?direction={direction}") {
+        // direction scopes the screen to one side of the sharing
+        // relationship so a grant only ever appears under the side that
+        // owns it (no more "Granted shows in both tabs"):
+        //   "inbound"  = data they've shared with you  → Current / Expired
+        //   "outbound" = data you share with them      → Allowed / Expired / Pending
+        // The ConnectionDetail Them tab opens "inbound", You tab "outbound".
+        fun createRoute(connectionId: String, direction: String = "inbound") =
+            "connections/${encodeId(connectionId)}/grants?direction=$direction"
     }
     object CriticalUseApproval : Screen("grants/critical-use/{requestId}?itemLabel={itemLabel}&operation={operation}&context={context}") {
         fun createRoute(requestId: String, itemLabel: String, operation: String, context: String): String {
@@ -1107,12 +1108,12 @@ fun VettIDApp(
                     navController.navigate(Screen.MySharing.createRoute(id))
                 },
                 onNavigateToTheirGrants = { id ->
-                    // From Them tab — show inbound grants (held in trust).
-                    navController.navigate(Screen.Grants.createRoute(id, initialTab = 0))
+                    // From Them tab — "Data they've shared": inbound only.
+                    navController.navigate(Screen.Grants.createRoute(id, direction = "inbound"))
                 },
                 onNavigateToYourGrants = { id ->
-                    // From You tab — show outbound grants (granted).
-                    navController.navigate(Screen.Grants.createRoute(id, initialTab = 1))
+                    // From You tab — "Data sharing": outbound + pending.
+                    navController.navigate(Screen.Grants.createRoute(id, direction = "outbound"))
                 },
                 onBack = { navController.safePopBackStack() }
             )
@@ -1189,7 +1190,7 @@ fun VettIDApp(
             route = Screen.Grants.route,
             arguments = listOf(
                 navArgument("connectionId") { type = NavType.StringType },
-                navArgument("initialTab") { type = NavType.IntType; defaultValue = 0 },
+                navArgument("direction") { type = NavType.StringType; defaultValue = "inbound" },
             )
         ) {
             com.vettid.app.features.grants.GrantsScreen(
