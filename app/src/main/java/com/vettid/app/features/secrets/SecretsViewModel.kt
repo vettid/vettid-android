@@ -338,6 +338,8 @@ class SecretsViewModel @Inject constructor(
                 val groupLabel = templateState.groupName.takeIf { it.isNotBlank() }
                     ?: template.name
 
+                val alias = templateState.alias.trim().takeIf { it.isNotBlank() }
+
                 template.fields.forEachIndexed { index, field ->
                     val value = templateState.getValue(index)
                     if (value.isNotBlank()) {
@@ -348,7 +350,8 @@ class SecretsViewModel @Inject constructor(
                             type = field.type,
                             isInPublicProfile = false,
                             groupId = groupId,
-                            groupLabel = groupLabel
+                            groupLabel = groupLabel,
+                            alias = alias
                         )
                         savedCount++
                     }

@@ -459,6 +459,10 @@ data class TemplateFormState(
     val template: SecretTemplate,
     val fieldValues: Map<Int, String> = emptyMap(),
     val groupName: String = "",
+    // Optional catalog disambiguator — mirrors the Personal Data
+    // template form's alias. Lets two "Credit Card" entries show as
+    // "Visa" / "Amex" in the catalog instead of two identical groups.
+    val alias: String = "",
     val isSaving: Boolean = false
 ) {
     fun getValue(fieldIndex: Int): String = fieldValues[fieldIndex] ?: ""

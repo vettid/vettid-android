@@ -266,6 +266,9 @@ fun SecretsContent(
             onGroupNameChange = { name ->
                 templateFormState = formState.copy(groupName = name)
             },
+            onAliasChange = { alias ->
+                templateFormState = formState.copy(alias = alias)
+            },
             onSave = {
                 viewModel.saveTemplate(formState)
                 templateFormState = null
@@ -1508,6 +1511,7 @@ private fun TemplateFormDialog(
     state: TemplateFormState,
     onFieldValueChange: (Int, String) -> Unit,
     onGroupNameChange: (String) -> Unit = {},
+    onAliasChange: (String) -> Unit = {},
     onSave: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -1547,10 +1551,29 @@ private fun TemplateFormDialog(
                     )
                 }
 
+                // Alias — optional catalog disambiguator, same as the
+                // Personal Data template form. Lets two entries of the
+                // same template ("Credit Card") be told apart.
+                OutlinedTextField(
+                    value = state.alias,
+                    onValueChange = onAliasChange,
+                    label = { Text("Alias (optional)") },
+                    placeholder = { Text("e.g. Visa, Amex, Joint Account") },
+                    supportingText = { Text("Helps tell similar entries apart in your catalog.") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
                 state.template.fields.forEachIndexed { index, field ->
                     when (field.inputHint) {
                         FieldInputHint.DATE, FieldInputHint.EXPIRY_DATE -> {
-                            // Date field - read-only text field that opens a date picker
+                            // Date field — read-only field that opens a date
+                            // picker on tap. enabled = false (not just
+                            // readOnly) so the field doesn't consume the tap
+                            // itself — a readOnly-but-enabled OutlinedTextField
+                            // swallows pointer input, leaving the .clickable
+                            // dead and the picker unreachable. Disabled colors
+                            // overridden so it still reads as an active field.
                             OutlinedTextField(
                                 value = state.getValue(index),
                                 onValueChange = {},
@@ -1559,6 +1582,7 @@ private fun TemplateFormDialog(
                                     Text(if (field.inputHint == FieldInputHint.EXPIRY_DATE) "MM/YYYY" else "MM/DD/YYYY")
                                 },
                                 readOnly = true,
+                                enabled = false,
                                 singleLine = true,
                                 leadingIcon = {
                                     Icon(
@@ -1567,6 +1591,13 @@ private fun TemplateFormDialog(
                                         modifier = Modifier.size(18.dp)
                                     )
                                 },
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                                    disabledBorderColor = MaterialTheme.colorScheme.outline,
+                                    disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    disabledPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    disabledLeadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                ),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable { datePickerFieldIndex = index }
