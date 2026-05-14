@@ -265,6 +265,46 @@ class GrantsRepository @Inject constructor(
         return Result.success(out)
     }
 
+    /**
+     * List requests this vault has SENT to peers (outgoing), with their
+     * current status. Backs the Them-tab "Requested" sub-tab and the
+     * peer-catalog "already requested" badge. Scoped to a connection
+     * when connectionId is non-empty.
+     */
+    suspend fun listMyRequests(connectionId: String?): Result<List<OutgoingRequestSummary>> {
+        val payload = JsonObject().apply {
+            if (!connectionId.isNullOrEmpty()) addProperty("connection_id", connectionId)
+        }
+        val resp = ownerSpaceClient.sendAndAwaitResponse("grant.list-my-requests", payload, 10_000L)
+        if (resp !is VaultResponse.HandlerResult || !resp.success || resp.result == null) {
+            return Result.failure(Exception("list-my-requests failed"))
+        }
+        val arr = resp.result.getAsJsonArray("my_requests") ?: return Result.success(emptyList())
+        val out = mutableListOf<OutgoingRequestSummary>()
+        arr.forEach { el ->
+            try {
+                val o = el.asJsonObject
+                out += OutgoingRequestSummary(
+                    requestId = o.get("request_id").asString,
+                    connectionId = o.get("connection_id")?.asString.orEmpty(),
+                    itemKind = o.get("item_kind")?.asString.orEmpty(),
+                    itemRef = o.get("item_ref")?.asString.orEmpty(),
+                    itemLabel = o.get("item_label")?.asString.orEmpty(),
+                    mode = o.get("mode")?.asString.orEmpty(),
+                    reason = o.get("reason")?.asString.orEmpty(),
+                    status = o.get("status")?.asString.orEmpty(),
+                    grantId = o.get("grant_id")?.asString.orEmpty(),
+                    denialReason = o.get("denial_reason")?.asString.orEmpty(),
+                    createdAt = o.get("created_at")?.asLong ?: 0L,
+                    respondedAt = o.get("responded_at")?.asLong ?: 0L,
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "skip malformed my-request: ${e.message}")
+            }
+        }
+        return Result.success(out)
+    }
+
     private fun parseGrants(resp: VaultResponse?, arrayKey: String): Result<List<GrantSummary>> {
         if (resp !is VaultResponse.HandlerResult || !resp.success || resp.result == null) {
             return Result.failure(Exception("$arrayKey list failed"))
@@ -361,6 +401,26 @@ data class PendingRequestSummary(
     val deliverTo: String,
     val reason: String,
     val receivedAt: Long,
+)
+
+/**
+ * A request this vault has SENT to a peer, with its current status.
+ * `status` is "pending" until the peer answers, then "approved" (with
+ * `grantId` set) or "denied" (with `denialReason`).
+ */
+data class OutgoingRequestSummary(
+    val requestId: String,
+    val connectionId: String,
+    val itemKind: String,
+    val itemRef: String,
+    val itemLabel: String,
+    val mode: String,
+    val reason: String,
+    val status: String,
+    val grantId: String,
+    val denialReason: String,
+    val createdAt: Long,
+    val respondedAt: Long,
 )
 
 object GrantModes {

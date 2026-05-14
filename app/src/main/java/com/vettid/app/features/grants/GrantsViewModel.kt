@@ -59,6 +59,11 @@ class GrantsViewModel @Inject constructor(
     private val _pending = MutableStateFlow<List<PendingRequestSummary>>(emptyList())
     val pending: StateFlow<List<PendingRequestSummary>> = _pending.asStateFlow()
 
+    // Requests this vault has sent to the peer, awaiting (or already
+    // given) their decision. Drives the Them-tab "Requested" sub-tab.
+    private val _myRequests = MutableStateFlow<List<OutgoingRequestSummary>>(emptyList())
+    val myRequests: StateFlow<List<OutgoingRequestSummary>> = _myRequests.asStateFlow()
+
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy.asStateFlow()
 
@@ -99,6 +104,7 @@ class GrantsViewModel @Inject constructor(
             repo.listPending().onSuccess { list ->
                 _pending.value = if (connectionId.isEmpty()) list else list.filter { it.connectionId == connectionId }
             }
+            repo.listMyRequests(connectionId.ifEmpty { null }).onSuccess { _myRequests.value = it }
         }
     }
 

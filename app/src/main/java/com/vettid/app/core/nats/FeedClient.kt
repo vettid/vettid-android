@@ -215,18 +215,24 @@ class FeedClient @Inject constructor(
      * @param eventTypes Filter by event types (e.g., ["call.incoming", "message.received"])
      * @param startDate Start date as epoch millis
      * @param endDate End date as epoch millis
+     * @param sourceId Scope to one connection's events (the vault's source_id filter)
      * @param limit Max results
      */
     suspend fun queryAudit(
         eventTypes: List<String>? = null,
         startDate: Long? = null,
         endDate: Long? = null,
+        sourceId: String? = null,
         limit: Int = 100
     ): Result<AuditQueryResponse> {
         val payload = JsonObject().apply {
             eventTypes?.let { add("event_types", gson.toJsonTree(it)) }
-            startDate?.let { addProperty("start_date", it) }
-            endDate?.let { addProperty("end_date", it) }
+            // The vault's AuditQueryRequest keys are start_time / end_time —
+            // start_date / end_date were silently ignored, so date filtering
+            // never reached the enclave.
+            startDate?.let { addProperty("start_time", it) }
+            endDate?.let { addProperty("end_time", it) }
+            sourceId?.takeIf { it.isNotEmpty() }?.let { addProperty("source_id", it) }
             addProperty("limit", limit)
         }
 
@@ -248,8 +254,9 @@ class FeedClient @Inject constructor(
     ): Result<AuditExportResponse> {
         val payload = JsonObject().apply {
             eventTypes?.let { add("event_types", gson.toJsonTree(it)) }
-            startDate?.let { addProperty("start_date", it) }
-            endDate?.let { addProperty("end_date", it) }
+            // start_time / end_time — see queryAudit note.
+            startDate?.let { addProperty("start_time", it) }
+            endDate?.let { addProperty("end_time", it) }
         }
 
         return sendRequest("audit.export", payload) { result ->

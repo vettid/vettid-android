@@ -196,17 +196,24 @@ class PeerCatalogViewModel @Inject constructor(
 
     private suspend fun loadOutstandingRequests(): Map<String, OutstandingRequest> {
         return try {
+            // grant.list-my-requests, NOT capability.request.list — the
+            // catalog requests items via grant.request, so the matching
+            // status store is the grant handler's outgoing-request log.
+            // (capability.request.* is a separate, coarser system.)
             val payload = JsonObject().apply { addProperty("connection_id", connectionId) }
-            val resp = ownerSpaceClient.sendAndAwaitResponse("capability.request.list", payload, 10_000L)
+            val resp = ownerSpaceClient.sendAndAwaitResponse("grant.list-my-requests", payload, 10_000L)
             if (resp is VaultResponse.HandlerResult && resp.success && resp.result != null) {
                 val out = mutableMapOf<String, OutstandingRequest>()
-                resp.result.getAsJsonArray("requests")?.forEach { el ->
+                resp.result.getAsJsonArray("my_requests")?.forEach { el ->
                     try {
                         val o = el.asJsonObject
-                        val credId = o.get("credential_id")?.asString ?: return@forEach
-                        val statusStr = o.get("status")?.asString ?: "pending"
+                        val kind = o.get("item_kind")?.asString ?: return@forEach
+                        val ref = o.get("item_ref")?.asString ?: return@forEach
                         val rid = o.get("request_id")?.asString ?: return@forEach
-                        out[credId] = OutstandingRequest(rid, parseStatus(statusStr))
+                        val statusStr = o.get("status")?.asString ?: "pending"
+                        // SharedItem.key is "<kind>:<ref>" — match it so the
+                        // catalog row reflects what's already been requested.
+                        out["$kind:$ref"] = OutstandingRequest(rid, parseStatus(statusStr))
                     } catch (_: Exception) { /* skip */ }
                 }
                 out

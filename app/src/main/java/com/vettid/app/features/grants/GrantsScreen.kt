@@ -40,6 +40,7 @@ fun GrantsScreen(
     val inbound by viewModel.inbound.collectAsState()
     val outbound by viewModel.outbound.collectAsState()
     val pending by viewModel.pending.collectAsState()
+    val myRequests by viewModel.myRequests.collectAsState()
     val revealedValue by viewModel.revealedValue.collectAsState()
     val busy by viewModel.busy.collectAsState()
 
@@ -70,11 +71,12 @@ fun GrantsScreen(
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
             TabRow(selectedTabIndex = tab) {
                 if (isInbound) {
-                    // Them side. No Pending tab here — that would track
-                    // requests YOU sent them awaiting their approval,
-                    // which has no vault list op yet.
+                    // Them side — "Data they've shared". Requested =
+                    // items you've asked them for, still awaiting (or
+                    // already given) their decision.
                     Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Current (${activeGrants.size})") })
                     Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Expired (${endedGrants.size})") })
+                    Tab(selected = tab == 2, onClick = { tab = 2 }, text = { Text("Requested (${myRequests.size})") })
                 } else {
                     // You side.
                     Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Allowed (${activeGrants.size})") })
@@ -95,6 +97,7 @@ fun GrantsScreen(
                     emptyMessage = "No expired or revoked items from this connection.",
                     onTap = { viewModel.reveal(it.grantId) },
                 )
+                isInbound && tab == 2 -> MyRequestsList(myRequests)
                 !isInbound && tab == 0 -> OutboundList(
                     grants = activeGrants,
                     emptyMessage = "You haven't granted any items to this connection.",
@@ -215,6 +218,40 @@ private fun PendingList(
                     OutlinedButton(onClick = { onDeny(p) }) { Text("Deny") }
                 }
             }
+            HorizontalDivider()
+        }
+    }
+}
+
+@Composable
+private fun MyRequestsList(requests: List<OutgoingRequestSummary>) {
+    if (requests.isEmpty()) {
+        EmptyState("You haven't requested anything from this connection yet.")
+        return
+    }
+    LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp)) {
+        items(requests) { r ->
+            ListItem(
+                headlineContent = { Text(r.itemLabel.ifEmpty { r.itemRef }) },
+                supportingContent = {
+                    val line = buildString {
+                        append(r.mode.ifEmpty { "one-shot" })
+                        if (r.status == "denied" && r.denialReason.isNotBlank()) {
+                            append(" · ").append(r.denialReason)
+                        } else if (r.createdAt > 0) {
+                            append(" · requested ").append(formatTime(r.createdAt))
+                        }
+                    }
+                    Text(line)
+                },
+                trailingContent = {
+                    AssistChip(
+                        onClick = {},
+                        label = { Text(r.status.ifEmpty { "pending" }) },
+                        enabled = false,
+                    )
+                },
+            )
             HorizontalDivider()
         }
     }

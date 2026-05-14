@@ -42,11 +42,9 @@ class AuditViewModel @Inject constructor(
     private var currentOffset = 0
     private var hasMore = false
 
-    // Raw events as loaded from the vault (date + event-type filtered
-    // server-side). The connection filter is applied client-side on top
-    // of this — see emitFilteredState(). A server-side connection_id
-    // param on queryAudit would make this exact under pagination; that
-    // lands with the grant.list-my-requests enclave pass.
+    // Events as loaded from the vault. Connection (source_id), date
+    // (start_time/end_time) and event-type filtering all happen
+    // server-side in the audit.query, so this list is already scoped.
     private var allLoadedEvents: List<FeedEvent> = emptyList()
 
     /**
@@ -81,6 +79,7 @@ class AuditViewModel @Inject constructor(
                 eventTypes = currentFilters.selectedEventTypes.takeIf { it.isNotEmpty() }?.toList(),
                 startDate = currentFilters.startDate,
                 endDate = currentFilters.endDate,
+                sourceId = currentFilters.connectionId,
                 limit = PAGE_SIZE
             ).onSuccess { response ->
                 hasMore = response.events.size == PAGE_SIZE
@@ -94,21 +93,20 @@ class AuditViewModel @Inject constructor(
     }
 
     /**
-     * Apply the client-side connection filter to the loaded events and
-     * publish the resulting state. Date + event-type filtering already
-     * happened server-side in the query.
+     * Publish the loaded events as state. Connection / date / event-type
+     * filtering all happen server-side in the query now (source_id +
+     * start_time/end_time + event_types), so this is a straight emit —
+     * kept as the single emit point so loadAuditLog and loadMore agree.
      */
     private fun emitFilteredState() {
-        val connId = _filters.value.connectionId
-        val visible = if (connId.isNullOrEmpty()) {
-            allLoadedEvents
-        } else {
-            allLoadedEvents.filter { it.sourceId == connId }
-        }
-        _state.value = if (visible.isEmpty()) {
+        _state.value = if (allLoadedEvents.isEmpty()) {
             AuditState.Empty
         } else {
-            AuditState.Success(events = visible, hasMore = hasMore, totalCount = visible.size)
+            AuditState.Success(
+                events = allLoadedEvents,
+                hasMore = hasMore,
+                totalCount = allLoadedEvents.size,
+            )
         }
     }
 
@@ -124,6 +122,7 @@ class AuditViewModel @Inject constructor(
                 eventTypes = currentFilters.selectedEventTypes.takeIf { it.isNotEmpty() }?.toList(),
                 startDate = currentFilters.startDate,
                 endDate = currentFilters.endDate,
+                sourceId = currentFilters.connectionId,
                 limit = PAGE_SIZE
             ).onSuccess { response ->
                 hasMore = response.events.size == PAGE_SIZE
@@ -160,12 +159,12 @@ class AuditViewModel @Inject constructor(
     }
 
     /**
-     * Scope the log to a single connection (or null for all). Applied
-     * client-side over already-loaded events — no re-query needed.
+     * Scope the log to a single connection (or null for all). Re-queries
+     * the vault with source_id so the filter is exact under pagination.
      */
     fun setConnectionFilter(connectionId: String?) {
         _filters.value = _filters.value.copy(connectionId = connectionId)
-        emitFilteredState()
+        loadAuditLog()
     }
 
     fun clearFilters() {
