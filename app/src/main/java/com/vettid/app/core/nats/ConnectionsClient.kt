@@ -665,6 +665,7 @@ class ConnectionsClient @Inject constructor(
             lastActivityType = json.get("last_activity_type")?.takeIf { !it.isJsonNull }?.asString,
             lastActivityAt = json.get("last_activity_at")?.takeIf { !it.isJsonNull }?.asString,
             lastActivityDirection = json.get("last_activity_direction")?.takeIf { !it.isJsonNull }?.asString,
+            lastActivityTitle = json.get("last_activity_title")?.takeIf { !it.isJsonNull }?.asString,
             lastActivitySubtype = json.get("last_activity_subtype")?.takeIf { !it.isJsonNull }?.asString,
             lastActivityOutcome = json.get("last_activity_outcome")?.takeIf { !it.isJsonNull }?.asString,
             missedCallCount = json.get("missed_call_count")?.asInt ?: 0,
@@ -931,10 +932,14 @@ data class ConnectionRecord(
     val lastMessageAt: String? = null,
     val lastMessageDirection: String? = null, // "incoming" | "outgoing" | null
     val unreadMessageCount: Int = 0,
-    // Merged message+call last-activity (vault picks the newer one).
-    val lastActivityType: String? = null,       // "message" | "call"
+    // Merged interaction-history + call last-activity (vault picks the
+    // newer one). "activity" carries lastActivityTitle (the AuditLog
+    // entry title — same text the history screen's top row shows);
+    // "call" carries subtype + outcome.
+    val lastActivityType: String? = null,       // "activity" | "call"
     val lastActivityAt: String? = null,
     val lastActivityDirection: String? = null,  // "incoming" | "outgoing"
+    val lastActivityTitle: String? = null,      // activity: AuditLog entry title
     val lastActivitySubtype: String? = null,    // calls: "voice" | "video"
     val lastActivityOutcome: String? = null,    // calls: "completed" | "missed" | "rejected"
     val missedCallCount: Int = 0,

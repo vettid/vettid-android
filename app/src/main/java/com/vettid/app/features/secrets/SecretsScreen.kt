@@ -42,12 +42,10 @@ import com.vettid.app.core.storage.MinorSecret
 import com.vettid.app.core.storage.SecretCategory
 import com.vettid.app.core.storage.SecretType
 import com.vettid.app.ui.components.DropdownPickerField
+import com.vettid.app.ui.components.FieldDatePickerDialog
 import com.vettid.app.ui.components.commonCountries
 import com.vettid.app.ui.components.usStatesAndTerritories
 import kotlinx.coroutines.flow.collectLatest
-import java.text.SimpleDateFormat
-import java.util.Calendar
-import java.util.Locale
 
 /**
  * Secrets screen content for embedding in MainScaffold.
@@ -1696,38 +1694,22 @@ private fun TemplateFormDialog(
         }
     )
 
-    // Date picker dialog
+    // Date picker — a scrolling-wheel roller, not a calendar grid.
+    // EXPIRY_DATE fields (e.g. credit-card expiry) roll month + year
+    // only; DATE fields add a day column.
     if (datePickerFieldIndex >= 0) {
         val field = state.template.fields[datePickerFieldIndex]
         val isExpiryOnly = field.inputHint == FieldInputHint.EXPIRY_DATE
-        val datePickerState = rememberDatePickerState()
 
-        DatePickerDialog(
-            onDismissRequest = { datePickerFieldIndex = -1 },
-            confirmButton = {
-                TextButton(onClick = {
-                    datePickerState.selectedDateMillis?.let { millis ->
-                        val cal = Calendar.getInstance().apply { timeInMillis = millis }
-                        val formatted = if (isExpiryOnly) {
-                            SimpleDateFormat("MM/yyyy", Locale.US).format(cal.time)
-                        } else {
-                            SimpleDateFormat("MM/dd/yyyy", Locale.US).format(cal.time)
-                        }
-                        onFieldValueChange(datePickerFieldIndex, formatted)
-                    }
-                    datePickerFieldIndex = -1
-                }) {
-                    Text("OK")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { datePickerFieldIndex = -1 }) {
-                    Text("Cancel")
-                }
+        FieldDatePickerDialog(
+            monthYearOnly = isExpiryOnly,
+            initialValue = state.getValue(datePickerFieldIndex),
+            onDismiss = { datePickerFieldIndex = -1 },
+            onConfirm = { formatted ->
+                onFieldValueChange(datePickerFieldIndex, formatted)
+                datePickerFieldIndex = -1
             }
-        ) {
-            DatePicker(state = datePickerState)
-        }
+        )
     }
 }
 

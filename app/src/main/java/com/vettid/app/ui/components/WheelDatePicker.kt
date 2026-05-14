@@ -280,6 +280,159 @@ private fun WheelDatePickerDialog(
     )
 }
 
+/**
+ * Wheel-style date picker dialog for secret / personal-data template
+ * fields. A rolling control, not a calendar grid.
+ *
+ * Two shapes, switched by [monthYearOnly]:
+ *  - true  → MM/YYYY (credit-card expiry, where a day makes no sense)
+ *  - false → MM/DD/YYYY (passport dates and other full dates)
+ *
+ * [initialValue] is the field's current text in whichever of those two
+ * formats applies; the picker opens on it. [onConfirm] hands back the
+ * formatted string in the same format.
+ *
+ * Reuses [WheelPicker] so it shares the snap-scroll + haptics behaviour
+ * of the birthday picker. No third-party wheel dependency.
+ */
+@Composable
+fun FieldDatePickerDialog(
+    monthYearOnly: Boolean,
+    initialValue: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit,
+) {
+    val today = remember { LocalDate.now() }
+    // Wide enough for past passport-issue dates and future expiries
+    // without being unwieldy. Birth dates use WheelBirthdayPicker.
+    val minYear = today.year - 100
+    val maxYear = today.year + 30
+
+    val parsed = remember(initialValue, monthYearOnly) {
+        parseFieldDate(initialValue, monthYearOnly, today)
+    }
+
+    var selectedYear by remember { mutableIntStateOf(parsed.year.coerceIn(minYear, maxYear)) }
+    var selectedMonth by remember { mutableIntStateOf(parsed.monthValue) }
+    var selectedDay by remember { mutableIntStateOf(parsed.dayOfMonth) }
+
+    val maxDaysInMonth = remember(selectedYear, selectedMonth) {
+        LocalDate.of(selectedYear, selectedMonth, 1).lengthOfMonth()
+    }
+    // Clamp the day if the selected month shrank under it (e.g. Mar 31 → Feb).
+    LaunchedEffect(maxDaysInMonth) {
+        if (selectedDay > maxDaysInMonth) selectedDay = maxDaysInMonth
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (monthYearOnly) "Expiration date" else "Select date") },
+        text = {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(240.dp),  // 5 items * 48dp
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    WheelPicker(
+                        items = (1..12).map { month ->
+                            Month.of(month).getDisplayName(TextStyle.SHORT, Locale.getDefault())
+                        },
+                        selectedIndex = selectedMonth - 1,
+                        onSelectedIndexChange = { selectedMonth = it + 1 },
+                        modifier = Modifier.weight(1.2f)
+                    )
+                    if (!monthYearOnly) {
+                        WheelPicker(
+                            items = (1..maxDaysInMonth).map { it.toString() },
+                            selectedIndex = (selectedDay - 1).coerceIn(0, maxDaysInMonth - 1),
+                            onSelectedIndexChange = { selectedDay = it + 1 },
+                            modifier = Modifier.weight(0.8f)
+                        )
+                    }
+                    WheelPicker(
+                        items = (maxYear downTo minYear).map { it.toString() },
+                        selectedIndex = maxYear - selectedYear,
+                        onSelectedIndexChange = { selectedYear = maxYear - it },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly
+                ) {
+                    Text(
+                        text = "Month",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1.2f),
+                        textAlign = TextAlign.Center
+                    )
+                    if (!monthYearOnly) {
+                        Text(
+                            text = "Day",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(0.8f),
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                    Text(
+                        text = "Year",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                val day = selectedDay.coerceIn(1, maxDaysInMonth)
+                val formatted = if (monthYearOnly) {
+                    "%02d/%04d".format(selectedMonth, selectedYear)
+                } else {
+                    "%02d/%02d/%04d".format(selectedMonth, day, selectedYear)
+                }
+                onConfirm(formatted)
+            }) {
+                Text("OK")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+/**
+ * Parse an existing field value into a LocalDate. Accepts the two
+ * formats [FieldDatePickerDialog] emits — MM/yyyy and MM/dd/yyyy —
+ * and falls back to today for blank or unrecognised input.
+ */
+private fun parseFieldDate(value: String, monthYearOnly: Boolean, fallback: LocalDate): LocalDate {
+    val parts = value.trim().split("/")
+    return try {
+        when {
+            monthYearOnly && parts.size == 2 ->
+                LocalDate.of(parts[1].toInt(), parts[0].toInt(), 1)
+            !monthYearOnly && parts.size == 3 ->
+                LocalDate.of(parts[2].toInt(), parts[0].toInt(), parts[1].toInt())
+            else -> fallback
+        }
+    } catch (e: Exception) {
+        fallback
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun WheelPicker(

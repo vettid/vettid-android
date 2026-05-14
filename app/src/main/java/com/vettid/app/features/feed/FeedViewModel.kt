@@ -500,9 +500,11 @@ class FeedViewModel @Inject constructor(
                     val kind = if (conn.lastActivitySubtype == "video") "video call" else "voice call"
                     "$verb · $kind"
                 }
-                conn.lastActivityType == "verify" ->
-                    if (conn.lastActivityDirection == "outgoing") "You asked to verify their identity"
-                    else "Asked to verify your identity"
+                // "activity" carries the AuditLog entry title verbatim —
+                // the same text the Connection History screen's top row
+                // shows, so the card stays in lockstep with it.
+                conn.lastActivityType == "activity" && !conn.lastActivityTitle.isNullOrBlank() ->
+                    conn.lastActivityTitle
                 conn.lastMessagePreview != null -> conn.lastMessagePreview
                 conn.status == "active" -> "Connected"
                 conn.status == "revoked" -> "Connection revoked"
@@ -709,8 +711,8 @@ class FeedViewModel @Inject constructor(
                                 else -> if (activityDirection == "outgoing") "You called · $kind" else "Called you · $kind"
                             }
                         }
+                        "activity" -> conn.lastActivityTitle.orEmpty()
                         "message" -> if (activityDirection == "outgoing") "You sent a message" else "Received a message"
-                        "verify" -> if (activityDirection == "outgoing") "You asked to verify their identity" else "Asked to verify your identity"
                         else -> ""
                     }
                 },

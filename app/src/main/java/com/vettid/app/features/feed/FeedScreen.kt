@@ -1940,13 +1940,20 @@ private fun lastActivityIcon(
         isCall && direction == "outgoing" -> Icons.Default.CallMade to AnswerGreenColor
         isCall && direction == "incoming" -> Icons.Default.CallReceived to AnswerGreenColor
         isCall -> Icons.Default.Call to AnswerGreenColor
-        // Messages: direction arrow when we have it.
+        // Messages: direction arrow when we have it. (Legacy
+        // "message" type — current enclaves send "activity".)
         activityType == "message" && direction == "outgoing" ->
             Icons.Default.Send to MaterialTheme.colorScheme.outline
         activityType == "message" && direction == "incoming" ->
             Icons.AutoMirrored.Filled.Reply to MaterialTheme.colorScheme.outline
         activityType == "message" -> Icons.AutoMirrored.Filled.Chat to MaterialTheme.colorScheme.outline
-        activityType == "verify" -> Icons.Default.VerifiedUser to MaterialTheme.colorScheme.outline
+        // "activity" = latest per-connection AuditLog entry (any type:
+        // message / verify / data-share / grant / location / …). The
+        // card shows the entry's title; a generic history glyph keeps
+        // the icon honest without trying to special-case every type.
+        activityType == "activity" && direction == "outgoing" ->
+            Icons.Default.Send to MaterialTheme.colorScheme.outline
+        activityType == "activity" -> Icons.Default.History to MaterialTheme.colorScheme.outline
         activityType == "connection" -> Icons.Default.Person to MaterialTheme.colorScheme.outline
         else -> null to MaterialTheme.colorScheme.outline
     }

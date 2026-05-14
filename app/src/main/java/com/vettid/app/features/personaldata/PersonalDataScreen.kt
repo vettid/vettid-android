@@ -45,6 +45,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import com.vettid.app.ui.components.DropdownPickerField
+import com.vettid.app.ui.components.FieldDatePickerDialog
 import com.vettid.app.ui.components.PhoneNumberInput
 import com.vettid.app.ui.components.ProfilePhotoCapture
 import com.vettid.app.ui.components.commonCountries
@@ -52,12 +53,9 @@ import com.vettid.app.ui.components.usStatesAndTerritories
 import kotlinx.coroutines.flow.collectLatest
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
-import java.text.SimpleDateFormat
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.util.Calendar
-import java.util.Locale
 
 /**
  * Format ISO 8601 timestamp to local timezone for display.
@@ -2899,38 +2897,22 @@ private fun PersonalDataTemplateFormDialog(
         }
     )
 
-    // Date picker dialog
+    // Date picker — a scrolling-wheel roller, not a calendar grid.
+    // EXPIRY_DATE fields (e.g. passport expiry) roll month + year only;
+    // DATE fields add a day column.
     if (datePickerFieldIndex >= 0) {
         val field = state.template.fields[datePickerFieldIndex]
         val isExpiryOnly = field.inputHint == PersonalDataFieldInputHint.EXPIRY_DATE
-        val datePickerState = rememberDatePickerState()
 
-        DatePickerDialog(
-            onDismissRequest = { datePickerFieldIndex = -1 },
-            confirmButton = {
-                TextButton(onClick = {
-                    datePickerState.selectedDateMillis?.let { millis ->
-                        val cal = Calendar.getInstance().apply { timeInMillis = millis }
-                        val formatted = if (isExpiryOnly) {
-                            SimpleDateFormat("MM/yyyy", Locale.US).format(cal.time)
-                        } else {
-                            SimpleDateFormat("MM/dd/yyyy", Locale.US).format(cal.time)
-                        }
-                        onFieldValueChange(datePickerFieldIndex, formatted)
-                    }
-                    datePickerFieldIndex = -1
-                }) {
-                    Text("OK")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { datePickerFieldIndex = -1 }) {
-                    Text("Cancel")
-                }
+        FieldDatePickerDialog(
+            monthYearOnly = isExpiryOnly,
+            initialValue = state.getValue(datePickerFieldIndex),
+            onDismiss = { datePickerFieldIndex = -1 },
+            onConfirm = { formatted ->
+                onFieldValueChange(datePickerFieldIndex, formatted)
+                datePickerFieldIndex = -1
             }
-        ) {
-            DatePicker(state = datePickerState)
-        }
+        )
     }
 }
 
