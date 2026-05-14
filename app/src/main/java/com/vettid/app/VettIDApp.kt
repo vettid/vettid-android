@@ -1162,6 +1162,24 @@ fun VettIDApp(
                     // Empty eventId — the audit row replaces the feed
                     // event; Screen.Guide accepts empty for this arg.
                     navController.navigate(Screen.Guide.createRoute(guideId, "", userName))
+                },
+                onOpenDataRequest = { req ->
+                    // "Respond" on a still-open request row in history —
+                    // route to the same approval screen the feed card
+                    // and auto-navigation use.
+                    navController.navigate(
+                        Screen.DataGrantApproval.createRoute(
+                            requestId = req.requestId,
+                            connectionId = req.connectionId,
+                            itemKind = req.itemKind,
+                            itemRef = req.itemRef,
+                            itemLabel = req.itemLabel,
+                            requestedMode = req.requestedMode,
+                            requestedExpiresAt = req.requestedExpiresAt,
+                            requestedMaxUses = req.requestedMaxUses,
+                            reason = req.reason,
+                        )
+                    )
                 }
             )
         }

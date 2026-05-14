@@ -26,6 +26,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.vettid.app.core.nats.AuditEntry
+import com.vettid.app.features.grants.PendingRequestSummary
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -36,6 +37,7 @@ fun ConnectionHistoryScreen(
     onBack: () -> Unit,
     onOpenConversation: (connectionId: String) -> Unit = {},
     onOpenGuide: (guideId: String, userName: String) -> Unit = { _, _ -> },
+    onOpenDataRequest: (PendingRequestSummary) -> Unit = {},
     viewModel: ConnectionHistoryViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
@@ -44,6 +46,7 @@ fun ConnectionHistoryScreen(
     val searchQuery by viewModel.searchQuery.collectAsState()
     val peerName by viewModel.peerName.collectAsState()
     val timeFilter by viewModel.timeFilter.collectAsState()
+    val pendingRequests by viewModel.pendingRequests.collectAsState()
     var searchExpanded by remember { mutableStateOf(false) }
     var showTimeFilterSheet by remember { mutableStateOf(false) }
 
@@ -149,6 +152,7 @@ fun ConnectionHistoryScreen(
                 is ConnectionHistoryState.Error -> ErrorCentered(current.message)
                 is ConnectionHistoryState.Loaded -> HistoryList(
                     events = current.events,
+                    pendingRequests = pendingRequests,
                     endReached = current.endReached,
                     isPaginating = isPaginating,
                     onLoadMore = viewModel::loadNextPage,
@@ -159,7 +163,8 @@ fun ConnectionHistoryScreen(
                             onOpenGuide = onOpenGuide,
                             onOpenDetailSheet = { detailSheet = it },
                         )
-                    }
+                    },
+                    onRespondToRequest = onOpenDataRequest,
                 )
             }
         }
@@ -279,10 +284,12 @@ private fun AuditEntry.isInteractive(): Boolean =
 @Composable
 private fun HistoryList(
     events: List<AuditEntry>,
+    pendingRequests: Map<String, PendingRequestSummary>,
     endReached: Boolean,
     isPaginating: Boolean,
     onLoadMore: () -> Unit,
     onEventClick: (AuditEntry) -> Unit,
+    onRespondToRequest: (PendingRequestSummary) -> Unit,
 ) {
     val listState = rememberLazyListState()
 
@@ -304,7 +311,18 @@ private fun HistoryList(
         contentPadding = PaddingValues(vertical = 8.dp)
     ) {
         items(items = events, key = { it.entry_id }) { event ->
-            HistoryRow(event, onClick = { onEventClick(event) })
+            // A data.request.received row whose request is still open
+            // gets a "Respond" affordance — the permanent way back to a
+            // request that needs an answer.
+            val pendingForRow = event.refs?.get("request_id")
+                ?.takeIf { event.event_type == "data.request.received" }
+                ?.let { pendingRequests[it] }
+            HistoryRow(
+                event = event,
+                pendingRequest = pendingForRow,
+                onClick = { onEventClick(event) },
+                onRespond = { pendingForRow?.let(onRespondToRequest) },
+            )
         }
         if (!endReached) {
             item {
@@ -320,7 +338,12 @@ private fun HistoryList(
 }
 
 @Composable
-private fun HistoryRow(event: AuditEntry, onClick: () -> Unit) {
+private fun HistoryRow(
+    event: AuditEntry,
+    pendingRequest: PendingRequestSummary?,
+    onClick: () -> Unit,
+    onRespond: () -> Unit,
+) {
     val (icon, tint) = iconForEventType(event.event_type)
     val body = renderEventBody(event)
     val clickable = event.isInteractive()
@@ -366,6 +389,18 @@ private fun HistoryRow(event: AuditEntry, onClick: () -> Unit) {
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.outline
             )
+        }
+        // Still-open incoming request → a "Respond" affordance so the
+        // history doubles as a fallback path back to anything awaiting
+        // a decision.
+        if (pendingRequest != null) {
+            Spacer(modifier = Modifier.width(8.dp))
+            FilledTonalButton(
+                onClick = onRespond,
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+            ) {
+                Text("Respond", style = MaterialTheme.typography.labelLarge)
+            }
         }
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))

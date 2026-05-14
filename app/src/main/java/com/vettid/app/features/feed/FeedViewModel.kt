@@ -662,15 +662,17 @@ class FeedViewModel @Inject constructor(
                 peerBtcAddress = conn.peerProfile?.wallets?.firstOrNull()?.address?.takeIf { it.isNotBlank() },
                 localHasWallet = localHasAnyWallet,
                 sortTimestamp = sortTime,
-                // Unread badges the card if: pending review, unread
-                // messages exist, or there's an unacknowledged missed
-                // incoming call.
-                // Unread badges the card if: pending review, unread
-                // messages, missed call, or — for the system card —
-                // open guides or open votes the user hasn't seen yet.
+                // Unread badges the card (bolds it + sorts it near the
+                // top) when something is waiting on the user: pending
+                // review, unread messages, a missed call, an incoming
+                // data request awaiting a decision, or — for the system
+                // card — open guides / votes. Pending data requests
+                // count here so a card you owe a response to can't be
+                // scrolled past — it's the feed's "action inbox" role.
                 isUnread = needsReview ||
                     conn.unreadMessageCount > 0 ||
                     conn.missedCallCount > 0 ||
+                    incomingGrantsByConn[conn.connectionId]?.isNotEmpty() == true ||
                     (conn.connectionType == "system" &&
                         (unreadGuidesCount > 0 || systemVotesBadge > 0))
             )

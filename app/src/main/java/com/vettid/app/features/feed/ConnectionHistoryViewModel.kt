@@ -7,6 +7,8 @@ import com.vettid.app.core.nats.AuditCursor
 import com.vettid.app.core.nats.AuditEntry
 import com.vettid.app.core.nats.ConnectionAuditClient
 import com.vettid.app.core.nats.ConnectionsClient
+import com.vettid.app.features.grants.GrantsRepository
+import com.vettid.app.features.grants.PendingRequestSummary
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -28,6 +30,7 @@ import javax.inject.Inject
 class ConnectionHistoryViewModel @Inject constructor(
     private val auditClient: ConnectionAuditClient,
     private val connectionsClient: ConnectionsClient,
+    private val grantsRepository: GrantsRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -36,6 +39,14 @@ class ConnectionHistoryViewModel @Inject constructor(
 
     private val _state = MutableStateFlow<ConnectionHistoryState>(ConnectionHistoryState.Loading)
     val state: StateFlow<ConnectionHistoryState> = _state.asStateFlow()
+
+    // Incoming data requests for this connection that are still awaiting
+    // the user's decision, keyed by request_id. Lets the history screen
+    // turn a `data.request.received` row that's still open into a
+    // tappable "Respond" affordance — the permanent fallback path back
+    // to a request that needs an answer.
+    private val _pendingRequests = MutableStateFlow<Map<String, PendingRequestSummary>>(emptyMap())
+    val pendingRequests: StateFlow<Map<String, PendingRequestSummary>> = _pendingRequests.asStateFlow()
 
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
@@ -67,6 +78,22 @@ class ConnectionHistoryViewModel @Inject constructor(
     init {
         loadFirstPage()
         loadPeerName()
+        loadPendingRequests()
+    }
+
+    /**
+     * Refresh the set of still-open incoming requests for this
+     * connection. Cheap RPC; runs on init + every refresh so the
+     * "Respond" affordance disappears once a request is actioned.
+     */
+    private fun loadPendingRequests() {
+        viewModelScope.launch {
+            grantsRepository.listPending().onSuccess { list ->
+                _pendingRequests.value = list
+                    .filter { it.connectionId == connectionId }
+                    .associateBy { it.requestId }
+            }
+        }
     }
 
     private fun loadPeerName() {
@@ -89,6 +116,7 @@ class ConnectionHistoryViewModel @Inject constructor(
             loadFirstPage(pushState = false)
             _isRefreshing.value = false
         }
+        loadPendingRequests()
     }
 
     fun onSearchQueryChanged(query: String) {
