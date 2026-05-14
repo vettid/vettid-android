@@ -2741,6 +2741,12 @@ private fun PersonalDataTemplateFormDialog(
                 state.template.fields.forEachIndexed { index, field ->
                     when (field.inputHint) {
                         PersonalDataFieldInputHint.DATE, PersonalDataFieldInputHint.EXPIRY_DATE -> {
+                            // enabled = false (not just readOnly) so the field
+                            // doesn't consume the tap itself — a readOnly-but-
+                            // enabled OutlinedTextField swallows pointer input,
+                            // which left the .clickable below dead and the
+                            // date picker unreachable. Disabled colors are
+                            // overridden so it still reads as an active field.
                             OutlinedTextField(
                                 value = state.getValue(index),
                                 onValueChange = {},
@@ -2749,6 +2755,7 @@ private fun PersonalDataTemplateFormDialog(
                                     Text(if (field.inputHint == PersonalDataFieldInputHint.EXPIRY_DATE) "MM/YYYY" else "MM/DD/YYYY")
                                 },
                                 readOnly = true,
+                                enabled = false,
                                 singleLine = true,
                                 leadingIcon = {
                                     Icon(
@@ -2757,6 +2764,13 @@ private fun PersonalDataTemplateFormDialog(
                                         modifier = Modifier.size(18.dp)
                                     )
                                 },
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    disabledTextColor = MaterialTheme.colorScheme.onSurface,
+                                    disabledBorderColor = MaterialTheme.colorScheme.outline,
+                                    disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    disabledPlaceholderColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    disabledLeadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                ),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable { datePickerFieldIndex = index }
