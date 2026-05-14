@@ -111,7 +111,24 @@ class FeedViewModel @Inject constructor(
     // IncomingGrantRequest PendingRow. Cleared when the user approves
     // or denies via the Grants screen, OR when the vault confirms a
     // grant.created / grant.denied event on the same request_id.
-    private data class IncomingGrantSnapshot(val requestId: String, val label: String, val timestampMs: Long)
+    // Carries the full RequestReceived payload so a card-row tap can
+    // re-open the approval screen for a queued request (not just the
+    // first one, which auto-navigation handles).
+    private data class IncomingGrantSnapshot(
+        val requestId: String,
+        val connectionId: String,
+        val requesterGuid: String,
+        val itemKind: String,
+        val itemRef: String,
+        val itemLabel: String,
+        val requestedMode: String,
+        val requestedExpiresAt: Long,
+        val requestedMaxUses: Int,
+        val deliverTo: String,
+        val reason: String,
+        val label: String,
+        val timestampMs: Long,
+    )
     private var incomingGrantsByConn: Map<String, List<IncomingGrantSnapshot>> = emptyMap()
 
     // Per-connection cached peer location (mirrors what location.peer.get
@@ -167,7 +184,21 @@ class FeedViewModel @Inject constructor(
                     is com.vettid.app.core.nats.GrantEvent.RequestReceived -> {
                         val list = (incomingGrantsByConn[ev.connectionId] ?: emptyList())
                             .filter { it.requestId != ev.requestId } +
-                            IncomingGrantSnapshot(ev.requestId, ev.itemLabel.ifEmpty { ev.itemRef }, System.currentTimeMillis())
+                            IncomingGrantSnapshot(
+                                requestId = ev.requestId,
+                                connectionId = ev.connectionId,
+                                requesterGuid = ev.requesterGuid,
+                                itemKind = ev.itemKind,
+                                itemRef = ev.itemRef,
+                                itemLabel = ev.itemLabel,
+                                requestedMode = ev.requestedMode,
+                                requestedExpiresAt = ev.requestedExpiresAt,
+                                requestedMaxUses = ev.requestedMaxUses,
+                                deliverTo = ev.deliverTo,
+                                reason = ev.reason,
+                                label = ev.itemLabel.ifEmpty { ev.itemRef },
+                                timestampMs = System.currentTimeMillis(),
+                            )
                         incomingGrantsByConn = incomingGrantsByConn + (ev.connectionId to list)
                         rebuildDisplayItems()
                     }
@@ -200,6 +231,33 @@ class FeedViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    /**
+     * Re-open the approval screen for a queued incoming data request.
+     * Auto-navigation (VettIDApp's grantEvents collector) only fires
+     * for the first request; subsequent ones sit as card rows. Tapping
+     * a row re-emits its RequestReceived event so the collector
+     * navigates to the approval screen — the same path the first
+     * request took.
+     */
+    fun reopenIncomingGrant(requestId: String) {
+        val snap = incomingGrantsByConn.values.asSequence()
+            .flatten()
+            .firstOrNull { it.requestId == requestId } ?: return
+        ownerSpaceClient.emitRequestReceivedLocally(
+            connectionId = snap.connectionId,
+            requesterGuid = snap.requesterGuid,
+            requestId = snap.requestId,
+            itemKind = snap.itemKind,
+            itemRef = snap.itemRef,
+            itemLabel = snap.itemLabel,
+            requestedMode = snap.requestedMode,
+            requestedExpiresAt = snap.requestedExpiresAt,
+            requestedMaxUses = snap.requestedMaxUses,
+            deliverTo = snap.deliverTo,
+            reason = snap.reason,
+        )
     }
 
     /**

@@ -813,22 +813,25 @@ private fun SecretRow(
                     .clickable(onClick = onClick)
                     .padding(vertical = 4.dp)
             ) {
+                // Title carries the alias the same way the Data tab
+                // does — "Field Name — Alias" — so a "Credit Card"
+                // entry reads as "Card Number — Visa" instead of
+                // burying the alias in the subtitle.
                 Text(
-                    text = secret.name,
+                    text = if (secret.alias.isNotBlank()) {
+                        "${secret.name} — ${secret.alias}"
+                    } else {
+                        secret.name
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Spacer(modifier = Modifier.height(2.dp))
-                // Show the type under the name (mirrors the data tab's
-                // "value under field name" treatment). The actual
-                // value stays out of the list — tap to reveal.
+                // Type under the name. The actual value stays out of
+                // the list — tap to reveal.
                 Text(
-                    text = if (secret.alias.isNotBlank()) {
-                        "${secret.type.displayName} • ${secret.alias}"
-                    } else {
-                        secret.type.displayName
-                    },
+                    text = secret.type.displayName,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

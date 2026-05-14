@@ -3122,6 +3122,43 @@ class OwnerSpaceClient @Inject constructor(
         )
     }
 
+    /**
+     * Re-emit a RequestReceived event for a queued data request. The
+     * vault only pushes data-request-received once; auto-navigation
+     * consumes it for the first request. Tapping a queued request's
+     * feed-card row re-emits the event from the cached snapshot so the
+     * grantEvents collector routes to the approval screen again.
+     */
+    fun emitRequestReceivedLocally(
+        connectionId: String,
+        requesterGuid: String,
+        requestId: String,
+        itemKind: String,
+        itemRef: String,
+        itemLabel: String,
+        requestedMode: String,
+        requestedExpiresAt: Long,
+        requestedMaxUses: Int,
+        deliverTo: String,
+        reason: String,
+    ) {
+        _grantEvents.tryEmit(
+            GrantEvent.RequestReceived(
+                connectionId = connectionId,
+                requesterGuid = requesterGuid,
+                requestId = requestId,
+                itemKind = itemKind,
+                itemRef = itemRef,
+                itemLabel = itemLabel,
+                requestedMode = requestedMode,
+                requestedExpiresAt = requestedExpiresAt,
+                requestedMaxUses = requestedMaxUses,
+                deliverTo = deliverTo,
+                reason = reason,
+            )
+        )
+    }
+
     companion object {
         private const val TAG = "OwnerSpaceClient"
 

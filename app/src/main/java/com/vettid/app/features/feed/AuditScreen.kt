@@ -7,6 +7,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Message
@@ -123,9 +125,11 @@ fun AuditScreen(
             if (filters.hasActiveFilters) {
                 ActiveFiltersRow(
                     filters = filters,
+                    connectionOptions = viewModel.connectionOptions,
                     onClearAll = { viewModel.clearFilters() },
                     onRemoveType = { viewModel.toggleEventTypeFilter(it) },
-                    onClearDateRange = { viewModel.setDateRange(null, null) }
+                    onClearDateRange = { viewModel.setDateRange(null, null) },
+                    onClearConnection = { viewModel.setConnectionFilter(null) }
                 )
             }
 
@@ -171,9 +175,11 @@ fun AuditScreen(
     if (showFiltersSheet) {
         FilterBottomSheet(
             filters = filters,
+            connectionOptions = viewModel.connectionOptions,
             onDismiss = { showFiltersSheet = false },
             onToggleEventType = { viewModel.toggleEventTypeFilter(it) },
             onSetDateRange = { start, end -> viewModel.setDateRange(start, end) },
+            onSetConnection = { viewModel.setConnectionFilter(it) },
             onClearAll = { viewModel.clearFilters() }
         )
     }
@@ -191,9 +197,11 @@ fun AuditScreen(
 @Composable
 private fun ActiveFiltersRow(
     filters: AuditFilters,
+    connectionOptions: List<AuditConnectionOption>,
     onClearAll: () -> Unit,
     onRemoveType: (String) -> Unit,
-    onClearDateRange: () -> Unit
+    onClearDateRange: () -> Unit,
+    onClearConnection: () -> Unit
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
@@ -203,6 +211,25 @@ private fun ActiveFiltersRow(
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            // Connection filter — the primary scope
+            filters.connectionId?.let { connId ->
+                item {
+                    val name = connectionOptions.firstOrNull { it.connectionId == connId }
+                        ?.displayName ?: connId.take(8)
+                    FilterChip(
+                        selected = true,
+                        onClick = onClearConnection,
+                        label = { Text(name) },
+                        leadingIcon = {
+                            Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(16.dp))
+                        },
+                        trailingIcon = {
+                            Icon(Icons.Default.Close, contentDescription = "Remove", modifier = Modifier.size(16.dp))
+                        }
+                    )
+                }
+            }
+
             // Event type filters
             items(filters.selectedEventTypes.toList()) { type ->
                 FilterChip(
@@ -345,15 +372,18 @@ private fun AuditEventItem(
 @Composable
 private fun FilterBottomSheet(
     filters: AuditFilters,
+    connectionOptions: List<AuditConnectionOption>,
     onDismiss: () -> Unit,
     onToggleEventType: (String) -> Unit,
     onSetDateRange: (Long?, Long?) -> Unit,
+    onSetConnection: (String?) -> Unit,
     onClearAll: () -> Unit
 ) {
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
             Text(
@@ -363,39 +393,62 @@ private fun FilterBottomSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Event Types section
+            // Connection — the primary scope. Pick a peer to see only
+            // that connection's audit trail.
             Text(
-                "Event Types",
+                "Connection",
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.primary
             )
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            AuditViewModel.ALL_EVENT_TYPES.chunked(2).forEach { row ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+            var connMenuExpanded by remember { mutableStateOf(false) }
+            val selectedConnName = filters.connectionId
+                ?.let { id -> connectionOptions.firstOrNull { it.connectionId == id }?.displayName }
+                ?: "All connections"
+            ExposedDropdownMenuBox(
+                expanded = connMenuExpanded,
+                onExpandedChange = { connMenuExpanded = it },
+            ) {
+                OutlinedTextField(
+                    value = selectedConnName,
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Connection") },
+                    trailingIcon = {
+                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = connMenuExpanded)
+                    },
+                    modifier = Modifier
+                        .menuAnchor()
+                        .fillMaxWidth(),
+                )
+                ExposedDropdownMenu(
+                    expanded = connMenuExpanded,
+                    onDismissRequest = { connMenuExpanded = false },
                 ) {
-                    row.forEach { eventType ->
-                        FilterChip(
-                            selected = eventType.type in filters.selectedEventTypes,
-                            onClick = { onToggleEventType(eventType.type) },
-                            label = { Text(eventType.displayName) },
-                            modifier = Modifier.weight(1f)
+                    DropdownMenuItem(
+                        text = { Text("All connections") },
+                        onClick = {
+                            onSetConnection(null)
+                            connMenuExpanded = false
+                        },
+                    )
+                    connectionOptions.forEach { opt ->
+                        DropdownMenuItem(
+                            text = { Text(opt.displayName) },
+                            onClick = {
+                                onSetConnection(opt.connectionId)
+                                connMenuExpanded = false
+                            },
                         )
                     }
-                    // Fill empty space if odd number
-                    if (row.size == 1) {
-                        Spacer(modifier = Modifier.weight(1f))
-                    }
                 }
-                Spacer(modifier = Modifier.height(4.dp))
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Quick date filters
+            // Date range — the other primary control.
             Text(
                 "Date Range",
                 style = MaterialTheme.typography.titleSmall,
@@ -441,6 +494,38 @@ private fun FilterBottomSheet(
                     onClick = { onSetDateRange(null, null) },
                     modifier = Modifier.weight(1f)
                 )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Event types — secondary refinement on top of the scope.
+            Text(
+                "Event Types",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            AuditViewModel.ALL_EVENT_TYPES.chunked(2).forEach { row ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    row.forEach { eventType ->
+                        FilterChip(
+                            selected = eventType.type in filters.selectedEventTypes,
+                            onClick = { onToggleEventType(eventType.type) },
+                            label = { Text(eventType.displayName) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    // Fill empty space if odd number
+                    if (row.size == 1) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
             }
 
             Spacer(modifier = Modifier.height(24.dp))

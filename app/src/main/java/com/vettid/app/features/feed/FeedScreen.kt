@@ -270,6 +270,7 @@ fun FeedContent(
                     onRequestPeerLocation = { connectionId -> viewModel.requestPeerLocation(connectionId) },
                     connectionPeerLocations = peerLocations,
                     onAcknowledgePeerLocationShare = { connectionId -> viewModel.acknowledgePeerLocationShare(connectionId) },
+                    onOpenIncomingGrant = { requestId -> viewModel.reopenIncomingGrant(requestId) },
                 )
                 is FeedState.Error -> {
                     // If in offline mode, show friendly offline content instead of error
@@ -416,6 +417,7 @@ private fun FeedList(
     onRequestPeerLocation: (String) -> Unit = {},
     connectionPeerLocations: Map<String, com.vettid.app.core.nats.CachedPeerLocation> = emptyMap(),
     onAcknowledgePeerLocationShare: (String) -> Unit = {},
+    onOpenIncomingGrant: (requestId: String) -> Unit = {},
 ) {
     // Shared-action layer state — one ActionsViewModel for the whole
     // feed. When the user taps "Available actions" on a card's More
@@ -535,6 +537,7 @@ private fun FeedList(
                         onRequestLocation = { onRequestPeerLocation(item.connectionId) },
                         peerLocation = connectionPeerLocations[item.connectionId],
                         onAcknowledgePeerLocationShare = onAcknowledgePeerLocationShare,
+                        onOpenIncomingGrant = onOpenIncomingGrant,
                     )
             }
 
@@ -732,6 +735,7 @@ private fun StatusAwareConnectionCard(
     onRequestLocation: () -> Unit = {},
     peerLocation: com.vettid.app.core.nats.CachedPeerLocation? = null,
     onAcknowledgePeerLocationShare: (connectionId: String) -> Unit = {},
+    onOpenIncomingGrant: (requestId: String) -> Unit = {},
 ) {
     // Render different card variants based on connection status
     when {
@@ -748,7 +752,7 @@ private fun StatusAwareConnectionCard(
             onNavigateToConnectionReview, onOpenMigration,
             onSystemVaultMessagesClick, onSystemVotesClick, onSystemGuidesClick,
             onOpenGuide, onOpenProposal, onShowAvailableActions, onRequestLocation,
-            peerLocation, onAcknowledgePeerLocationShare,
+            peerLocation, onAcknowledgePeerLocationShare, onOpenIncomingGrant,
         )
         item.connectionStatus == "revoked"
             || item.connectionStatus == "rejected"
@@ -761,7 +765,7 @@ private fun StatusAwareConnectionCard(
             onNavigateToConnectionReview, onOpenMigration,
             onSystemVaultMessagesClick, onSystemVotesClick, onSystemGuidesClick,
             onOpenGuide, onOpenProposal, onShowAvailableActions, onRequestLocation,
-            peerLocation, onAcknowledgePeerLocationShare,
+            peerLocation, onAcknowledgePeerLocationShare, onOpenIncomingGrant,
         )
     }
 }
@@ -1009,6 +1013,7 @@ private fun ActiveConnectionCard(
     onRequestLocation: () -> Unit = {},
     peerLocation: com.vettid.app.core.nats.CachedPeerLocation? = null,
     onAcknowledgePeerLocationShare: (connectionId: String) -> Unit = {},
+    onOpenIncomingGrant: (requestId: String) -> Unit = {},
 ) {
     val haptic = LocalHapticFeedback.current
 
@@ -1279,12 +1284,12 @@ private fun ActiveConnectionCard(
                                     onHistoryClick()
                                 }
                                 is PendingRow.IncomingGrantRequest -> {
-                                    // Route to the connection's history for
-                                    // now — Phase 2 polish would open the
-                                    // Grants screen's Pending tab directly.
-                                    // The user can reach it via Connection
-                                    // Detail → Data sharing.
-                                    onHistoryClick()
+                                    // Open the approval screen for this
+                                    // request. Auto-navigation only fires
+                                    // for the first incoming request; this
+                                    // is how the 2nd/3rd queued requests
+                                    // get actioned.
+                                    onOpenIncomingGrant(row.requestId)
                                 }
                             }
                         }
