@@ -34,10 +34,25 @@ class SecretsViewModel @Inject constructor(
     private val credentialStore: CredentialStore,
     private val natsAutoConnector: NatsAutoConnector,
     private val secureClipboard: com.vettid.app.core.security.SecureClipboard,
+    private val appPreferences: com.vettid.app.core.storage.AppPreferencesStore,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<SecretsState>(SecretsState.Loading)
     val state: StateFlow<SecretsState> = _state.asStateFlow()
+
+    // Whether the "secrets visible to connections" nudge has been
+    // dismissed. Backed by AppPreferencesStore so it persists across
+    // navigation — the banner shows at most once, ever.
+    private val _catalogNudgeDismissed = MutableStateFlow(
+        appPreferences.hasDismissedCatalogVisibilityNudge()
+    )
+    val catalogNudgeDismissed: StateFlow<Boolean> = _catalogNudgeDismissed.asStateFlow()
+
+    /** Permanently dismiss the catalog-visibility nudge. */
+    fun dismissCatalogNudge() {
+        appPreferences.setCatalogVisibilityNudgeDismissed()
+        _catalogNudgeDismissed.value = true
+    }
 
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()

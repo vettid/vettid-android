@@ -70,6 +70,7 @@ fun SecretsContent(
     val editState by viewModel.editState.collectAsState()
     val showAddDialog by viewModel.showAddDialog.collectAsState()
     val showDeleteConfirmDialog by viewModel.showDeleteConfirmDialog.collectAsState()
+    val catalogNudgeDismissed by viewModel.catalogNudgeDismissed.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
     // QR code dialog state
@@ -138,6 +139,8 @@ fun SecretsContent(
                         groupedByCategory = groupedByCategory,
                         hasUnpublishedChanges = currentState.hasUnpublishedChanges,
                         searchQuery = currentState.searchQuery,
+                        nudgeDismissed = catalogNudgeDismissed,
+                        onDismissNudge = { viewModel.dismissCatalogNudge() },
                         onSecretClick = { viewModel.onEvent(SecretsEvent.SecretClicked(it)) },
                         onTogglePublicProfile = { viewModel.onEvent(SecretsEvent.TogglePublicProfile(it)) },
                         onToggleHideFromCatalog = { viewModel.onEvent(SecretsEvent.ToggleHideFromCatalog(it)) },
@@ -278,6 +281,8 @@ private fun SecretsList(
     groupedByCategory: GroupedByCategory,
     hasUnpublishedChanges: Boolean,
     searchQuery: String,
+    nudgeDismissed: Boolean,
+    onDismissNudge: () -> Unit,
     onSecretClick: (String) -> Unit,
     onTogglePublicProfile: (String) -> Unit,
     onToggleHideFromCatalog: (String) -> Unit,
@@ -315,8 +320,10 @@ private fun SecretsList(
     // 2026-05-12 (plans/data-request-grants.md Phase 3). Surface a
     // nudge so users with already-visible secrets can review them —
     // it appears at the top of the list when there's at least one
-    // non-hidden minor secret, dismissable per-session.
-    var nudgeDismissed by remember { mutableStateOf(false) }
+    // non-hidden minor secret. Dismissal is persisted (via
+    // AppPreferencesStore, hoisted into SecretsViewModel) so the
+    // banner shows at most once ever — previously it was a
+    // remember-scoped flag and reappeared on every navigation back.
     val visibleSecretsCount = remember(groupedByCategory) {
         groupedByCategory.categories.values.flatten()
             .count { !it.hideFromCatalog }
@@ -347,7 +354,7 @@ private fun SecretsList(
                         )
                         Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                            TextButton(onClick = { nudgeDismissed = true }) { Text("Dismiss") }
+                            TextButton(onClick = onDismissNudge) { Text("Dismiss") }
                         }
                     }
                 }

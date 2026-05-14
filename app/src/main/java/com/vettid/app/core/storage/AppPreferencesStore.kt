@@ -225,6 +225,9 @@ class AppPreferencesStore(context: Context) {
 
         // Notification keys
         private const val KEY_NOTIFICATION_PERMISSION_REQUESTED = "notification_permission_requested"
+
+        // One-time UI nudge keys
+        private const val KEY_CATALOG_NUDGE_DISMISSED = "secrets_catalog_nudge_dismissed"
     }
 
     fun isBackupEnabled(): Boolean =
@@ -241,5 +244,20 @@ class AppPreferencesStore(context: Context) {
 
     fun setNotificationPermissionRequested(requested: Boolean) {
         prefs.edit().putBoolean(KEY_NOTIFICATION_PERMISSION_REQUESTED, requested).apply()
+    }
+
+    // --- One-time UI nudges ---
+
+    /**
+     * Whether the user has dismissed the "secrets visible to connections"
+     * nudge on the Secrets screen. Persisted so the banner shows at most
+     * once ever — previously a remember-scoped flag, so it reappeared on
+     * every navigation back to the screen.
+     */
+    fun hasDismissedCatalogVisibilityNudge(): Boolean =
+        prefs.getBoolean(KEY_CATALOG_NUDGE_DISMISSED, false)
+
+    fun setCatalogVisibilityNudgeDismissed() {
+        prefs.edit().putBoolean(KEY_CATALOG_NUDGE_DISMISSED, true).apply()
     }
 }
