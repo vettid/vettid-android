@@ -407,7 +407,11 @@ private fun LoadedContent(
     ))
     val peerShortName = connection.peerDisplayName.takeIf { it.isNotBlank() }?.substringBefore(' ') ?: "this connection"
     val isActive = connection.status == ConnectionStatus.ACTIVE
-    var selectedTab by remember { mutableStateOf(0) }
+    // rememberSaveable, not remember — navigating to a sub-screen (My
+    // sharing, Their catalog, Data sharing) and back was disposing the
+    // composable's plain `remember` and snapping us back to tab 0
+    // (Them) regardless of where we'd been.
+    var selectedTab by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(0) }
 
     // Pulse highlight applied to the verify row when we land here from
     // a verify-result OS notification. Compose-managed so we don't
