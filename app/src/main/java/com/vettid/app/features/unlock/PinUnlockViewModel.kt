@@ -610,6 +610,21 @@ class PinUnlockViewModel @Inject constructor(
                     // pending_new_enclave so the app retries.
                     addProperty("migrate_consent", true)
                 }
+                // Carry the app-stored ECIES-sealed credential so the
+                // vault can populate the narrow carve-outs (identity
+                // keys, pinAuthHash/Salt, audit key) on every unlock —
+                // cold or warm — without depending on
+                // credential/sealed_blob being in vault storage. This
+                // is the unified self-heal: legacy vaults enrolled
+                // before the blob was written at create-time get
+                // repaired on first unlock from this client, and
+                // future migrations / restarts can never strand the
+                // user with empty carve-outs and the "no PIN hash
+                // stored" warm-vault error. See the enclave's
+                // restoreCredentialCarveOuts in pin_handler.go.
+                credentialStore.getEncryptedBlob()?.takeIf { it.isNotEmpty() }?.let { blob ->
+                    addProperty("encrypted_credential", blob)
+                }
             }
 
             Log.d(TAG, "Sending PIN unlock request via OwnerSpaceClient (event_id correlation)")
