@@ -240,7 +240,21 @@ class FeedClient @Inject constructor(
             val eventsArray = result.getAsJsonArray("events")
             val events = eventsArray?.map { gson.fromJson(it, FeedEvent::class.java) } ?: emptyList()
             val total = result.get("total")?.asInt ?: events.size
-            AuditQueryResponse(events = events, total = total)
+            // The vault sends audit_pub + binding_sig + identity_pub on
+            // every audit.query response — without those three the
+            // client's AuditChainVerifier classifies every row as
+            // Unsigned and the SecurityAuditLog screen displays a
+            // misleading "Chain unsigned · unlock your vault to verify"
+            // pill even when the chain is actually intact. Prior parser
+            // dropped them silently. (Surfaced 2026-05-16 post-Phase-1
+            // re-enrollment test.)
+            AuditQueryResponse(
+                events = events,
+                total = total,
+                auditPub = result.get("audit_pub")?.takeIf { !it.isJsonNull }?.asString,
+                bindingSig = result.get("binding_sig")?.takeIf { !it.isJsonNull }?.asString,
+                identityPub = result.get("identity_pub")?.takeIf { !it.isJsonNull }?.asString,
+            )
         }
     }
 
