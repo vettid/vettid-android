@@ -1,5 +1,7 @@
 package com.vettid.app.features.migration
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -12,13 +14,18 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.vettid.app.core.nats.AuditLogEntry
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -38,9 +45,36 @@ fun SecurityAuditLogScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val filters by viewModel.filters.collectAsState()
+    val connections by viewModel.connections.collectAsState()
     var showFilters by remember { mutableStateOf(false) }
+    var showCustomDatePicker by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    // Storage Access Framework launcher: lets the user pick where to
+    // write the export. JSON includes the chain-hashed entries plus a
+    // record of which filter produced the view so it's self-describing.
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val json = viewModel.buildExportJson()
+        scope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                try {
+                    context.contentResolver.openOutputStream(uri)?.use { it.write(json.toByteArray()) }
+                    true
+                } catch (e: Exception) {
+                    false
+                }
+            }
+            snackbarHostState.showSnackbar(if (ok) "Audit log exported" else "Export failed")
+        }
+    }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("Security Audit Log") },
@@ -56,6 +90,12 @@ fun SecurityAuditLogScreen(
                             contentDescription = if (showFilters) "Hide filters" else "Show filters",
                             tint = if (filters.hasActive) MaterialTheme.colorScheme.primary else LocalContentColor.current,
                         )
+                    }
+                    IconButton(onClick = {
+                        val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+                        exportLauncher.launch("vettid-audit-$ts.json")
+                    }) {
+                        Icon(Icons.Default.Share, contentDescription = "Export")
                     }
                     IconButton(onClick = { viewModel.refresh() }) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh")
@@ -75,6 +115,38 @@ fun SecurityAuditLogScreen(
                     onToggle = { id -> viewModel.toggleCategory(id) },
                     onClear = { viewModel.clearFilters() },
                     modifier = Modifier.fillMaxWidth(),
+                )
+                DateFilterRow(
+                    selectedPresetId = filters.datePresetId,
+                    onPresetSelected = { id ->
+                        if (id == "custom") {
+                            showCustomDatePicker = true
+                        }
+                        viewModel.applyDatePreset(id)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (connections.isNotEmpty()) {
+                    ConnectionFilterDropdown(
+                        connections = connections,
+                        selected = filters.selectedConnectionIds,
+                        onToggle = { viewModel.toggleConnection(it) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+            if (showCustomDatePicker) {
+                CustomDateRangeDialog(
+                    initialStartMs = filters.startSeconds?.times(1000L),
+                    initialEndMs = filters.endSeconds?.times(1000L),
+                    onDismiss = { showCustomDatePicker = false },
+                    onConfirm = { startMs, endMs ->
+                        viewModel.setCustomDateRange(
+                            startSeconds = startMs?.div(1000L),
+                            endSeconds = endMs?.div(1000L),
+                        )
+                        showCustomDatePicker = false
+                    },
                 )
             }
             Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -153,6 +225,127 @@ private fun FilterChipRow(
                 )
             }
         }
+    }
+}
+
+/**
+ * Date-preset chips row: Today / Last 7 days / Last 30 days / All time / Custom.
+ * "Custom" triggers the parent's date-picker dialog via the same callback.
+ */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun DateFilterRow(
+    selectedPresetId: String,
+    onPresetSelected: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = modifier,
+    ) {
+        FlowRow(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            SECURITY_AUDIT_DATE_PRESETS.forEach { preset ->
+                FilterChip(
+                    selected = preset.id == selectedPresetId,
+                    onClick = { onPresetSelected(preset.id) },
+                    label = { Text(preset.label) },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Multi-select connection dropdown shown only when ≥1 connection is
+ * cached. Anchored to a button that summarizes the current selection
+ * ("All connections" / "1 connection" / "N connections"). Lighter than
+ * inlining a chip per connection — keeps the filter row tidy even for
+ * users with many peers.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ConnectionFilterDropdown(
+    connections: List<AuditConnectionOption>,
+    selected: Set<String>,
+    onToggle: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val summary = when {
+        selected.isEmpty() -> "All connections"
+        selected.size == 1 -> connections.firstOrNull { it.connectionId in selected }?.label ?: "1 connection"
+        else -> "${selected.size} connections"
+    }
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = modifier,
+    ) {
+        Box(modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)) {
+            AssistChip(
+                onClick = { expanded = true },
+                label = { Text(summary) },
+                leadingIcon = { Icon(Icons.Default.People, null, modifier = Modifier.size(18.dp)) },
+                trailingIcon = { Icon(Icons.Default.ArrowDropDown, null) },
+            )
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+            ) {
+                connections.forEach { conn ->
+                    DropdownMenuItem(
+                        text = { Text(conn.label) },
+                        leadingIcon = {
+                            Checkbox(
+                                checked = conn.connectionId in selected,
+                                onCheckedChange = { onToggle(conn.connectionId) },
+                            )
+                        },
+                        onClick = { onToggle(conn.connectionId) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Two-step custom date-range picker. Uses Material3 DateRangePicker
+ * which already handles min/max + per-locale presentation. Returns
+ * (startMs, endMs) where end defaults to end-of-selected-day so the
+ * user's "through Tuesday" intent includes Tuesday's events.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CustomDateRangeDialog(
+    initialStartMs: Long?,
+    initialEndMs: Long?,
+    onDismiss: () -> Unit,
+    onConfirm: (startMs: Long?, endMs: Long?) -> Unit,
+) {
+    val pickerState = rememberDateRangePickerState(
+        initialSelectedStartDateMillis = initialStartMs,
+        initialSelectedEndDateMillis = initialEndMs,
+    )
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = {
+                val start = pickerState.selectedStartDateMillis
+                // end-of-day for the picked end date so the chosen
+                // range is inclusive of all of that day's events.
+                val end = pickerState.selectedEndDateMillis?.let { it + (24L * 3600 * 1000) - 1 }
+                onConfirm(start, end)
+            }) { Text("Apply") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    ) {
+        DateRangePicker(state = pickerState)
     }
 }
 
