@@ -109,7 +109,13 @@ fun SecurityAuditLogScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            if (showFilters || filters.hasActive) {
+            // Filter row visibility is now ONLY user-controlled. The
+            // previous `|| filters.hasActive` clause kept the row pinned
+            // open whenever any filter was set, eating screen space and
+            // squeezing the log to one row at the bottom. The filter
+            // button in the top bar tints when filters are active so
+            // there's still a clear "filters in effect" signal.
+            if (showFilters) {
                 FilterChipRow(
                     filters = filters,
                     onToggle = { id -> viewModel.toggleCategory(id) },

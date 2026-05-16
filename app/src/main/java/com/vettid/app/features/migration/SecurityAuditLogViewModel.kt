@@ -158,7 +158,13 @@ class SecurityAuditLogViewModel @Inject constructor(
                     _state.value = if (filtered.isEmpty()) {
                         SecurityAuditLogState.Empty
                     } else {
-                        SecurityAuditLogState.Success(filtered, page.chainStatus)
+                        SecurityAuditLogState.Success(
+                            entries = filtered,
+                            chainStatus = page.chainStatus,
+                            auditPubB64 = page.auditPubB64,
+                            bindingSigB64 = page.bindingSigB64,
+                            identityPubB64 = page.identityPubB64,
+                        )
                     }
                 }
                 .onFailure { error ->
@@ -221,12 +227,29 @@ class SecurityAuditLogViewModel @Inject constructor(
      * still self-checkable against the same audit_pub the app holds.
      */
     fun buildExportJson(): String {
-        val s = _state.value
-        val entries = (s as? SecurityAuditLogState.Success)?.entries.orEmpty()
+        val s = _state.value as? SecurityAuditLogState.Success
+        val entries = s?.entries.orEmpty()
         val f = _filters.value
         val builder = StringBuilder()
         builder.append("{\n")
+        builder.append("  \"_verification\": {\n")
+        builder.append("    \"summary\": \"This export contains a tamper-evident audit chain. ")
+        builder.append("Each entry's entry_sig is an Ed25519 signature over its entry_hash by audit_pub. ")
+        builder.append("audit_pub itself is bound to your identity via binding_sig, which is an Ed25519 signature by identity_pub over the bytes \\\"vettid-audit-binding-v1\\\" concatenated with audit_pub. ")
+        builder.append("Each entry's previous_hash chains it to the prior entry's entry_hash so reordering or deletion is detectable.\",\n")
+        builder.append("    \"binding_domain\": \"vettid-audit-binding-v1\",\n")
+        builder.append("    \"steps\": [\n")
+        builder.append("      \"1. Decode audit_pub, binding_sig, identity_pub from base64 (standard alphabet, not URL-safe).\",\n")
+        builder.append("      \"2. Verify Ed25519(identity_pub, \\\"vettid-audit-binding-v1\\\" || audit_pub, binding_sig). If this fails, the audit_pub is not bound to identity_pub and the chain is untrusted.\",\n")
+        builder.append("      \"3. For each entry in chronological order (oldest first): confirm previous_hash equals the prior entry's entry_hash (or empty/genesis for the oldest). Mismatch means the chain was tampered.\",\n")
+        builder.append("      \"4. For each entry with a non-empty entry_sig: verify Ed25519(audit_pub, entry_hash.utf8_bytes, hex_decode(entry_sig)). Entries with empty entry_sig were written before the audit key was loaded (pre-PIN-unlock) and are intentionally unsigned.\",\n")
+        builder.append("      \"5. The 'verification' field on each entry shows how the in-app verifier classified it at export time (Verified / Unsigned / Tampered).\"\n")
+        builder.append("    ]\n")
+        builder.append("  },\n")
         builder.append("  \"exported_at\": ").append(System.currentTimeMillis() / 1000L).append(",\n")
+        builder.append("  \"audit_pub\": ").append(s?.auditPubB64?.let { "\"$it\"" } ?: "null").append(",\n")
+        builder.append("  \"binding_sig\": ").append(s?.bindingSigB64?.let { "\"$it\"" } ?: "null").append(",\n")
+        builder.append("  \"identity_pub\": ").append(s?.identityPubB64?.let { "\"$it\"" } ?: "null").append(",\n")
         builder.append("  \"filter\": {\n")
         builder.append("    \"categories\": ").append(jsonStringArray(f.selectedCategories)).append(",\n")
         builder.append("    \"connection_ids\": ").append(jsonStringArray(f.selectedConnectionIds)).append(",\n")
@@ -234,7 +257,7 @@ class SecurityAuditLogViewModel @Inject constructor(
         builder.append("    \"start_seconds\": ").append(f.startSeconds ?: "null").append(",\n")
         builder.append("    \"end_seconds\": ").append(f.endSeconds ?: "null").append("\n")
         builder.append("  },\n")
-        builder.append("  \"chain_status\": \"").append(s.javaClass.simpleName).append("\",\n")
+        builder.append("  \"chain_status\": \"").append((s as Any?)?.javaClass?.simpleName ?: "Empty").append("\",\n")
         builder.append("  \"entry_count\": ").append(entries.size).append(",\n")
         builder.append("  \"entries\": [\n")
         entries.forEachIndexed { i, e ->
@@ -274,6 +297,12 @@ sealed class SecurityAuditLogState {
         val entries: List<AuditLogEntry>,
         val chainStatus: com.vettid.app.core.audit.AuditChainVerifier.ChainStatus =
             com.vettid.app.core.audit.AuditChainVerifier.ChainStatus.Empty,
+        // Anchor fields carried through from the audit.query response so
+        // the export can be re-verified offline against the user's
+        // identity public key.
+        val auditPubB64: String? = null,
+        val bindingSigB64: String? = null,
+        val identityPubB64: String? = null,
     ) : SecurityAuditLogState()
     data class Error(val message: String) : SecurityAuditLogState()
 }

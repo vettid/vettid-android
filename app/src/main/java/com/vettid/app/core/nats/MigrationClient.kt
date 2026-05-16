@@ -324,7 +324,13 @@ class MigrationClient @Inject constructor(
         val display = allEntries.mapIndexed { i, e ->
             e.copy(verification = perRow.getOrNull(i)?.state ?: com.vettid.app.core.audit.AuditChainVerifier.RowState.Unsigned)
         }
-        return AuditLogPage(entries = display, chainStatus = chainStatus)
+        return AuditLogPage(
+            entries = display,
+            chainStatus = chainStatus,
+            auditPubB64 = json.get("audit_pub")?.asString,
+            bindingSigB64 = json.get("binding_sig")?.asString,
+            identityPubB64 = json.get("identity_pub")?.asString,
+        )
     }
 
     // See AuditChainVerifier.decodeB64Safe for the order rationale:
@@ -482,4 +488,10 @@ data class AuditLogPage(
     val entries: List<AuditLogEntry>,
     val chainStatus: com.vettid.app.core.audit.AuditChainVerifier.ChainStatus =
         com.vettid.app.core.audit.AuditChainVerifier.ChainStatus.Empty,
+    // Anchor fields (base64) from the audit.query response. Carried
+    // through to the screen so exports can include them — offline
+    // re-verification of the chain needs all three.
+    val auditPubB64: String? = null,
+    val bindingSigB64: String? = null,
+    val identityPubB64: String? = null,
 )
