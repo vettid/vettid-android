@@ -323,11 +323,14 @@ class MigrationClient @Inject constructor(
         return AuditLogPage(entries = display, chainStatus = chainStatus)
     }
 
+    // See AuditChainVerifier.decodeB64Safe for the order rationale:
+    // vault encodes with Go's base64.StdEncoding, so try standard first.
+    // URL_SAFE first silently dropped `+`/`/` chars from the input.
     private fun decodeBase64Safely(s: String): ByteArray? = try {
-        android.util.Base64.decode(s, android.util.Base64.NO_WRAP or android.util.Base64.URL_SAFE)
-            ?: android.util.Base64.decode(s, android.util.Base64.NO_WRAP)
+        android.util.Base64.decode(s, android.util.Base64.NO_WRAP)
+            ?: android.util.Base64.decode(s, android.util.Base64.NO_WRAP or android.util.Base64.URL_SAFE)
     } catch (_: Exception) {
-        try { android.util.Base64.decode(s, android.util.Base64.NO_WRAP) } catch (_: Exception) { null }
+        try { android.util.Base64.decode(s, android.util.Base64.NO_WRAP or android.util.Base64.URL_SAFE) } catch (_: Exception) { null }
     }
 
     private fun parseAuditLogEntries(json: JsonObject): List<AuditLogEntry> {

@@ -200,10 +200,18 @@ class AuditChainVerifier {
         }
     }
 
+    // Standard b64 first (vault always uses Go's base64.StdEncoding for
+    // these fields), URL_SAFE only as a fallback. Prior order tried
+    // URL_SAFE first, which silently produced SHORTER output on inputs
+    // containing `+` or `/` — those chars aren't in the URL_SAFE alphabet
+    // but Android's decoder didn't fail loudly, just dropped them. al's
+    // binding_sig had four such chars and three bytes vanished, breaking
+    // anchor verification on his vault while mesmer's (only `/`s) survived.
+    // Surfaced 2026-05-16.
     private fun decodeB64Safe(s: String): ByteArray? = try {
-        Base64.decode(s, Base64.NO_WRAP or Base64.URL_SAFE) ?: Base64.decode(s, Base64.NO_WRAP)
+        Base64.decode(s, Base64.NO_WRAP) ?: Base64.decode(s, Base64.NO_WRAP or Base64.URL_SAFE)
     } catch (_: Exception) {
-        try { Base64.decode(s, Base64.NO_WRAP) } catch (_: Exception) { null }
+        try { Base64.decode(s, Base64.NO_WRAP or Base64.URL_SAFE) } catch (_: Exception) { null }
     }
 
     private fun hexDecode(hex: String): ByteArray {
