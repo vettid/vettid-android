@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import kotlinx.coroutines.flow.collectLatest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -53,10 +54,25 @@ fun GrantsScreen(
     val endedGrants = directionGrants.filter { it.status != "active" }
 
     var tab by remember { mutableStateOf(0) }
+    val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(Unit) { viewModel.refresh() }
 
+    // Surface errors emitted by the ViewModel (fetch denials, send
+    // failures, etc.) as a snackbar. Before this, the events flow had
+    // no UI consumer on this screen — a denied data-grant fetch
+    // emitted "Fetch denied: …" into the void and the user saw nothing
+    // happen when they tapped Reveal. (Surfaced 2026-05-16.)
+    LaunchedEffect(viewModel) {
+        viewModel.events.collectLatest { ev ->
+            if (ev is GrantsEvent.Error) {
+                snackbarHostState.showSnackbar(ev.message)
+            }
+        }
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(if (isInbound) "Data they've shared" else "Data sharing") },
