@@ -169,6 +169,12 @@ fun SecurityAuditLogScreen(
                         Column(modifier = Modifier.fillMaxSize()) {
                             ChainStatusPill(
                                 status = currentState.chainStatus,
+                                signedShown = currentState.entries.count {
+                                    it.verification == com.vettid.app.core.audit.AuditChainVerifier.RowState.Verified
+                                },
+                                unsignedShown = currentState.entries.count {
+                                    it.verification == com.vettid.app.core.audit.AuditChainVerifier.RowState.Unsigned
+                                },
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 16.dp, vertical = 8.dp),
@@ -363,17 +369,28 @@ private fun CustomDateRangeDialog(
 @Composable
 private fun ChainStatusPill(
     status: com.vettid.app.core.audit.AuditChainVerifier.ChainStatus,
+    signedShown: Int = 0,
+    unsignedShown: Int = 0,
     modifier: Modifier = Modifier,
 ) {
     val (bg, fg, icon, text) = when (status) {
         is com.vettid.app.core.audit.AuditChainVerifier.ChainStatus.Empty -> return
         is com.vettid.app.core.audit.AuditChainVerifier.ChainStatus.Verified -> {
-            val unsignedPart = if (status.unsignedRows > 0) " · ${status.unsignedRows} unsigned" else ""
+            // Show "X of Y signed" so the count reflects what's actually
+            // on screen — the chain status counts are computed over the
+            // full chain (the verifier needs the complete chain to
+            // validate prev_hash linkage) but the user only sees the
+            // filtered subset. "16 signed" with 2 rows visible was the
+            // confusing case.
+            val signedPart = "$signedShown of ${status.signedRows} signed"
+            val unsignedPart = if (status.unsignedRows > 0) {
+                " · $unsignedShown of ${status.unsignedRows} unsigned"
+            } else ""
             Quad(
                 MaterialTheme.colorScheme.primaryContainer,
                 MaterialTheme.colorScheme.onPrimaryContainer,
                 androidx.compose.material.icons.Icons.Default.Verified,
-                "Chain verified · ${status.signedRows} signed$unsignedPart",
+                "Chain verified · $signedPart$unsignedPart",
             )
         }
         is com.vettid.app.core.audit.AuditChainVerifier.ChainStatus.Unsigned -> Quad(
