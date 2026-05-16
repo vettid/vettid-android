@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.vettid.app.core.attestation.HardwareAttestationManager
+import com.vettid.app.core.attestation.AttestationRetryingVerifier
 import com.vettid.app.core.attestation.NitroAttestationVerifier
 import com.vettid.app.core.attestation.PcrConfigManager
 import com.vettid.app.core.crypto.CryptoManager
@@ -174,10 +175,9 @@ object AppModule {
     @Singleton
     fun provideBootstrapClient(
         credentialStore: CredentialStore,
-        attestationVerifier: NitroAttestationVerifier,
-        pcrConfigManager: PcrConfigManager
+        retryingVerifier: AttestationRetryingVerifier,
     ): BootstrapClient {
-        return BootstrapClient(credentialStore, attestationVerifier, pcrConfigManager)
+        return BootstrapClient(credentialStore, retryingVerifier)
     }
 
     @Provides

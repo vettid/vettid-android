@@ -4,9 +4,8 @@ import android.util.Base64
 import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import com.vettid.app.core.attestation.AttestationRetryingVerifier
 import com.vettid.app.core.attestation.AttestationVerificationException
-import com.vettid.app.core.attestation.NitroAttestationVerifier
-import com.vettid.app.core.attestation.PcrConfigManager
 import com.vettid.app.core.attestation.VerifiedAttestation
 import com.vettid.app.core.crypto.SessionCrypto
 import com.vettid.app.core.crypto.SessionInfo
@@ -43,8 +42,7 @@ import javax.inject.Singleton
 @Singleton
 class BootstrapClient @Inject constructor(
     private val credentialStore: CredentialStore,
-    private val attestationVerifier: NitroAttestationVerifier,
-    private val pcrConfigManager: PcrConfigManager
+    private val retryingVerifier: AttestationRetryingVerifier,
 ) {
     companion object {
         private const val TAG = "BootstrapClient"
@@ -248,18 +246,26 @@ class BootstrapClient @Inject constructor(
             val attestationDoc = data.get("attestation_document")?.asString
             var verifiedAttestation: VerifiedAttestation? = null
 
-            // Verify attestation if present (Nitro Enclave flow)
+            // Verify attestation if present (Nitro Enclave flow).
+            // Uses AttestationRetryingVerifier so a PCR mismatch against
+            // the cached manifest (e.g. enclave was redeployed past our
+            // last manifest refresh) automatically force-refreshes and
+            // retries once. Without this, a transient cache-staleness
+            // window could keep the user locked out of an enclave they'd
+            // otherwise trust (#234). The runBlocking bridge follows the
+            // existing pattern in NitroEnrollmentClient — this callback
+            // runs on a NATS delivery thread, the bootstrap timeout
+            // (30s) covers the worst-case refresh-and-retry path.
             if (!attestationDoc.isNullOrBlank()) {
                 Log.d(TAG, "Attestation document present, verifying...")
                 try {
-                    val expectedPcrs = pcrConfigManager.getCurrentPcrs()
-                    Log.d(TAG, "Using PCRs version: ${expectedPcrs.version}")
-
-                    verifiedAttestation = attestationVerifier.verify(
-                        attestationDocBase64 = attestationDoc,
-                        expectedPcrs = expectedPcrs,
-                        expectedNonce = pendingNonce
-                    )
+                    verifiedAttestation = kotlinx.coroutines.runBlocking {
+                        retryingVerifier.verifyWithRefreshOnMismatch(
+                            attestationDocBase64 = attestationDoc,
+                            expectedNonce = pendingNonce,
+                            callerTag = TAG,
+                        )
+                    }
 
                     Log.i(TAG, "Attestation verified! Module: ${verifiedAttestation.moduleId}")
                 } catch (e: AttestationVerificationException) {
