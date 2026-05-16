@@ -314,10 +314,14 @@ class MigrationClient @Inject constructor(
             identityPub = json.get("identity_pub")?.asString?.let { decodeBase64Safely(it) },
             entryHashOf = { e -> Triple(e.entryHash, e.previousHash, e.entrySig) },
         )
-        // Apply the display filter after verification so each row's
-        // verification state still maps to its original chain position.
-        val display = allEntries.mapIndexedNotNull { i, e ->
-            if (!isSecurityRelevantType(e.type)) return@mapIndexedNotNull null
+        // Stamp each entry with its chain-verification state and return
+        // the full set. The hardcoded isSecurityRelevantType whitelist
+        // that used to filter here surprised users — with no UI filters
+        // applied, the screen still hid 12 of 14 events. The audit log
+        // now defaults to "show everything"; user-driven filters
+        // (category chips, future connection/date filters) narrow from
+        // there. 2026-05-16.
+        val display = allEntries.mapIndexed { i, e ->
             e.copy(verification = perRow.getOrNull(i)?.state ?: com.vettid.app.core.audit.AuditChainVerifier.RowState.Unsigned)
         }
         return AuditLogPage(entries = display, chainStatus = chainStatus)
