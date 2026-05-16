@@ -112,7 +112,7 @@ class ProteanCredentialManager @Inject constructor(
         version: Int = 1,
         triggerBackup: Boolean = true
     ) {
-        Log.i(TAG, "Recording Protean Credential metadata version $version for user $userGuid")
+        Log.i(TAG, "Recording Protean Credential metadata version $version")
 
         val metadata = CredentialMetadata(
             version = version,

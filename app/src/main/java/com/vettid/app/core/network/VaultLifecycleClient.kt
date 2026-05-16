@@ -92,7 +92,7 @@ class VaultLifecycleClient @Inject constructor(
         val userGuid = credentialStore.getUserGuid()
             ?: return Result.failure(VaultLifecycleException("User not enrolled - no user GUID found"))
 
-        Log.i(TAG, "Requesting NATS credential reissue for userGuid=$userGuid")
+        Log.i(TAG, "Requesting NATS credential reissue")
 
         val request = NatsReissueRequest(userGuid = userGuid)
         return safeApiCall { api.reissueNatsCredentials(request) }
@@ -112,7 +112,7 @@ class VaultLifecycleClient @Inject constructor(
         val userGuid = credentialStore.getUserGuid()
             ?: return Result.failure(VaultLifecycleException("User not enrolled - no user GUID found"))
 
-        Log.i(TAG, "Requesting action token for $actionType with userGuid=$userGuid")
+        Log.i(TAG, "Requesting action token for $actionType")
 
         // Step 1: Request action token
         val tokenResult = requestActionToken(userGuid, actionType)

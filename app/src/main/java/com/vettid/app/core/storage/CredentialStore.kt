@@ -786,7 +786,7 @@ class CredentialStore @Inject constructor(
         }.commit()  // Use commit() for critical enrollment data
 
         if (success) {
-            android.util.Log.i("CredentialStore", "Stored Nitro credential: $credentialGuid for user $userGuid with ${utks.size} UTKs, PCR version: $pcrVersion")
+            android.util.Log.i("CredentialStore", "Stored Nitro credential: $credentialGuid with ${utks.size} UTKs, PCR version: $pcrVersion")
         } else {
             android.util.Log.e("CredentialStore", "CRITICAL: Failed to persist Nitro credential!")
         }
