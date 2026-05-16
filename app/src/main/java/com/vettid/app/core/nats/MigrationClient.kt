@@ -296,24 +296,31 @@ class MigrationClient @Inject constructor(
      * connection verify outcomes, migrations, auth events.
      */
     private fun parseAuditLogPage(json: JsonObject): AuditLogPage {
-        // First parse the entries, then run the chain verifier across
-        // them in one pass. Chain verification needs the response-level
-        // anchor (audit_pub + binding_sig + identity_pub) so do that
-        // here before returning entries to the screen.
-        val entries = parseAuditLogEntries(json)
-        if (entries.isEmpty()) return AuditLogPage(emptyList())
+        // Verify against the *full* chain, then filter for display. The
+        // chain's previous_hash linkage spans every event in the audit
+        // store — connection.created, audit.binding, etc. — not just
+        // the security-relevant subset shown on the screen. Filtering
+        // before verification broke prev_hash continuity (a kept row's
+        // previous_hash pointed at a filtered-out row's entry_hash) and
+        // the verifier returned "chain integrity broken" even on an
+        // intact chain. Surfaced 2026-05-16 on the post-Phase-1 test pass.
+        val allEntries = parseAuditLogEntries(json)
+        if (allEntries.isEmpty()) return AuditLogPage(emptyList())
         val verifier = com.vettid.app.core.audit.AuditChainVerifier()
         val (perRow, chainStatus) = verifier.verifyChain(
-            rows = entries,
+            rows = allEntries,
             auditPubB64 = json.get("audit_pub")?.asString,
             bindingSigB64 = json.get("binding_sig")?.asString,
             identityPub = json.get("identity_pub")?.asString?.let { decodeBase64Safely(it) },
             entryHashOf = { e -> Triple(e.entryHash, e.previousHash, e.entrySig) },
         )
-        val verified = entries.mapIndexed { i, e ->
+        // Apply the display filter after verification so each row's
+        // verification state still maps to its original chain position.
+        val display = allEntries.mapIndexedNotNull { i, e ->
+            if (!isSecurityRelevantType(e.type)) return@mapIndexedNotNull null
             e.copy(verification = perRow.getOrNull(i)?.state ?: com.vettid.app.core.audit.AuditChainVerifier.RowState.Unsigned)
         }
-        return AuditLogPage(entries = verified, chainStatus = chainStatus)
+        return AuditLogPage(entries = display, chainStatus = chainStatus)
     }
 
     private fun decodeBase64Safely(s: String): ByteArray? = try {
@@ -340,7 +347,10 @@ class MigrationClient @Inject constructor(
             try {
                 val obj = element.asJsonObject
                 val type = obj.get("event_type")?.asString ?: return@mapNotNull null
-                if (!isSecurityRelevantType(type)) return@mapNotNull null
+                // Don't filter by isSecurityRelevantType here — the chain
+                // verifier needs every entry with a prev_hash link in
+                // order so the chain validates. The display filter runs
+                // in parseAuditLogPage after verification.
                 val sourceId = obj.get("source_id")?.asString.orEmpty()
                 val sourceType = obj.get("source_type")?.asString.orEmpty()
                 val peerName = if (sourceType == "connection" && sourceId.isNotEmpty()) {
