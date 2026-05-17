@@ -783,6 +783,11 @@ fun VettIDApp(
                     appViewModel.setOfflineMode(offlineMode)
                     appViewModel.refreshUserProfile()
                     appViewModel.setAuthenticated(true)
+                    // D #142: pre-warm the caches the first post-unlock
+                    // screen will read so Feed / Connections render
+                    // without a Loading flash. Runs in parallel with
+                    // NATS auto-connect; self-throttling.
+                    appViewModel.preWarmAfterUnlock()
                     // Start background service for reliable notifications
                     com.vettid.app.core.notifications.VaultProtectionService.start(navController.context)
                     // Schedule WorkManager fallback for when service is killed

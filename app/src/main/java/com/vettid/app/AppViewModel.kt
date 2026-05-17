@@ -77,6 +77,7 @@ class AppViewModel @Inject constructor(
     private val personalDataStore: PersonalDataStore,
     private val appLifecycleObserver: com.vettid.app.core.nats.AppLifecycleObserver,
     private val localDataWiper: com.vettid.app.core.security.LocalDataWiper,
+    private val connectionsClient: com.vettid.app.core.nats.ConnectionsClient,
 ) : ViewModel() {
 
     private val _appState = MutableStateFlow(AppState(
@@ -171,6 +172,29 @@ class AppViewModel @Inject constructor(
      */
     fun refreshUserProfile() {
         loadUserProfile()
+    }
+
+    /**
+     * SECURITY (D #142): pre-warm caches the first screen needs after
+     * PIN unlock so the user lands on Feed / Connections without a
+     * Loading flash. Fires in parallel — each call is fire-and-forget
+     * and self-throttling (ConnectionsClient.warmList early-outs if
+     * the cache is still hot, PersonalDataStore.hydrate is idempotent).
+     *
+     * Run AFTER setAuthenticated so the NATS auto-connect has started
+     * — the warm-up calls will succeed once the connection comes up.
+     */
+    fun preWarmAfterUnlock() {
+        viewModelScope.launch {
+            // ConnectionsClient.warmList absorbs:
+            //   • ConnectionsViewModel.list() on first tab open
+            //   • ConnectionDetailViewModel.loadConnection() on
+            //     subsequent navigation from a feed event (D #141)
+            launch { connectionsClient.warmList() }
+            // PersonalDataStore hydrate populates the profile fields
+            // every screen that renders the BusinessCard reads.
+            launch { personalDataStore.hydrate() }
+        }
     }
 
     fun refreshCredentialStatus() {
