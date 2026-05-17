@@ -67,6 +67,19 @@ class AppPreferencesStore(context: Context) {
     fun setLocationTrackingEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_LOCATION_ENABLED, enabled).apply()
         _locationTrackingFlow.value = enabled
+        // SECURITY (#46): when the user disables tracking, clear the
+        // last-known-location cache that LocationCollectionWorker keeps
+        // for displacement filtering. The vault is the source of truth
+        // for retained location history; this cache only exists to
+        // avoid sending duplicate readings, and it has no reason to
+        // outlive the opt-in window.
+        if (!enabled) {
+            securePrefs.edit()
+                .remove(KEY_LAST_KNOWN_LAT)
+                .remove(KEY_LAST_KNOWN_LON)
+                .apply()
+            prefs.edit().remove(KEY_LAST_CAPTURE_TIME).apply()
+        }
     }
 
     fun getLocationPrecision(): LocationPrecision {
@@ -127,8 +140,14 @@ class AppPreferencesStore(context: Context) {
 
     /**
      * Last-known GPS coordinates. Persisted in EncryptedSharedPreferences
-     * (separate from the rest of app prefs) because lat/lon is PII.
-     * SECURITY (android-storage-H2).
+     * (hardware-backed MasterKey, AES256-GCM) because lat/lon is PII.
+     *
+     * SECURITY (android-storage-H2 + #46): the vault is the canonical
+     * store for retained location history (`location.add` NATS op).
+     * This on-device copy exists purely so LocationCollectionWorker can
+     * compute the displacement-since-last-reading and skip duplicates
+     * without round-tripping to the vault on every GPS tick. Cache is
+     * cleared on tracking-disable (see setLocationTrackingEnabled).
      */
     fun getLastKnownLatitude(): Double {
         // Migrate any existing plaintext value to encrypted on first read.
