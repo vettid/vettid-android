@@ -256,8 +256,11 @@ dependencies {
     // CBOR/COSE for AWS Nitro Enclave attestation verification
     implementation("com.fasterxml.jackson.dataformat:jackson-dataformat-cbor:2.16.1")
     implementation("com.fasterxml.jackson.module:jackson-module-kotlin:2.16.1")
-    implementation("org.bouncycastle:bcprov-jdk18on:1.77")  // Certificate chain verification
-    implementation("org.bouncycastle:bcpkix-jdk18on:1.77")  // COSE signature verification
+    // SECURITY (#102): BouncyCastle 1.78.1 includes fixes for
+    // CVE-2024-29857 (elliptic-curve infinite loop), CVE-2024-30171,
+    // and CVE-2024-30172. 1.77 was Nov 2023; bumped 2026-05-17.
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")  // Certificate chain verification
+    implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")  // COSE signature verification
 
     // Biometrics
     implementation("androidx.biometric:biometric:1.1.0")
@@ -274,8 +277,12 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.5.0")
 
     // Networking
-    implementation("com.squareup.retrofit2:retrofit:2.9.0")
-    implementation("com.squareup.retrofit2:converter-gson:2.9.0")
+    // SECURITY (#103): Retrofit 2.9.0 (May 2020) has no direct CVEs
+    // but is years old; 2.11.0 (Apr 2024) ships bug fixes and modern
+    // Kotlin support. OkHttp 4.12.0 remains the latest stable in the
+    // 4.x line as of 2026-05; 5.x is still alpha.
+    implementation("com.squareup.retrofit2:retrofit:2.11.0")
+    implementation("com.squareup.retrofit2:converter-gson:2.11.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
 
