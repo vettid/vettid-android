@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.app.core.crypto.CryptoManager
+import com.vettid.app.core.security.SecurePassword
 import com.vettid.app.core.storage.CredentialStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -103,6 +104,14 @@ class VaultCredentialEnrollmentViewModel @Inject constructor(
         viewModelScope.launch {
             _state.value = currentState.copy(isCreating = true)
 
+            // SECURITY (#50): copy the String password into a SecurePassword
+            // right at the launch boundary and immediately clear the
+            // ViewModel-state String so GC can reclaim the original.
+            // SecurePassword carries a mutable CharArray that wipe()
+            // overwrites with spaces inside the use-block below.
+            val pw = SecurePassword.fromString(currentState.password)
+            _state.value = currentState.copy(password = "")
+
             try {
                 // Generate salt and hash password
                 val salt = withContext(Dispatchers.Default) {
@@ -110,7 +119,7 @@ class VaultCredentialEnrollmentViewModel @Inject constructor(
                 }
 
                 val passwordHash = withContext(Dispatchers.Default) {
-                    cryptoManager.hashPassword(currentState.password, salt)
+                    cryptoManager.hashPassword(pw, salt)
                 }
 
                 // Store vault credential (separate from vault services credential)
@@ -127,6 +136,8 @@ class VaultCredentialEnrollmentViewModel @Inject constructor(
                 _effects.emit(VaultCredentialEnrollmentEffect.ShowError(
                     e.message ?: "Failed to create credential"
                 ))
+            } finally {
+                pw.wipe()
             }
         }
     }
@@ -145,11 +156,17 @@ class VaultCredentialEnrollmentViewModel @Inject constructor(
         viewModelScope.launch {
             _authState.value = currentState.copy(isAuthenticating = true)
 
+            // SECURITY (#50): same SecurePassword handoff as createCredential.
+            val pw = SecurePassword.fromString(currentState.password)
+            val passwordLength = currentState.password.length
+            _authState.value = currentState.copy(password = "")
+
             try {
                 // Get stored salt
                 val salt = credentialStore.getVaultCredentialSalt()
                 if (salt == null) {
                     _authState.value = currentState.copy(
+                        password = "",
                         isAuthenticating = false,
                         error = "No vault credential found"
                     )
@@ -158,13 +175,13 @@ class VaultCredentialEnrollmentViewModel @Inject constructor(
 
                 // Hash provided password
                 val passwordHash = withContext(Dispatchers.Default) {
-                    cryptoManager.hashPassword(currentState.password, salt)
+                    cryptoManager.hashPassword(pw, salt)
                 }
 
                 // Verify against stored hash (or in production, authenticate with vault)
                 val isValid = createdPasswordHash?.contentEquals(passwordHash) ?: run {
                     // If we don't have the hash in memory, accept for demo
-                    currentState.password.length >= MIN_PASSWORD_LENGTH
+                    passwordLength >= MIN_PASSWORD_LENGTH
                 }
 
                 if (isValid) {
@@ -174,6 +191,7 @@ class VaultCredentialEnrollmentViewModel @Inject constructor(
                     _effects.emit(VaultCredentialEnrollmentEffect.EnrollmentComplete)
                 } else {
                     _authState.value = currentState.copy(
+                        password = "",
                         isAuthenticating = false,
                         error = "Invalid password"
                     )
@@ -182,9 +200,12 @@ class VaultCredentialEnrollmentViewModel @Inject constructor(
             } catch (e: Exception) {
                 Log.e(TAG, "Authentication failed", e)
                 _authState.value = currentState.copy(
+                    password = "",
                     isAuthenticating = false,
                     error = e.message ?: "Authentication failed"
                 )
+            } finally {
+                pw.wipe()
             }
         }
     }
