@@ -68,6 +68,21 @@ class ConnectionsClient @Inject constructor(
     }
 
     /**
+     * SECURITY (D #143): synchronous snapshot accessor for callers
+     * that want to render optimistically from cache before kicking
+     * off the real fetch. Returns null when the cache is cold or
+     * the snapshot is stale beyond the TTL — in either case the
+     * caller should fall through to list() and show a Loading state.
+     */
+    fun cachedListSnapshot(): ConnectionListResult? {
+        val cached = listCache ?: return null
+        if (System.currentTimeMillis() - cached.fetchedAtMs >= listCacheTtlMs) {
+            return null
+        }
+        return cached.result
+    }
+
+    /**
      * Create an invitation for a peer to connect to this vault.
      *
      * The invitation contains NATS credentials scoped to the owner's message space,

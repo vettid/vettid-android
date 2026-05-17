@@ -2,6 +2,7 @@ package com.vettid.app.features.connections
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.app.core.nats.ConnectionListResult
 import com.vettid.app.core.nats.ConnectionRecord
 import com.vettid.app.core.nats.ConnectionsClient
 import com.vettid.app.core.nats.NatsAutoConnector
@@ -119,6 +120,11 @@ class ConnectionsViewModel @Inject constructor(
     private val loadDebounceMs = 3000L
 
     init {
+        // SECURITY (D #143): loadConnections() now renders from
+        // ConnectionsClient.cachedListSnapshot() synchronously when
+        // available (D #142 pre-warm or a recent screen-visit
+        // populated it), skipping the Loading flash entirely on
+        // the hot path.
         loadConnections()
 
         // Observe network changes for auto-sync
@@ -210,8 +216,19 @@ class ConnectionsViewModel @Inject constructor(
             }
             lastLoadTime = now
 
+            // SECURITY (D #143): only transition to Loading when we
+            // have no current data on screen AND the connections client
+            // has no warm cache to render from. If a cached snapshot is
+            // available, render it synchronously here so the user
+            // never sees a blank/loading flash; loadConnections then
+            // refreshes the data underneath.
             if (_state.value !is ConnectionsState.Loaded) {
-                _state.value = ConnectionsState.Loading
+                val snapshot = connectionsClient.cachedListSnapshot()
+                if (snapshot != null) {
+                    applyListResult(snapshot)
+                } else {
+                    _state.value = ConnectionsState.Loading
+                }
             }
 
             // Check if NATS is connected
@@ -753,6 +770,52 @@ class ConnectionsViewModel @Inject constructor(
             unreadCount = conn.unreadCount,
             createdAt = com.vettid.app.util.toInstant(conn.createdAt)
         )
+    }
+
+    /**
+     * SECURITY (D #143): synchronous render path from a cached
+     * ConnectionListResult snapshot. Same record-mapping as the
+     * loadConnections() onSuccess branch (kept inline there because
+     * it also runs side-effects like the review-prompt emitter and
+     * the stale-key-rotation check, neither of which we want to fire
+     * on a cache-render). Only the data-population path is shared
+     * via this helper.
+     */
+    private fun applyListResult(listResult: ConnectionListResult) {
+        val connectionsWithMessages = listResult.items.map { record ->
+            val status = when (record.status.lowercase()) {
+                "active" -> ConnectionStatus.ACTIVE
+                "revoked", "expired",
+                "declined_by_us", "declined_by_peer", "rejected" -> ConnectionStatus.REVOKED
+                else -> ConnectionStatus.PENDING
+            }
+            val createdAtMillis = try {
+                java.time.Instant.parse(record.createdAt).toEpochMilli()
+            } catch (e: Exception) {
+                0L
+            }
+            val lastMessageMillis = record.lastMessageAt?.let {
+                try { java.time.Instant.parse(it).toEpochMilli() } catch (_: Exception) { null }
+            }
+            ConnectionWithLastMessage(
+                connection = Connection(
+                    connectionId = record.connectionId,
+                    peerGuid = record.peerGuid,
+                    peerDisplayName = record.label,
+                    peerAvatarUrl = null,
+                    status = status,
+                    createdAt = createdAtMillis,
+                    lastMessageAt = lastMessageMillis,
+                    unreadCount = record.unreadMessageCount
+                ),
+                lastMessage = null,
+                peerPhotoBase64 = record.peerProfile?.photo,
+            )
+        }.sortedByDescending { it.connection.createdAt }
+        allConnections = connectionsWithMessages
+        lastListResult = listResult.items
+        allEnhancedConnections = connectionsWithMessages.map { it.toEnhanced() }
+        applyFilterAndSort()
     }
 }
 
