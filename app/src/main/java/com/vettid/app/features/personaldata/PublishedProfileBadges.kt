@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.vettid.app.core.nats.PeerHandlerInfo
 import com.vettid.app.core.nats.PeerPublicSecretMetadata
+import com.vettid.app.core.nats.VaultHandler
 
 /**
  * Three-icon row (Data / Secrets / Handlers) that renders above a
@@ -50,11 +51,52 @@ import com.vettid.app.core.nats.PeerPublicSecretMetadata
  * that doesn't publish handlers/secrets shows "0" instead of
  * breaking the layout.
  */
+/**
+ * Self-side entry point (#126) — owner's published-profile preview.
+ * Same shape as the peer-side overload but accepts VaultHandler so
+ * the user's own handler entries flow in directly without the
+ * PeerHandlerInfo conversion the peer side does row-by-row.
+ */
 @Composable
 fun PublishedProfileBadges(
     dataCatalog: List<PublicMetadataItem>,
     secretCatalog: List<PublicMetadataItem>,
-    handlers: List<PeerHandlerInfo>,
+    handlers: List<VaultHandler>,
+    modifier: Modifier = Modifier,
+) {
+    PublishedProfileBadgesImpl(
+        dataCatalog = dataCatalog,
+        secretCatalog = secretCatalog,
+        handlerRowCount = handlers.size,
+        handlerRows = { handlers.forEach { ProfileHandlerRow(handler = it) } },
+        modifier = modifier,
+    )
+}
+
+/**
+ * Helper for peer-side callers: convert a list of PeerHandlerInfo
+ * (the shape connection.list returns) into the VaultHandler shape
+ * the shared badges overload expects. Defaults for enabled /
+ * share_globally are fine — peer side doesn't see toggle state.
+ */
+fun List<PeerHandlerInfo>.toVaultHandlers(): List<VaultHandler> = map { handler ->
+    VaultHandler(
+        id = handler.id,
+        name = handler.name,
+        description = handler.description,
+        operations = handler.operations,
+        category = handler.category,
+        required = handler.required,
+        shareable = handler.shareable,
+    )
+}
+
+@Composable
+private fun PublishedProfileBadgesImpl(
+    dataCatalog: List<PublicMetadataItem>,
+    secretCatalog: List<PublicMetadataItem>,
+    handlerRowCount: Int,
+    handlerRows: @Composable () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var showDataDialog by remember { mutableStateOf(false) }
@@ -87,7 +129,7 @@ fun PublishedProfileBadges(
         BadgeIcon(
             icon = Icons.Default.Extension,
             label = "Handlers",
-            count = handlers.size,
+            count = handlerRowCount,
             contentDescription = "Vault capabilities",
             onClick = { showHandlersDialog = true },
         )
@@ -114,8 +156,9 @@ fun PublishedProfileBadges(
         )
     }
     if (showHandlersDialog) {
-        PeerHandlersDialog(
-            handlers = handlers,
+        HandlersDialog(
+            count = handlerRowCount,
+            rows = handlerRows,
             onDismiss = { showHandlersDialog = false },
         )
     }
@@ -141,14 +184,15 @@ private fun BadgeIcon(
 }
 
 /**
- * Handler-catalog dialog for a peer's published profile. Mirrors the
- * styling of the user's own public-profile preview so peer and self
- * sides render identically. Each row expands to show the description
- * and operations chips.
+ * Handler-catalog dialog used by both the self-preview and the
+ * peer-profile surfaces. The shared `rows` slot lets each caller
+ * pass already-prepared VaultHandler rows so the dialog stays
+ * type-agnostic over the source shape (VaultHandler vs PeerHandlerInfo).
  */
 @Composable
-private fun PeerHandlersDialog(
-    handlers: List<PeerHandlerInfo>,
+private fun HandlersDialog(
+    count: Int,
+    rows: @Composable () -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
@@ -164,7 +208,7 @@ private fun PeerHandlersDialog(
                     color = MaterialTheme.colorScheme.primaryContainer,
                 ) {
                     Text(
-                        "${handlers.size}",
+                        "$count",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onPrimaryContainer,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
@@ -173,9 +217,9 @@ private fun PeerHandlersDialog(
             }
         },
         text = {
-            if (handlers.isEmpty()) {
+            if (count == 0) {
                 Text(
-                    "This vault didn't publish its capability catalog.",
+                    "No handlers are currently installed.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -183,22 +227,7 @@ private fun PeerHandlersDialog(
                 Column(
                     modifier = Modifier.verticalScroll(rememberScrollState()),
                 ) {
-                    handlers.forEach { handler ->
-                        // Convert PeerHandlerInfo to VaultHandler so the
-                        // shared row composable can render it. Defaults
-                        // for enabled/share_globally are fine — peer side
-                        // doesn't see toggle state.
-                        val vh = com.vettid.app.core.nats.VaultHandler(
-                            id = handler.id,
-                            name = handler.name,
-                            description = handler.description,
-                            operations = handler.operations,
-                            category = handler.category,
-                            required = handler.required,
-                            shareable = handler.shareable,
-                        )
-                        ProfileHandlerRow(handler = vh)
-                    }
+                    rows()
                 }
             }
         },

@@ -1269,9 +1269,11 @@ internal fun PublicProfileFullScreen(
     handlers: List<com.vettid.app.core.nats.VaultHandler> = emptyList(),
     onBack: () -> Unit
 ) {
-    var showSecretsDialog by remember { mutableStateOf(false) }
-    var showPersonalDataDialog by remember { mutableStateOf(false) }
-    var showHandlersDialog by remember { mutableStateOf(false) }
+    // SECURITY (#126): the showSecretsDialog / showPersonalDataDialog /
+    // showHandlersDialog state vars + the three inline AlertDialog
+    // blocks they drove were removed when this surface adopted
+    // PublishedProfileBadges. The shared component manages its own
+    // dialog state internally.
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background
@@ -1412,36 +1414,18 @@ internal fun PublicProfileFullScreen(
 
                         Spacer(modifier = Modifier.height(12.dp))
 
-                        // Public metadata icon buttons
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            // Data
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                IconButton(onClick = { showPersonalDataDialog = true }) {
-                                    Icon(Icons.Default.Person, contentDescription = "Personal Data")
-                                }
-                                Text("Data (${publicPersonalData.size})", style = MaterialTheme.typography.labelSmall)
-                            }
-                            Spacer(modifier = Modifier.width(24.dp))
-                            // Secrets
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                IconButton(onClick = { showSecretsDialog = true }) {
-                                    Icon(Icons.Default.Key, contentDescription = "Secrets")
-                                }
-                                Text("Secrets (${publicSecrets.size})", style = MaterialTheme.typography.labelSmall)
-                            }
-                            Spacer(modifier = Modifier.width(24.dp))
-                            // Handlers
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                IconButton(onClick = { showHandlersDialog = true }) {
-                                    Icon(Icons.Default.Extension, contentDescription = "Handlers")
-                                }
-                                Text("Handlers (${handlers.size})", style = MaterialTheme.typography.labelSmall)
-                            }
-                        }
+                        // SECURITY (#126): shared PublishedProfileBadges
+                        // — replaces the hand-rolled 3-icon row + three
+                        // inline AlertDialogs that used to live here. The
+                        // peer-side rendering uses the same component
+                        // (PeerHandlerInfo overload), so self/peer views
+                        // stay visually consistent without two parallel
+                        // implementations drifting apart.
+                        PublishedProfileBadges(
+                            dataCatalog = publicPersonalData,
+                            secretCatalog = publicSecrets,
+                            handlers = handlers,
+                        )
 
                         Spacer(modifier = Modifier.height(16.dp))
 
@@ -1481,73 +1465,11 @@ internal fun PublicProfileFullScreen(
         }
     }
 
-    // Public Secrets Metadata Dialog
-    if (showSecretsDialog) {
-        PublicMetadataDialog(
-            title = "Available Secrets",
-            subtitle = "Metadata only — peers can request these via policy. Values are never shared without consent.",
-            items = publicSecrets,
-            emptyMessage = "No secrets are available yet.",
-            onDismiss = { showSecretsDialog = false }
-        )
-    }
-
-    // Available Personal Data Dialog
-    if (showPersonalDataDialog) {
-        PublicMetadataDialog(
-            title = "Available Personal Data",
-            subtitle = "Metadata only — peers can request these via policy. Values are never shared without consent.",
-            items = publicPersonalData,
-            emptyMessage = "No personal data is available yet.",
-            onDismiss = { showPersonalDataDialog = false }
-        )
-    }
-
-    // Handlers Dialog — styled like Settings > Vault Status > Handlers
-    if (showHandlersDialog) {
-        AlertDialog(
-            onDismissRequest = { showHandlersDialog = false },
-            title = {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Extension, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Available Handlers")
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer
-                    ) {
-                        Text(
-                            "${handlers.size}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-                        )
-                    }
-                }
-            },
-            text = {
-                if (handlers.isEmpty()) {
-                    Text(
-                        "No handlers are currently installed.\n\nHandlers allow services and agents to interact with your vault data.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                } else {
-                    Column(
-                        modifier = Modifier.verticalScroll(rememberScrollState())
-                    ) {
-                        handlers.forEach { handler ->
-                            ProfileHandlerRow(handler = handler)
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { showHandlersDialog = false }) { Text("Close") }
-            }
-        )
-    }
+    // SECURITY (#126): the three inline dialog blocks that used to
+    // live here (Public Secrets, Available Personal Data, Handlers)
+    // are now owned by PublishedProfileBadges. Removed alongside the
+    // showSecretsDialog / showPersonalDataDialog / showHandlersDialog
+    // state vars.
 }
 
 @Composable
