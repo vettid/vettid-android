@@ -26,6 +26,25 @@ android {
         }
     }
 
+    // SECURITY (#49): runtime signing-cert hash pin. The expected
+    // SHA-256 hex string for the release certificate is read from
+    // either keystore.properties (`signingCertSha256=...`) or the
+    // VETTID_SIGNING_CERT_SHA256 env var. Empty string means
+    // "skip the runtime tamper check" — that's the right behavior
+    // for debug builds. Computed via:
+    //   keytool -list -v -keystore release.keystore -alias vettid-release \
+    //     | awk '/SHA256:/ { print $2 }' | tr -d ':'
+    val signingCertSha256Pin: String = (run {
+        val keystorePropertiesFile = rootProject.file("keystore.properties")
+        if (keystorePropertiesFile.exists()) {
+            val ksProps = Properties()
+            ksProps.load(FileInputStream(keystorePropertiesFile))
+            (ksProps["signingCertSha256"] as String?)?.trim().orEmpty()
+        } else {
+            System.getenv("VETTID_SIGNING_CERT_SHA256")?.trim().orEmpty()
+        }
+    }).uppercase()
+
     signingConfigs {
         create("release") {
             // SECURITY: Signing credentials can be provided via:
@@ -37,10 +56,12 @@ android {
             //   storePassword=xxx
             //   keyAlias=vettid-release
             //   keyPassword=xxx
+            //   signingCertSha256=ABCDEF...   (optional, see #49)
             //
             // Environment variables:
             //   VETTID_KEYSTORE_PATH, VETTID_KEYSTORE_PASSWORD,
-            //   VETTID_KEY_ALIAS, VETTID_KEY_PASSWORD
+            //   VETTID_KEY_ALIAS, VETTID_KEY_PASSWORD,
+            //   VETTID_SIGNING_CERT_SHA256 (optional, see #49)
 
             // Try keystore.properties first (local development)
             val keystorePropertiesFile = rootProject.file("keystore.properties")
@@ -113,6 +134,8 @@ android {
             buildConfigField("Boolean", "TEST_MODE", "false")
             buildConfigField("String", "API_BASE_URL", "\"https://api.vettid.dev\"")
             buildConfigField("String", "PCR_MANIFEST_URL", "\"https://pcr-manifest.vettid.dev/pcr-manifest.json\"")
+            // SECURITY (#49): expected signing-cert SHA-256 (empty = skip pin).
+            buildConfigField("String", "SIGNING_CERT_SHA256_PIN", "\"$signingCertSha256Pin\"")
         }
         create("automation") {
             dimension = "environment"
@@ -124,6 +147,8 @@ android {
             buildConfigField("String", "API_BASE_URL", "\"https://api.vettid.dev\"")
             buildConfigField("String", "PCR_MANIFEST_URL", "\"https://pcr-manifest.vettid.dev/pcr-manifest.json\"")
             buildConfigField("String", "TEST_API_KEY", "\"\"")  // Set via environment or test-config.json
+            // SECURITY (#49): automation builds intentionally skip the pin.
+            buildConfigField("String", "SIGNING_CERT_SHA256_PIN", "\"\"")
         }
     }
 

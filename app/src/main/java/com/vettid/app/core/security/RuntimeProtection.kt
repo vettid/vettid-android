@@ -6,10 +6,13 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Debug
 import android.provider.Settings
+import android.util.Log
+import com.vettid.app.BuildConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.BufferedReader
 import java.io.File
 import java.io.InputStreamReader
+import java.security.MessageDigest
 import java.net.InetSocketAddress
 import java.net.Socket
 import javax.inject.Inject
@@ -30,6 +33,10 @@ import javax.inject.Singleton
 class RuntimeProtection @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
+
+    companion object {
+        private const val TAG = "RuntimeProtection"
+    }
 
     // MARK: - Comprehensive Security Check
 
@@ -318,10 +325,41 @@ class RuntimeProtection @Inject constructor(
                 packageInfo.signatures
             }
 
-            // In production, compare against known good signature hash
-            // For now, just check if signatures exist
-            signatures.isNullOrEmpty()
+            if (signatures.isNullOrEmpty()) {
+                Log.w(TAG, "checkSignature: no signing certs returned by PackageManager")
+                return true
+            }
+
+            // SECURITY (#49): compare against the pinned SHA-256 of the
+            // release signing certificate. The pin is supplied at build
+            // time via keystore.properties (signingCertSha256=...) or
+            // the VETTID_SIGNING_CERT_SHA256 env var — see build.gradle.kts.
+            // When the pin is empty (debug / automation builds) we keep
+            // the previous "as long as something is signing it" behavior
+            // and emit a single info-level note so reviewers can see
+            // it's intentionally skipped, not silently broken.
+            val pin = BuildConfig.SIGNING_CERT_SHA256_PIN
+            if (pin.isBlank()) {
+                Log.i(TAG, "checkSignature: SIGNING_CERT_SHA256_PIN empty — skipping pin check (debug / automation build)")
+                return false
+            }
+
+            val pinNormalized = pin.replace(":", "").trim().uppercase()
+            val actualHashes = signatures.mapNotNull { sig ->
+                runCatching {
+                    val digest = MessageDigest.getInstance("SHA-256").digest(sig.toByteArray())
+                    digest.joinToString("") { "%02X".format(it) }
+                }.getOrNull()
+            }
+
+            if (actualHashes.none { it == pinNormalized }) {
+                Log.w(TAG, "checkSignature: cert hash mismatch — runtime cert not in pinned set")
+                true
+            } else {
+                false
+            }
         } catch (e: Exception) {
+            Log.w(TAG, "checkSignature: exception during pin verification, assuming tampered", e)
             true // If we can't check, assume tampered
         }
     }
