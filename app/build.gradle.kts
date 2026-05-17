@@ -232,6 +232,23 @@ dependencies {
     implementation("sh.calvin.reorderable:reorderable:2.4.3")  // Drag-and-drop reordering
 
     // Security / Crypto
+    // SECURITY (#52): androidx.security:security-crypto has been stuck
+    // on alpha for years — Google has not shipped a stable since 2021,
+    // but the artifact is widely deployed (Authenticator, Drive, etc.)
+    // and the underlying implementation has been stable across alphas.
+    // We pin to 1.1.0-alpha06 explicitly (no version-range fuzz, no
+    // accidental bump via transitive resolution) and keep an eye on
+    // the AndroidX release notes. Alternatives considered:
+    //   • Rolling our own EncryptedSharedPreferences: worse — Tink's
+    //     primitives are right but the file-format + KMS-style key
+    //     wrapping logic is non-trivial and easy to get wrong.
+    //   • DataStore + manual encryption: viable for a future rewrite,
+    //     but EncryptedSharedPreferences is currently the file format
+    //     persisted credential blobs use, so migrating mid-flight
+    //     would need a forward-compat reader.
+    // Bump procedure: check https://developer.android.com/jetpack/androidx/releases/security
+    // for a non-alpha; verify EncryptedSharedPreferences file format
+    // didn't change before bumping in production.
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("com.google.crypto.tink:tink-android:1.12.0")  // X25519, ChaCha20-Poly1305
     implementation("org.signal:argon2:13.1")  // Argon2id password hashing
