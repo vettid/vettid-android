@@ -619,14 +619,30 @@ class PinUnlockViewModel @Inject constructor(
 
             Log.d(TAG, "Using UTK: ${availableUtk.keyId}")
 
-            // Encrypt PIN with enclave's public key using X25519 + ChaCha20-Poly1305
+            // Encrypt PIN with enclave's public key using X25519 + ChaCha20-Poly1305.
+            // SECURITY (#51): the PIN String is unavoidable at the IME /
+            // JSON-serialisation boundary (gson serialises to String, and
+            // Kotlin's String is immutable). The mitigations we can apply
+            // are: (1) zero the plaintext bytes between toByteArray() and
+            // the encrypt call returning, (2) discard the JsonObject's
+            // serialised form as fast as possible, (3) ensure the
+            // ViewModel state String is cleared on every exit path (done
+            // elsewhere in this file). PIN entropy is only 4-8 digits so
+            // these are hygiene-grade defences — a memory snapshot of a
+            // PIN String is brute-forceable in microseconds — but they
+            // bound the accidental-disclosure window to the encrypt call.
             val pinPayload = JsonObject().apply {
                 addProperty("pin", pin)
             }
-            val encryptedResult = cryptoManager.encryptToPublicKey(
-                plaintext = pinPayload.toString().toByteArray(),
-                publicKeyBase64 = android.util.Base64.encodeToString(enclavePublicKey, android.util.Base64.NO_WRAP)
-            )
+            val plaintextBytes = pinPayload.toString().toByteArray()
+            val encryptedResult = try {
+                cryptoManager.encryptToPublicKey(
+                    plaintext = plaintextBytes,
+                    publicKeyBase64 = android.util.Base64.encodeToString(enclavePublicKey, android.util.Base64.NO_WRAP)
+                )
+            } finally {
+                java.util.Arrays.fill(plaintextBytes, 0.toByte())
+            }
 
             // Combine ephemeral public key + nonce + ciphertext
             val ephemeralPubKeyBytes = android.util.Base64.decode(encryptedResult.ephemeralPublicKey, android.util.Base64.NO_WRAP)
