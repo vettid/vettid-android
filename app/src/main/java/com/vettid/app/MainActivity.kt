@@ -162,6 +162,44 @@ class MainActivity : ComponentActivity() {
 
         val uri = intent?.data ?: return DeepLinkData(DeepLinkType.NONE)
 
+        // SECURITY (#98): refuse intents that arrive without ACTION_VIEW
+        // (the only action our intent-filters expose). A malicious app
+        // can fire ACTION_SEND / ACTION_MAIN with our scheme — without
+        // this guard those would still flow into the deep-link parser.
+        // BROWSABLE category presence is enforced as well: a sibling app
+        // can't synthesise a deep-link launch by hand without it.
+        val action = intent?.action
+        val categories = intent?.categories ?: emptySet()
+        if (action != Intent.ACTION_VIEW || Intent.CATEGORY_BROWSABLE !in categories) {
+            if (BuildConfig.DEBUG) {
+                android.util.Log.w(
+                    "VettID-DeepLink",
+                    "Refusing intent: action=$action categories=$categories scheme=${uri.scheme}",
+                )
+            }
+            return DeepLinkData(DeepLinkType.NONE)
+        }
+
+        // Whitelist the (scheme, host) pairs we accept up front so the
+        // when {} below can't be tricked into matching by a malformed
+        // URI that scheme-matches one branch but host-matches another.
+        val scheme = uri.scheme
+        val host = uri.host
+        val allowed = when (scheme) {
+            "vettid" -> host in ALLOWED_VETTID_HOSTS
+            "https" -> host == "vettid.dev" && uri.pathSegments.firstOrNull() in ALLOWED_VETTID_HOSTS
+            else -> false
+        }
+        if (!allowed) {
+            if (BuildConfig.DEBUG) {
+                android.util.Log.w(
+                    "VettID-DeepLink",
+                    "Refusing intent: scheme=$scheme host=$host (not in allow-list)",
+                )
+            }
+            return DeepLinkData(DeepLinkType.NONE)
+        }
+
         // SECURITY: Only log deep link type, not parameters (may contain tokens/codes)
         if (BuildConfig.DEBUG) {
             android.util.Log.d("VettID-DeepLink", "Received URI: scheme=${uri.scheme}, host=${uri.host}, path=${uri.path}")
@@ -295,6 +333,17 @@ class MainActivity : ComponentActivity() {
         // input. Same value used for vettid:// custom-scheme + the
         // https://vettid.dev/* fallback paths.
         private const val MAX_DEEP_LINK_DATA_CHARS = 4096
+
+        // SECURITY (#98): vettid:// hosts we accept, plus the leading
+        // path segment on https://vettid.dev. The intent filters in
+        // AndroidManifest already restrict the dispatcher to these
+        // shapes, but the runtime allow-list defends against an
+        // attacker who hand-crafts a vettid:// URI with an unknown
+        // host hoping a future branch in extractDeepLinkData picks it
+        // up by accident.
+        private val ALLOWED_VETTID_HOSTS = setOf(
+            "enroll", "connect", "votes", "transfer",
+        )
     }
 
     override fun onStop() {
