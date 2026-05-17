@@ -199,6 +199,10 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            // BouncyCastle 1.78.1's bcprov-jdk18on + bcpkix-jdk18on
+            // each ship META-INF/versions/9/OSGI-INF/MANIFEST.MF;
+            // 1.77 only had it in bcprov. Pick one to keep.
+            pickFirsts += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
         }
     }
 
