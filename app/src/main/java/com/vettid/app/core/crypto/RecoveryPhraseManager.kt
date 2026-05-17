@@ -2,6 +2,7 @@ package com.vettid.app.core.crypto
 
 import com.vettid.app.core.network.EncryptedCredentialBackup
 import com.vettid.app.core.network.RecoveryPhraseException
+import com.vettid.app.core.security.secureClear
 import com.vettid.app.util.Bip39WordList
 import java.security.MessageDigest
 import javax.crypto.Cipher
@@ -122,6 +123,15 @@ class RecoveryPhraseManager @Inject constructor(
 
     /**
      * Encrypt credential data for backup using the recovery phrase.
+     *
+     * SECURITY (#45): the derived Argon2id key is zeroed via try/finally
+     * so it doesn't linger on the heap after the ChaCha20-Poly1305 /
+     * AES-GCM call returns. The recovery phrase itself enters as
+     * `List<String>` — String immutability prevents a true zero of the
+     * word entries, so the lifecycle defence is to (a) keep the phrase
+     * in memory for the smallest possible window in the calling UI and
+     * (b) drop the only persistent derivative (this key) immediately
+     * after use.
      */
     fun encryptCredentialBackup(
         credentialBlob: ByteArray,
@@ -136,18 +146,24 @@ class RecoveryPhraseManager @Inject constructor(
         // Derive key from phrase
         val key = deriveKeyFromPhrase(phrase, salt)
 
-        // Encrypt with ChaCha20-Poly1305 (or AES-GCM as fallback)
-        val ciphertext = encryptWithKey(credentialBlob, key, nonce)
-
-        return EncryptedCredentialBackup(
-            ciphertext = ciphertext,
-            salt = salt,
-            nonce = nonce
-        )
+        try {
+            // Encrypt with ChaCha20-Poly1305 (or AES-GCM as fallback)
+            val ciphertext = encryptWithKey(credentialBlob, key, nonce)
+            return EncryptedCredentialBackup(
+                ciphertext = ciphertext,
+                salt = salt,
+                nonce = nonce
+            )
+        } finally {
+            key.secureClear()
+        }
     }
 
     /**
      * Decrypt credential backup using the recovery phrase.
+     *
+     * SECURITY (#45): zero the derived key after the AEAD call. See
+     * encryptCredentialBackup for the full lifecycle rationale.
      */
     fun decryptCredentialBackup(
         encryptedBackup: EncryptedCredentialBackup,
@@ -155,9 +171,11 @@ class RecoveryPhraseManager @Inject constructor(
     ): ByteArray {
         // Derive key from phrase
         val key = deriveKeyFromPhrase(phrase, encryptedBackup.salt)
-
-        // Decrypt
-        return decryptWithKey(encryptedBackup.ciphertext, key, encryptedBackup.nonce)
+        try {
+            return decryptWithKey(encryptedBackup.ciphertext, key, encryptedBackup.nonce)
+        } finally {
+            key.secureClear()
+        }
     }
 
     /**
