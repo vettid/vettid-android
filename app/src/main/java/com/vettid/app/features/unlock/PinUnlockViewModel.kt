@@ -56,6 +56,13 @@ sealed class PinUnlockState {
         val summary: String? = null,
         val detailsUrl: String? = null
     ) : PinUnlockState()
+    // SECURITY (#97): client-side rate-limit lockout. Shown when the
+    // user has accumulated enough failed attempts that PinAttemptTracker
+    // refuses further submissions until `remainingMs` has elapsed.
+    data class RateLimited(
+        val remainingMs: Long,
+        val failedAttempts: Int
+    ) : PinUnlockState()
 }
 
 /**
@@ -89,6 +96,7 @@ class PinUnlockViewModel @Inject constructor(
     private val personalDataStore: PersonalDataStore,
     private val pcrConfigManager: PcrConfigManager,
     private val migrationCompletionRecorder: com.vettid.app.features.migration.MigrationCompletionRecorder,
+    private val pinAttemptTracker: PinAttemptTracker,
     @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context
 ) : ViewModel() {
 
@@ -200,6 +208,20 @@ class PinUnlockViewModel @Inject constructor(
 
             if (current.pin.length !in MIN_PIN_LENGTH..MAX_PIN_LENGTH) {
                 _state.value = current.copy(error = "PIN must be $MIN_PIN_LENGTH-$MAX_PIN_LENGTH digits")
+                return
+            }
+
+            // SECURITY (#97): refuse the submission outright while the
+            // local rate-limit lockout is in force. The lockout window
+            // is persisted in SharedPreferences so killing + relaunching
+            // the app doesn't reset it.
+            val remainingLockout = pinAttemptTracker.remainingLockoutMs()
+            if (remainingLockout > 0) {
+                Log.w(TAG, "PIN unlock locked out — ${remainingLockout}ms remaining (${pinAttemptTracker.failedAttempts()} failed attempts)")
+                _state.value = PinUnlockState.RateLimited(
+                    remainingMs = remainingLockout,
+                    failedAttempts = pinAttemptTracker.failedAttempts(),
+                )
                 return
             }
 
@@ -370,6 +392,11 @@ class PinUnlockViewModel @Inject constructor(
 
                         val firstName = personalDataStore.getSystemFields()?.firstName
 
+                        // SECURITY (#97): clear the failed-attempt counter
+                        // + any active lockout window on every successful
+                        // unlock.
+                        pinAttemptTracker.reset()
+
                         _state.value = PinUnlockState.Success(firstName = firstName)
                         _effects.emit(PinUnlockEffect.UnlockSuccess)
                         return
@@ -392,7 +419,18 @@ class PinUnlockViewModel @Inject constructor(
                     }
                     PinVerificationResult.InvalidPin -> {
                         Log.w(TAG, "PIN verification failed - invalid PIN")
-                        _state.value = PinUnlockState.EnteringPin(pin = "", error = "Invalid PIN")
+                        // SECURITY (#97): record the failed attempt and
+                        // surface the lockout state if the increment
+                        // tripped a threshold.
+                        val lockoutMs = pinAttemptTracker.recordFailure()
+                        if (lockoutMs > 0) {
+                            _state.value = PinUnlockState.RateLimited(
+                                remainingMs = lockoutMs,
+                                failedAttempts = pinAttemptTracker.failedAttempts(),
+                            )
+                        } else {
+                            _state.value = PinUnlockState.EnteringPin(pin = "", error = "Invalid PIN")
+                        }
                         return
                     }
                     is PinVerificationResult.Error -> {

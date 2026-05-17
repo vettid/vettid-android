@@ -98,6 +98,7 @@ fun PinUnlockScreen(
                     is PinUnlockState.WarmingUp -> "Vault is updating..."
                     is PinUnlockState.Error -> "Error occurred"
                     is PinUnlockState.EnclaveUpdateRequired -> "Vault Update Available"
+                    is PinUnlockState.RateLimited -> "Too many failed attempts"
                 },
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -168,6 +169,13 @@ fun PinUnlockScreen(
                         detailsUrl = currentState.detailsUrl,
                         onApprove = { viewModel.approveEnclaveUpdate() },
                         onSkip = { viewModel.skipEnclaveUpdate() }
+                    )
+                }
+
+                is PinUnlockState.RateLimited -> {
+                    RateLimitedContent(
+                        remainingMs = currentState.remainingMs,
+                        failedAttempts = currentState.failedAttempts,
                     )
                 }
 
@@ -593,5 +601,49 @@ private fun EnclaveUpdateContent(
         OutlinedButton(onClick = onSkip, modifier = Modifier.fillMaxWidth()) {
             Text("Not Now")
         }
+    }
+}
+
+@Composable
+private fun RateLimitedContent(remainingMs: Long, failedAttempts: Int) {
+    // SECURITY (#97): live ticking countdown so the user sees the
+    // lockout clock advance. Re-renders once per second until expiry.
+    val unlockAtMs = remember(remainingMs) { System.currentTimeMillis() + remainingMs }
+    val nowMs = remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(unlockAtMs) {
+        while (System.currentTimeMillis() < unlockAtMs) {
+            nowMs.value = System.currentTimeMillis()
+            kotlinx.coroutines.delay(1_000)
+        }
+        nowMs.value = unlockAtMs
+    }
+    val secondsLeft = ((unlockAtMs - nowMs.value).coerceAtLeast(0L) / 1000L).toInt()
+    val minutes = secondsLeft / 60
+    val seconds = secondsLeft % 60
+    val countdown = if (minutes > 0) "${minutes}m ${seconds}s" else "${seconds}s"
+
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp)
+    ) {
+        Spacer(modifier = Modifier.height(24.dp))
+        Icon(
+            imageVector = Icons.Default.Lock,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.error,
+            modifier = Modifier.size(48.dp)
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        Text(
+            text = "$failedAttempts failed attempts",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Text(
+            text = if (secondsLeft > 0) "Try again in $countdown" else "You may try again",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
     }
 }
