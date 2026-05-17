@@ -1,5 +1,6 @@
 package com.vettid.app.features.handlers
 
+import java.util.Locale
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -460,7 +461,7 @@ private fun StatsSection(handler: HandlerDetailResponse) {
             handler.rating?.let { rating ->
                 StatItem(
                     icon = Icons.Default.Star,
-                    value = String.format("%.1f", rating),
+                    value = String.format(Locale.US, "%.1f", rating),
                     label = "${handler.ratingCount} ratings"
                 )
             }
@@ -513,8 +514,8 @@ private fun formatCount(count: Int): String {
 
 private fun formatSize(bytes: Long): String {
     return when {
-        bytes >= 1_000_000 -> String.format("%.1f MB", bytes / 1_000_000.0)
-        bytes >= 1_000 -> String.format("%.1f KB", bytes / 1_000.0)
+        bytes >= 1_000_000 -> String.format(Locale.US, "%.1f MB", bytes / 1_000_000.0)
+        bytes >= 1_000 -> String.format(Locale.US, "%.1f KB", bytes / 1_000.0)
         else -> "$bytes B"
     }
 }

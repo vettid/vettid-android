@@ -1,5 +1,6 @@
 package com.vettid.app.features.transfer
 
+import java.util.Locale
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -261,7 +262,7 @@ private fun WaitingContent(
 ) {
     val minutes = remainingSeconds / 60
     val seconds = remainingSeconds % 60
-    val timeString = String.format("%02d:%02d", minutes, seconds)
+    val timeString = String.format(Locale.US, "%02d:%02d", minutes, seconds)
 
     Column(
         modifier = Modifier

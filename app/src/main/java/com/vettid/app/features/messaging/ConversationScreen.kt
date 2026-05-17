@@ -1,5 +1,6 @@
 package com.vettid.app.features.messaging
 
+import java.util.Locale
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
@@ -498,7 +499,7 @@ private fun BtcPaymentRequestContent(
         return
     }
 
-    val btcAmount = String.format("%.8f BTC", request.amountSats / 100_000_000.0)
+    val btcAmount = String.format(Locale.US, "%.8f BTC", request.amountSats / 100_000_000.0)
 
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -675,8 +676,8 @@ private fun BtcPaymentReceiptContent(
 
     val clipboardManager = LocalClipboardManager.current
     val context = LocalContext.current
-    val btcAmount = String.format("%.8f BTC", receipt.amountSats / 100_000_000.0)
-    val btcFee = String.format("%.8f BTC", receipt.feeSats / 100_000_000.0)
+    val btcAmount = String.format(Locale.US, "%.8f BTC", receipt.amountSats / 100_000_000.0)
+    val btcFee = String.format(Locale.US, "%.8f BTC", receipt.feeSats / 100_000_000.0)
     val truncatedTxid = if (receipt.txid.length > 16) {
         "${receipt.txid.take(8)}...${receipt.txid.takeLast(8)}"
     } else {

@@ -1,5 +1,6 @@
 package com.vettid.app.ui.recovery
 
+import java.util.Locale
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
@@ -669,5 +670,5 @@ private fun formatCountdown(seconds: Long): String {
     val hours = seconds / 3600
     val minutes = (seconds % 3600) / 60
     val secs = seconds % 60
-    return String.format("%02d:%02d:%02d", hours, minutes, secs)
+    return String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, secs)
 }

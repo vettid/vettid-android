@@ -1,5 +1,6 @@
 package com.vettid.app.features.services
 
+import java.util.Locale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -291,7 +292,7 @@ private fun ServiceDetailHeader(service: DirectoryService) {
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     Text(
-                        text = "${String.format("%.1f", rating.average)} (${rating.count})",
+                        text = "${String.format(Locale.US, "%.1f", rating.average)} (${rating.count})",
                         style = MaterialTheme.typography.labelMedium
                     )
                 }

@@ -1,5 +1,6 @@
 package com.vettid.app.features.services.models
 
+import java.util.Locale
 import java.time.Instant
 
 /**
@@ -237,10 +238,10 @@ data class Money(
     fun formatted(): String {
         val dollars = amount / 100.0
         return when (currency) {
-            "USD" -> "$${String.format("%.2f", dollars)}"
-            "EUR" -> "€${String.format("%.2f", dollars)}"
-            "GBP" -> "£${String.format("%.2f", dollars)}"
-            else -> "${String.format("%.2f", dollars)} $currency"
+            "USD" -> "$${String.format(Locale.US, "%.2f", dollars)}"
+            "EUR" -> "€${String.format(Locale.US, "%.2f", dollars)}"
+            "GBP" -> "£${String.format(Locale.US, "%.2f", dollars)}"
+            else -> "${String.format(Locale.US, "%.2f", dollars)} $currency"
         }
     }
 }

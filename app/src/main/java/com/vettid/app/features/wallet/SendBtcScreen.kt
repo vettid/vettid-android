@@ -1,5 +1,6 @@
 package com.vettid.app.features.wallet
 
+import java.util.Locale
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -50,7 +51,7 @@ fun SendBtcScreen(
     // by approving a payment request. Free-form sends start blank.
     val initialAmountBtc = remember(viewModel.initialAmountSats) {
         if (viewModel.initialAmountSats > 0L) {
-            String.format("%.8f", viewModel.initialAmountSats / 100_000_000.0).trimEnd('0').trimEnd('.')
+            String.format(Locale.US, "%.8f", viewModel.initialAmountSats / 100_000_000.0).trimEnd('0').trimEnd('.')
         } else ""
     }
     var amountBtc by remember { mutableStateOf(initialAmountBtc) }

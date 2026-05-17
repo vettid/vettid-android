@@ -1,5 +1,6 @@
 package com.vettid.app.features.connections
 
+import java.util.Locale
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -391,7 +392,7 @@ private fun CreatedContent(
 private fun ExpirationTimer(expiresInSeconds: Int) {
     val minutes = expiresInSeconds / 60
     val seconds = expiresInSeconds % 60
-    val timeText = String.format("%02d:%02d", minutes, seconds)
+    val timeText = String.format(Locale.US, "%02d:%02d", minutes, seconds)
 
     val isLow = expiresInSeconds < 60
 

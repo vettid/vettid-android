@@ -1,5 +1,6 @@
 package com.vettid.app.features.connections.components
 
+import java.util.Locale
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -235,7 +236,7 @@ private fun QrCodeCard(
             // Expiration timer
             val minutes = expiresInSeconds / 60
             val seconds = expiresInSeconds % 60
-            val timeText = String.format("%d:%02d", minutes, seconds)
+            val timeText = String.format(Locale.US, "%d:%02d", minutes, seconds)
             val isLow = expiresInSeconds < 60
 
             Row(

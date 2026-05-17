@@ -1,5 +1,6 @@
 package com.vettid.app.features.calling
 
+import java.util.Locale
 import android.media.AudioDeviceInfo
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -128,7 +129,7 @@ class CallViewModel @Inject constructor(
     fun formatDuration(seconds: Long): String {
         val minutes = seconds / 60
         val secs = seconds % 60
-        return String.format("%02d:%02d", minutes, secs)
+        return String.format(Locale.US, "%02d:%02d", minutes, secs)
     }
 
     /**

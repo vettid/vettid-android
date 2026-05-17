@@ -113,13 +113,18 @@ class CallManager @Inject constructor(
         val lock = proximityWakeLock ?: return
         if (!lock.isHeld) {
             try {
-                lock.acquire()
+                // SECURITY (D #139): bound the wake-lock to the longest
+                // realistic call duration (4h). The OS will release on
+                // its own past that ceiling even if releaseProximityLock
+                // is never called — survives a crashed CallManager.
+                lock.acquire(MAX_PROXIMITY_LOCK_MS)
                 Log.d(TAG, "Proximity screen-off wake lock acquired")
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to acquire proximity wake lock", e)
             }
         }
     }
+
 
     private fun releaseProximityLock() {
         val lock = proximityWakeLock ?: return
@@ -1346,5 +1351,10 @@ class CallManager @Inject constructor(
 
     companion object {
         private const val TAG = "CallManager"
+        // SECURITY (D #139): 4-hour ceiling on the proximity wake-lock
+        // — longer than any legitimate call, short enough that a leaked
+        // lock can't drain the battery overnight if releaseProximityLock
+        // never fires (crashed handler, dead viewmodel scope).
+        private const val MAX_PROXIMITY_LOCK_MS = 4L * 60 * 60 * 1000
     }
 }

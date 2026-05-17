@@ -1,5 +1,6 @@
 package com.vettid.app.features.services.models
 
+import java.util.Locale
 import java.time.Instant
 
 /**
@@ -470,7 +471,7 @@ data class PaymentMethod(
 
     val expiryDisplay: String?
         get() = if (expiryMonth != null && expiryYear != null) {
-            String.format("%02d/%02d", expiryMonth, expiryYear % 100)
+            String.format(Locale.US, "%02d/%02d", expiryMonth, expiryYear % 100)
         } else null
 }
 
@@ -574,7 +575,7 @@ data class ServiceCallState(
         get() {
             val minutes = duration / 60
             val seconds = duration % 60
-            return String.format("%02d:%02d", minutes, seconds)
+            return String.format(Locale.US, "%02d:%02d", minutes, seconds)
         }
 }
 

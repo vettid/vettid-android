@@ -1,5 +1,6 @@
 package com.vettid.app.features.services
 
+import java.util.Locale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -357,7 +358,7 @@ private fun FeaturedServiceCard(
                         )
                         Spacer(modifier = Modifier.width(2.dp))
                         Text(
-                            text = String.format("%.1f", rating.average),
+                            text = String.format(Locale.US, "%.1f", rating.average),
                             style = MaterialTheme.typography.labelSmall
                         )
                     }
@@ -453,7 +454,7 @@ private fun ServiceDirectoryItem(
                             tint = Color(0xFFFFC107)
                         )
                         Text(
-                            text = String.format("%.1f", rating.average),
+                            text = String.format(Locale.US, "%.1f", rating.average),
                             style = MaterialTheme.typography.labelSmall
                         )
                     }
