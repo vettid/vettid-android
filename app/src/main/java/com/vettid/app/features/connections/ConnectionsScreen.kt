@@ -400,8 +400,18 @@ fun ConnectionListItem(
             )
         },
         supportingContent = {
+            // SECURITY (D #124): prefer the last-activity timestamp as
+            // the connection-card preview line. lastMessageAt is the
+            // most recent stamp the vault propagates on the
+            // connection.list response, so a connection that's been
+            // chatted on shows "Last activity · 2h ago" while a
+            // dormant one falls back to its enrollment date. Surfaces
+            // recency without a per-card audit round-trip.
+            val previewText = connection.lastMessageAt?.let {
+                "Last activity · ${formatRelativeOrAbsolute(it)}"
+            } ?: "Connected ${formatDateTime(connection.createdAt)}"
             Text(
-                text = "Connected ${formatDateTime(connection.createdAt)}",
+                text = previewText,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.bodySmall,
@@ -617,6 +627,26 @@ private fun formatDateTime(timestamp: Long): String {
     val timestampMillis = if (timestamp < 10000000000L) timestamp * 1000 else timestamp
     val sdf = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
     return sdf.format(Date(timestampMillis))
+}
+
+/**
+ * D #124: relative time for the connection-card preview line.
+ * "Just now" / "5m ago" / "2h ago" / "Yesterday" / "Mon" / "Mar 12"
+ * Tracks the same buckets used elsewhere in the app for consistency.
+ */
+private fun formatRelativeOrAbsolute(timestamp: Long): String {
+    val timestampMillis = if (timestamp < 10000000000L) timestamp * 1000 else timestamp
+    val now = System.currentTimeMillis()
+    val diffMs = now - timestampMillis
+    return when {
+        diffMs < 60_000L -> "Just now"
+        diffMs < 3600_000L -> "${diffMs / 60_000L}m ago"
+        diffMs < 86400_000L -> "${diffMs / 3600_000L}h ago"
+        diffMs < 2 * 86400_000L -> "Yesterday"
+        diffMs < 7 * 86400_000L -> SimpleDateFormat("EEE", Locale.getDefault()).format(Date(timestampMillis))
+        diffMs < 365 * 86400_000L -> SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(timestampMillis))
+        else -> SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(timestampMillis))
+    }
 }
 
 private fun formatTime(timestamp: Long): String {
