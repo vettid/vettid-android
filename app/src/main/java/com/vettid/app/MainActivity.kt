@@ -254,6 +254,21 @@ class MainActivity : ComponentActivity() {
      * Returns the original string if decoding fails or it's not base64.
      */
     private fun decodeBase64IfNeeded(input: String): String {
+        // SECURITY (#99): cap the input length before base64-decode so a
+        // hostile share intent or share-sheet handoff can't ship a
+        // multi-megabyte payload that we then expand ~1.33x in memory.
+        // Real broker codes / invitation JSON are well under 2 KB; a
+        // 4 KB cap leaves headroom for future growth and stops the
+        // OOM vector cold. Returning input unchanged is safe — callers
+        // treat the result as opaque text and pass it to vault decoders
+        // that will reject garbage further down.
+        if (input.length > MAX_DEEP_LINK_DATA_CHARS) {
+            android.util.Log.w(
+                "VettID-DeepLink",
+                "Deep link data exceeds ${MAX_DEEP_LINK_DATA_CHARS}-char cap (got ${input.length}) — rejecting",
+            )
+            return ""
+        }
         return try {
             // Check if it looks like base64 (only contains valid base64 chars)
             if (input.matches(Regex("^[A-Za-z0-9+/=_-]+$"))) {
@@ -271,6 +286,15 @@ class MainActivity : ComponentActivity() {
             // If decoding fails, return original string
             input
         }
+    }
+
+    companion object {
+        // SECURITY (#99): hard cap on the base64-encoded payload size
+        // accepted from a deep link. Real invitation/broker payloads
+        // sit under 2 KB; 4 KB gives headroom and rejects pathological
+        // input. Same value used for vettid:// custom-scheme + the
+        // https://vettid.dev/* fallback paths.
+        private const val MAX_DEEP_LINK_DATA_CHARS = 4096
     }
 
     override fun onStop() {
