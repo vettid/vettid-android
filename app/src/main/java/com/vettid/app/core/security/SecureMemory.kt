@@ -1,5 +1,6 @@
 package com.vettid.app.core.security
 
+import com.vettid.app.core.crypto.SecureRandomProvider
 import java.io.Closeable
 import java.security.SecureRandom
 import java.util.Arrays
@@ -208,7 +209,7 @@ class SecureCharArray private constructor(
             Arrays.fill(data, '\u0000')
             // Overwrite with random chars
             for (i in data.indices) {
-                data[i] = (SecureRandom().nextInt(65536)).toChar()
+                data[i] = (SecureRandomProvider.shared.nextInt(65536)).toChar()
             }
             // Final zeros
             Arrays.fill(data, '\u0000')
@@ -245,9 +246,8 @@ class SecureCharArray private constructor(
  * Clear a byte array securely
  */
 fun ByteArray.secureClear() {
-    val random = SecureRandom()
     // Multiple overwrite passes
-    random.nextBytes(this)
+    SecureRandomProvider.shared.nextBytes(this)
     Arrays.fill(this, 0.toByte())
     Arrays.fill(this, 0xFF.toByte())
     Arrays.fill(this, 0.toByte())

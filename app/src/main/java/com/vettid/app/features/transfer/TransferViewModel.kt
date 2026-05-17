@@ -400,8 +400,8 @@ class TransferViewModel @Inject constructor(
     private fun generateAttestation(): String? {
         return try {
             // Generate a random challenge for attestation
-            val challenge = java.security.SecureRandom().let { random ->
-                ByteArray(32).also { random.nextBytes(it) }
+            val challenge = ByteArray(32).also {
+                com.vettid.app.core.crypto.SecureRandomProvider.shared.nextBytes(it)
             }
             val result = attestationManager.generateAttestationKey(challenge)
             // Serialize the attestation certificate chain as base64

@@ -13,7 +13,7 @@ import com.vettid.app.core.attestation.VerifiedAttestation
 import com.vettid.app.core.crypto.CryptoManager
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
-import java.security.SecureRandom
+import com.vettid.app.core.crypto.SecureRandomProvider
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -130,7 +130,7 @@ class NitroEnrollmentClient @Inject constructor(
 
         // Generate random nonce for replay protection
         val nonce = ByteArray(NONCE_SIZE)
-        SecureRandom().nextBytes(nonce)
+        SecureRandomProvider.shared.nextBytes(nonce)
         attestationNonce = nonce
 
         val nonceBase64 = Base64.encodeToString(nonce, Base64.NO_WRAP)

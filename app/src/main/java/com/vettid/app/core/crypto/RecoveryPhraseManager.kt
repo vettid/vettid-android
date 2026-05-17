@@ -4,7 +4,6 @@ import com.vettid.app.core.network.EncryptedCredentialBackup
 import com.vettid.app.core.network.RecoveryPhraseException
 import com.vettid.app.util.Bip39WordList
 import java.security.MessageDigest
-import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
@@ -35,7 +34,7 @@ class RecoveryPhraseManager @Inject constructor(
     fun generateRecoveryPhrase(): List<String> {
         // Generate 256 bits of entropy
         val entropy = ByteArray(ENTROPY_BYTES)
-        SecureRandom().nextBytes(entropy)
+        SecureRandomProvider.shared.nextBytes(entropy)
 
         // Calculate checksum (SHA-256 of entropy, take first 8 bits)
         val hash = MessageDigest.getInstance("SHA-256").digest(entropy)
@@ -131,8 +130,8 @@ class RecoveryPhraseManager @Inject constructor(
         // Generate salt and nonce
         val salt = ByteArray(SALT_BYTES)
         val nonce = ByteArray(NONCE_BYTES)
-        SecureRandom().nextBytes(salt)
-        SecureRandom().nextBytes(nonce)
+        SecureRandomProvider.shared.nextBytes(salt)
+        SecureRandomProvider.shared.nextBytes(nonce)
 
         // Derive key from phrase
         val key = deriveKeyFromPhrase(phrase, salt)

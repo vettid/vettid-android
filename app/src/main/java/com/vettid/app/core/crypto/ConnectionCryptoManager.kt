@@ -10,7 +10,6 @@ import javax.crypto.Cipher
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
-import java.security.SecureRandom
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -326,7 +325,7 @@ class ConnectionCryptoManager @Inject constructor(
      */
     private fun generateNonce(): ByteArray {
         val nonce = ByteArray(NONCE_LENGTH)
-        SecureRandom().nextBytes(nonce)
+        SecureRandomProvider.shared.nextBytes(nonce)
         return nonce
     }
 
