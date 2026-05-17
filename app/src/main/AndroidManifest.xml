@@ -13,7 +13,18 @@
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
-    <!-- Location tracking (opt-in, vault-stored) -->
+    <!--
+      Location tracking is strictly opt-in (settings: VaultPreferencesScreen
+      / LocationSettingsScreen). The manifest declarations are required so
+      the runtime permission prompts can render at all; LocationCollectionWorker
+      defensively re-checks PackageManager.PERMISSION_GRANTED on every fire
+      and short-circuits if the user hasn't granted (or has revoked) any of
+      the three. ACCESS_BACKGROUND_LOCATION is only meaningful on API 29+;
+      on older devices the system ignores it. SECURITY (#100): if a future
+      build introduces a "Lite" flavor that ships without the location
+      feature, remove these declarations from that flavor's manifest
+      overlay rather than leaving them as residual install-time prompts.
+    -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
