@@ -29,6 +29,44 @@ class ConnectionsClient @Inject constructor(
 ) {
     private val gson = Gson()
 
+    // SECURITY (D #141): short-TTL cache for the most-recent unfiltered
+    // list() result so a speculative pre-fetch fired from a card-tap
+    // and the immediate detail-screen load don't both round-trip the
+    // vault. 30s is short enough that staleness never bites legitimate
+    // UI flows (the user can't double-tap → wait 30s → expect updates)
+    // and long enough to cover screen transitions on slow devices.
+    private data class CachedList(val result: ConnectionListResult, val fetchedAtMs: Long)
+    @Volatile private var listCache: CachedList? = null
+    private val listCacheTtlMs = 30_000L
+
+    /**
+     * Drop the cached list, forcing the next list() to hit the vault.
+     * Call after any mutation (create-invite, revoke, store-credentials,
+     * presence toggle) so the cached list doesn't lag.
+     */
+    fun invalidateListCache() {
+        listCache = null
+    }
+
+    /**
+     * Speculative pre-fetch helper (D #141). Fire-and-forget — the
+     * result populates the cache so the next real list() call returns
+     * synchronously when called within ttl_ms. Already-cached calls
+     * (the cache is still warm) early-out so a flurry of taps doesn't
+     * spam the vault. Caller doesn't need to await.
+     */
+    suspend fun warmList() {
+        val cached = listCache
+        if (cached != null &&
+            System.currentTimeMillis() - cached.fetchedAtMs < listCacheTtlMs) {
+            return
+        }
+        // No try/catch — the call already returns Result<>; a failure
+        // is just "cache stays empty," which falls through to a real
+        // call on next list().
+        list()
+    }
+
     /**
      * Create an invitation for a peer to connect to this vault.
      *
@@ -193,13 +231,27 @@ class ConnectionsClient @Inject constructor(
         limit: Int = 50,
         cursor: String? = null
     ): Result<ConnectionListResult> {
+        // SECURITY (D #141): only the unfiltered, first-page call
+        // (no status filter, no cursor, default limit) is cached.
+        // Filtered / paginated calls always hit the vault — the UI
+        // surfaces that need them are far less hot than the
+        // ConnectionDetailViewModel.loadConnection path.
+        val isCacheable = status == null && cursor == null && limit == 50
+        if (isCacheable) {
+            val cached = listCache
+            if (cached != null &&
+                System.currentTimeMillis() - cached.fetchedAtMs < listCacheTtlMs) {
+                return Result.success(cached.result)
+            }
+        }
+
         val payload = JsonObject().apply {
             status?.let { addProperty("status", it) }
             addProperty("limit", limit)
             cursor?.let { addProperty("cursor", it) }
         }
 
-        return sendAndAwait("connection.list", payload) { result ->
+        val result = sendAndAwait("connection.list", payload) { result ->
             val items = (result.getAsJsonArray("connections") ?: result.getAsJsonArray("items"))?.map { item ->
                 parseConnectionRecord(item.asJsonObject)
             } ?: emptyList()
@@ -209,6 +261,10 @@ class ConnectionsClient @Inject constructor(
                 nextCursor = result.get("next_cursor")?.asString
             )
         }
+        if (isCacheable) {
+            result.onSuccess { listCache = CachedList(it, System.currentTimeMillis()) }
+        }
+        return result
     }
 
     /**

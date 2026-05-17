@@ -23,6 +23,16 @@ import javax.inject.Inject
 
 private const val TAG = "FeedViewModel"
 
+// SECURITY (D #141): event types whose tap path navigates somewhere
+// that calls ConnectionsClient.list() on init. Used to gate the
+// speculative cache warm-up in onEventClick.
+private val CONNECTION_NAV_EVENTS = setOf(
+    EventTypes.MESSAGE_RECEIVED,
+    EventTypes.MESSAGE_SENT,
+    EventTypes.CONNECTION_ACCEPTED,
+    EventTypes.CONNECTION_REQUEST,
+)
+
 // Connection statuses that should not appear in the live feed. The
 // vault keeps the record (so a future "Connection History" view can
 // surface them); the active list stays focused on usable peers.
@@ -1501,6 +1511,17 @@ class FeedViewModel @Inject constructor(
         viewModelScope.launch {
             // Mark as read
             markAsRead(event.eventId)
+
+            // SECURITY (D #141): if this click navigates to a
+            // connection-detail-shaped surface, kick off a speculative
+            // connection.list() pre-fetch in parallel with the
+            // navigation. The ConnectionsClient cache absorbs both
+            // this call and the detail-screen ViewModel's init load
+            // — net effect is one round-trip instead of two, and
+            // the detail screen renders without a Loading flash.
+            if (event.eventType in CONNECTION_NAV_EVENTS) {
+                launch { connectionsClient.warmList() }
+            }
 
             // Navigate based on event type
             val sourceId = event.sourceId
