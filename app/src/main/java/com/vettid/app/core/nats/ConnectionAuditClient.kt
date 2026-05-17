@@ -115,7 +115,17 @@ class ConnectionAuditClient @Inject constructor(
             )
         }
         val total = json.get("total_estimate")?.asInt ?: entries.size
-        return AuditListResult(entries = entries, nextCursor = nextCursor, totalEstimate = total)
+        // Audit-chain anchor (#125): forwarded from the vault when
+        // available. Empty / absent means the vault hasn't been
+        // unlocked this session — caller renders rows as Unsigned.
+        return AuditListResult(
+            entries = entries,
+            nextCursor = nextCursor,
+            totalEstimate = total,
+            auditPubB64 = json.get("audit_pub")?.asString?.takeIf { it.isNotBlank() },
+            bindingSigB64 = json.get("binding_sig")?.asString?.takeIf { it.isNotBlank() },
+            identityPubB64 = json.get("identity_pub")?.asString?.takeIf { it.isNotBlank() },
+        )
     }
 }
 
@@ -124,6 +134,12 @@ class ConnectionAuditClient @Inject constructor(
 /**
  * One row in the per-connection audit trail. Event type strings match
  * the vault-side taxonomy (`message.sent`, `call.voice.completed`, …).
+ *
+ * Chain fields (entry_hash / previous_hash / entry_sig) ship with
+ * each row when the vault has an audit-key anchor available, and feed
+ * AuditChainVerifier for client-side verification. `verification` is
+ * stamped by the client after the verifier runs over the page; rows
+ * fetched but not yet verified report Unsigned. See #125.
  */
 data class AuditEntry(
     val entry_id: String,
@@ -136,6 +152,11 @@ data class AuditEntry(
     val created_at: Long,
     val refs: Map<String, String>? = null,
     val metadata: Map<String, String>? = null,
+    val entry_hash: String? = null,
+    val previous_hash: String? = null,
+    val entry_sig: String? = null,
+    val verification: com.vettid.app.core.audit.AuditChainVerifier.RowState =
+        com.vettid.app.core.audit.AuditChainVerifier.RowState.Unsigned,
 )
 
 data class AuditCursor(
@@ -143,8 +164,17 @@ data class AuditCursor(
     val entryId: String,
 )
 
+/**
+ * Server response for connection.audit.{list,search}. The anchor
+ * fields (auditPubB64 / bindingSigB64 / identityPubB64) carry the
+ * audit-chain anchor for client-side verification — empty when the
+ * vault was queried before the user unlocked this session. See #125.
+ */
 data class AuditListResult(
     val entries: List<AuditEntry>,
     val nextCursor: AuditCursor?,
     val totalEstimate: Int,
+    val auditPubB64: String? = null,
+    val bindingSigB64: String? = null,
+    val identityPubB64: String? = null,
 )

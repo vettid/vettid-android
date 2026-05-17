@@ -1,5 +1,6 @@
 package com.vettid.app.features.feed
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -150,22 +151,28 @@ fun ConnectionHistoryScreen(
                     subtitle = "Nothing in this contact's history mentions \"${current.query}\"."
                 )
                 is ConnectionHistoryState.Error -> ErrorCentered(current.message)
-                is ConnectionHistoryState.Loaded -> HistoryList(
-                    events = current.events,
-                    pendingRequests = pendingRequests,
-                    endReached = current.endReached,
-                    isPaginating = isPaginating,
-                    onLoadMore = viewModel::loadNextPage,
-                    onEventClick = { event ->
-                        handleHistoryClick(
-                            event = event,
-                            onOpenConversation = onOpenConversation,
-                            onOpenGuide = onOpenGuide,
-                            onOpenDetailSheet = { detailSheet = it },
-                        )
-                    },
-                    onRespondToRequest = onOpenDataRequest,
-                )
+                is ConnectionHistoryState.Loaded -> Column(modifier = Modifier.fillMaxSize()) {
+                    // #125: chain-verification pill at the top of the
+                    // loaded list. Hidden when the chain is empty
+                    // (the empty branch above handles that case).
+                    ChainStatusPill(current.chainStatus)
+                    HistoryList(
+                        events = current.events,
+                        pendingRequests = pendingRequests,
+                        endReached = current.endReached,
+                        isPaginating = isPaginating,
+                        onLoadMore = viewModel::loadNextPage,
+                        onEventClick = { event ->
+                            handleHistoryClick(
+                                event = event,
+                                onOpenConversation = onOpenConversation,
+                                onOpenGuide = onOpenGuide,
+                                onOpenDetailSheet = { detailSheet = it },
+                            )
+                        },
+                        onRespondToRequest = onOpenDataRequest,
+                    )
+                }
             }
         }
 
@@ -384,11 +391,33 @@ private fun HistoryRow(
                 )
             }
             Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = formatEventTimestamp(event.created_at),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = formatEventTimestamp(event.created_at),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline
+                )
+                // SECURITY (#125): per-row chain-verification badge.
+                // Only surfaces Tampered rows inline — Verified and
+                // Unsigned would clutter every row, and the screen-
+                // level pill already summarises those. A Tampered row
+                // is rare and must stand out.
+                if (event.verification == com.vettid.app.core.audit.AuditChainVerifier.RowState.Tampered) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = "Audit chain verification failed",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(14.dp),
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = "Unverified",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
         }
         // Still-open incoming request → a "Respond" affordance so the
         // history doubles as a fallback path back to anything awaiting
@@ -684,3 +713,74 @@ private fun TimeFilterRow(label: String, selected: Boolean, onClick: () -> Unit)
         )
     }
 }
+
+/**
+ * SECURITY (#125): screen-level pill summarising the audit-chain
+ * verification result for the currently-loaded page. Mirrors the
+ * tone of the system-wide audit log pill so the language is
+ * consistent across surfaces.
+ */
+@Composable
+private fun ChainStatusPill(status: com.vettid.app.core.audit.AuditChainVerifier.ChainStatus) {
+    val (label, icon, container, content) = when (status) {
+        is com.vettid.app.core.audit.AuditChainVerifier.ChainStatus.Empty ->
+            return // nothing to show on an empty chain
+        is com.vettid.app.core.audit.AuditChainVerifier.ChainStatus.Verified -> {
+            val signed = status.signedRows
+            val unsigned = status.unsignedRows
+            val text = if (unsigned == 0) {
+                "$signed of $signed signed — chain verified"
+            } else {
+                "$signed of ${signed + unsigned} signed — chain verified"
+            }
+            Quad(
+                text,
+                Icons.Default.Verified,
+                MaterialTheme.colorScheme.primaryContainer,
+                MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+        }
+        is com.vettid.app.core.audit.AuditChainVerifier.ChainStatus.Unsigned ->
+            Quad(
+                "${status.rows} unsigned (pre-anchor or pre-unlock)",
+                Icons.Default.Info,
+                MaterialTheme.colorScheme.surfaceVariant,
+                MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        is com.vettid.app.core.audit.AuditChainVerifier.ChainStatus.Tampered ->
+            Quad(
+                "Chain integrity check failed (row ${status.firstBadRowIndex})",
+                Icons.Default.Warning,
+                MaterialTheme.colorScheme.errorContainer,
+                MaterialTheme.colorScheme.onErrorContainer,
+            )
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .background(container, shape = CircleShape)
+            .padding(horizontal = 12.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = content,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = content,
+        )
+    }
+}
+
+// Small 4-tuple helper used by ChainStatusPill to thread the four
+// per-state visuals (label + icon + container colour + content
+// colour) through a single `when` expression. The data-class auto-
+// generated componentN gives us idiomatic destructuring at the
+// call site.
+private data class Quad<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)

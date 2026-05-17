@@ -3,8 +3,10 @@ package com.vettid.app.features.feed
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.app.core.audit.AuditChainVerifier
 import com.vettid.app.core.nats.AuditCursor
 import com.vettid.app.core.nats.AuditEntry
+import com.vettid.app.core.nats.AuditListResult
 import com.vettid.app.core.nats.ConnectionAuditClient
 import com.vettid.app.core.nats.ConnectionsClient
 import com.vettid.app.features.grants.GrantsRepository
@@ -75,10 +77,55 @@ class ConnectionHistoryViewModel @Inject constructor(
     // vault with one RPC per keystroke.
     private var searchJob: Job? = null
 
+    // Shared verifier instance — stateless, safe to keep as a field.
+    // Used to stamp per-row chain-verification state on every page
+    // fetched + to roll up the screen-level chainStatus pill (#125).
+    private val chainVerifier = AuditChainVerifier()
+
     init {
         loadFirstPage()
         loadPeerName()
         loadPendingRequests()
+    }
+
+    /**
+     * SECURITY (#125): run the audit-chain verifier over a fetched
+     * page. The vault ships the (audit_pub, binding_sig, identity_pub)
+     * anchor and per-row entry_hash / previous_hash / entry_sig — the
+     * verifier checks the Ed25519 signature on every row and walks
+     * the previous_hash linkage to catch tamper / insertion / reorder.
+     *
+     * Returns the page entries stamped with their RowState plus the
+     * aggregated ChainStatus surfaced as the screen-level pill.
+     */
+    private fun verifyPage(page: AuditListResult): Pair<List<AuditEntry>, AuditChainVerifier.ChainStatus> {
+        val identityPub = page.identityPubB64?.let { decodeB64Safely(it) }
+        val (perRow, chainStatus) = chainVerifier.verifyChain(
+            rows = page.entries,
+            auditPubB64 = page.auditPubB64,
+            bindingSigB64 = page.bindingSigB64,
+            identityPub = identityPub,
+            entryHashOf = { e -> Triple(e.entry_hash, e.previous_hash, e.entry_sig) },
+        )
+        val stamped = page.entries.mapIndexed { i, e ->
+            e.copy(
+                verification = perRow.getOrNull(i)?.state
+                    ?: AuditChainVerifier.RowState.Unsigned,
+            )
+        }
+        return stamped to chainStatus
+    }
+
+    // Mirror of MigrationClient.decodeBase64Safely. Vault encodes with
+    // Go's base64.StdEncoding; try standard first then URL_SAFE.
+    private fun decodeB64Safely(s: String): ByteArray? = try {
+        android.util.Base64.decode(s, android.util.Base64.NO_WRAP)
+    } catch (_: Exception) {
+        try {
+            android.util.Base64.decode(s, android.util.Base64.NO_WRAP or android.util.Base64.URL_SAFE)
+        } catch (_: Exception) {
+            null
+        }
     }
 
     /**
@@ -160,10 +207,17 @@ class ConnectionHistoryViewModel @Inject constructor(
             result.onSuccess { page ->
                 nextCursor = page.nextCursor
                 endReached = page.nextCursor == null
+                // #125: verify the new page on its own. Aggregate
+                // chainStatus reflects the latest page — the verifier
+                // is stateless across pages, so a per-page rollup is
+                // the honest report. Per-row state on already-loaded
+                // events stays as it was stamped on its own page.
+                val (newRows, pageStatus) = verifyPage(page)
                 _state.value = ConnectionHistoryState.Loaded(
-                    events = prev.events + page.entries,
+                    events = prev.events + newRows,
                     totalEstimate = page.totalEstimate,
                     endReached = endReached,
+                    chainStatus = pageStatus,
                 )
             }
         }
@@ -195,11 +249,15 @@ class ConnectionHistoryViewModel @Inject constructor(
                         ConnectionHistoryState.NoMatches(q)
                     page.entries.isEmpty() ->
                         ConnectionHistoryState.Empty
-                    else -> ConnectionHistoryState.Loaded(
-                        events = page.entries,
-                        totalEstimate = page.totalEstimate,
-                        endReached = endReached,
-                    )
+                    else -> {
+                        val (rows, status) = verifyPage(page)
+                        ConnectionHistoryState.Loaded(
+                            events = rows,
+                            totalEstimate = page.totalEstimate,
+                            endReached = endReached,
+                            chainStatus = status,
+                        )
+                    }
                 }
             }.onFailure { err ->
                 _state.value = ConnectionHistoryState.Error(err.message ?: "Failed to load history")
@@ -226,6 +284,11 @@ sealed class ConnectionHistoryState {
         val events: List<AuditEntry>,
         val totalEstimate: Int,
         val endReached: Boolean,
+        // SECURITY (#125): aggregated chain-verification status for
+        // the loaded page. Renders as a pill at the top of the screen
+        // (Verified / Unsigned / Tampered).
+        val chainStatus: AuditChainVerifier.ChainStatus =
+            AuditChainVerifier.ChainStatus.Empty,
     ) : ConnectionHistoryState()
     data class Error(val message: String) : ConnectionHistoryState()
 }
