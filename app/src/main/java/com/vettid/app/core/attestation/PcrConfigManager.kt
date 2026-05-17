@@ -496,6 +496,18 @@ class PcrConfigManager @Inject constructor(
     fun verifyPcrsWithFallback(actualPcrs: ExpectedPcrs): Boolean {
         val currentPcrs = getCurrentPcrs()
 
+        // SECURITY (#53): refuse to verify against the all-zeros
+        // bootstrap PCRs. Without this guard, an attacker who submits
+        // an attestation document with all-zero PCRs (or any other
+        // unfetched-yet state) would silently pass — the fallback
+        // exists only as a sentinel until the device fetches real
+        // PCRs from the signed manifest. The previous-version slot
+        // is also rejected if it is fallback-invalid.
+        if (currentPcrs.version == DEFAULT_PCRS.version) {
+            Log.w(TAG, "verifyPcrsWithFallback called before real PCRs fetched — failing closed")
+            return false
+        }
+
         // Try current PCRs first
         if (matchesPcrs(actualPcrs, currentPcrs)) {
             Log.d(TAG, "PCRs match current version: ${currentPcrs.version}")
@@ -504,7 +516,11 @@ class PcrConfigManager @Inject constructor(
 
         // During transition, try previous version
         getPreviousPcrs()?.let { previousPcrs ->
-            if (matchesPcrs(actualPcrs, previousPcrs)) {
+            if (previousPcrs.version == DEFAULT_PCRS.version) {
+                // Defence in depth — the previous-version slot should
+                // never hold the fallback sentinel, but guard anyway.
+                Log.w(TAG, "previous PCRs slot is fallback-invalid — skipping")
+            } else if (matchesPcrs(actualPcrs, previousPcrs)) {
                 Log.d(TAG, "PCRs match previous version: ${previousPcrs.version} (transition period)")
                 return true
             }
@@ -519,6 +535,18 @@ class PcrConfigManager @Inject constructor(
                 actual.pcr1.equals(expected.pcr1, ignoreCase = true) &&
                 actual.pcr2.equals(expected.pcr2, ignoreCase = true) &&
                 (expected.pcr3 == null || actual.pcr3.equals(expected.pcr3, ignoreCase = true))
+    }
+
+    /**
+     * SECURITY (#53): true when the device has fetched real PCRs from
+     * the signed manifest at least once. Use this from callers that
+     * need to refuse cryptographic operations (PIN unlock, sealing
+     * key derivation) until the device has a verified PCR baseline,
+     * rather than letting the all-zeros fallback bridge into the
+     * attestation path.
+     */
+    fun hasVerifiedPcrs(): Boolean {
+        return getCurrentPcrs().version != DEFAULT_PCRS.version
     }
 
     // === User-Controlled Trusted PCR0 Set ===
