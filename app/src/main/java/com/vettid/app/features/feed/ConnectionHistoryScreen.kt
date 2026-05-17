@@ -459,8 +459,17 @@ private fun renderEventBody(event: AuditEntry): String {
     }
 }
 
-private fun humanizeEventType(eventType: String): String =
-    eventType.replace(".", " · ").replaceFirstChar { it.uppercase() }
+private fun humanizeEventType(eventType: String): String = when (eventType) {
+    // D #123: hand-written labels for the data-sharing lifecycle so
+    // the audit row reads like a sentence the user wrote, not the
+    // dotted backend taxonomy. Falls through to the dot-split for
+    // unrecognised types.
+    "data.granted" -> "Data shared"
+    "data.grant.denied" -> "Data request declined"
+    "data.grant.revoked" -> "Data access revoked"
+    "data.request.received" -> "Data request received"
+    else -> eventType.replace(".", " · ").replaceFirstChar { it.uppercase() }
+}
 
 private fun formatDuration(seconds: Long): String {
     val m = seconds / 60
@@ -480,6 +489,14 @@ private fun iconForEventType(eventType: String): Pair<ImageVector, Color> {
         eventType.startsWith("connection.") -> Icons.Default.Person to MaterialTheme.colorScheme.secondary
         eventType.startsWith("transfer.") -> Icons.Default.SwapHoriz to MaterialTheme.colorScheme.tertiary
         eventType.startsWith("security.") -> Icons.Default.Security to red
+        // D #123: shared-data lifecycle gets a distinct treatment so
+        // the user can see at a glance which rows record what they
+        // shared (and what was refused).
+        eventType == "data.granted" -> Icons.Default.Share to MaterialTheme.colorScheme.tertiary
+        eventType == "data.grant.denied" -> Icons.Default.Block to red
+        eventType == "data.grant.revoked" -> Icons.Default.LinkOff to MaterialTheme.colorScheme.outline
+        eventType == "data.request.received" -> Icons.Default.Inbox to MaterialTheme.colorScheme.secondary
+        eventType.startsWith("data.") -> Icons.Default.Share to MaterialTheme.colorScheme.secondary
         else -> Icons.Default.Event to MaterialTheme.colorScheme.outline
     }
 }
