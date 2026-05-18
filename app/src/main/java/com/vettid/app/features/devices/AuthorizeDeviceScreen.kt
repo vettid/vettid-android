@@ -1,8 +1,13 @@
 package com.vettid.app.features.devices
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -13,13 +18,16 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.vettid.app.ui.components.QrCodeScanner
+import kotlin.math.abs
+import kotlinx.coroutines.flow.distinctUntilChanged
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -244,60 +252,116 @@ private fun InfoRow(label: String, value: String, mono: Boolean = false) {
     }
 }
 
+// Preset durations the wheel picker scrolls through. These are the
+// useful "how long should this desktop stay paired" choices — common
+// session lengths plus a few long-lived options for trusted machines.
+// Values are clamped at use-time against the vault's maxDurationSeconds
+// so a vault policy reduction can hide longer options without changing
+// this list.
+private val DURATION_PRESETS: List<Pair<String, Long>> = listOf(
+    "1 hour" to 60L * 60L,
+    "4 hours" to 4L * 60L * 60L,
+    "8 hours" to 8L * 60L * 60L,
+    "12 hours" to 12L * 60L * 60L,
+    "1 day" to 24L * 60L * 60L,
+    "3 days" to 3L * 24L * 60L * 60L,
+    "7 days" to 7L * 24L * 60L * 60L,
+    "14 days" to 14L * 24L * 60L * 60L,
+    "30 days" to 30L * 24L * 60L * 60L,
+)
+
 @Composable
 private fun DurationPicker(
     seconds: Long,
     maxSeconds: Long,
     onChange: (Long) -> Unit
 ) {
-    var hours by remember(seconds) { mutableStateOf((seconds / 3600).toString()) }
-    var minutes by remember(seconds) { mutableStateOf(((seconds % 3600) / 60).toString()) }
-
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        OutlinedTextField(
-            value = hours,
-            onValueChange = { input ->
-                val filtered = input.filter { it.isDigit() }.take(2)
-                hours = filtered
-                val h = filtered.toLongOrNull() ?: 0L
-                val m = minutes.toLongOrNull() ?: 0L
-                onChange((h * 3600 + m * 60).coerceIn(60L, maxSeconds))
-            },
-            label = { Text("Hours") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.weight(1f)
-        )
-        Spacer(Modifier.width(12.dp))
-        OutlinedTextField(
-            value = minutes,
-            onValueChange = { input ->
-                val filtered = input.filter { it.isDigit() }.take(2)
-                minutes = filtered
-                val h = hours.toLongOrNull() ?: 0L
-                val m = filtered.toLongOrNull() ?: 0L
-                onChange((h * 3600 + m * 60).coerceIn(60L, maxSeconds))
-            },
-            label = { Text("Minutes") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.weight(1f)
-        )
+    // Filter presets to those the vault still allows, and pick the
+    // option closest to (but not exceeding) the currently-selected
+    // duration so the wheel starts on the right row when the user
+    // first sees the form.
+    val options = remember(maxSeconds) {
+        DURATION_PRESETS.filter { it.second <= maxSeconds }
+            .ifEmpty { listOf(DURATION_PRESETS.first()) }
     }
-    Spacer(Modifier.height(4.dp))
-    Text(
-        "Max 24 hours. Current: ${formatDuration(seconds)}",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-}
+    val initialIndex = remember(seconds, options) {
+        options.indexOfLast { it.second <= seconds }.coerceAtLeast(0)
+    }
 
-private fun formatDuration(seconds: Long): String {
-    val h = seconds / 3600
-    val m = (seconds % 3600) / 60
-    return when {
-        h > 0 && m > 0 -> "${h}h ${m}m"
-        h > 0 -> "${h}h"
-        else -> "${m}m"
+    // Pure-Compose scroll wheel. Pad the list with three blank rows at
+    // top and bottom so the selected item (the row at the middle of the
+    // viewport) can scroll to any preset including the first and last.
+    // Snap-fling locks the scroll to whole-row stops; the centered row
+    // is whichever is `firstVisibleItemIndex + paddingRows`.
+    val rowHeight = 44.dp
+    val paddingRows = 2
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
+    val flingBehavior = rememberSnapFlingBehavior(lazyListState = listState)
+
+    // Track the centered row as the user scrolls. firstVisibleItem +
+    // paddingRows gives the row currently at the highlighted center
+    // band; emit a duration change on every distinct landing.
+    LaunchedEffect(listState, options) {
+        snapshotFlow { listState.firstVisibleItemIndex }
+            .distinctUntilChanged()
+            .collect { idx ->
+                val opt = options.getOrNull(idx) ?: return@collect
+                onChange(opt.second.coerceAtMost(maxSeconds))
+            }
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(rowHeight * (paddingRows * 2 + 1))
+            .clip(RoundedCornerShape(8.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center
+    ) {
+        // Center highlight band — visual cue for which row counts as
+        // "selected." Behind the LazyColumn so the row text sits on top.
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(rowHeight)
+                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+        )
+        LazyColumn(
+            state = listState,
+            flingBehavior = flingBehavior,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            // Top padding rows so the first real option can land on the
+            // center band.
+            items(paddingRows) {
+                Box(Modifier.fillMaxWidth().height(rowHeight))
+            }
+            items(options) { (label, _) ->
+                val idx = options.indexOfFirst { it.first == label }
+                val centerIdx = listState.firstVisibleItemIndex
+                val distance = abs(idx - centerIdx)
+                val rowAlpha = when (distance) {
+                    0 -> 1.0f
+                    1 -> 0.55f
+                    else -> 0.30f
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(rowHeight)
+                        .alpha(rowAlpha),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        label,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = if (distance == 0) FontWeight.SemiBold else FontWeight.Normal
+                    )
+                }
+            }
+            items(paddingRows) {
+                Box(Modifier.fillMaxWidth().height(rowHeight))
+            }
+        }
     }
 }

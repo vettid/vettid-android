@@ -64,6 +64,7 @@ fun FeedContent(
     onNavigateToConversation: (String) -> Unit = {},
     onNavigateToConnectionDetail: (String) -> Unit = {},
     onNavigateToConnectionHistory: (String) -> Unit = {},
+    onNavigateToDesktopConnectionDetail: (String) -> Unit = {},
     onNavigateToConnectionRequest: (String) -> Unit = {},
     onResurfaceVaultUpdate: () -> Unit = {},
     onNavigateToHandler: (String) -> Unit = {},
@@ -221,6 +222,7 @@ fun FeedContent(
                     onNavigateToConversation = onNavigateToConversation,
                     onNavigateToConnectionDetail = onNavigateToConnectionDetail,
                     onNavigateToConnectionHistory = onNavigateToConnectionHistory,
+                    onNavigateToDesktopConnectionDetail = onNavigateToDesktopConnectionDetail,
                     onEventClick = { viewModel.onEventClick(it) },
                     onArchive = { viewModel.archiveEvent(it.eventId) },
                     onDelete = { viewModel.deleteEvent(it.eventId) },
@@ -393,6 +395,7 @@ private fun FeedList(
     onNavigateToConversation: (String) -> Unit,
     onNavigateToConnectionDetail: (String) -> Unit = {},
     onNavigateToConnectionHistory: (String) -> Unit = {},
+    onNavigateToDesktopConnectionDetail: (String) -> Unit = {},
     onEventClick: (FeedEvent) -> Unit,
     onArchive: (FeedEvent) -> Unit,
     onDelete: (FeedEvent) -> Unit,
@@ -508,6 +511,12 @@ private fun FeedList(
                                 // History (the natural "detail" for
                                 // system events).
                                 item.connectionType == "system" -> onNavigateToConnectionHistory(item.connectionId)
+                                // Desktop clients have a purpose-built
+                                // detail screen (hostname, fingerprint,
+                                // session state, Remove). The shared
+                                // peer-oriented ConnectionDetail screen
+                                // isn't useful for them.
+                                item.connectionType == "device" -> onNavigateToDesktopConnectionDetail(item.connectionId)
                                 // Tap on the card (name/photo) opens the
                                 // peer's profile. The dedicated Text button
                                 // handles the messaging entry point — this
@@ -746,6 +755,12 @@ private fun StatusAwareConnectionCard(
             onClick = onClick,
             onCancel = onCancelInvitation,
         )
+        // Desktop clients get their own card variant: no text/voice/
+        // video actions (those are for peer-to-peer), session-time
+        // status pill, and a single adaptive primary action that
+        // matches the current session state. Tapping the card opens
+        // the device-aware detail screen.
+        item.connectionType == "device" -> DesktopConnectionCard(item = item, onClick = onClick)
         item.connectionStatus == "active" -> ActiveConnectionCard(
             item, onClick, onLongClick, onMessageClick, onHistoryClick,
             onCallClick, onVideoCallClick, onBtcClick, onBtcRequestClick,
@@ -987,6 +1002,135 @@ private fun InactiveConnectionCard(
                 )
             }
         }
+    }
+}
+
+/**
+ * Connection card for a paired desktop client. No text/voice/video
+ * actions (those belong to peer-to-peer connections) — instead the
+ * card surfaces the session state: a status pill showing time
+ * remaining (or expired/revoked/awaiting-pairing), and a single
+ * primary action that adapts to that state. Tapping the card opens
+ * the device-detail screen with hostname / fingerprint / activity
+ * history / Remove.
+ */
+@Composable
+private fun DesktopConnectionCard(
+    item: FeedDisplayItem.ConnectionCard,
+    onClick: () -> Unit,
+) {
+    val nowSec = System.currentTimeMillis() / 1000
+    val sessionRemainingSec = (item.deviceSessionExpiresAt - nowSec).coerceAtLeast(0L)
+    val hasActiveSession = item.deviceSessionStatus == "active" && sessionRemainingSec > 0
+    val statusText: String
+    val statusColor: androidx.compose.ui.graphics.Color
+    when {
+        hasActiveSession -> {
+            statusText = "Session · ${formatRemainingShort(sessionRemainingSec)}"
+            statusColor = MaterialTheme.colorScheme.primary
+        }
+        item.deviceSessionStatus == "expired" || (item.deviceSessionStatus == "active" && sessionRemainingSec == 0L) -> {
+            statusText = "Session expired"
+            statusColor = MaterialTheme.colorScheme.error
+        }
+        item.deviceSessionStatus == "revoked" -> {
+            statusText = "Revoked"
+            statusColor = MaterialTheme.colorScheme.error
+        }
+        item.connectionStatus == "pending_pairing" -> {
+            statusText = "Awaiting pairing"
+            statusColor = MaterialTheme.colorScheme.tertiary
+        }
+        else -> {
+            statusText = "Inactive"
+            statusColor = MaterialTheme.colorScheme.onSurfaceVariant
+        }
+    }
+    val cardName = item.peerName.ifBlank {
+        item.deviceHostname?.takeIf { it.isNotBlank() } ?: "Desktop"
+    }
+    val subtitleLine = listOfNotNull(
+        item.deviceHostname?.takeIf { it.isNotBlank() && it != cardName },
+        item.devicePlatform?.takeIf { it.isNotBlank() },
+    ).joinToString(" · ")
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        border = if (item.isUnread) {
+            androidx.compose.foundation.BorderStroke(
+                width = 1.dp,
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
+            )
+        } else null,
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ConnectionAvatar(item.peerPhotoBase64, cardName, item.connectionType)
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = cardName,
+                    style = MaterialTheme.typography.titleSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (subtitleLine.isNotEmpty()) {
+                    Text(
+                        text = subtitleLine,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(statusColor)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = statusText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = statusColor,
+                    )
+                }
+            }
+            // Tap-the-card-to-act is the primary affordance; an explicit
+            // chevron tells the user this row has a detail screen behind
+            // it (matches the pattern other inactive-state cards use).
+            Icon(
+                imageVector = Icons.Default.ChevronRight,
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** "4h 23m" / "12m" / "55s" — compact session-remaining label. */
+private fun formatRemainingShort(seconds: Long): String {
+    if (seconds <= 0L) return "0s"
+    val h = seconds / 3600
+    val m = (seconds % 3600) / 60
+    val s = seconds % 60
+    return when {
+        h > 0 && m > 0 -> "${h}h ${m}m"
+        h > 0 -> "${h}h"
+        m > 0 -> "${m}m"
+        else -> "${s}s"
     }
 }
 
@@ -1498,6 +1642,25 @@ private fun ConnectionAvatarCore(
                     contentDescription = "Agent",
                     modifier = Modifier.size(24.dp),
                     tint = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+            }
+        }
+    } else if (connectionType == "device") {
+        // Desktop client — distinct avatar so it's instantly readable
+        // as "this is a paired desktop" vs a peer connection. Uses the
+        // primary accent (gold) for the icon so paired desktops stand
+        // out without needing the user to read the type label.
+        Surface(
+            modifier = Modifier.size(44.dp),
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.primaryContainer
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    Icons.Default.DesktopWindows,
+                    contentDescription = "Desktop",
+                    modifier = Modifier.size(24.dp),
+                    tint = MaterialTheme.colorScheme.primary
                 )
             }
         }

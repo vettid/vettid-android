@@ -93,19 +93,23 @@ fun DevicePairingScreen(
                     )
                     Spacer(modifier = Modifier.height(24.dp))
 
-                    // Large code display
+                    // Large code display — formatted as three 4-char
+                    // blocks (ABCD-EFGH-JKLM) so the 12-char vault
+                    // codes fit the card without wrapping or
+                    // letter-spacing overlap, and read like one chunk
+                    // per glance.
                     Card(
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.primaryContainer
                         )
                     ) {
                         Text(
-                            s.code,
-                            modifier = Modifier.padding(horizontal = 32.dp, vertical = 20.dp),
-                            fontSize = 40.sp,
+                            formatDeviceCode(s.code),
+                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 20.dp),
+                            fontSize = 28.sp,
                             fontWeight = FontWeight.Bold,
                             fontFamily = FontFamily.Monospace,
-                            letterSpacing = 8.sp,
+                            letterSpacing = 2.sp,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                     }
@@ -134,7 +138,33 @@ fun DevicePairingScreen(
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(32.dp))
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    // Manual escape hatch: scan the QR the desktop renders
+                    // once it's resolved the invite. Normally the vault's
+                    // pending-authorization notification auto-navigates the
+                    // user to the scanner — this button is the fallback when
+                    // that notification is missed/delayed, so the user is
+                    // never stranded staring at a code they've already typed
+                    // on the desktop.
+                    Button(
+                        onClick = {
+                            val connId = viewModel.pendingConnectionId()
+                            if (connId != null) onNavigateToAuthorize(connId)
+                        },
+                        modifier = Modifier.fillMaxWidth(0.7f)
+                    ) {
+                        Text("Scan QR Code from Desktop")
+                    }
+                    Text(
+                        "Once you've typed the code into your desktop, scan the QR it shows.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(top = 8.dp, start = 16.dp, end = 16.dp)
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
                     OutlinedButton(onClick = { viewModel.cancel() }) {
                         Text("Cancel")
                     }
@@ -191,4 +221,17 @@ private fun formatCountdown(seconds: Int): String {
     val m = seconds / 60
     val s = seconds % 60
     return "${m}:${s.toString().padStart(2, '0')}"
+}
+
+// Display 12-char vault codes as three 4-char blocks (ABCD-EFGH-JKLM)
+// so the typography fits cleanly and is easier to read aloud / dictate.
+// Falls back to the raw code when the length isn't 12 — keeps unknown
+// shapes intact rather than guessing where to insert dashes.
+private fun formatDeviceCode(code: String): String {
+    val clean = code.uppercase()
+    return if (clean.length == 12) {
+        "${clean.substring(0, 4)}-${clean.substring(4, 8)}-${clean.substring(8, 12)}"
+    } else {
+        clean
+    }
 }

@@ -146,6 +146,9 @@ sealed class Screen(val route: String) {
         fun createRoute(connectionId: String) = "devices/authorize/$connectionId"
     }
     object DevicesList : Screen("devices/list")
+    object DesktopConnectionDetail : Screen("devices/{connectionId}/detail") {
+        fun createRoute(connectionId: String) = "devices/${encodeId(connectionId)}/detail"
+    }
     object ScanInvitation : Screen("connections/scan-invitation?data={data}") {
         fun createRoute(data: String? = null) = if (data != null) {
             "connections/scan-invitation?data=${java.net.URLEncoder.encode(data, "UTF-8")}"
@@ -828,6 +831,9 @@ fun VettIDApp(
                 onNavigateToConnectionHistory = { connectionId ->
                     navController.navigate(Screen.ConnectionHistory.createRoute(connectionId))
                 },
+                onNavigateToDesktopConnectionDetail = { connectionId ->
+                    navController.navigate(Screen.DesktopConnectionDetail.createRoute(connectionId))
+                },
                 onNavigateToConnectionReview = { connectionId, eventId ->
                     navController.navigate(Screen.ConnectionReview.createRoute(connectionId, eventId))
                 },
@@ -1027,6 +1033,16 @@ fun VettIDApp(
                 onNavigateToPairing = {
                     navController.navigate(Screen.DevicePairing.route)
                 }
+            )
+        }
+        composable(
+            route = Screen.DesktopConnectionDetail.route,
+            arguments = listOf(navArgument("connectionId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val connectionId = backStackEntry.arguments?.getString("connectionId") ?: ""
+            com.vettid.app.features.devices.DesktopConnectionDetailScreen(
+                connectionId = connectionId,
+                onNavigateBack = { navController.safePopBackStack() }
             )
         }
         composable(
@@ -1973,6 +1989,7 @@ fun MainScreen(
     onNavigateToProteanRecovery: () -> Unit = {},
     onNavigateToConnectionDetail: (String) -> Unit = {},
     onNavigateToConnectionHistory: (String) -> Unit = {},
+    onNavigateToDesktopConnectionDetail: (String) -> Unit = {},
     onNavigateToConnectionReview: (connectionId: String, eventId: String) -> Unit = { _, _ -> },
     onNavigateToCreateInvitation: () -> Unit = {},
     onNavigateToScanInvitation: () -> Unit = {},
@@ -2079,6 +2096,7 @@ fun MainScreen(
                 onNavigateToConversation = onNavigateToConversation,
                 onNavigateToConnectionDetail = onNavigateToConnectionDetail,
                 onNavigateToConnectionHistory = onNavigateToConnectionHistory,
+                onNavigateToDesktopConnectionDetail = onNavigateToDesktopConnectionDetail,
                 onNavigateToHandler = onNavigateToHandlerDetail,
                 onNavigateToBackup = { onNavigateToBackups() },
                 onNavigateToGuide = onNavigateToGuide,

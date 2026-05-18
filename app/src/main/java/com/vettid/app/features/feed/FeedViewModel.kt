@@ -684,7 +684,14 @@ class FeedViewModel @Inject constructor(
                     conn.missedCallCount > 0 ||
                     incomingGrantsByConn[conn.connectionId]?.isNotEmpty() == true ||
                     (conn.connectionType == "system" &&
-                        (unreadGuidesCount > 0 || systemVotesBadge > 0))
+                        (unreadGuidesCount > 0 || systemVotesBadge > 0)),
+                // Device fields — flat-pull from the connection record so
+                // the desktop card can render session state + hostname
+                // without a second round-trip. Null for non-device cards.
+                deviceSessionStatus = conn.deviceSession?.status,
+                deviceSessionExpiresAt = conn.deviceSession?.expiresAt ?: 0L,
+                deviceHostname = conn.deviceMetadata?.hostname,
+                devicePlatform = conn.deviceMetadata?.platform,
             )
         }.sortedWith(
             // 1) Pending review goes first regardless of timestamp.

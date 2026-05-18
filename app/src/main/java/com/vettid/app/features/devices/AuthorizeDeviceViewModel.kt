@@ -61,6 +61,12 @@ class AuthorizeDeviceViewModel @Inject constructor(
      * Called when the user scans a QR. Expected payload: {"t":"...","c":"..."}.
      * Validates the connection_id matches our pending device, then transitions
      * to Ready with the user input form.
+     *
+     * Falls back to synthesized defaults when no pending-authorization
+     * notification has been received yet — covers the case where the user
+     * tapped the manual "Scan Desktop QR" button before (or instead of) the
+     * vault's notification arrived. The approval_token in the QR is the
+     * security boundary: the vault rejects on token mismatch.
      */
     fun onQrScanned(qrText: String) {
         val parsed = parseQr(qrText)
@@ -69,17 +75,29 @@ class AuthorizeDeviceViewModel @Inject constructor(
             return
         }
         val p = pending
-        if (p == null || p.connectionId != parsed.connectionId) {
+        if (p != null && p.connectionId != parsed.connectionId) {
             _state.value = AuthorizeDeviceState.Error(
                 "QR doesn't match the device waiting for authorization"
             )
             return
         }
+        val info = p ?: PendingDeviceInfo(
+            connectionId = parsed.connectionId,
+            hostname = "",
+            platform = "",
+            osName = "",
+            osVersion = "",
+            appVersion = "",
+            clientIp = "",
+            binaryFpPrefix = "",
+            defaultDurationSeconds = DEFAULT_FALLBACK_DURATION_S,
+            maxDurationSeconds = MAX_FALLBACK_DURATION_S
+        )
         _state.value = AuthorizeDeviceState.Ready(
             scanned = parsed,
-            info = p,
-            deviceName = p.hostname.ifEmpty { "Desktop" },
-            durationSeconds = p.defaultDurationSeconds
+            info = info,
+            deviceName = info.hostname.ifEmpty { "Desktop" },
+            durationSeconds = info.defaultDurationSeconds
         )
     }
 
@@ -149,5 +167,12 @@ class AuthorizeDeviceViewModel @Inject constructor(
 
     companion object {
         private const val TAG = "AuthorizeDeviceVM"
+
+        // Conservative defaults when the user scans the QR before the
+        // vault's pending-authorization notification arrives. The vault
+        // separately enforces its own session-duration policy, so these
+        // are display-time suggestions, not the source of truth.
+        private const val DEFAULT_FALLBACK_DURATION_S = 24L * 60L * 60L
+        private const val MAX_FALLBACK_DURATION_S = 30L * 24L * 60L * 60L
     }
 }

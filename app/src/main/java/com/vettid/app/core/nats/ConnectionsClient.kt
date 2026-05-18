@@ -742,6 +742,38 @@ class ConnectionsClient @Inject constructor(
             missedCallCount = json.get("missed_call_count")?.asInt ?: 0,
             peerProfile = peerProfile,
             presenceShareOverride = json.get("presence_share_override")?.takeIf { !it.isJsonNull }?.asBoolean,
+            deviceMetadata = parseDeviceMetadata(json),
+            deviceSession = parseDeviceSession(json),
+        )
+    }
+
+    private fun parseDeviceMetadata(json: JsonObject): DeviceConnectionMetadata? {
+        val meta = json.get("device_metadata")?.takeIf { !it.isJsonNull }?.asJsonObject ?: return null
+        return DeviceConnectionMetadata(
+            deviceName = meta.get("device_name")?.takeIf { !it.isJsonNull }?.asString,
+            hostname = meta.get("hostname")?.takeIf { !it.isJsonNull }?.asString,
+            platform = meta.get("platform")?.takeIf { !it.isJsonNull }?.asString,
+            osName = meta.get("os_name")?.takeIf { !it.isJsonNull }?.asString,
+            osVersion = meta.get("os_version")?.takeIf { !it.isJsonNull }?.asString,
+            appVersion = meta.get("app_version")?.takeIf { !it.isJsonNull }?.asString,
+            binaryFingerprint = meta.get("binary_fingerprint")?.takeIf { !it.isJsonNull }?.asString,
+            machineFingerprint = meta.get("machine_fingerprint")?.takeIf { !it.isJsonNull }?.asString,
+            clientIp = meta.get("client_ip")?.takeIf { !it.isJsonNull }?.asString,
+            firstSeenAt = meta.get("first_seen_at")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
+        )
+    }
+
+    private fun parseDeviceSession(json: JsonObject): DeviceConnectionSession? {
+        val sess = json.get("device_session")?.takeIf { !it.isJsonNull }?.asJsonObject ?: return null
+        val id = sess.get("session_id")?.takeIf { !it.isJsonNull }?.asString ?: return null
+        return DeviceConnectionSession(
+            sessionId = id,
+            status = sess.get("status")?.takeIf { !it.isJsonNull }?.asString ?: "unknown",
+            createdAt = sess.get("created_at")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
+            expiresAt = sess.get("expires_at")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
+            lastActiveAt = sess.get("last_active_at")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
+            durationSeconds = sess.get("duration_seconds")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
+            keyRotationCount = sess.get("key_rotation_count")?.takeIf { !it.isJsonNull }?.asInt ?: 0,
         )
     }
 
@@ -1022,6 +1054,42 @@ data class ConnectionRecord(
      * global presence setting per peer.
      */
     val presenceShareOverride: Boolean? = null,
+    /**
+     * Device-specific metadata (hostname, platform, fingerprint, ...).
+     * Populated by the vault only when connectionType == "device";
+     * null for peer/agent/system connections.
+     */
+    val deviceMetadata: DeviceConnectionMetadata? = null,
+    /**
+     * Active device session for an authorized desktop. Null when no
+     * session has been authorized yet, or after revoke/expiry.
+     */
+    val deviceSession: DeviceConnectionSession? = null,
+)
+
+/** Desktop-client registration details collected at pairing time. */
+data class DeviceConnectionMetadata(
+    val deviceName: String? = null,
+    val hostname: String? = null,
+    val platform: String? = null,
+    val osName: String? = null,
+    val osVersion: String? = null,
+    val appVersion: String? = null,
+    val binaryFingerprint: String? = null,
+    val machineFingerprint: String? = null,
+    val clientIp: String? = null,
+    val firstSeenAt: Long = 0L,
+)
+
+/** Time-limited session for an authorized desktop. */
+data class DeviceConnectionSession(
+    val sessionId: String,
+    val status: String,             // "active" | "expired" | "revoked"
+    val createdAt: Long,            // unix seconds
+    val expiresAt: Long,            // unix seconds
+    val lastActiveAt: Long = 0L,
+    val durationSeconds: Long = 0L,
+    val keyRotationCount: Int = 0,
 )
 
 /**

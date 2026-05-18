@@ -81,6 +81,14 @@ sealed class FeedDisplayItem {
         val localHasWallet: Boolean = false,
         // Peer's primary published BTC address. Pre-filled in Send BTC.
         val peerBtcAddress: String? = null,
+        // Device-only fields. Populated when connectionType == "device"
+        // by FeedViewModel via `device.list` so the desktop-specific card
+        // can render the session state, hostname, and platform without a
+        // second round-trip per render. Null/empty for non-device cards.
+        val deviceSessionStatus: String? = null,        // "active" | "suspended" | "revoked" | null
+        val deviceSessionExpiresAt: Long = 0L,          // unix seconds; 0 = no active session
+        val deviceHostname: String? = null,
+        val devicePlatform: String? = null,
         override val sortTimestamp: Long,
         override val isUnread: Boolean
     ) : FeedDisplayItem()

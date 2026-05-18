@@ -95,7 +95,15 @@ class OwnerSpaceClient @Inject constructor(
      */
     val presenceHeartbeats: SharedFlow<PresenceHeartbeat> = _presenceHeartbeats.asSharedFlow()
 
-    private val _devicePendingAuth = MutableSharedFlow<DevicePendingAuthNotification>(extraBufferCapacity = 8)
+    // replay = 1 so a second screen (AuthorizeDeviceScreen, which subscribes
+    // AFTER DevicePairingScreen consumed the notification to trigger the
+    // navigation) still receives the device metadata. Without it the form
+    // renders empty (hostname / platform / fingerprint all blank) because
+    // the SharedFlow has nothing to deliver to the late subscriber.
+    private val _devicePendingAuth = MutableSharedFlow<DevicePendingAuthNotification>(
+        replay = 1,
+        extraBufferCapacity = 8,
+    )
     /**
      * Flow of desktop devices awaiting session authorization (stage 2 of pairing).
      * Emitted when a desktop has resolved a device invite code and posted
