@@ -133,14 +133,57 @@ class AuthorizeDeviceViewModel @Inject constructor(
 
     fun approve() {
         val ready = _state.value as? AuthorizeDeviceState.Ready ?: return
+        submitAuthorize(
+            scanned = ready.scanned,
+            info = ready.info,
+            deviceName = ready.deviceName,
+            durationSeconds = ready.durationSeconds,
+            forceReplace = false,
+        )
+    }
+
+    /**
+     * User confirmed the "end existing session and continue" prompt.
+     * Re-fires authorize-session with force_replace=true.
+     */
+    fun confirmReplace() {
+        val pending = _state.value as? AuthorizeDeviceState.ConfirmReplace ?: return
+        submitAuthorize(
+            scanned = pending.scanned,
+            info = pending.info,
+            deviceName = pending.deviceName,
+            durationSeconds = pending.durationSeconds,
+            forceReplace = true,
+        )
+    }
+
+    /** User dismissed the ConfirmReplace prompt — return to the Ready form. */
+    fun cancelReplace() {
+        val pending = _state.value as? AuthorizeDeviceState.ConfirmReplace ?: return
+        _state.value = AuthorizeDeviceState.Ready(
+            scanned = pending.scanned,
+            info = pending.info,
+            deviceName = pending.deviceName,
+            durationSeconds = pending.durationSeconds,
+        )
+    }
+
+    private fun submitAuthorize(
+        scanned: ScannedDeviceAuthQr,
+        info: PendingDeviceInfo,
+        deviceName: String,
+        durationSeconds: Long,
+        forceReplace: Boolean,
+    ) {
         _state.value = AuthorizeDeviceState.Submitting
         viewModelScope.launch {
             try {
                 val payload = JsonObject().apply {
-                    addProperty("connection_id", ready.scanned.connectionId)
-                    addProperty("approval_token", ready.scanned.approvalToken)
-                    addProperty("device_name", ready.deviceName.ifBlank { "Desktop" })
-                    addProperty("duration_seconds", ready.durationSeconds)
+                    addProperty("connection_id", scanned.connectionId)
+                    addProperty("approval_token", scanned.approvalToken)
+                    addProperty("device_name", deviceName.ifBlank { "Desktop" })
+                    addProperty("duration_seconds", durationSeconds)
+                    if (forceReplace) addProperty("force_replace", true)
                 }
                 val response = ownerSpaceClient.sendAndAwaitResponse(
                     messageType = "device.authorize-session",
@@ -152,7 +195,20 @@ class AuthorizeDeviceViewModel @Inject constructor(
                         if (response.success) _state.value = AuthorizeDeviceState.Done
                         else _state.value = AuthorizeDeviceState.Error(response.error ?: "Authorization failed")
                     }
-                    is VaultResponse.Error -> _state.value = AuthorizeDeviceState.Error(response.message)
+                    is VaultResponse.Error -> {
+                        if (response.code == "existing_session_active") {
+                            val existing = parseExistingDevices(response.extra)
+                            _state.value = AuthorizeDeviceState.ConfirmReplace(
+                                scanned = scanned,
+                                info = info,
+                                deviceName = deviceName,
+                                durationSeconds = durationSeconds,
+                                existingDevices = existing,
+                            )
+                        } else {
+                            _state.value = AuthorizeDeviceState.Error(response.message)
+                        }
+                    }
                     null -> _state.value = AuthorizeDeviceState.Error("Request timed out")
                     else -> _state.value = AuthorizeDeviceState.Error("Unexpected response")
                 }
@@ -160,6 +216,20 @@ class AuthorizeDeviceViewModel @Inject constructor(
                 Log.e(TAG, "Authorization failed", e)
                 _state.value = AuthorizeDeviceState.Error(e.message ?: "Failed")
             }
+        }
+    }
+
+    private fun parseExistingDevices(extra: JsonObject?): List<ExistingDeviceSummary> {
+        if (extra == null) return emptyList()
+        val arr = extra.getAsJsonArray("existing_devices") ?: return emptyList()
+        return arr.mapNotNull { el ->
+            val obj = el.asJsonObject ?: return@mapNotNull null
+            ExistingDeviceSummary(
+                connectionId = obj.get("connection_id")?.takeIf { !it.isJsonNull }?.asString.orEmpty(),
+                deviceName = obj.get("device_name")?.takeIf { !it.isJsonNull }?.asString.orEmpty(),
+                lastActiveAt = obj.get("last_active_at")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
+                expiresAt = obj.get("expires_at")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
+            )
         }
     }
 

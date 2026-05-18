@@ -94,9 +94,29 @@ sealed class AuthorizeDeviceState {
         val durationSeconds: Long
     ) : AuthorizeDeviceState()
     object Submitting : AuthorizeDeviceState()
+    /**
+     * Vault reported an existing active session on another device.
+     * The screen renders a confirm prompt; user can end the existing
+     * session(s) and continue, or cancel back to Ready.
+     */
+    data class ConfirmReplace(
+        val scanned: ScannedDeviceAuthQr,
+        val info: PendingDeviceInfo,
+        val deviceName: String,
+        val durationSeconds: Long,
+        val existingDevices: List<ExistingDeviceSummary>
+    ) : AuthorizeDeviceState()
     object Done : AuthorizeDeviceState()
     data class Error(val message: String) : AuthorizeDeviceState()
 }
+
+/** Existing-session summary surfaced to the user in the ConfirmReplace prompt. */
+data class ExistingDeviceSummary(
+    val connectionId: String,
+    val deviceName: String,
+    val lastActiveAt: Long,
+    val expiresAt: Long,
+)
 
 // ---- Legacy per-operation approval (separate from stage-2 pairing) ---------
 

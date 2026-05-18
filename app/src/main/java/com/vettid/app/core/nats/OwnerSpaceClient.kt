@@ -487,9 +487,22 @@ class OwnerSpaceClient @Inject constructor(
                         error = null
                     )
                 } else {
+                    // Re-parse the raw payload to a JsonObject so call
+                    // sites can read top-level fields the structured
+                    // type doesn't model (error_code, existing_devices
+                    // for the one-active-session-per-vault gate, etc).
+                    // Also honors snake_case error_code which the
+                    // VaultResponseJson camelCase field doesn't catch.
+                    val rawObj: JsonObject? = try {
+                        gson.fromJson(responseString, JsonObject::class.java)
+                    } catch (e: Exception) { null }
+                    val errCode = response.errorCode
+                        ?: rawObj?.get("error_code")?.takeIf { !it.isJsonNull }?.asString
+                        ?: "HANDLER_ERROR"
                     VaultResponse.Error(
                         requestId = response.getCorrelationId().ifEmpty { requestId },
-                        code = response.errorCode ?: "HANDLER_ERROR",
+                        code = errCode,
+                        extra = rawObj,
                         message = response.error ?: "Unknown error"
                     )
                 }
@@ -3297,6 +3310,15 @@ sealed class VaultResponse {
     data class Error(
         override val requestId: String,
         val code: String,
+        /**
+         * Full original JSON payload from the vault when available.
+         * Lets specific call-sites (e.g. AuthorizeDeviceVM reading
+         * `existing_devices` from an `existing_session_active` error)
+         * reach top-level fields the structured Error type doesn't
+         * model. Null for synthetic errors (TIMEOUT, GARBLED) where
+         * there is no upstream payload.
+         */
+        val extra: JsonObject? = null,
         val message: String
     ) : VaultResponse()
 }

@@ -92,6 +92,14 @@ fun AuthorizeDeviceScreen(
                     }
                 }
 
+                is AuthorizeDeviceState.ConfirmReplace -> {
+                    ConfirmReplacePrompt(
+                        existing = s.existingDevices,
+                        onConfirm = viewModel::confirmReplace,
+                        onCancel = viewModel::cancelReplace,
+                    )
+                }
+
                 is AuthorizeDeviceState.Done -> {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -313,3 +321,45 @@ private fun DurationChips(
     }
 }
 
+
+@Composable
+private fun ConfirmReplacePrompt(
+    existing: List<ExistingDeviceSummary>,
+    onConfirm: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Card(
+            modifier = Modifier
+                .padding(24.dp)
+                .widthIn(max = 480.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    "Existing session active",
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Text(
+                    if (existing.size == 1) {
+                        "\"${existing.first().deviceName.ifBlank { "another desktop" }}\" already has an active session. End it and authorize this new one?"
+                    } else {
+                        "${existing.size} other desktops have active sessions. End them and authorize this new one?"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    OutlinedButton(onClick = onCancel) { Text("Cancel") }
+                    Spacer(Modifier.width(12.dp))
+                    Button(onClick = onConfirm) { Text("End and continue") }
+                }
+            }
+        }
+    }
+}
