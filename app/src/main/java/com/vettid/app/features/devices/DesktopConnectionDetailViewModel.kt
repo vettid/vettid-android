@@ -3,6 +3,8 @@ package com.vettid.app.features.devices
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.JsonObject
+import com.vettid.app.core.nats.AuditEntry
+import com.vettid.app.core.nats.ConnectionAuditClient
 import com.vettid.app.core.nats.ConnectionsClient
 import com.vettid.app.core.nats.DeviceConnectionMetadata
 import com.vettid.app.core.nats.DeviceConnectionSession
@@ -25,6 +27,7 @@ import javax.inject.Inject
 class DesktopConnectionDetailViewModel @Inject constructor(
     private val ownerSpaceClient: OwnerSpaceClient,
     private val connectionsClient: ConnectionsClient,
+    private val auditClient: ConnectionAuditClient,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<DesktopDetailState>(DesktopDetailState.Loading)
@@ -35,6 +38,13 @@ class DesktopConnectionDetailViewModel @Inject constructor(
 
     private val _toast = MutableStateFlow<String?>(null)
     val toast: StateFlow<String?> = _toast.asStateFlow()
+
+    // Recent activity for this desktop — the latest entries from
+    // connection.audit.list filtered to this connection_id. Loads in
+    // the background after the device info renders so the screen
+    // doesn't stall on the audit fetch.
+    private val _activity = MutableStateFlow<ActivityState>(ActivityState.Loading)
+    val activity: StateFlow<ActivityState> = _activity.asStateFlow()
 
     fun load(connectionId: String) {
         viewModelScope.launch {
@@ -64,8 +74,73 @@ class DesktopConnectionDetailViewModel @Inject constructor(
                     metadata = rec.deviceMetadata,
                     session = rec.deviceSession,
                 )
+                loadActivity(connectionId)
             } catch (e: Exception) {
                 _state.value = DesktopDetailState.Error(e.message ?: "Failed to load desktop")
+            }
+        }
+    }
+
+    /**
+     * Fetch the most recent N audit entries for this connection so the
+     * detail screen can show "what has this desktop done?". Runs in
+     * the background — failures degrade silently to an empty list
+     * rather than failing the whole detail load.
+     */
+    private fun loadActivity(connectionId: String) {
+        viewModelScope.launch {
+            _activity.value = ActivityState.Loading
+            val result = auditClient.list(connectionId = connectionId, limit = 20)
+            _activity.value = result.fold(
+                onSuccess = { ActivityState.Loaded(it.entries) },
+                onFailure = { ActivityState.Error(it.message ?: "Failed to load activity") },
+            )
+        }
+    }
+
+    /**
+     * Force-ends the current session vault-side without revoking the
+     * pairing. Wipes the server-side session key + flips DeviceSession
+     * to expired. The desktop will see is_active=false on its next poll
+     * (or via the forApp.device.{conn}.ended notification) and land on
+     * its Start-New-Session view — the user can start a fresh session
+     * without re-pairing. Use [remove] when the goal is to retire the
+     * desktop entirely.
+     */
+    fun endSession(connectionId: String, onDone: () -> Unit) {
+        viewModelScope.launch {
+            _isWorking.value = true
+            try {
+                val payload = JsonObject().apply {
+                    addProperty("connection_id", connectionId)
+                    addProperty("reason", "phone_locked")
+                }
+                val response = ownerSpaceClient.sendAndAwaitResponse(
+                    messageType = "device.end-session",
+                    payload = payload,
+                    timeoutMs = 15_000L,
+                )
+                when (response) {
+                    is VaultResponse.HandlerResult -> {
+                        if (response.success) {
+                            connectionsClient.invalidateListCache()
+                            // Refresh the screen so the Session card
+                            // reflects the now-expired state.
+                            load(connectionId)
+                            _toast.value = "Session ended."
+                            onDone()
+                        } else {
+                            _toast.value = response.error ?: "Failed to end session"
+                        }
+                    }
+                    is VaultResponse.Error -> _toast.value = response.message
+                    null -> _toast.value = "Request timed out"
+                    else -> _toast.value = "Failed to end session"
+                }
+            } catch (e: Exception) {
+                _toast.value = e.message ?: "Failed to end session"
+            } finally {
+                _isWorking.value = false
             }
         }
     }
@@ -128,4 +203,10 @@ sealed class DesktopDetailState {
         val session: DeviceConnectionSession?,
     ) : DesktopDetailState()
     data class Error(val message: String) : DesktopDetailState()
+}
+
+sealed class ActivityState {
+    object Loading : ActivityState()
+    data class Loaded(val entries: List<AuditEntry>) : ActivityState()
+    data class Error(val message: String) : ActivityState()
 }

@@ -20,6 +20,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.vettid.app.core.nats.AuditEntry
 import com.vettid.app.core.nats.DeviceConnectionMetadata
 import com.vettid.app.core.nats.DeviceConnectionSession
 import java.text.SimpleDateFormat
@@ -42,7 +43,9 @@ fun DesktopConnectionDetailScreen(
     val state by viewModel.state.collectAsState()
     val isWorking by viewModel.isWorking.collectAsState()
     val toast by viewModel.toast.collectAsState()
+    val activity by viewModel.activity.collectAsState()
     var confirmingRemove by remember { mutableStateOf(false) }
+    var confirmingEnd by remember { mutableStateOf(false) }
 
     LaunchedEffect(connectionId) {
         viewModel.load(connectionId)
@@ -89,11 +92,40 @@ fun DesktopConnectionDetailScreen(
                     DesktopDetailContent(
                         loaded = s,
                         isWorking = isWorking,
+                        activity = activity,
+                        onEndSessionClicked = { confirmingEnd = true },
                         onRemoveClicked = { confirmingRemove = true },
                     )
                 }
             }
         }
+    }
+
+    if (confirmingEnd) {
+        val loaded = state as? DesktopDetailState.Loaded
+        AlertDialog(
+            onDismissRequest = { confirmingEnd = false },
+            title = { Text("End session now?") },
+            text = {
+                Text(
+                    "This ends the current session — the desktop will be locked out " +
+                        "until a new session is authorized. The pairing stays in place, " +
+                        "so you won't need to re-pair: the desktop can ask for a new " +
+                        "session and you scan its QR to approve."
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmingEnd = false
+                        loaded?.connectionId?.let { id -> viewModel.endSession(id) { } }
+                    }
+                ) { Text("End session") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmingEnd = false }) { Text("Cancel") }
+            }
+        )
     }
 
     if (confirmingRemove) {
@@ -129,6 +161,8 @@ fun DesktopConnectionDetailScreen(
 private fun DesktopDetailContent(
     loaded: DesktopDetailState.Loaded,
     isWorking: Boolean,
+    activity: ActivityState,
+    onEndSessionClicked: () -> Unit,
     onRemoveClicked: () -> Unit,
 ) {
     Column(
@@ -149,7 +183,7 @@ private fun DesktopDetailContent(
                     Icons.Default.DesktopWindows,
                     contentDescription = null,
                     modifier = Modifier.size(36.dp),
-                    tint = MaterialTheme.colorScheme.primary,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
             }
         }
@@ -207,6 +241,56 @@ private fun DesktopDetailContent(
                 val rem = sess.expiresAt - System.currentTimeMillis() / 1000
                 DetailRow("Remaining", if (rem > 0) formatRemainingLong(rem) else "expired")
                 DetailRow("Key rotations", sess.keyRotationCount.toString())
+
+                // Force-end the current session without retiring the
+                // pairing. The desktop falls back to its Start-New-
+                // Session view so the user can re-authorize without
+                // a full re-pair — much lighter than Remove desktop.
+                if (sess.status == "active" && rem > 0) {
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedButton(
+                        onClick = onEndSessionClicked,
+                        enabled = !isWorking,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(if (isWorking) "Ending…" else "End session now")
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        // Recent activity — most recent N audit entries scoped to this
+        // connection_id. The full history lives on the dedicated
+        // Connection History screen for peers; here we show a short
+        // summary so the user can see at-a-glance what this desktop
+        // has been doing without leaving the detail page.
+        SectionCard(title = "Recent activity") {
+            when (val a = activity) {
+                is ActivityState.Loading -> Text(
+                    "Loading…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                is ActivityState.Error -> Text(
+                    a.message,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                is ActivityState.Loaded -> {
+                    if (a.entries.isEmpty()) {
+                        Text(
+                            "No recent activity.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        a.entries.forEach { entry ->
+                            ActivityRow(entry)
+                        }
+                    }
+                }
             }
         }
 
@@ -330,6 +414,40 @@ private fun DetailRow(label: String, value: String, mono: Boolean = false) {
             fontFamily = if (mono) FontFamily.Monospace else null,
             modifier = Modifier.weight(1f),
         )
+    }
+}
+
+@Composable
+private fun ActivityRow(entry: AuditEntry) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                entry.title.ifBlank { entry.event_type },
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                formatUnixDate(entry.created_at),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (!entry.body.isNullOrBlank()) {
+            Text(
+                entry.body,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }
 

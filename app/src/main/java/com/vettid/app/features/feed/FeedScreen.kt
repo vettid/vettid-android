@@ -1647,9 +1647,12 @@ private fun ConnectionAvatarCore(
         }
     } else if (connectionType == "device") {
         // Desktop client — distinct avatar so it's instantly readable
-        // as "this is a paired desktop" vs a peer connection. Uses the
-        // primary accent (gold) for the icon so paired desktops stand
-        // out without needing the user to read the type label.
+        // as "this is a paired desktop" vs a peer connection. Icon
+        // tint uses onPrimaryContainer (the semantic foreground color
+        // for primaryContainer) — gold-on-gold was unreadable in both
+        // themes; this gives the icon the same contrast guarantee the
+        // Material color system applies to onPrimaryContainer/
+        // primaryContainer pairings.
         Surface(
             modifier = Modifier.size(44.dp),
             shape = CircleShape,
@@ -1660,7 +1663,7 @@ private fun ConnectionAvatarCore(
                     Icons.Default.DesktopWindows,
                     contentDescription = "Desktop",
                     modifier = Modifier.size(24.dp),
-                    tint = MaterialTheme.colorScheme.primary
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer
                 )
             }
         }
