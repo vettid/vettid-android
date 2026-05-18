@@ -45,9 +45,18 @@ data class PendingDeviceInfo(
     val osVersion: String,
     val appVersion: String,
     val clientIp: String,
-    val binaryFpPrefix: String,
+    /** SHA-256 of the desktop binary, full 64-char hex (was truncated to 8 chars). */
+    val binaryFingerprint: String,
+    /** HMAC-SHA256 over stable machine attributes. May be empty on first
+     *  desktop builds — we won't dim the row, we'll just show "—". */
+    val machineFingerprint: String,
     val defaultDurationSeconds: Long,
-    val maxDurationSeconds: Long
+    val maxDurationSeconds: Long,
+    /** Existing connection.peer_alias if this is a re-authorize. The
+     *  AuthorizeDeviceScreen shows the rename field only when this is
+     *  null/blank — the name is set at original pairing and shouldn't
+     *  change on every session refresh. */
+    val existingAlias: String? = null,
 )
 
 /** QR payload shown by the desktop at stage 2 — user scans this in the app. */

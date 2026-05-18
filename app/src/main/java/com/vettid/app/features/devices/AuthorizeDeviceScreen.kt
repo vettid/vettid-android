@@ -1,14 +1,8 @@
 package com.vettid.app.features.devices
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
@@ -18,16 +12,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.vettid.app.ui.components.QrCodeScanner
-import kotlin.math.abs
-import kotlinx.coroutines.flow.distinctUntilChanged
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -150,86 +140,107 @@ private fun AuthorizeForm(
     onApprove: () -> Unit,
     onCancel: () -> Unit
 ) {
+    val isRename = state.info.existingAlias.isNullOrBlank()
+
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+            .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
-        Icon(
-            Icons.Default.Computer,
-            contentDescription = null,
-            modifier = Modifier.size(48.dp),
-            tint = MaterialTheme.colorScheme.primary
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "Authorize this desktop",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.SemiBold
-        )
-        Spacer(Modifier.height(20.dp))
+        // Header — compact title row so the rest fits without scroll.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                Icons.Default.Computer,
+                contentDescription = null,
+                modifier = Modifier.size(28.dp),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.width(10.dp))
+            Column {
+                Text(
+                    "Authorize this desktop",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    state.info.existingAlias?.takeIf { it.isNotBlank() } ?: state.deviceName,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
 
-        // Fingerprint card
+        Spacer(Modifier.height(12.dp))
+
+        // Identity card — verify against the desktop's Settings →
+        // Device tab. Full fingerprints (not prefixes) so the user
+        // can confirm bit-for-bit.
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
                 containerColor = MaterialTheme.colorScheme.surfaceVariant
             )
         ) {
-            Column(Modifier.padding(16.dp)) {
+            Column(Modifier.padding(12.dp)) {
                 InfoRow("Hostname", state.info.hostname.ifEmpty { "—" })
-                InfoRow("Platform", state.info.platform.ifEmpty { "—" })
-                if (state.info.osName.isNotEmpty()) InfoRow("OS", "${state.info.osName} ${state.info.osVersion}")
-                if (state.info.appVersion.isNotEmpty()) InfoRow("Version", state.info.appVersion)
+                if (state.info.osName.isNotEmpty()) {
+                    InfoRow("OS", "${state.info.osName} ${state.info.osVersion}".trim())
+                }
+                if (state.info.platform.isNotEmpty()) InfoRow("Platform", state.info.platform)
+                if (state.info.appVersion.isNotEmpty()) InfoRow("App version", state.info.appVersion)
                 if (state.info.clientIp.isNotEmpty()) InfoRow("Client IP", state.info.clientIp)
-                if (state.info.binaryFpPrefix.isNotEmpty()) {
-                    InfoRow(
-                        "Fingerprint",
-                        state.info.binaryFpPrefix,
-                        mono = true
-                    )
+                if (state.info.binaryFingerprint.isNotEmpty()) {
+                    InfoRow("Binary fingerprint", state.info.binaryFingerprint, mono = true)
+                }
+                if (state.info.machineFingerprint.isNotEmpty()) {
+                    InfoRow("Machine fingerprint", state.info.machineFingerprint, mono = true)
                 }
             }
         }
 
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(12.dp))
 
-        // Device name
-        OutlinedTextField(
-            value = state.deviceName,
-            onValueChange = onNameChange,
-            label = { Text("Device name") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
+        // Device name — editable only on first-pair. On re-auth we
+        // already have a user-chosen alias on the connection record;
+        // changing it every session creates churn for no benefit.
+        if (isRename) {
+            OutlinedTextField(
+                value = state.deviceName,
+                onValueChange = onNameChange,
+                label = { Text("Device name") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(12.dp))
+        }
 
-        Spacer(Modifier.height(20.dp))
-
-        // Duration picker
+        // Session duration — horizontal chip row instead of the wheel.
+        // Compact, scannable, snaps to preset durations without the
+        // 160dp vertical real-estate the wheel was eating.
         Text(
             "Session duration",
             style = MaterialTheme.typography.titleSmall,
-            modifier = Modifier.fillMaxWidth()
         )
-        Spacer(Modifier.height(8.dp))
-        DurationPicker(
+        Spacer(Modifier.height(6.dp))
+        DurationChips(
             seconds = state.durationSeconds,
             maxSeconds = state.info.maxDurationSeconds,
-            onChange = onDurationChange
+            onChange = onDurationChange,
         )
 
-        Spacer(Modifier.height(32.dp))
+        // Weight = 1 spacer pushes the action row to the bottom so it's
+        // always visible without scrolling.
+        Spacer(Modifier.weight(1f))
+
         Row(Modifier.fillMaxWidth()) {
             OutlinedButton(
                 onClick = onCancel,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
             ) { Text("Deny") }
             Spacer(Modifier.width(12.dp))
             Button(
                 onClick = onApprove,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
             ) { Text("Approve") }
         }
     }
@@ -237,17 +248,21 @@ private fun AuthorizeForm(
 
 @Composable
 private fun InfoRow(label: String, value: String, mono: Boolean = false) {
-    Row(Modifier.padding(vertical = 4.dp)) {
+    // 64-char mono fingerprints don't fit a single line on most
+    // phones; wrap naturally and use a smaller font for mono rows so
+    // the row doesn't grow taller than the rest of the card.
+    Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.Top) {
         Text(
             label,
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.width(110.dp)
+            modifier = Modifier.width(120.dp),
         )
         Text(
             value,
-            style = MaterialTheme.typography.bodyMedium,
-            fontFamily = if (mono) FontFamily.Monospace else null
+            style = if (mono) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium,
+            fontFamily = if (mono) FontFamily.Monospace else null,
+            modifier = Modifier.weight(1f),
         )
     }
 }
@@ -271,97 +286,30 @@ private val DURATION_PRESETS: List<Pair<String, Long>> = listOf(
 )
 
 @Composable
-private fun DurationPicker(
+@OptIn(ExperimentalMaterial3Api::class)
+private fun DurationChips(
     seconds: Long,
     maxSeconds: Long,
-    onChange: (Long) -> Unit
+    onChange: (Long) -> Unit,
 ) {
-    // Filter presets to those the vault still allows, and pick the
-    // option closest to (but not exceeding) the currently-selected
-    // duration so the wheel starts on the right row when the user
-    // first sees the form.
     val options = remember(maxSeconds) {
         DURATION_PRESETS.filter { it.second <= maxSeconds }
             .ifEmpty { listOf(DURATION_PRESETS.first()) }
     }
-    val initialIndex = remember(seconds, options) {
-        options.indexOfLast { it.second <= seconds }.coerceAtLeast(0)
-    }
-
-    // Pure-Compose scroll wheel. Pad the list with three blank rows at
-    // top and bottom so the selected item (the row at the middle of the
-    // viewport) can scroll to any preset including the first and last.
-    // Snap-fling locks the scroll to whole-row stops; the centered row
-    // is whichever is `firstVisibleItemIndex + paddingRows`.
-    val rowHeight = 44.dp
-    val paddingRows = 2
-    val listState = rememberLazyListState(initialFirstVisibleItemIndex = initialIndex)
-    val flingBehavior = rememberSnapFlingBehavior(lazyListState = listState)
-
-    // Track the centered row as the user scrolls. firstVisibleItem +
-    // paddingRows gives the row currently at the highlighted center
-    // band; emit a duration change on every distinct landing.
-    LaunchedEffect(listState, options) {
-        snapshotFlow { listState.firstVisibleItemIndex }
-            .distinctUntilChanged()
-            .collect { idx ->
-                val opt = options.getOrNull(idx) ?: return@collect
-                onChange(opt.second.coerceAtMost(maxSeconds))
-            }
-    }
-
-    Box(
+    Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(rowHeight * (paddingRows * 2 + 1))
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant),
-        contentAlignment = Alignment.Center
+            .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        // Center highlight band — visual cue for which row counts as
-        // "selected." Behind the LazyColumn so the row text sits on top.
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(rowHeight)
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
-        )
-        LazyColumn(
-            state = listState,
-            flingBehavior = flingBehavior,
-            modifier = Modifier.fillMaxSize()
-        ) {
-            // Top padding rows so the first real option can land on the
-            // center band.
-            items(paddingRows) {
-                Box(Modifier.fillMaxWidth().height(rowHeight))
-            }
-            items(options) { (label, _) ->
-                val idx = options.indexOfFirst { it.first == label }
-                val centerIdx = listState.firstVisibleItemIndex
-                val distance = abs(idx - centerIdx)
-                val rowAlpha = when (distance) {
-                    0 -> 1.0f
-                    1 -> 0.55f
-                    else -> 0.30f
-                }
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(rowHeight)
-                        .alpha(rowAlpha),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        label,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = if (distance == 0) FontWeight.SemiBold else FontWeight.Normal
-                    )
-                }
-            }
-            items(paddingRows) {
-                Box(Modifier.fillMaxWidth().height(rowHeight))
-            }
+        options.forEach { (label, secs) ->
+            val selected = seconds == secs
+            FilterChip(
+                selected = selected,
+                onClick = { onChange(secs.coerceAtMost(maxSeconds)) },
+                label = { Text(label, style = MaterialTheme.typography.bodyMedium) },
+            )
         }
     }
 }
+

@@ -438,6 +438,25 @@ fun VettIDApp(
         }
     }
 
+    // Device pending-authorization → auto-navigate to the QR scanner
+    // regardless of where the user currently is. Without this, a
+    // user who clicks "Start new session" on the desktop has to
+    // know to open Settings → Devices → Pair on the phone to find
+    // the scanner; the in-app DevicePairingViewModel listener only
+    // fires while that screen is active. App-level navigation here
+    // handles the cold case: notification dismissed, user opens the
+    // app, devicePendingAuth replay=1 emits the cached event.
+    LaunchedEffect(grantsEntryPoint) {
+        grantsEntryPoint.ownerSpaceClient().devicePendingAuth.collect { notif ->
+            val current = navController.currentDestination?.route
+            // Don't yank the user out of an in-flight authorize step
+            // for the same connection — they may have navigated there
+            // via the notification tap path already.
+            if (current?.startsWith("devices/authorize/") == true) return@collect
+            navController.navigate(Screen.DeviceAuthorize.createRoute(notif.connectionId))
+        }
+    }
+
     // Handle call UI events. showCallUI now has replay=1 so a
     // late-arriving collector (e.g. the Activity recreated after the
     // incoming-call notification's Answer action) still receives the
@@ -611,6 +630,22 @@ fun VettIDApp(
                                 navController.navigate(Screen.Conversation.createRoute(sourceId))
                             eventType?.startsWith("agent.message") == true ->
                                 navController.navigate(Screen.Conversation.createRoute(sourceId))
+                            eventType?.startsWith("device.") == true -> {
+                                // Device events on the notification path are
+                                // almost always "your desktop wants a new
+                                // session" — route to AuthorizeDeviceScreen
+                                // so the user can scan the desktop's QR.
+                                // Tapping any device event into Conversation
+                                // would land on a chat surface that doesn't
+                                // exist for desktops (there's no peer to
+                                // message — they're a paired device).
+                                when (eventType) {
+                                    "device.connection.request" ->
+                                        navController.navigate(Screen.DeviceAuthorize.createRoute(sourceId))
+                                    else ->
+                                        navController.navigate(Screen.DesktopConnectionDetail.createRoute(sourceId))
+                                }
+                            }
                             eventType?.startsWith("connection.") == true -> {
                                 // Pass a focus hint when the notification is a
                                 // verify-identity outcome — Detail screen reads

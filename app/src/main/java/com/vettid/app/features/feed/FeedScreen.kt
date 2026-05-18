@@ -1487,12 +1487,21 @@ private fun PendingRowView(row: PendingRow, onClick: () -> Unit) {
     val (icon, tint) = pendingRowIcon(row)
     val label = pendingRowLabel(row)
     val interactive = row !is PendingRow.LastActivity
+    // Long messages on a LastActivity row (e.g. an audit-log entry
+    // title) crowd against the right-aligned timestamp and force a
+    // second line that wraps under the timestamp awkwardly. For that
+    // row type only, stack the label + timestamp vertically — text
+    // gets the full width on its own line, timestamp sits below in a
+    // smaller font. Other PendingRow types keep the horizontal
+    // layout because their labels are short ("1 new message", etc.).
+    val stackedTimestamp = row is PendingRow.LastActivity
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .then(if (interactive) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = if (stackedTimestamp) Alignment.Top else Alignment.CenterVertically,
     ) {
         if (icon != null) {
             Icon(
@@ -1503,22 +1512,43 @@ private fun PendingRowView(row: PendingRow, onClick: () -> Unit) {
             )
             Spacer(modifier = Modifier.width(10.dp))
         }
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = if (interactive) FontWeight.Medium else FontWeight.Normal,
-            color = if (interactive) MaterialTheme.colorScheme.onSurface
-                else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (row.timestamp > 0L) {
+        if (stackedTimestamp) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Normal,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (row.timestamp > 0L) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = formatTimestamp(row.timestamp),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                    )
+                }
+            }
+        } else {
             Text(
-                text = formatTimestamp(row.timestamp),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.outline,
+                text = label,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (interactive) FontWeight.Medium else FontWeight.Normal,
+                color = if (interactive) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
             )
+            if (row.timestamp > 0L) {
+                Text(
+                    text = formatTimestamp(row.timestamp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                )
+            }
         }
     }
 }

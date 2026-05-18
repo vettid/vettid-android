@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.vettid.app.core.nats.ConnectionsClient
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.nats.VaultResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -23,7 +24,8 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class AuthorizeDeviceViewModel @Inject constructor(
-    private val ownerSpaceClient: OwnerSpaceClient
+    private val ownerSpaceClient: OwnerSpaceClient,
+    private val connectionsClient: ConnectionsClient,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<AuthorizeDeviceState>(AuthorizeDeviceState.Scanning)
@@ -33,6 +35,16 @@ class AuthorizeDeviceViewModel @Inject constructor(
     private var listenerJob: Job? = null
 
     fun setPendingFromNotification(connectionId: String) {
+        // If we've already paired this desktop, the user picked a name
+        // at first-pair time and shouldn't have to retype it on every
+        // session refresh. Pull it from the cached connections list so
+        // the AuthorizeForm can render it read-only.
+        val existingAlias = connectionsClient.cachedListSnapshot()
+            ?.items
+            ?.firstOrNull { it.connectionId == connectionId }
+            ?.label
+            ?.takeIf { it.isNotBlank() }
+
         // Cache the info from any already-emitted pending notifications for this
         // connection_id. If none is cached yet, listen briefly.
         listenerJob?.cancel()
@@ -48,9 +60,11 @@ class AuthorizeDeviceViewModel @Inject constructor(
                         osVersion = meta?.osVersion ?: "",
                         appVersion = meta?.appVersion ?: "",
                         clientIp = meta?.clientIp ?: "",
-                        binaryFpPrefix = notif.binaryFpPrefix,
+                        binaryFingerprint = meta?.binaryFingerprint ?: "",
+                        machineFingerprint = meta?.machineFingerprint ?: "",
                         defaultDurationSeconds = notif.defaultDurationSeconds,
-                        maxDurationSeconds = notif.maxDurationSeconds
+                        maxDurationSeconds = notif.maxDurationSeconds,
+                        existingAlias = existingAlias,
                     )
                 }
             }
@@ -89,15 +103,20 @@ class AuthorizeDeviceViewModel @Inject constructor(
             osVersion = "",
             appVersion = "",
             clientIp = "",
-            binaryFpPrefix = "",
+            binaryFingerprint = "",
+            machineFingerprint = "",
             defaultDurationSeconds = DEFAULT_FALLBACK_DURATION_S,
-            maxDurationSeconds = MAX_FALLBACK_DURATION_S
+            maxDurationSeconds = MAX_FALLBACK_DURATION_S,
+            existingAlias = null,
         )
+        val initialName = info.existingAlias
+            ?: info.hostname.takeIf { it.isNotBlank() }
+            ?: "Desktop"
         _state.value = AuthorizeDeviceState.Ready(
             scanned = parsed,
             info = info,
-            deviceName = info.hostname.ifEmpty { "Desktop" },
-            durationSeconds = info.defaultDurationSeconds
+            deviceName = initialName,
+            durationSeconds = info.defaultDurationSeconds,
         )
     }
 

@@ -67,9 +67,11 @@ class DevicePairingViewModel @Inject constructor(
                             osVersion = meta?.osVersion ?: "",
                             appVersion = meta?.appVersion ?: "",
                             clientIp = meta?.clientIp ?: "",
-                            binaryFpPrefix = notif.binaryFpPrefix,
+                            binaryFingerprint = meta?.binaryFingerprint ?: "",
+                            machineFingerprint = meta?.machineFingerprint ?: "",
                             defaultDurationSeconds = notif.defaultDurationSeconds,
-                            maxDurationSeconds = notif.maxDurationSeconds
+                            maxDurationSeconds = notif.maxDurationSeconds,
+                            existingAlias = null,
                         )
                     )
                     countdownJob?.cancel()
