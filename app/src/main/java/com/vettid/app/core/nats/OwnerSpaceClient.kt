@@ -2731,21 +2731,22 @@ class OwnerSpaceClient @Inject constructor(
     private fun handleDeviceApprovalRequest(message: NatsMessage) {
         try {
             val json = JSONObject(String(message.data, Charsets.UTF_8))
-            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
 
             // Per-op payload from device_handler.go's approvalReq map.
-            // Some fields (secret_name, category) are op-specific and may
-            // be absent — UI shows operation name as fallback context.
-            val innerPayload = payload.optJSONObject("payload")
+            // The vault marshals req.Payload directly as "payload" — for
+            // ops that carry no inner data (e.g. secret.unlock-session)
+            // it serializes as JSON null, so optJSONObject is the right
+            // accessor (getJSONObject throws on a null value).
+            val innerPayload = json.optJSONObject("payload")
             val request = com.vettid.app.features.devices.DeviceApprovalRequest(
-                requestId = payload.optString("request_id"),
-                connectionId = payload.optString("connection_id"),
-                deviceName = payload.optString("device_name", "Desktop"),
+                requestId = json.optString("request_id"),
+                connectionId = json.optString("connection_id"),
+                deviceName = json.optString("device_name", "Desktop"),
                 hostname = null,
-                operation = payload.optString("operation", "unknown"),
+                operation = json.optString("operation", "unknown"),
                 secretName = innerPayload?.optString("id")?.takeIf { it.isNotBlank() },
                 category = null,
-                requestedAt = payload.optString("timestamp", ""),
+                requestedAt = json.optString("timestamp", ""),
             )
             android.util.Log.i(TAG, "Device approval request: ${request.requestId} op=${request.operation}")
             _devicePendingApproval.tryEmit(request)
