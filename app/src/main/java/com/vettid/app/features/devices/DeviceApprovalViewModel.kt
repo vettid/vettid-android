@@ -45,7 +45,7 @@ class DeviceApprovalViewModel @Inject constructor(
                     addProperty("approved", true)
                 }
                 val response = ownerSpaceClient.sendAndAwaitResponse(
-                    messageType = "connection.device.approval",
+                    messageType = "device.approval",
                     payload = payload,
                     timeoutMs = 15000L
                 )
@@ -84,7 +84,7 @@ class DeviceApprovalViewModel @Inject constructor(
                     addProperty("approved", false)
                 }
                 val response = ownerSpaceClient.sendAndAwaitResponse(
-                    messageType = "connection.device.approval",
+                    messageType = "device.approval",
                     payload = payload,
                     timeoutMs = 15000L
                 )
