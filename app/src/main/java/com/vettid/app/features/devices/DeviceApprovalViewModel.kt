@@ -47,7 +47,7 @@ class DeviceApprovalViewModel @Inject constructor(
                 val response = ownerSpaceClient.sendAndAwaitResponse(
                     messageType = "device.approval",
                     payload = payload,
-                    timeoutMs = 15000L
+                    timeoutMs = 60000L
                 )
                 when (response) {
                     is VaultResponse.HandlerResult -> {
@@ -86,7 +86,7 @@ class DeviceApprovalViewModel @Inject constructor(
                 val response = ownerSpaceClient.sendAndAwaitResponse(
                     messageType = "device.approval",
                     payload = payload,
-                    timeoutMs = 15000L
+                    timeoutMs = 60000L
                 )
                 when (response) {
                     is VaultResponse.HandlerResult -> {

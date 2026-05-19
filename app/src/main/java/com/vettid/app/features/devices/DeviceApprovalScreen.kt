@@ -166,9 +166,9 @@ fun ApprovalRequestCard(
             modifier = Modifier.padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // Phone icon
+            // Computer icon — the desktop is asking, the phone is approving.
             Icon(
-                Icons.Default.PhoneAndroid,
+                Icons.Default.Computer,
                 contentDescription = null,
                 modifier = Modifier.size(48.dp),
                 tint = MaterialTheme.colorScheme.primary
@@ -177,7 +177,7 @@ fun ApprovalRequestCard(
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                "Approve on Your Phone",
+                "Approve Desktop Access",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold
             )
