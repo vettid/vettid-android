@@ -35,7 +35,12 @@ data class AppState(
     val lastName: String = "",
     val userEmail: String = "",
     // Profile photo (Base64 encoded)
-    val profilePhoto: String? = null
+    val profilePhoto: String? = null,
+    // Pending device approval request — set when a paired desktop
+    // requests a phone-required op. VettIDApp.kt watches this and
+    // navigates to DeviceApprovalScreen. Cleared when the user
+    // approves/denies/dismisses (or when a new request arrives).
+    val pendingDeviceApproval: com.vettid.app.features.devices.DeviceApprovalRequest? = null
 ) {
     val displayName: String
         get() = listOf(firstName, lastName).filter { it.isNotBlank() }.joinToString(" ")
@@ -91,6 +96,7 @@ class AppViewModel @Inject constructor(
         observeProfilePhotoUpdates()
         observeSessionExpiry()
         observeVaultLock()
+        observeDeviceApprovals()
         loadUserProfile()
     }
 
@@ -117,6 +123,24 @@ class AppViewModel @Inject constructor(
      * typed it. Ignore vault_locked responses within VAULT_LOCK_GRACE_MS of
      * the last successful authentication and instead just log them.
      */
+    /**
+     * Mirror per-op approval requests from the vault into AppState
+     * so VettIDApp's navigation host can route to DeviceApprovalScreen
+     * when one arrives. Cleared from the screen on Approve/Deny/dismiss.
+     */
+    private fun observeDeviceApprovals() {
+        viewModelScope.launch {
+            ownerSpaceClient.devicePendingApproval.collect { req ->
+                _appState.update { it.copy(pendingDeviceApproval = req) }
+            }
+        }
+    }
+
+    /** Called from VettIDApp when the user dismisses or completes the prompt. */
+    fun clearPendingDeviceApproval() {
+        _appState.update { it.copy(pendingDeviceApproval = null) }
+    }
+
     private fun observeVaultLock() {
         viewModelScope.launch {
             ownerSpaceClient.vaultLocked.collect {

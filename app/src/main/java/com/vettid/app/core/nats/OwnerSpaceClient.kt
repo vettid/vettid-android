@@ -165,6 +165,14 @@ class OwnerSpaceClient @Inject constructor(
     /** Flow of agent approval requests (secret/action requests needing owner approval). */
     val agentApprovalRequests: SharedFlow<AgentApprovalRequest> = _agentApprovalRequests.asSharedFlow()
 
+    // Device approval request events — fired by the vault when a desktop
+    // requests a phone-required op (e.g. secret.unlock-session,
+    // personal-data.update, wallet.send). The phone's UI navigates to
+    // DeviceApprovalScreen so the user can approve/deny.
+    private val _devicePendingApproval = MutableSharedFlow<com.vettid.app.features.devices.DeviceApprovalRequest>(extraBufferCapacity = 16)
+    /** Flow of device approval requests (desktop ops awaiting phone owner approval). */
+    val devicePendingApproval: SharedFlow<com.vettid.app.features.devices.DeviceApprovalRequest> = _devicePendingApproval.asSharedFlow()
+
     // Vault locked events — emitted when the vault returns "vault_locked" error
     // (e.g., after enclave instance refresh where DEK is lost). Observers should
     // trigger PIN re-entry to re-derive the DEK.
@@ -1986,6 +1994,12 @@ class OwnerSpaceClient @Inject constructor(
                 subject.contains(".forApp.device.") && subject.endsWith(".revoked") -> {
                     handleDeviceRevoked(message); return
                 }
+                // Device per-operation approval — desktop has requested a
+                // phone-required op (secret.unlock-session, personal-data.
+                // update, etc). Phone UI renders DeviceApprovalScreen.
+                subject.contains(".forApp.device.approval.request.") -> {
+                    handleDeviceApprovalRequest(message); return
+                }
 
                 // Profile
                 subject.contains(".forApp.profile-update") -> {
@@ -2704,6 +2718,39 @@ class OwnerSpaceClient @Inject constructor(
             _agentApprovalRequests.tryEmit(request)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to parse agent event", e)
+        }
+    }
+
+    /**
+     * Handle a device per-operation approval request from the vault.
+     * Published by the vault on every phone-required device op
+     * (secret.unlock-session, personal-data.update, wallet.send, etc).
+     * Emitted to devicePendingApproval; VettIDApp.kt navigates to
+     * DeviceApprovalScreen so the user can approve/deny.
+     */
+    private fun handleDeviceApprovalRequest(message: NatsMessage) {
+        try {
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+
+            // Per-op payload from device_handler.go's approvalReq map.
+            // Some fields (secret_name, category) are op-specific and may
+            // be absent — UI shows operation name as fallback context.
+            val innerPayload = payload.optJSONObject("payload")
+            val request = com.vettid.app.features.devices.DeviceApprovalRequest(
+                requestId = payload.optString("request_id"),
+                connectionId = payload.optString("connection_id"),
+                deviceName = payload.optString("device_name", "Desktop"),
+                hostname = null,
+                operation = payload.optString("operation", "unknown"),
+                secretName = innerPayload?.optString("id")?.takeIf { it.isNotBlank() },
+                category = null,
+                requestedAt = payload.optString("timestamp", ""),
+            )
+            android.util.Log.i(TAG, "Device approval request: ${request.requestId} op=${request.operation}")
+            _devicePendingApproval.tryEmit(request)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse device approval request", e)
         }
     }
 

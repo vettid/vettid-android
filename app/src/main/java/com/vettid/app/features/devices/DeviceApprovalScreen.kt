@@ -15,9 +15,18 @@ import androidx.hilt.navigation.compose.hiltViewModel
 @Composable
 fun DeviceApprovalScreen(
     onDismiss: () -> Unit,
+    initialRequest: DeviceApprovalRequest? = null,
     viewModel: DeviceApprovalViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsState()
+
+    // Push the incoming request into the VM on first composition so
+    // the Ready state renders without an explicit caller-side
+    // loadRequest. New requestId restarts the prompt — useful if a
+    // second op arrives while the screen is already up.
+    LaunchedEffect(initialRequest?.requestId) {
+        initialRequest?.let { viewModel.loadRequest(it) }
+    }
 
     Column(
         modifier = Modifier

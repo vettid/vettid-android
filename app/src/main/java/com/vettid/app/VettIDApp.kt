@@ -302,6 +302,11 @@ sealed class Screen(val route: String) {
         fun createRoute(requestId: String) = "agents/approval/$requestId"
     }
     object CreateAgentInvitation : Screen("agents/create-invitation")
+    // Per-op device approval (desktop requesting a phone-required op).
+    // Routed off pendingDeviceApproval in AppState; request data flows
+    // through the AppViewModel rather than nav args because the full
+    // payload is richer than the route can carry cleanly.
+    object DeviceApproval : Screen("device-approval")
     // Wallet screens
     object WalletDetail : Screen("wallet/{walletId}") {
         fun createRoute(walletId: String) = "wallet/$walletId"
@@ -538,6 +543,19 @@ fun VettIDApp(
                 onDeepLinkConsumed()
             }
             DeepLinkType.NONE -> { /* No deep link */ }
+        }
+    }
+
+    // Per-op device approval auto-route. A new pending request flips
+    // appState.pendingDeviceApproval to non-null; pop straight to the
+    // DeviceApproval screen so the user is in front of an
+    // Approve/Deny decision without hunting for it. Cleared from the
+    // screen via AppViewModel.clearPendingDeviceApproval.
+    LaunchedEffect(appState.pendingDeviceApproval?.requestId) {
+        val req = appState.pendingDeviceApproval ?: return@LaunchedEffect
+        val current = navController.currentDestination?.route
+        if (current != Screen.DeviceApproval.route) {
+            navController.navigate(Screen.DeviceApproval.route)
         }
     }
 
@@ -1710,6 +1728,25 @@ fun VettIDApp(
                 requestId = requestId,
                 onNavigateBack = { navController.safePopBackStack() }
             )
+        }
+        composable(Screen.DeviceApproval.route) {
+            // Per-op approval prompt. The request payload was placed
+            // into AppState by AppViewModel.observeDeviceApprovals
+            // before navigation fired below; if the user already
+            // dismissed or another request replaced it, fall back to
+            // popping the stack.
+            val req = appState.pendingDeviceApproval
+            if (req == null) {
+                LaunchedEffect(Unit) { navController.safePopBackStack() }
+            } else {
+                com.vettid.app.features.devices.DeviceApprovalScreen(
+                    initialRequest = req,
+                    onDismiss = {
+                        appViewModel.clearPendingDeviceApproval()
+                        navController.safePopBackStack()
+                    }
+                )
+            }
         }
         composable(Screen.CreateAgentInvitation.route) {
             com.vettid.app.features.agents.CreateAgentInvitationScreen(
