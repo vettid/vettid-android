@@ -638,6 +638,14 @@ fun VettIDApp(
                         "connection.identity-verify-challenged",
                         "connection.critical-secret-use-requested",
                         "connection.data-request-received",
+                        // Per-op device approvals (desktop asked for
+                        // secret.unlock-session, wallet.send, etc).
+                        // Handled by the pendingDeviceApproval
+                        // LaunchedEffect above, which navigates to
+                        // DeviceApprovalScreen. Routing here would
+                        // stomp on it and land the user on the
+                        // desktop's detail page instead.
+                        "device.approval.requested",
                     )
                     if (!approvalEvent) {
                         navController.navigate(Screen.Main.route) {
