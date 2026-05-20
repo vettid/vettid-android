@@ -218,6 +218,14 @@ class AppViewModel @Inject constructor(
             // PersonalDataStore hydrate populates the profile fields
             // every screen that renders the BusinessCard reads.
             launch { personalDataStore.hydrate() }
+            // Pull device-operation approvals that arrived while the app
+            // was down. The approval request reaches the phone over a
+            // core-NATS forApp.* subject with no replay, so a request a
+            // desktop made while the app was killed/offline is missed —
+            // this re-surfaces it from the vault. Each one flows into
+            // observeDeviceApprovals → appState.pendingDeviceApproval →
+            // VettIDApp routes to the approval screen.
+            launch { ownerSpaceClient.fetchPendingDeviceApprovals() }
         }
     }
 

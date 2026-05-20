@@ -2728,6 +2728,57 @@ class OwnerSpaceClient @Inject constructor(
      * Emitted to devicePendingApproval; VettIDApp.kt navigates to
      * DeviceApprovalScreen so the user can approve/deny.
      */
+    /**
+     * Pull the device-operation approvals still awaiting this owner's
+     * decision and surface each one onto devicePendingApproval (same
+     * flow a live request uses).
+     *
+     * The approval request reaches the phone over a core-NATS forApp.*
+     * subject with no replay — a phone that was killed or offline when
+     * a desktop made the request never sees it. Pulling on every
+     * post-unlock rebuilds the pending set from the vault, the durable
+     * source of truth, so the user can still act on a request that
+     * arrived while the app was down. Best-effort: a transport error
+     * or timeout is logged and ignored.
+     */
+    suspend fun fetchPendingDeviceApprovals() {
+        val resp = sendAndAwaitResponse("device.approval-pending", JsonObject(), 15000L)
+        if (resp !is VaultResponse.HandlerResult) {
+            android.util.Log.d(TAG, "Pending-approvals pull: no result (${resp?.javaClass?.simpleName})")
+            return
+        }
+        val pending = resp.result?.getAsJsonArray("pending")
+        if (pending == null || pending.size() == 0) {
+            return
+        }
+        var surfaced = 0
+        for (el in pending) {
+            try {
+                val obj = el.asJsonObject
+                val requestId = obj.get("request_id")?.asString
+                if (requestId.isNullOrBlank()) continue
+                val payloadObj = obj.get("payload")?.takeIf { it.isJsonObject }?.asJsonObject
+                val request = com.vettid.app.features.devices.DeviceApprovalRequest(
+                    requestId = requestId,
+                    connectionId = obj.get("connection_id")?.asString ?: "",
+                    deviceName = obj.get("device_name")?.asString ?: "Desktop",
+                    hostname = null,
+                    operation = obj.get("operation")?.asString ?: "unknown",
+                    secretName = payloadObj?.get("id")?.asString?.takeIf { it.isNotBlank() },
+                    category = null,
+                    requestedAt = obj.get("timestamp")?.asString ?: "",
+                )
+                _devicePendingApproval.tryEmit(request)
+                surfaced++
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "Pending-approvals pull: skipped a malformed entry", e)
+            }
+        }
+        if (surfaced > 0) {
+            android.util.Log.i(TAG, "Pending-approvals pull: surfaced $surfaced device approval(s) from the vault")
+        }
+    }
+
     private fun handleDeviceApprovalRequest(message: NatsMessage) {
         try {
             val json = JSONObject(String(message.data, Charsets.UTF_8))
