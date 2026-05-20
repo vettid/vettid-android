@@ -551,12 +551,27 @@ fun VettIDApp(
     // DeviceApproval screen so the user is in front of an
     // Approve/Deny decision without hunting for it. Cleared from the
     // screen via AppViewModel.clearPendingDeviceApproval.
-    LaunchedEffect(appState.pendingDeviceApproval?.requestId) {
-        val req = appState.pendingDeviceApproval ?: return@LaunchedEffect
+    //
+    // Keyed on isAuthenticated as well as the request id. A request
+    // that arrives while the app is locked (backgrounded, then the
+    // user taps the OS notification) used to navigate here and be
+    // immediately stomped by the auth-redirect below — and never
+    // re-fire, because the request id never changed. The user landed
+    // on Main/Connections after PIN entry instead of the approval
+    // screen. Re-running on the unlock transition lands them on the
+    // approval the instant they finish entering their PIN.
+    LaunchedEffect(appState.pendingDeviceApproval?.requestId, appState.isAuthenticated) {
+        if (!appState.isAuthenticated) return@LaunchedEffect
+        if (appState.pendingDeviceApproval == null) return@LaunchedEffect
         val current = navController.currentDestination?.route
-        if (current != Screen.DeviceApproval.route) {
-            navController.navigate(Screen.DeviceApproval.route)
+        if (current == Screen.DeviceApproval.route) return@LaunchedEffect
+        // Request arrived while locked → we're still on the PIN screen.
+        // Put Main underneath first so dismissing the approval (or an
+        // OS back gesture) lands on the app, not back on the lock screen.
+        if (current == Screen.Authentication.route || current == Screen.Welcome.route) {
+            navController.navigate(Screen.Main.route) { popUpTo(0) { inclusive = true } }
         }
+        navController.navigate(Screen.DeviceApproval.route)
     }
 
     // Handle navigation based on app state and pending deep links
