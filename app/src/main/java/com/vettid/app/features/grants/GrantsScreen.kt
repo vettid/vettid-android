@@ -50,6 +50,7 @@ fun GrantsScreen(
     val pendingAliases by viewModel.pendingAliases.collectAsState()
     val myRequests by viewModel.myRequests.collectAsState()
     val revealedValue by viewModel.revealedValue.collectAsState()
+    val revealedGroup by viewModel.revealedGroup.collectAsState()
     val busy by viewModel.busy.collectAsState()
 
     val isInbound = viewModel.isInbound
@@ -115,12 +116,14 @@ fun GrantsScreen(
                     aliases = inboundAliases,
                     emptyMessage = "Nothing currently held in trust from this connection.",
                     onTap = { viewModel.reveal(it.grantId) },
+                    onRevealGroup = { title, grants -> viewModel.revealGroup(title, grants) },
                 )
                 isInbound && tab == 1 -> InboundList(
                     grants = endedGrants,
                     aliases = inboundAliases,
                     emptyMessage = "No expired or revoked items from this connection.",
                     onTap = { viewModel.reveal(it.grantId) },
+                    onRevealGroup = { title, grants -> viewModel.revealGroup(title, grants) },
                 )
                 isInbound && tab == 2 -> MyRequestsList(myRequests)
                 !isInbound && tab == 0 -> OutboundList(
@@ -152,7 +155,55 @@ fun GrantsScreen(
                 confirmButton = { TextButton(onClick = { viewModel.dismissReveal() }) { Text("Close") } },
             )
         }
+
+        revealedGroup?.let { grp ->
+            GroupRevealDialog(group = grp, onDismiss = { viewModel.dismissGroupReveal() })
+        }
     }
+}
+
+// Shows every field of an alias group at once — each field fills in as
+// its fetch lands. Mirrors the Secrets screen's group-reveal.
+@Composable
+private fun GroupRevealDialog(
+    group: GrantsViewModel.RevealedGroup,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(group.title) },
+        text = {
+            Column {
+                group.fields.forEach { field ->
+                    Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                        Text(
+                            text = field.label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        when {
+                            field.error != null -> Text(
+                                text = field.error,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            field.value != null -> Text(
+                                text = field.value.ifBlank { "— no value —" },
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            else -> Row(verticalAlignment = Alignment.CenterVertically) {
+                                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Revealing…", style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
 }
 
 @Composable
@@ -161,6 +212,7 @@ private fun InboundList(
     aliases: Map<String, String>,
     emptyMessage: String,
     onTap: (GrantSummary) -> Unit,
+    onRevealGroup: (String, List<GrantSummary>) -> Unit,
 ) {
     if (grants.isEmpty()) {
         EmptyState(emptyMessage)
@@ -190,14 +242,30 @@ private fun InboundList(
             }
         }
         items(aliasGroups, key = { "group_${it.key}" }) { group ->
+            val label = group.label ?: group.key
+            val anyActive = group.items.any { it.status == "active" }
             AliasCard {
-                AliasCardHeader(label = group.label ?: group.key)
+                AliasCardHeader(
+                    label = label,
+                    // One tap reveals every field in the alias together.
+                    trailing = if (anyActive) {
+                        {
+                            TextButton(
+                                onClick = { onRevealGroup(label, group.items) },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            ) {
+                                Text("Reveal", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    } else null,
+                )
                 group.items.forEach { g ->
                     GrantRow(
                         title = g.itemLabel.ifEmpty { g.itemRef },
                         supportingText = supportingLine(g),
                         statusBadge = g.status,
-                        onClick = { onTap(g) },
+                        // Tapping any row reveals the whole alias group.
+                        onClick = { onRevealGroup(label, group.items) },
                     )
                 }
             }

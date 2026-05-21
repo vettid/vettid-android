@@ -90,6 +90,12 @@ class GrantsViewModel @Inject constructor(
     private val _revealedValue = MutableStateFlow<String?>(null)
     val revealedValue: StateFlow<String?> = _revealedValue.asStateFlow()
 
+    // Group reveal — every field of an alias revealed together. null
+    // when no group reveal is open.
+    private val _revealedGroup = MutableStateFlow<RevealedGroup?>(null)
+    val revealedGroup: StateFlow<RevealedGroup?> = _revealedGroup.asStateFlow()
+    private var groupRevealGrantIds: Set<String> = emptySet()
+
     private val _events = MutableSharedFlow<GrantsEvent>(extraBufferCapacity = 8)
     val events: SharedFlow<GrantsEvent> = _events.asSharedFlow()
 
@@ -256,8 +262,60 @@ class GrantsViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Reveals every active grant in an alias group at once — one tap on
+     * the card fetches all its fields, shown together in a dialog. Each
+     * fetch returns asynchronously via onFetchResponse, which fills the
+     * matching field in as it lands.
+     */
+    fun revealGroup(title: String, grants: List<GrantSummary>) {
+        val active = grants.filter { it.status == "active" }
+        if (active.isEmpty()) return
+        groupRevealGrantIds = active.map { it.grantId }.toSet()
+        _revealedGroup.value = RevealedGroup(
+            title = title,
+            fields = active.map {
+                RevealedField(
+                    grantId = it.grantId,
+                    label = it.itemLabel.ifEmpty { it.itemRef },
+                    value = null,
+                    error = null,
+                )
+            },
+        )
+        viewModelScope.launch {
+            _busy.value = true
+            active.forEach { g ->
+                repo.fetchRemote(g.grantId).onFailure { err ->
+                    markGroupFieldError(g.grantId, err.message ?: "Fetch failed")
+                }
+            }
+            _busy.value = false
+        }
+    }
+
+    private fun markGroupFieldError(grantId: String, error: String) {
+        val grp = _revealedGroup.value ?: return
+        _revealedGroup.value = grp.copy(
+            fields = grp.fields.map { if (it.grantId == grantId) it.copy(error = error) else it },
+        )
+    }
+
     /** Called by VettIDApp when a forApp.connection.data-grant-fetch-response event arrives. */
     fun onFetchResponse(grantId: String, status: String, value: String?, error: String?) {
+        // Group reveal in progress — fill the matching field instead of
+        // the single-value dialog.
+        if (grantId in groupRevealGrantIds) {
+            val grp = _revealedGroup.value ?: return
+            _revealedGroup.value = grp.copy(
+                fields = grp.fields.map {
+                    if (it.grantId != grantId) it
+                    else if (status == "ok") it.copy(value = value.orEmpty(), error = null)
+                    else it.copy(error = error ?: "Fetch denied")
+                },
+            )
+            return
+        }
         if (status == "ok" && !value.isNullOrEmpty()) {
             _revealedValue.value = value
         } else {
@@ -266,6 +324,21 @@ class GrantsViewModel @Inject constructor(
     }
 
     fun dismissReveal() { _revealedValue.value = null }
+
+    fun dismissGroupReveal() {
+        _revealedGroup.value = null
+        groupRevealGrantIds = emptySet()
+    }
+
+    /** One field of a group reveal. value == null && error == null → still loading. */
+    data class RevealedField(
+        val grantId: String,
+        val label: String,
+        val value: String?,
+        val error: String?,
+    )
+
+    data class RevealedGroup(val title: String, val fields: List<RevealedField>)
 }
 
 sealed class GrantsEvent {

@@ -186,9 +186,14 @@ class PeerCatalogViewModel @Inject constructor(
                 kind = SharedItem.Kind.SECRET,
                 status = outstanding[key]?.status ?: RequestStatus.AVAILABLE,
                 requestId = outstanding[key]?.requestId,
-                // "Critical Secret · Use-only" is how the vault tags
-                // cataloged-for-use rows in buildSecretCatalog.
-                useOnly = cat.contains("Use-only", ignoreCase = true),
+                // Any critical secret is use-only: the vault hard-rejects
+                // grant.fetch on a credential-bound secret either way, so
+                // peers may only ASK the owner to operate with it, never
+                // request a copy. buildSecretCatalog tags every critical
+                // secret's category with "Critical Secret" (plus an
+                // optional "· Use-only" suffix) — match the base label.
+                useOnly = cat.contains("Critical Secret", ignoreCase = true) ||
+                    cat.contains("Use-only", ignoreCase = true),
                 alias = entry.alias,
             )
         }
