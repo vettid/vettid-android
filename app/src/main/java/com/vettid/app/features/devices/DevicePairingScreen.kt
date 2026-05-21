@@ -29,6 +29,10 @@ fun DevicePairingScreen(
     LaunchedEffect(state) {
         val s = state
         if (s is DevicePairingState.DevicePending) {
+            // Advancing to the authorize step destroys this ViewModel
+            // (the nav pops the pairing screen). Tell it not to cancel
+            // the still-live invite when that happens.
+            viewModel.markAdvancingToAuthorize()
             onNavigateToAuthorize(s.info.connectionId)
         }
     }
@@ -140,24 +144,41 @@ fun DevicePairingScreen(
 
                     Spacer(modifier = Modifier.height(24.dp))
 
-                    // Manual escape hatch: scan the QR the desktop renders
-                    // once it's resolved the invite. Normally the vault's
-                    // pending-authorization notification auto-navigates the
-                    // user to the scanner — this button is the fallback when
-                    // that notification is missed/delayed, so the user is
-                    // never stranded staring at a code they've already typed
-                    // on the desktop.
+                    // Set expectations: the vault's pending-authorization
+                    // notification auto-advances this screen once the
+                    // desktop completes stage 1. Saying so plainly stops
+                    // the user from navigating away to hunt for a
+                    // scanner (which is what stranded the 2026-05-21
+                    // pairing — see DevicePairingViewModel).
+                    Text(
+                        "Keep this screen open — it continues on its own once your desktop connects.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.padding(horizontal = 16.dp)
+                    )
+
+                    Spacer(modifier = Modifier.height(20.dp))
+
+                    // Manual fallback for a missed/delayed notification:
+                    // jump straight to the authorize scanner.
+                    // markAdvancingToAuthorize() is set first so leaving
+                    // this screen to authorize does NOT cancel the
+                    // still-live invite.
                     Button(
                         onClick = {
                             val connId = viewModel.pendingConnectionId()
-                            if (connId != null) onNavigateToAuthorize(connId)
+                            if (connId != null) {
+                                viewModel.markAdvancingToAuthorize()
+                                onNavigateToAuthorize(connId)
+                            }
                         },
                         modifier = Modifier.fillMaxWidth(0.7f)
                     ) {
                         Text("Scan QR Code from Desktop")
                     }
                     Text(
-                        "Once you've typed the code into your desktop, scan the QR it shows.",
+                        "Not advancing on its own? Once your desktop shows a QR code, tap above to scan it.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
@@ -166,7 +187,7 @@ fun DevicePairingScreen(
 
                     Spacer(modifier = Modifier.height(16.dp))
                     OutlinedButton(onClick = { viewModel.cancel() }) {
-                        Text("Cancel")
+                        Text("Cancel pairing")
                     }
                 }
 

@@ -33,6 +33,16 @@ class DevicePairingViewModel @Inject constructor(
     private var pendingListenerJob: Job? = null
     private val inviteTtlSeconds = 120 // 2 min, matches backend
 
+    // Set true the instant the screen advances to the authorize step
+    // (auto-advance on DevicePending, or the manual "Scan QR" button).
+    // onCleared() cancels the invite on destruction to clean up a
+    // genuine abandonment — but advancing to authorize ALSO destroys
+    // this ViewModel (the nav pops the pairing screen), and there the
+    // invite is still live and about to be used. Without this guard
+    // the act of advancing cancelled the invite, so the authorize step
+    // then hit "no pending authorization" (2026-05-21).
+    private var advancingToAuthorize = false
+
     // Connection ID returned by device.create-invite. Kept here (rather than
     // on the state class) so cancel/timeout paths can fire
     // device.cancel-invite without exposing it to the UI. Cleared when the
@@ -176,14 +186,29 @@ class DevicePairingViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Called by the screen right before it navigates to the
+     * authorize-device step (auto-advance on DevicePending, or the
+     * manual "Scan QR" button). Tells onCleared() NOT to cancel the
+     * invite — the pairing is continuing, not being abandoned.
+     */
+    fun markAdvancingToAuthorize() {
+        advancingToAuthorize = true
+    }
+
     override fun onCleared() {
         super.onCleared()
         createJob?.cancel()
         countdownJob?.cancel()
         pendingListenerJob?.cancel()
-        // Fire teardown if the user navigated away without explicitly
-        // cancelling (e.g. system back, process tear-down).
-        cancelOnVault()
+        // Fire vault-side teardown if the user genuinely abandoned the
+        // pairing (Back, system back, process death). When the screen
+        // is cleared because we advanced to the authorize step the
+        // invite is still live and in use — cancelling it here would
+        // make the authorize land on "no pending authorization".
+        if (!advancingToAuthorize) {
+            cancelOnVault()
+        }
     }
 
     companion object {
