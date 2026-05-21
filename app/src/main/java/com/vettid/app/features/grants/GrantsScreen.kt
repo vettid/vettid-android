@@ -1,18 +1,22 @@
 package com.vettid.app.features.grants
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.vettid.app.features.sharing.AliasCard
+import com.vettid.app.features.sharing.AliasCardHeader
+import com.vettid.app.features.sharing.buildAliasGroups
 import kotlinx.coroutines.flow.collectLatest
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -39,6 +43,7 @@ fun GrantsScreen(
     onBack: () -> Unit = {},
 ) {
     val inbound by viewModel.inbound.collectAsState()
+    val inboundAliases by viewModel.inboundAliases.collectAsState()
     val outbound by viewModel.outbound.collectAsState()
     val pending by viewModel.pending.collectAsState()
     val myRequests by viewModel.myRequests.collectAsState()
@@ -105,11 +110,13 @@ fun GrantsScreen(
             when {
                 isInbound && tab == 0 -> InboundList(
                     grants = activeGrants,
+                    aliases = inboundAliases,
                     emptyMessage = "Nothing currently held in trust from this connection.",
                     onTap = { viewModel.reveal(it.grantId) },
                 )
                 isInbound && tab == 1 -> InboundList(
                     grants = endedGrants,
+                    aliases = inboundAliases,
                     emptyMessage = "No expired or revoked items from this connection.",
                     onTap = { viewModel.reveal(it.grantId) },
                 )
@@ -146,6 +153,7 @@ fun GrantsScreen(
 @Composable
 private fun InboundList(
     grants: List<GrantSummary>,
+    aliases: Map<String, String>,
     emptyMessage: String,
     onTap: (GrantSummary) -> Unit,
 ) {
@@ -153,15 +161,41 @@ private fun InboundList(
         EmptyState(emptyMessage)
         return
     }
-    LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp)) {
-        items(grants) { g ->
-            GrantRow(
-                title = g.itemLabel.ifEmpty { g.itemRef },
-                supportingText = supportingLine(g),
-                statusBadge = g.status,
-                onClick = { onTap(g) },
-            )
-            HorizontalDivider()
+    // Alias-card model: grants the peer filed under one alias collapse
+    // into a single card; ungrouped grants are each their own card.
+    val groups = remember(grants, aliases) {
+        buildAliasGroups(grants, aliasOf = { aliases[it.grantId].orEmpty() }, idOf = { it.grantId })
+    }
+    val singles = groups.filter { it.label == null }
+    val aliasGroups = groups.filter { it.label != null }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        items(singles, key = { "single_${it.key}" }) { group ->
+            val g = group.items.first()
+            AliasCard {
+                GrantRow(
+                    title = g.itemLabel.ifEmpty { g.itemRef },
+                    supportingText = supportingLine(g),
+                    statusBadge = g.status,
+                    onClick = { onTap(g) },
+                )
+            }
+        }
+        items(aliasGroups, key = { "group_${it.key}" }) { group ->
+            AliasCard {
+                AliasCardHeader(label = group.label ?: group.key)
+                group.items.forEach { g ->
+                    GrantRow(
+                        title = g.itemLabel.ifEmpty { g.itemRef },
+                        supportingText = supportingLine(g),
+                        statusBadge = g.status,
+                        onClick = { onTap(g) },
+                    )
+                }
+            }
         }
     }
 }
@@ -280,18 +314,34 @@ private fun GrantRow(
     statusBadge: String,
     onClick: () -> Unit,
 ) {
-    ListItem(
-        modifier = Modifier.clickable(enabled = statusBadge == "active", onClick = onClick),
-        headlineContent = { Text(title) },
-        supportingContent = { Text(supportingText) },
-        trailingContent = {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        onClick = onClick,
+        enabled = statusBadge == "active",
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+        shape = RoundedCornerShape(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp, horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                Text(
+                    supportingText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
             AssistChip(
                 onClick = {},
                 label = { Text(statusBadge) },
                 enabled = false,
             )
-        },
-    )
+        }
+    }
 }
 
 @Composable

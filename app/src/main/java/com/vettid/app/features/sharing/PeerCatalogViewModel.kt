@@ -163,17 +163,17 @@ class PeerCatalogViewModel @Inject constructor(
         conn.peerProfile?.dataCatalog?.forEach { entry ->
             val key = "data:${entry.name}"
             val baseName = entry.displayName.ifEmpty { entry.name }
-            // Alias surfaces in the catalog so peers can tell similar
-            // entries apart ("Family · Phone — Wife" vs. "Family ·
-            // Phone — Daughter") without seeing the value.
-            val displayName = if (entry.alias.isNotBlank()) "$baseName — ${entry.alias}" else baseName
+            // Alias rides on the item (not folded into displayName) so
+            // entries the peer filed together — a home address, a
+            // credit card — collapse into one alias card.
             out += SharedItem(
                 key = key,
-                displayName = displayName,
+                displayName = baseName,
                 category = entry.category.ifEmpty { entry.fieldType },
                 kind = SharedItem.Kind.DATA,
                 status = outstanding[key]?.status ?: RequestStatus.AVAILABLE,
                 requestId = outstanding[key]?.requestId,
+                alias = entry.alias,
             )
         }
         conn.peerProfile?.secretCatalog?.forEach { entry ->
@@ -189,6 +189,7 @@ class PeerCatalogViewModel @Inject constructor(
                 // "Critical Secret · Use-only" is how the vault tags
                 // cataloged-for-use rows in buildSecretCatalog.
                 useOnly = cat.contains("Use-only", ignoreCase = true),
+                alias = entry.alias,
             )
         }
         return out

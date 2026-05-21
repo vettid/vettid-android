@@ -1,10 +1,13 @@
 package com.vettid.app.features.sharing
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
@@ -135,26 +138,44 @@ private fun Loaded(
     state: PeerCatalogState.Loaded,
     onRequest: (String) -> Unit,
 ) {
+    // Alias-card model: items the peer filed under one alias collapse
+    // into a single card; ungrouped items are their own card, first.
+    val groups = remember(state.items) {
+        buildAliasGroups(state.items, aliasOf = { it.alias }, idOf = { it.key })
+    }
+    val singles = groups.filter { it.label == null }
+    val aliasGroups = groups.filter { it.label != null }
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         item {
-            SectionCard(
+            SharingSectionHeader(
                 title = "What ${state.peerName} shares",
                 subtitle = "Catalog items this connection has published. Tap Request to ask for any item.",
                 count = state.items.size,
-            ) {
-                if (state.items.isEmpty()) {
+            )
+        }
+        if (state.items.isEmpty()) {
+            item {
+                Box(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
                     EmptyHint("This connection hasn't published any catalog items yet.")
-                } else {
-                    state.items.forEachIndexed { idx, item ->
-                        if (idx > 0) {
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                        }
-                        SharedItemRow(item = item, onRequest = { onRequest(item.key) })
-                    }
+                }
+            }
+        }
+        items(singles, key = { "single_${it.key}" }) { group ->
+            val item = group.items.first()
+            AliasCard {
+                SharedItemRow(item = item, onRequest = { onRequest(item.key) })
+            }
+        }
+        items(aliasGroups, key = { "group_${it.key}" }) { group ->
+            AliasCard {
+                AliasCardHeader(label = group.label ?: group.key)
+                group.items.forEach { item ->
+                    SharedItemRow(item = item, onRequest = { onRequest(item.key) })
                 }
             }
         }

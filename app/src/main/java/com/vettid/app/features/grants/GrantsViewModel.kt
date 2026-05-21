@@ -7,6 +7,7 @@ import com.vettid.app.core.nats.GrantEvent
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.features.feed.ApprovalNotificationKind
 import com.vettid.app.features.feed.FeedNotificationService
+import com.vettid.app.features.feed.FeedRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,6 +35,7 @@ class GrantsViewModel @Inject constructor(
     private val repo: GrantsRepository,
     private val ownerSpaceClient: OwnerSpaceClient,
     private val notificationService: FeedNotificationService,
+    private val feedRepository: FeedRepository,
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -63,6 +65,12 @@ class GrantsViewModel @Inject constructor(
     // given) their decision. Drives the Them-tab "Requested" sub-tab.
     private val _myRequests = MutableStateFlow<List<OutgoingRequestSummary>>(emptyList())
     val myRequests: StateFlow<List<OutgoingRequestSummary>> = _myRequests.asStateFlow()
+
+    // grantId → alias, derived from the peer's published catalog so the
+    // inbound "Data they've shared" list groups items the peer filed
+    // together (a credit card's number/expiry/CVV) into one alias card.
+    private val _inboundAliases = MutableStateFlow<Map<String, String>>(emptyMap())
+    val inboundAliases: StateFlow<Map<String, String>> = _inboundAliases.asStateFlow()
 
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy.asStateFlow()
@@ -100,12 +108,40 @@ class GrantsViewModel @Inject constructor(
     fun refresh() {
         viewModelScope.launch {
             repo.listOutbound(connectionId.ifEmpty { null }).onSuccess { _outbound.value = it }
-            repo.listInbound(connectionId.ifEmpty { null }).onSuccess { _inbound.value = it }
+            repo.listInbound(connectionId.ifEmpty { null }).onSuccess {
+                _inbound.value = it
+                if (isInbound) updateInboundAliases(it)
+            }
             repo.listPending().onSuccess { list ->
                 _pending.value = if (connectionId.isEmpty()) list else list.filter { it.connectionId == connectionId }
             }
             repo.listMyRequests(connectionId.ifEmpty { null }).onSuccess { _myRequests.value = it }
         }
+    }
+
+    /**
+     * Builds the grantId → alias map for inbound grants by matching each
+     * grant's item against the peer's published catalog. Grants whose
+     * item carries no alias — or isn't in the cached catalog — are left
+     * out and render as their own single card.
+     */
+    private suspend fun updateInboundAliases(grants: List<GrantSummary>) {
+        if (connectionId.isEmpty()) {
+            _inboundAliases.value = emptyMap()
+            return
+        }
+        val conn = runCatching { feedRepository.getConnections().getOrNull() }
+            .getOrNull()?.firstOrNull { it.connectionId == connectionId }
+        if (conn == null) {
+            _inboundAliases.value = emptyMap()
+            return
+        }
+        val dataAlias = conn.peerProfile?.dataCatalog?.associate { it.name to it.alias }.orEmpty()
+        val secretAlias = conn.peerProfile?.secretCatalog?.associate { it.name to it.alias }.orEmpty()
+        _inboundAliases.value = grants.mapNotNull { g ->
+            val alias = if (g.itemKind == "secret") secretAlias[g.itemRef] else dataAlias[g.itemRef]
+            if (!alias.isNullOrBlank()) g.grantId to alias else null
+        }.toMap()
     }
 
     fun sendRequest(

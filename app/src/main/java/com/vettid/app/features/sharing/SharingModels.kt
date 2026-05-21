@@ -12,6 +12,9 @@ data class SharedItem(
     val kind: Kind,
     val status: RequestStatus,
     val requestId: String?,     // last request id, used for retries / detail
+    // Alias the peer filed this item under (e.g. "Visa", "Wife"). Drives
+    // the alias-card grouping; blank for ungrouped items.
+    val alias: String = "",
     // Cataloged-for-use critical secrets — peer can ASK the owner to
     // perform an operation (sign/decrypt/derive/auth) but never gets
     // the value. The UI swaps the Request button for "Ask to use"
@@ -38,6 +41,9 @@ data class SharePolicyRow(
     val key: String,             // "<kind>:<id>" matching the vault store
     val displayName: String,
     val category: String,
+    // Alias this item is filed under in the user's catalog. Drives the
+    // alias-card grouping; blank for ungrouped items.
+    val alias: String = "",
     val allowed: Boolean,
     val tier: String,            // "required" | "optional" | "on_demand" | "consent"
     val retention: String,       // "session" | "time_limited" | "until_revoked"

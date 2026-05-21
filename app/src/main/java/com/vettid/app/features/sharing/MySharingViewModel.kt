@@ -108,7 +108,15 @@ class MySharingViewModel @Inject constructor(
                     val stored = storedPolicyDeferred.await()
                     val merged = LinkedHashMap<String, SharePolicyRow>()
                     seeded.forEach { merged[it.key] = it }
-                    stored.forEach { merged[it.key] = it }
+                    stored.forEach { st ->
+                        // The stored share-policy doesn't persist alias —
+                        // keep it from the seeded catalog row so the
+                        // alias-card grouping survives the overwrite.
+                        val seededAlias = merged[st.key]?.alias.orEmpty()
+                        merged[st.key] =
+                            if (seededAlias.isNotBlank() && st.alias.isBlank()) st.copy(alias = seededAlias)
+                            else st
+                    }
                     val rows = merged.values.sortedWith(
                         compareBy({ it.category }, { it.displayName })
                     )
@@ -194,14 +202,15 @@ class MySharingViewModel @Inject constructor(
             val fields = resp.result.getAsJsonObject("fields") ?: return emptyList()
             fields.entrySet().mapNotNull { (namespace, valueJson) ->
                 if (namespace == "_system_stored_at" || namespace == "_system_email_verified") return@mapNotNull null
+                // Alias rides on the row (not folded into displayName) so
+                // fields the user filed together collapse into one card.
                 val alias = valueJson?.takeIf { it.isJsonObject }?.asJsonObject
                     ?.get("alias")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
-                val baseName = humanizeNamespace(namespace)
-                val displayName = if (alias.isNotBlank()) "$baseName — $alias" else baseName
                 SharePolicyRow(
                     key = "data:$namespace",
-                    displayName = displayName,
+                    displayName = humanizeNamespace(namespace),
                     category = "Personal data",
+                    alias = alias,
                     allowed = false,
                     tier = "on_demand",
                     retention = "until_revoked",
@@ -225,10 +234,12 @@ class MySharingViewModel @Inject constructor(
                     val o = el.asJsonObject
                     val name = o.get("name")?.asString ?: return@mapNotNull null
                     val category = o.get("category")?.asString?.takeIf { it.isNotEmpty() } ?: "Secret"
+                    val alias = o.get("alias")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
                     SharePolicyRow(
                         key = "secret:$name",
                         displayName = name,
                         category = category,
+                        alias = alias,
                         allowed = false,
                         tier = "on_demand",
                         retention = "until_revoked",

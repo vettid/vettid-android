@@ -7,6 +7,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronRight
@@ -168,7 +170,7 @@ private fun Loaded(
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item {
             SectionCard(
@@ -239,52 +241,46 @@ private fun Loaded(
             }
         }
 
-        // Capabilities and Data/secrets render as separate cards so
-        // the user reads "what they can do" and "what they can ask
-        // for" as two distinct decisions.
+        // Capabilities and Data/secrets render as two sections of
+        // alias cards so the user reads "what they can do" and "what
+        // they can ask for" as two distinct decisions.
         val capabilityRows = state.rows.filter { it.key.startsWith("handler:") }
         val dataRows = state.rows.filter {
             it.key.startsWith("data:") || it.key.startsWith("secret:") || it.key.startsWith("wallet:")
         }
 
         item {
-            val allowed = capabilityRows.count { it.allowed }
-            SectionCard(
+            SharingSectionHeader(
                 title = "Capabilities",
-                subtitle = "What this connection can do with your vault. Tap a row to fine-tune or revoke.",
-                count = if (capabilityRows.isNotEmpty()) allowed else null,
-            ) {
-                if (capabilityRows.isEmpty()) {
+                subtitle = "What this connection can do with your vault. Tap a card to fine-tune or revoke.",
+                count = if (capabilityRows.isNotEmpty()) capabilityRows.count { it.allowed } else null,
+            )
+        }
+        if (capabilityRows.isEmpty()) {
+            item {
+                Box(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                     EmptyHint("No shareable capabilities yet. Enable handlers in Settings → Handlers to expose any.")
-                } else {
-                    capabilityRows.forEachIndexed { idx, row ->
-                        if (idx > 0) {
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                        }
-                        SharePolicyRow(row = row, onClick = { editingRow = row })
-                    }
                 }
             }
+        } else {
+            aliasPolicyCards(capabilityRows, keyPrefix = "cap") { editingRow = it }
         }
 
         item {
-            val allowed = dataRows.count { it.allowed }
-            SectionCard(
+            SharingSectionHeader(
                 title = "Data & secrets",
-                subtitle = "What this connection can request from your catalog. Tap a row to allow and set rules.",
-                count = if (dataRows.isNotEmpty()) allowed else null,
-            ) {
-                if (dataRows.isEmpty()) {
+                subtitle = "What this connection can request from your catalog. Tap a card to allow and set rules.",
+                count = if (dataRows.isNotEmpty()) dataRows.count { it.allowed } else null,
+            )
+        }
+        if (dataRows.isEmpty()) {
+            item {
+                Box(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
                     EmptyHint("Default policy in effect: only your published-profile fields (name, email, photo, public key) are shared. Add explicit allowances as you go.")
-                } else {
-                    dataRows.forEachIndexed { idx, row ->
-                        if (idx > 0) {
-                            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
-                        }
-                        SharePolicyRow(row = row, onClick = { editingRow = row })
-                    }
                 }
             }
+        } else {
+            aliasPolicyCards(dataRows, keyPrefix = "data") { editingRow = it }
         }
     }
 
@@ -308,6 +304,35 @@ private fun Loaded(
             },
             onDismiss = { showPresencePicker = false },
         )
+    }
+}
+
+/**
+ * Renders a section's share-policy rows as alias cards: rows the user
+ * filed under one alias collapse into a single card; ungrouped rows are
+ * each their own card, listed first.
+ */
+private fun LazyListScope.aliasPolicyCards(
+    rows: List<SharePolicyRow>,
+    keyPrefix: String,
+    onClick: (SharePolicyRow) -> Unit,
+) {
+    val groups = buildAliasGroups(rows, aliasOf = { it.alias }, idOf = { it.key })
+    val singles = groups.filter { it.label == null }
+    val aliasGroups = groups.filter { it.label != null }
+    items(singles, key = { "${keyPrefix}_single_${it.key}" }) { group ->
+        val row = group.items.first()
+        AliasCard {
+            SharePolicyRow(row = row, onClick = { onClick(row) })
+        }
+    }
+    items(aliasGroups, key = { "${keyPrefix}_group_${it.key}" }) { group ->
+        AliasCard {
+            AliasCardHeader(label = group.label ?: group.key)
+            group.items.forEach { row ->
+                SharePolicyRow(row = row, onClick = { onClick(row) })
+            }
+        }
     }
 }
 
