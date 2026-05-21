@@ -330,20 +330,46 @@ private fun PersonalDataList(
             }
 
             if (!isCollapsed) {
-                itemsIndexed(categoryItems, key = { _, item -> item.id }) { index, item ->
-                    val isFirst = index == 0
-                    val isLast = index == categoryItems.size - 1
-                    CompactDataRow(
-                        item = item,
-                        isFirst = isFirst,
-                        isLast = isLast,
-                        onClick = { onItemClick(item.id) },
-                        onDelete = { onDeleteClick(item.id) },
-                        onTogglePublic = { onTogglePublicProfile(item.id) },
-                        onToggleHideFromCatalog = { onToggleHideFromCatalog(item.id) },
-                        onMoveUp = { onMoveUp(item.id) },
-                        onMoveDown = { onMoveDown(item.id) }
-                    )
+                val dataGroups = buildDataDisplayGroups(categoryItems)
+                // No-alias fields first — each its own card; then one
+                // card per alias with that alias's fields listed inside.
+                val singles = dataGroups.filter { it.label == null }
+                val aliasGroups = dataGroups.filter { it.label != null }
+
+                items(singles, key = { "dsingle_${it.key}" }) { group ->
+                    val item = group.items.first()
+                    DataCard {
+                        CompactDataRow(
+                            item = item,
+                            isFirst = true,
+                            isLast = true,
+                            onClick = { onItemClick(item.id) },
+                            onDelete = { onDeleteClick(item.id) },
+                            onTogglePublic = { onTogglePublicProfile(item.id) },
+                            onToggleHideFromCatalog = { onToggleHideFromCatalog(item.id) },
+                            onMoveUp = { onMoveUp(item.id) },
+                            onMoveDown = { onMoveDown(item.id) }
+                        )
+                    }
+                }
+
+                items(aliasGroups, key = { "dgroup_${it.key}" }) { group ->
+                    DataCard {
+                        DataGroupHeader(label = group.label ?: group.key)
+                        group.items.forEachIndexed { idx, item ->
+                            CompactDataRow(
+                                item = item,
+                                isFirst = idx == 0,
+                                isLast = idx == group.items.lastIndex,
+                                onClick = { onItemClick(item.id) },
+                                onDelete = { onDeleteClick(item.id) },
+                                onTogglePublic = { onTogglePublicProfile(item.id) },
+                                onToggleHideFromCatalog = { onToggleHideFromCatalog(item.id) },
+                                onMoveUp = { onMoveUp(item.id) },
+                                onMoveDown = { onMoveDown(item.id) }
+                            )
+                        }
+                    }
                 }
             }
 
@@ -684,6 +710,84 @@ private fun PublishProfileButton(
  * - Lock icon for system fields
  * - Tap anywhere to edit
  */
+// Display group for the alias-card model: a named alias group, or a
+// lone ungrouped data field.
+private data class DataDisplayGroup(
+    val key: String,
+    val label: String?,   // alias name, or null for a lone field
+    val items: List<PersonalDataItem>
+)
+
+// Groups a category's data fields by alias. Fields sharing an alias
+// (e.g. a home address's street/city/state) collapse into one card;
+// a field with no alias — or the only field with its alias — stays a
+// lone field.
+private fun buildDataDisplayGroups(categoryItems: List<PersonalDataItem>): List<DataDisplayGroup> {
+    val result = mutableListOf<DataDisplayGroup>()
+    val seen = mutableSetOf<String>()
+    for (item in categoryItems) {
+        if (item.id in seen) continue
+        val alias = item.alias.takeIf { it.isNotBlank() }
+        val members = if (alias != null) categoryItems.filter { it.alias == alias } else listOf(item)
+        if (alias != null && members.size > 1) {
+            if (alias in seen) continue
+            seen.add(alias)
+            members.forEach { seen.add(it.id) }
+            result.add(DataDisplayGroup(key = alias, label = alias, items = members))
+        } else {
+            seen.add(item.id)
+            result.add(DataDisplayGroup(key = item.id, label = null, items = listOf(item)))
+        }
+    }
+    return result
+}
+
+// Wraps one alias group — or a lone ungrouped field — as a single
+// card, matching the Secrets screen's alias-card model.
+@Composable
+private fun DataCard(content: @Composable ColumnScope.() -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            content = content
+        )
+    }
+}
+
+// Header band inside a data alias card — the alias name.
+@Composable
+private fun DataGroupHeader(label: String) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
+        shape = MaterialTheme.shapes.small
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                Icons.Default.Folder,
+                contentDescription = null,
+                modifier = Modifier.size(16.dp),
+                tint = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+        }
+    }
+}
+
 @Composable
 private fun CompactDataRow(
     item: PersonalDataItem,
