@@ -69,6 +69,7 @@ fun SecretsContent(
     val showAddDialog by viewModel.showAddDialog.collectAsState()
     val showDeleteConfirmDialog by viewModel.showDeleteConfirmDialog.collectAsState()
     val catalogNudgeDismissed by viewModel.catalogNudgeDismissed.collectAsState()
+    val groupReveal by viewModel.groupReveal.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
 
     // QR code dialog state
@@ -145,6 +146,7 @@ fun SecretsContent(
                         onMoveUp = { /* sort order is vault-driven; UI move is a no-op */ },
                         onMoveDown = { /* sort order is vault-driven; UI move is a no-op */ },
                         onRenameGroup = { groupId, newLabel -> viewModel.renameGroup(groupId, newLabel) },
+                        onRevealGroup = { label, ids -> viewModel.revealGroup(label, ids) },
                         onPublishClick = { viewModel.onEvent(SecretsEvent.PublishPublicKeys) },
                         onCriticalSecretsTap = onNavigateToCriticalSecrets
                     )
@@ -275,6 +277,62 @@ fun SecretsContent(
         )
     }
 
+    // Group reveal — every field of an alias group shown together.
+    groupReveal?.let { reveal ->
+        GroupRevealDialog(
+            state = reveal,
+            onDismiss = { viewModel.dismissGroupReveal() }
+        )
+    }
+
+}
+
+// Shows every field of an alias group (e.g. a credit card) at once,
+// fetched together by SecretsViewModel.revealGroup. Auto-hides after 30s.
+@Composable
+private fun GroupRevealDialog(
+    state: GroupRevealState,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(state.label) },
+        text = {
+            if (state.loading) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Text("Revealing…")
+                }
+            } else {
+                Column {
+                    state.fields.forEach { field ->
+                        Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                            Text(
+                                text = field.name,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = field.value.ifBlank { "— no value —" },
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "Hides automatically after 30 seconds.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Done") }
+        }
+    )
 }
 
 @Composable
@@ -290,6 +348,7 @@ private fun SecretsList(
     onMoveUp: (String) -> Unit,
     onMoveDown: (String) -> Unit,
     onRenameGroup: (String, String) -> Unit,
+    onRevealGroup: (String, List<String>) -> Unit = { _, _ -> },
     onPublishClick: () -> Unit,
     onCriticalSecretsTap: () -> Unit = {}
 ) {
@@ -409,7 +468,8 @@ private fun SecretsList(
                                 isLast = isLastGroup,
                                 onMoveUp = { group.items.firstOrNull()?.let { onMoveUp(it.id) } },
                                 onMoveDown = { group.items.firstOrNull()?.let { onMoveDown(it.id) } },
-                                onRename = { newLabel -> onRenameGroup(group.key, newLabel) }
+                                onRename = { newLabel -> onRenameGroup(group.key, newLabel) },
+                                onReveal = { onRevealGroup(group.label ?: group.key, group.items.map { it.id }) }
                             )
                         }
                     }
@@ -610,6 +670,14 @@ private data class DisplayGroup(
     val items: List<MinorSecret>
 )
 
+// Grouping key for a secret: the user-facing alias takes precedence so
+// any fields the user filed under the same alias (a credit card, a
+// bank login) collapse into one card — even when they were added
+// separately and never shared a template groupId. Falls back to the
+// template groupId.
+private fun MinorSecret.groupKey(): String? =
+    alias.takeIf { it.isNotBlank() } ?: groupId
+
 private fun buildDisplayGroups(categoryItems: List<MinorSecret>): List<DisplayGroup> {
     val result = mutableListOf<DisplayGroup>()
     val seen = mutableSetOf<String>()
@@ -617,18 +685,21 @@ private fun buildDisplayGroups(categoryItems: List<MinorSecret>): List<DisplayGr
     for (item in categoryItems) {
         if (item.id in seen) continue
 
-        val gid = item.groupId
-        if (gid != null) {
-            if (gid in seen) continue
-            seen.add(gid)
-            val members = categoryItems.filter { it.groupId == gid }
+        val gk = item.groupKey()
+        val members = if (gk != null) categoryItems.filter { it.groupKey() == gk } else listOf(item)
+        if (gk != null && members.size > 1) {
+            if (gk in seen) continue
+            seen.add(gk)
             members.forEach { seen.add(it.id) }
+            val first = members.first()
             result.add(DisplayGroup(
-                key = gid,
-                label = members.firstOrNull()?.groupLabel ?: gid,
+                key = gk,
+                label = first.alias.takeIf { it.isNotBlank() } ?: first.groupLabel ?: gk,
                 items = members
             ))
         } else {
+            // Lone secret (no alias/group, or the only member of its
+            // key) — render as a standalone row, not a one-item group.
             seen.add(item.id)
             result.add(DisplayGroup(
                 key = item.id,
@@ -647,7 +718,8 @@ private fun GroupHeader(
     isLast: Boolean,
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
-    onRename: (String) -> Unit = {}
+    onRename: (String) -> Unit = {},
+    onReveal: () -> Unit = {}
 ) {
     var isEditing by remember { mutableStateOf(false) }
     var editText by remember { mutableStateOf(label) }
@@ -744,6 +816,20 @@ private fun GroupHeader(
                             isEditing = true
                         },
                     tint = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.5f)
+                )
+            }
+            // Reveal every field in this alias group at once — a credit
+            // card is used as a unit, so number/expiry/CVV/issuer come
+            // together rather than one tap-to-reveal per field.
+            IconButton(
+                onClick = onReveal,
+                modifier = Modifier.size(32.dp)
+            ) {
+                Icon(
+                    Icons.Default.Visibility,
+                    contentDescription = "Reveal all fields in this group",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer
                 )
             }
         }

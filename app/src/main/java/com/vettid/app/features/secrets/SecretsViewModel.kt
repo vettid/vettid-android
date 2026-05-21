@@ -70,6 +70,14 @@ class SecretsViewModel @Inject constructor(
     private val _showDeleteConfirmDialog = MutableStateFlow<String?>(null)
     val showDeleteConfirmDialog: StateFlow<String?> = _showDeleteConfirmDialog.asStateFlow()
 
+    // Group reveal: revealing an alias group fetches every field's value
+    // at once — a credit card is used as a unit, so its number, expiry,
+    // CVV and issuer come together. Null when nothing is revealed;
+    // auto-clears after 30s.
+    private val _groupReveal = MutableStateFlow<GroupRevealState?>(null)
+    val groupReveal: StateFlow<GroupRevealState?> = _groupReveal.asStateFlow()
+    private var groupRevealHideJob: kotlinx.coroutines.Job? = null
+
     init {
         Log.i(TAG, "SecretsViewModel initialized")
         loadSecrets()
@@ -270,6 +278,39 @@ class SecretsViewModel @Inject constructor(
     fun dismissAddDialog() {
         _showAddDialog.value = false
         _editState.value = EditSecretState()
+    }
+
+    /**
+     * Reveal every field in an alias group at once. A credit card is
+     * used as a unit — number, expiry, CVV, issuer — so revealing one
+     * pulls them all via secret.get. Auto-hides after 30s.
+     */
+    fun revealGroup(label: String, memberIds: List<String>) {
+        groupRevealHideJob?.cancel()
+        viewModelScope.launch {
+            _groupReveal.value = GroupRevealState(label = label, fields = emptyList(), loading = true)
+            val fields = mutableListOf<RevealedField>()
+            for (id in memberIds) {
+                val secret = minorSecretsStore.getSecret(id) ?: continue
+                val value = try {
+                    minorSecretsStore.revealSecretValue(id).orEmpty()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to reveal group field $id", e)
+                    ""
+                }
+                fields.add(RevealedField(name = secret.name, type = secret.type, value = value))
+            }
+            _groupReveal.value = GroupRevealState(label = label, fields = fields, loading = false)
+            groupRevealHideJob = viewModelScope.launch {
+                kotlinx.coroutines.delay(30_000L)
+                _groupReveal.value = null
+            }
+        }
+    }
+
+    fun dismissGroupReveal() {
+        groupRevealHideJob?.cancel()
+        _groupReveal.value = null
     }
 
     fun updateEditState(newState: EditSecretState) {
@@ -536,3 +577,17 @@ class SecretsViewModel @Inject constructor(
     }
 
 }
+
+/** One field's revealed value inside a group reveal. */
+data class RevealedField(
+    val name: String,
+    val type: SecretType,
+    val value: String,
+)
+
+/** State for the group-reveal dialog — every field in an alias group. */
+data class GroupRevealState(
+    val label: String,
+    val fields: List<RevealedField>,
+    val loading: Boolean,
+)
