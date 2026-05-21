@@ -264,6 +264,10 @@ class ConnectionDetailViewModel @Inject constructor(
     init {
         loadConnection()
         observePeerLocationStream()
+        // Lazy peer-location fetch (2026-05-21): the connection list no
+        // longer bulk-seeds peer locations, so fetch this peer's
+        // location when its detail screen opens.
+        loadPeerLocation()
     }
 
     /**

@@ -93,17 +93,13 @@ class ConnectionsViewModel @Inject constructor(
      * Set of connection ids that are currently sharing location with
      * us. Drives the pin indicator on each card (A3).
      *
-     * Population strategy:
-     *  - On loadConnections, query location.peer.get for each ACTIVE
-     *    connection in parallel and seed the set with the ones whose
-     *    response is {shared:true}.
-     *  - Observe peerLocationTransitions and live location updates to
-     *    keep the set in sync within a session (no poll needed).
-     *
-     * Cold-start gap: the set is empty until the parallel seed
-     * completes. That's typically a sub-second blip after
-     * loadConnections; the indicator just appears when the
-     * vault responses land.
+     * Population strategy (lazy — 2026-05-21): no cold-start bulk
+     * fetch. The set is populated only by live vault signals during
+     * the session — peerLocationTransitions (start/stop) and live
+     * location updates. The old per-connection `location.peer.get`
+     * seed on every loadConnections was a request burst that delayed
+     * an unrelated device-approval; the per-connection fetch now
+     * happens lazily when a connection's detail screen is opened.
      */
     private val _connectionsSharingLocation = MutableStateFlow<Set<String>>(emptySet())
     val connectionsSharingLocation: StateFlow<Set<String>> = _connectionsSharingLocation.asStateFlow()
@@ -289,15 +285,10 @@ class ConnectionsViewModel @Inject constructor(
                     allConnections = connectionsWithMessages
                     lastListResult = listResult.items
 
-                    // A3: parallel-seed the shared-location set for
-                    // each active connection. Each call is small and
-                    // they run concurrently, so even with several
-                    // dozen active connections this is quick.
-                    seedConnectionsSharingLocation(
-                        connectionsWithMessages
-                            .filter { it.connection.status == ConnectionStatus.ACTIVE }
-                            .map { it.connection.connectionId }
-                    )
+                    // A3: peer-location is no longer bulk-seeded here.
+                    // It's fetched lazily when a connection's detail
+                    // screen opens; the shared-location set stays in
+                    // sync live via peerLocationTransitions / updates.
 
                     // Check for stale key rotation (> 30 days)
                     val thirtyDaysAgo = Instant.now().minusSeconds(30L * 24 * 60 * 60)
@@ -639,32 +630,6 @@ class ConnectionsViewModel @Inject constructor(
     /**
      * Filter connections by search query.
      */
-    /**
-     * Query the vault for each connection's cached peer location in
-     * parallel and merge the truthy responses into
-     * connectionsSharingLocation. Idempotent — re-running it (e.g.,
-     * after a reload) refreshes without dropping live updates that
-     * arrived in between.
-     */
-    private fun seedConnectionsSharingLocation(connectionIds: List<String>) {
-        if (connectionIds.isEmpty()) return
-        viewModelScope.launch {
-            val sharing = connectionIds.map { id ->
-                async {
-                    try {
-                        if (ownerSpaceClient.getPeerLocation(id) != null) id else null
-                    } catch (e: Exception) {
-                        null
-                    }
-                }
-            }.awaitAll().filterNotNull()
-            // Merge rather than replace so live transitions that fired
-            // during the seed aren't dropped.
-            _connectionsSharingLocation.value =
-                _connectionsSharingLocation.value + sharing.toSet()
-        }
-    }
-
     private fun filterConnections(
         connections: List<ConnectionWithLastMessage>,
         query: String
