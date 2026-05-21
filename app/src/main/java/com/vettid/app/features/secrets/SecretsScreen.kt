@@ -452,42 +452,54 @@ private fun SecretsList(
             }
 
             if (!isCollapsed) {
-                // Build group structure for display
                 val groupOrder = buildDisplayGroups(categoryItems)
+                // No-alias fields first — each its own card; then one
+                // card per alias with that alias's fields listed inside.
+                val singles = groupOrder.filter { it.label == null }
+                val aliasGroups = groupOrder.filter { it.label != null }
 
-                groupOrder.forEachIndexed { groupIdx, group ->
-                    val isFirstGroup = groupIdx == 0
-                    val isLastGroup = groupIdx == groupOrder.size - 1
-
-                    if (group.label != null) {
-                        // Group header
-                        item(key = "group_${group.key}") {
-                            GroupHeader(
-                                label = group.label,
-                                isFirst = isFirstGroup,
-                                isLast = isLastGroup,
-                                onMoveUp = { group.items.firstOrNull()?.let { onMoveUp(it.id) } },
-                                onMoveDown = { group.items.firstOrNull()?.let { onMoveDown(it.id) } },
-                                onRename = { newLabel -> onRenameGroup(group.key, newLabel) },
-                                onReveal = { onRevealGroup(group.label ?: group.key, group.items.map { it.id }) }
-                            )
-                        }
-                    }
-
-                    items(group.items, key = { it.id }) { secret ->
-                        val isFirst = group.label == null && isFirstGroup
-                        val isLast = group.label == null && isLastGroup
+                items(singles, key = { "single_${it.key}" }) { group ->
+                    val secret = group.items.first()
+                    SecretCard {
                         SecretRow(
                             secret = secret,
-                            isFirst = isFirst,
-                            isLast = isLast,
-                            isInGroup = group.label != null,
+                            isFirst = true,
+                            isLast = true,
+                            isInGroup = false,
                             onClick = { onSecretClick(secret.id) },
                             onTogglePublic = { onTogglePublicProfile(secret.id) },
                             onToggleHideFromCatalog = { onToggleHideFromCatalog(secret.id) },
                             onMoveUp = { onMoveUp(secret.id) },
                             onMoveDown = { onMoveDown(secret.id) }
                         )
+                    }
+                }
+
+                items(aliasGroups, key = { "group_${it.key}" }) { group ->
+                    SecretCard {
+                        GroupHeader(
+                            label = group.label ?: group.key,
+                            isFirst = true,
+                            isLast = true,
+                            onMoveUp = {},
+                            onMoveDown = {},
+                            onRename = { newLabel -> onRenameGroup(group.key, newLabel) },
+                            onReveal = { onRevealGroup(group.label ?: group.key, group.items.map { it.id }) },
+                            showMove = false
+                        )
+                        group.items.forEachIndexed { idx, secret ->
+                            SecretRow(
+                                secret = secret,
+                                isFirst = idx == 0,
+                                isLast = idx == group.items.lastIndex,
+                                isInGroup = false,
+                                onClick = { onSecretClick(secret.id) },
+                                onTogglePublic = { onTogglePublicProfile(secret.id) },
+                                onToggleHideFromCatalog = { onToggleHideFromCatalog(secret.id) },
+                                onMoveUp = { onMoveUp(secret.id) },
+                                onMoveDown = { onMoveDown(secret.id) }
+                            )
+                        }
                     }
                 }
             }
@@ -711,6 +723,24 @@ private fun buildDisplayGroups(categoryItems: List<MinorSecret>): List<DisplayGr
     return result
 }
 
+// Wraps one alias group — or a lone ungrouped field — as a single
+// card, so a credit card's fields read as one unit. The header and the
+// field rows are placed inside via the content slot.
+@Composable
+private fun SecretCard(content: @Composable ColumnScope.() -> Unit) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            content = content
+        )
+    }
+}
+
 @Composable
 private fun GroupHeader(
     label: String,
@@ -719,7 +749,8 @@ private fun GroupHeader(
     onMoveUp: () -> Unit,
     onMoveDown: () -> Unit,
     onRename: (String) -> Unit = {},
-    onReveal: () -> Unit = {}
+    onReveal: () -> Unit = {},
+    showMove: Boolean = true
 ) {
     var isEditing by remember { mutableStateOf(false) }
     var editText by remember { mutableStateOf(label) }
@@ -733,7 +764,7 @@ private fun GroupHeader(
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            if (showMove) Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 IconButton(
                     onClick = onMoveUp,
                     enabled = !isFirst,
