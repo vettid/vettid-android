@@ -1,6 +1,7 @@
 package com.vettid.app.features.grants
 
 import android.util.Log
+import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.nats.VaultResponse
@@ -30,6 +31,55 @@ class GrantsRepository @Inject constructor(
             addProperty("item_kind", itemKind)
             addProperty("item_ref", itemRef)
             addProperty("item_label", itemLabel)
+            addProperty("mode", mode)
+            addProperty("deliver_to", deliverTo)
+            addProperty("requested_expires_at", requestedExpiresAt)
+            addProperty("requested_max_uses", requestedMaxUses)
+            addProperty("reason", reason)
+        }
+        return when (val resp = ownerSpaceClient.sendAndAwaitResponse("grant.request", payload, 10_000L)) {
+            is VaultResponse.HandlerResult ->
+                if (resp.success) Result.success(resp.result?.get("request_id")?.asString.orEmpty())
+                else Result.failure(Exception(resp.result?.get("error")?.asString ?: "request failed"))
+            is VaultResponse.Error -> Result.failure(Exception(resp.message))
+            else -> Result.failure(Exception("unexpected response"))
+        }
+    }
+
+    /**
+     * Sends a single multi-field grant request — one request covering
+     * every field of an alias group. The vault stores it as one pending
+     * request the peer approves / denies as a unit. Singular item_*
+     * fields mirror the first item (item_label carries the group label)
+     * so an older vault build still sees a usable single-item request.
+     */
+    suspend fun sendGroupRequest(
+        connectionId: String,
+        groupLabel: String,
+        items: List<GrantRequestItem>,
+        mode: String,
+        deliverTo: String,
+        requestedExpiresAt: Long,
+        requestedMaxUses: Int,
+        reason: String,
+    ): Result<String> {
+        if (items.isEmpty()) return Result.failure(Exception("no items to request"))
+        val first = items.first()
+        val itemsArr = JsonArray().apply {
+            items.forEach { item ->
+                add(JsonObject().apply {
+                    addProperty("item_kind", item.itemKind)
+                    addProperty("item_ref", item.itemRef)
+                    addProperty("item_label", item.itemLabel)
+                })
+            }
+        }
+        val payload = JsonObject().apply {
+            addProperty("connection_id", connectionId)
+            addProperty("item_kind", first.itemKind)
+            addProperty("item_ref", first.itemRef)
+            addProperty("item_label", groupLabel.ifBlank { first.itemLabel })
+            add("items", itemsArr)
             addProperty("mode", mode)
             addProperty("deliver_to", deliverTo)
             addProperty("requested_expires_at", requestedExpiresAt)
@@ -286,6 +336,7 @@ class GrantsRepository @Inject constructor(
                     itemKind = o.get("item_kind")?.asString.orEmpty(),
                     itemRef = o.get("item_ref")?.asString.orEmpty(),
                     itemLabel = o.get("item_label")?.asString.orEmpty(),
+                    items = parseRequestItems(o),
                     requestedMode = o.get("requested_mode")?.asString.orEmpty(),
                     requestedExpiresAt = o.get("requested_expires_at")?.asLong ?: 0L,
                     requestedMaxUses = o.get("requested_max_uses")?.asInt ?: 0,
@@ -298,6 +349,36 @@ class GrantsRepository @Inject constructor(
             }
         }
         return Result.success(out)
+    }
+
+    /**
+     * Parses a request's `items` array, falling back to a single item
+     * folded from the singular fields when absent — so callers always
+     * get a non-empty list (≥1) regardless of request shape.
+     */
+    private fun parseRequestItems(o: JsonObject): List<GrantRequestItem> {
+        val arr = o.getAsJsonArray("items")
+        if (arr != null && arr.size() > 0) {
+            return arr.mapNotNull { el ->
+                runCatching {
+                    val io = el.asJsonObject
+                    GrantRequestItem(
+                        itemKind = io.get("item_kind")?.asString.orEmpty(),
+                        itemRef = io.get("item_ref")?.asString.orEmpty(),
+                        itemLabel = io.get("item_label")?.asString.orEmpty(),
+                    )
+                }.getOrNull()
+            }
+        }
+        val ref = o.get("item_ref")?.asString.orEmpty()
+        if (ref.isEmpty()) return emptyList()
+        return listOf(
+            GrantRequestItem(
+                itemKind = o.get("item_kind")?.asString.orEmpty(),
+                itemRef = ref,
+                itemLabel = o.get("item_label")?.asString.orEmpty(),
+            )
+        )
     }
 
     /**
@@ -423,6 +504,18 @@ data class GrantSummary(
     val lastFetched: Long,
 )
 
+/**
+ * One field of a grant request. A request for an alias group carries
+ * one per member; a single-item request carries exactly one. Used both
+ * as the outgoing `sendGroupRequest` payload and the parsed `items` of
+ * an incoming PendingRequestSummary.
+ */
+data class GrantRequestItem(
+    val itemKind: String,
+    val itemRef: String,
+    val itemLabel: String,
+)
+
 data class PendingRequestSummary(
     val requestId: String,
     val requesterGuid: String,
@@ -430,6 +523,10 @@ data class PendingRequestSummary(
     val itemKind: String,
     val itemRef: String,
     val itemLabel: String,
+    // Every field the request covers. Always ≥1 — a single-item request
+    // yields one entry folded from the singular fields. For a group the
+    // singular itemLabel is the alias; per-field labels live here.
+    val items: List<GrantRequestItem>,
     val requestedMode: String,
     val requestedExpiresAt: Long,
     val requestedMaxUses: Int,

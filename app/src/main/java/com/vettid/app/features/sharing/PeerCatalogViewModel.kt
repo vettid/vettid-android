@@ -10,6 +10,7 @@ import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.features.feed.FeedRepository
 import com.vettid.app.core.nats.GrantEvent
 import com.vettid.app.features.grants.GrantItemKinds
+import com.vettid.app.features.grants.GrantRequestItem
 import com.vettid.app.features.grants.GrantsRepository
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.launchIn
@@ -68,8 +69,48 @@ class PeerCatalogViewModel @Inject constructor(
         when (event) {
             is PeerCatalogEvent.Request -> request(event.key)
             is PeerCatalogEvent.RequestGrant -> requestGrant(event)
+            is PeerCatalogEvent.RequestGrantGroup -> requestGrantGroup(event)
             is PeerCatalogEvent.RequestCriticalUse -> requestCriticalUse(event)
             PeerCatalogEvent.Refresh -> load()
+        }
+    }
+
+    /**
+     * Requests a whole alias group as ONE multi-field grant request —
+     * the vault stores it as a single pending request the peer approves
+     * or denies as a unit (one feed row, one notification, one prompt).
+     */
+    private fun requestGrantGroup(event: PeerCatalogEvent.RequestGrantGroup) {
+        viewModelScope.launch {
+            val current = _state.value as? PeerCatalogState.Loaded ?: return@launch
+            val items = event.keys.mapNotNull { key ->
+                val item = current.items.firstOrNull { it.key == key } ?: return@mapNotNull null
+                val (kindPrefix, ref) = key.split(':', limit = 2).let {
+                    if (it.size == 2) it[0] to it[1] else "data" to key
+                }
+                val kind = if (kindPrefix == "secret") GrantItemKinds.SECRET else GrantItemKinds.DATA
+                GrantRequestItem(itemKind = kind, itemRef = ref, itemLabel = item.displayName)
+            }
+            if (items.isEmpty()) return@launch
+            grantsRepository.sendGroupRequest(
+                connectionId = connectionId,
+                groupLabel = event.groupLabel,
+                items = items,
+                mode = event.mode,
+                deliverTo = "self",
+                requestedExpiresAt = event.expiresAt,
+                requestedMaxUses = event.maxUses,
+                reason = event.reason,
+            ).onSuccess { rid ->
+                val st = _state.value
+                if (st is PeerCatalogState.Loaded) {
+                    _state.value = st.copy(
+                        items = st.items.map {
+                            if (it.key in event.keys) it.copy(status = RequestStatus.PENDING, requestId = rid) else it
+                        }
+                    )
+                }
+            }.onFailure { Log.w(TAG, "grant.request (group): ${it.message}") }
         }
     }
 
@@ -292,6 +333,14 @@ sealed class PeerCatalogEvent {
     data class Request(val key: String) : PeerCatalogEvent()
     data class RequestGrant(
         val key: String,
+        val mode: String,
+        val expiresAt: Long,
+        val maxUses: Int,
+        val reason: String,
+    ) : PeerCatalogEvent()
+    data class RequestGrantGroup(
+        val groupLabel: String,
+        val keys: List<String>,
         val mode: String,
         val expiresAt: Long,
         val maxUses: Int,

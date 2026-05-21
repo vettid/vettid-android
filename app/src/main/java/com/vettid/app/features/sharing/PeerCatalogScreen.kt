@@ -130,11 +130,9 @@ fun PeerCatalogScreen(
                         )
                     }
                     groupRequestTarget?.let { group ->
-                        // "Request all" — one RequestAccessSheet for the
-                        // whole alias group; on submit, fan out one
-                        // grant.request per requestable member. The vault
-                        // still tracks each individually; the grantor's
-                        // approval screen regroups them by alias.
+                        // "Request" — one RequestAccessSheet for the whole
+                        // alias group; submitting sends ONE multi-field
+                        // grant request the peer approves/denies as a unit.
                         val members = group.items.filter {
                             it.status == RequestStatus.AVAILABLE && !it.useOnly
                         }
@@ -142,17 +140,16 @@ fun PeerCatalogScreen(
                             itemLabel = "${group.label ?: group.key} (${members.size} item${if (members.size == 1) "" else "s"})",
                             onDismiss = { groupRequestTarget = null },
                             onSubmit = { mode, expiresAt, maxUses, reason ->
-                                members.forEach { item ->
-                                    viewModel.onEvent(
-                                        PeerCatalogEvent.RequestGrant(
-                                            key = item.key,
-                                            mode = mode,
-                                            expiresAt = expiresAt,
-                                            maxUses = maxUses,
-                                            reason = reason,
-                                        )
+                                viewModel.onEvent(
+                                    PeerCatalogEvent.RequestGrantGroup(
+                                        groupLabel = group.label ?: group.key,
+                                        keys = members.map { it.key },
+                                        mode = mode,
+                                        expiresAt = expiresAt,
+                                        maxUses = maxUses,
+                                        reason = reason,
                                     )
-                                }
+                                )
                                 groupRequestTarget = null
                             },
                         )

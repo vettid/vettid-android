@@ -4,7 +4,6 @@ import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.vettid.app.core.nats.GrantEvent
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.features.feed.ApprovalNotificationKind
 import com.vettid.app.features.feed.FeedNotificationService
@@ -13,8 +12,6 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.launchIn
-import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -22,19 +19,14 @@ private const val TAG = "DataGrantApprovalVM"
 
 /**
  * Backs the full-screen approval prompt for an incoming data/secret
- * access request. Unlike critical-secret use and identity-verify
- * (both password-gated), regular grants only need explicit approve /
- * deny with the requested expiry + max-uses. The vault enforces those
- * server-side at fetch time.
+ * access request. A request covering an alias group is ONE request in
+ * the vault (one pending record, one event) — this screen loads its
+ * fields and approves / denies the whole request as a unit.
  *
- * Alias-group aware: when a peer used "Request all" on an alias group,
- * each member arrives as its own `grant.request` / RequestReceived
- * event. The route carries the first (anchor) request; this VM resolves
- * the anchor item's alias from the user's OWN catalog, pulls every
- * sibling pending request that shares it, and approves / denies the
- * whole group as a unit. An ungrouped item is just a group of one.
- *
- * Approval sends `grant.approve` per item; denial sends `grant.deny`.
+ * Regular grants need no password — the vault has already authorized
+ * the peer to issue requests against this connection; approval here
+ * just consents to the requested items + expiry + max-uses. The vault
+ * enforces those server-side at fetch time.
  */
 @HiltViewModel
 class DataGrantApprovalViewModel @Inject constructor(
@@ -45,9 +37,7 @@ class DataGrantApprovalViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
-    // Anchor request from the route — the RequestReceived event that
-    // triggered the screen.
-    private val anchorRequestId: String = savedStateHandle["requestId"] ?: ""
+    val requestId: String = savedStateHandle["requestId"] ?: ""
     val connectionId: String = savedStateHandle["connectionId"] ?: ""
     private val anchorItemKind: String = savedStateHandle["itemKind"] ?: ""
     private val anchorItemRef: String = savedStateHandle["itemRef"] ?: ""
@@ -59,62 +49,31 @@ class DataGrantApprovalViewModel @Inject constructor(
 
     val peerName: String = resolvePeerName(connectionId)
 
-    /** One request inside the group this screen approves/denies. */
+    /** One field the request covers. */
     data class RequestItem(
-        val requestId: String,
         val itemKind: String,
         val itemRef: String,
         val itemLabel: String,
-        val mode: String,
-        val expiresAt: Long,
-        val maxUses: Int,
     )
 
-    // The group this screen acts on. Seeded with the anchor so the
-    // screen renders instantly; loadGroup() expands it to siblings.
+    // The fields this request covers. Seeded from the route's single
+    // item so the screen renders instantly; loadGroup() replaces it
+    // with the full set once the pending request is loaded.
     private val _items = MutableStateFlow(
-        listOf(
-            RequestItem(
-                requestId = anchorRequestId,
-                itemKind = anchorItemKind,
-                itemRef = anchorItemRef,
-                itemLabel = anchorItemLabel,
-                mode = requestedMode,
-                expiresAt = requestedExpiresAt,
-                maxUses = requestedMaxUses,
-            )
-        )
+        listOf(RequestItem(anchorItemKind, anchorItemRef, anchorItemLabel))
     )
     val items: StateFlow<List<RequestItem>> = _items.asStateFlow()
 
-    // Alias the group shares; blank when the anchor item is ungrouped.
+    // The alias / group label when the request covers multiple fields;
+    // blank for a single-field request.
     private val _alias = MutableStateFlow("")
     val alias: StateFlow<String> = _alias.asStateFlow()
 
     private val _state = MutableStateFlow<State>(State.Idle)
     val state: StateFlow<State> = _state.asStateFlow()
 
-    // Own-catalog alias maps, fetched once per screen.
-    private var aliasesLoaded = false
-    private var dataAliasMap: Map<String, String> = emptyMap()
-    private var secretAliasMap: Map<String, String> = emptyMap()
-
     init {
         loadGroup()
-        // The requester fans out N requests near-simultaneously, so a
-        // sibling can land just after this screen opened — re-resolve
-        // the group when another RequestReceived for this connection
-        // fires, until the user acts.
-        ownerSpaceClient.grantEvents
-            .onEach { ev ->
-                if (ev is GrantEvent.RequestReceived &&
-                    ev.connectionId == connectionId &&
-                    _state.value is State.Idle
-                ) {
-                    loadGroup()
-                }
-            }
-            .launchIn(viewModelScope)
     }
 
     private fun resolvePeerName(connID: String): String {
@@ -129,100 +88,66 @@ class DataGrantApprovalViewModel @Inject constructor(
     }
 
     /**
-     * Resolve the anchor item's alias from the user's own catalog and
-     * pull every sibling pending request that shares it. When the
-     * anchor item carries no alias the group stays just the anchor.
+     * Loads the pending request's full field list from the vault. A
+     * request for an alias group carries every field in `items`; the
+     * request's item_label is the group label (alias).
      */
     private fun loadGroup() {
+        if (requestId.isEmpty()) return
         viewModelScope.launch {
-            if (!aliasesLoaded) {
-                dataAliasMap = runCatching { grants.ownDataAliases() }.getOrDefault(emptyMap())
-                secretAliasMap = runCatching { grants.ownSecretAliases() }.getOrDefault(emptyMap())
-                aliasesLoaded = true
+            val pending = grants.listPending().getOrNull()
+                ?.firstOrNull { it.requestId == requestId } ?: return@launch
+            val fields = pending.items.takeIf { it.isNotEmpty() } ?: return@launch
+            _items.value = fields.map {
+                RequestItem(itemKind = it.itemKind, itemRef = it.itemRef, itemLabel = it.itemLabel)
             }
-            val anchorAlias = aliasOf(anchorItemKind, anchorItemRef)
-            _alias.value = anchorAlias
-            if (anchorAlias.isBlank()) return@launch  // ungrouped — anchor only
-
-            val pending = grants.listPending().getOrDefault(emptyList())
-                .filter { it.connectionId == connectionId }
-            // Anchor first, always present even if list-pending lags
-            // behind the fan-out.
-            val merged = LinkedHashMap<String, RequestItem>()
-            _items.value.firstOrNull { it.requestId == anchorRequestId }?.let {
-                merged[anchorRequestId] = it
-            }
-            pending.forEach { p ->
-                if (aliasOf(p.itemKind, p.itemRef) == anchorAlias) {
-                    merged[p.requestId] = RequestItem(
-                        requestId = p.requestId,
-                        itemKind = p.itemKind,
-                        itemRef = p.itemRef,
-                        itemLabel = p.itemLabel,
-                        mode = p.requestedMode,
-                        expiresAt = p.requestedExpiresAt,
-                        maxUses = p.requestedMaxUses,
-                    )
-                }
-            }
-            if (merged.isNotEmpty()) _items.value = merged.values.toList()
+            // A multi-field request names the alias in item_label.
+            _alias.value = if (fields.size > 1) pending.itemLabel else ""
         }
     }
 
-    private fun aliasOf(itemKind: String, itemRef: String): String =
-        (if (itemKind == "secret") secretAliasMap[itemRef] else dataAliasMap[itemRef]).orEmpty()
-
     fun approve() {
-        val targets = _items.value.filter { it.requestId.isNotEmpty() }
-        if (targets.isEmpty()) {
+        if (requestId.isEmpty()) {
             _state.value = State.Error("Missing request_id")
             return
         }
         viewModelScope.launch {
             _state.value = State.Submitting
-            var firstError: String? = null
-            targets.forEach { item ->
-                grants.approve(item.requestId, item.expiresAt, item.maxUses, item.mode)
-                    .onSuccess {
-                        notificationService.clearApprovalNotification(
-                            ApprovalNotificationKind.DataRequest, item.requestId
-                        )
-                        // Drop the IncomingGrantRequest row from the feed
-                        // card immediately rather than waiting on the
-                        // vault's data-grant-created echo.
-                        ownerSpaceClient.emitGrantCreatedLocally(connectionId, item.requestId)
-                    }
-                    .onFailure {
-                        Log.e(TAG, "approve ${item.requestId}", it)
-                        if (firstError == null) firstError = it.message
-                    }
-            }
-            _state.value = if (firstError == null) State.Approved
-                else State.Error(firstError ?: "Approve failed")
+            // One approve resolves the whole request — the vault creates
+            // a grant per field.
+            grants.approve(requestId, requestedExpiresAt, requestedMaxUses, requestedMode)
+                .onSuccess {
+                    notificationService.clearApprovalNotification(
+                        ApprovalNotificationKind.DataRequest, requestId
+                    )
+                    // Drop the IncomingGrantRequest feed row immediately
+                    // rather than waiting on the vault's echo.
+                    ownerSpaceClient.emitGrantCreatedLocally(connectionId, requestId)
+                    _state.value = State.Approved
+                }
+                .onFailure {
+                    Log.e(TAG, "approve", it)
+                    _state.value = State.Error(it.message ?: "Approve failed")
+                }
         }
     }
 
     fun deny() {
-        val targets = _items.value.filter { it.requestId.isNotEmpty() }
-        if (targets.isEmpty()) return
+        if (requestId.isEmpty()) return
         viewModelScope.launch {
             _state.value = State.Submitting
-            var firstError: String? = null
-            targets.forEach { item ->
-                grants.deny(item.requestId, "")
-                    .onSuccess {
-                        notificationService.clearApprovalNotification(
-                            ApprovalNotificationKind.DataRequest, item.requestId
-                        )
-                        ownerSpaceClient.emitGrantDeniedLocally(connectionId, item.requestId)
-                    }
-                    .onFailure {
-                        Log.e(TAG, "deny ${item.requestId}", it)
-                        if (firstError == null) firstError = it.message
-                    }
-            }
-            _state.value = if (firstError == null) State.Denied
-                else State.Error(firstError ?: "Deny failed")
+            grants.deny(requestId, "")
+                .onSuccess {
+                    notificationService.clearApprovalNotification(
+                        ApprovalNotificationKind.DataRequest, requestId
+                    )
+                    ownerSpaceClient.emitGrantDeniedLocally(connectionId, requestId)
+                    _state.value = State.Denied
+                }
+                .onFailure {
+                    Log.e(TAG, "deny", it)
+                    _state.value = State.Error(it.message ?: "Deny failed")
+                }
         }
     }
 
