@@ -3,8 +3,10 @@ package com.vettid.app.features.grants
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.gson.JsonObject
 import com.vettid.app.core.nats.GrantEvent
 import com.vettid.app.core.nats.OwnerSpaceClient
+import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.features.feed.ApprovalNotificationKind
 import com.vettid.app.features.feed.FeedNotificationService
 import com.vettid.app.features.feed.FeedRepository
@@ -72,6 +74,12 @@ class GrantsViewModel @Inject constructor(
     private val _inboundAliases = MutableStateFlow<Map<String, String>>(emptyMap())
     val inboundAliases: StateFlow<Map<String, String>> = _inboundAliases.asStateFlow()
 
+    // grantId → alias for outbound grants, derived from the user's OWN
+    // catalog (personal-data fields + secrets) so the "Data sharing"
+    // list groups items the user filed together into one alias card.
+    private val _outboundAliases = MutableStateFlow<Map<String, String>>(emptyMap())
+    val outboundAliases: StateFlow<Map<String, String>> = _outboundAliases.asStateFlow()
+
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy.asStateFlow()
 
@@ -107,7 +115,10 @@ class GrantsViewModel @Inject constructor(
 
     fun refresh() {
         viewModelScope.launch {
-            repo.listOutbound(connectionId.ifEmpty { null }).onSuccess { _outbound.value = it }
+            repo.listOutbound(connectionId.ifEmpty { null }).onSuccess {
+                _outbound.value = it
+                if (!isInbound) updateOutboundAliases(it)
+            }
             repo.listInbound(connectionId.ifEmpty { null }).onSuccess {
                 _inbound.value = it
                 if (isInbound) updateInboundAliases(it)
@@ -142,6 +153,56 @@ class GrantsViewModel @Inject constructor(
             val alias = if (g.itemKind == "secret") secretAlias[g.itemRef] else dataAlias[g.itemRef]
             if (!alias.isNullOrBlank()) g.grantId to alias else null
         }.toMap()
+    }
+
+    /**
+     * Builds the grantId → alias map for outbound grants by matching
+     * each grant's item against the user's OWN catalog — personal-data
+     * fields keyed by namespace, secrets keyed by name. Grants whose
+     * item carries no alias are left out and render as a single card.
+     */
+    private suspend fun updateOutboundAliases(grants: List<GrantSummary>) {
+        if (grants.isEmpty()) {
+            _outboundAliases.value = emptyMap()
+            return
+        }
+        val dataAlias = runCatching { fetchOwnDataAliases() }.getOrDefault(emptyMap())
+        val secretAlias = runCatching { fetchOwnSecretAliases() }.getOrDefault(emptyMap())
+        _outboundAliases.value = grants.mapNotNull { g ->
+            val alias = if (g.itemKind == "secret") secretAlias[g.itemRef] else dataAlias[g.itemRef]
+            if (!alias.isNullOrBlank()) g.grantId to alias else null
+        }.toMap()
+    }
+
+    /** namespace → alias for the user's personal-data fields. */
+    private suspend fun fetchOwnDataAliases(): Map<String, String> {
+        val resp = ownerSpaceClient.sendAndAwaitResponse("personal-data.get", JsonObject(), 10_000L)
+        if (resp !is VaultResponse.HandlerResult || !resp.success || resp.result == null) return emptyMap()
+        val fields = resp.result.getAsJsonObject("fields") ?: return emptyMap()
+        val out = mutableMapOf<String, String>()
+        fields.entrySet().forEach { (namespace, valueJson) ->
+            val alias = valueJson?.takeIf { it.isJsonObject }?.asJsonObject
+                ?.get("alias")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
+            if (alias.isNotBlank()) out[namespace] = alias
+        }
+        return out
+    }
+
+    /** secret name → alias for the user's minor secrets. */
+    private suspend fun fetchOwnSecretAliases(): Map<String, String> {
+        val resp = ownerSpaceClient.sendAndAwaitResponse("credential.secret.list", JsonObject(), 10_000L)
+        if (resp !is VaultResponse.HandlerResult || !resp.success || resp.result == null) return emptyMap()
+        val secrets = resp.result.getAsJsonArray("secrets") ?: return emptyMap()
+        val out = mutableMapOf<String, String>()
+        secrets.forEach { el ->
+            runCatching {
+                val o = el.asJsonObject
+                val name = o.get("name")?.asString ?: return@forEach
+                val alias = o.get("alias")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
+                if (alias.isNotBlank()) out[name] = alias
+            }
+        }
+        return out
     }
 
     fun sendRequest(

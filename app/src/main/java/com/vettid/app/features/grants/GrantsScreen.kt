@@ -45,6 +45,7 @@ fun GrantsScreen(
     val inbound by viewModel.inbound.collectAsState()
     val inboundAliases by viewModel.inboundAliases.collectAsState()
     val outbound by viewModel.outbound.collectAsState()
+    val outboundAliases by viewModel.outboundAliases.collectAsState()
     val pending by viewModel.pending.collectAsState()
     val myRequests by viewModel.myRequests.collectAsState()
     val revealedValue by viewModel.revealedValue.collectAsState()
@@ -123,11 +124,13 @@ fun GrantsScreen(
                 isInbound && tab == 2 -> MyRequestsList(myRequests)
                 !isInbound && tab == 0 -> OutboundList(
                     grants = activeGrants,
+                    aliases = outboundAliases,
                     emptyMessage = "You haven't granted any items to this connection.",
                     onRevoke = { viewModel.revoke(it.grantId) },
                 )
                 !isInbound && tab == 1 -> OutboundList(
                     grants = endedGrants,
+                    aliases = outboundAliases,
                     emptyMessage = "No expired or revoked grants for this connection.",
                     onRevoke = { viewModel.revoke(it.grantId) },
                 )
@@ -203,6 +206,7 @@ private fun InboundList(
 @Composable
 private fun OutboundList(
     grants: List<GrantSummary>,
+    aliases: Map<String, String>,
     emptyMessage: String,
     onRevoke: (GrantSummary) -> Unit,
 ) {
@@ -210,20 +214,60 @@ private fun OutboundList(
         EmptyState(emptyMessage)
         return
     }
-    LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp)) {
-        items(grants) { g ->
-            ListItem(
-                headlineContent = { Text(g.itemLabel.ifEmpty { g.itemRef }) },
-                supportingContent = { Text(supportingLine(g)) },
-                trailingContent = {
-                    if (g.status == "active") {
-                        TextButton(onClick = { onRevoke(g) }) { Text("Revoke") }
-                    } else {
-                        Text(g.status, style = MaterialTheme.typography.labelMedium)
-                    }
-                },
-            )
-            HorizontalDivider()
+    // Alias-card model: grants for items the user filed under one alias
+    // collapse into a single card; ungrouped grants are their own card.
+    val groups = remember(grants, aliases) {
+        buildAliasGroups(grants, aliasOf = { aliases[it.grantId].orEmpty() }, idOf = { it.grantId })
+    }
+    val singles = groups.filter { it.label == null }
+    val aliasGroups = groups.filter { it.label != null }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        items(singles, key = { "single_${it.key}" }) { group ->
+            AliasCard { OutboundGrantRow(group.items.first(), onRevoke) }
+        }
+        items(aliasGroups, key = { "group_${it.key}" }) { group ->
+            AliasCard {
+                AliasCardHeader(label = group.label ?: group.key)
+                group.items.forEach { g -> OutboundGrantRow(g, onRevoke) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OutboundGrantRow(g: GrantSummary, onRevoke: (GrantSummary) -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+        shape = RoundedCornerShape(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp, horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    g.itemLabel.ifEmpty { g.itemRef },
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    supportingLine(g),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            if (g.status == "active") {
+                TextButton(onClick = { onRevoke(g) }) { Text("Revoke") }
+            } else {
+                Text(g.status, style = MaterialTheme.typography.labelMedium)
+            }
         }
     }
 }
