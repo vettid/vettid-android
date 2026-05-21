@@ -200,6 +200,19 @@ class OwnerSpaceClient @Inject constructor(
     private val inflightRequests = ConcurrentHashMap<String, CompletableDeferred<NatsMessage>>()
 
     /**
+     * In-flight dedup ("single-flight") for idempotent read ops. When an
+     * op in DEDUP_SAFE_OPS is requested while an identical one (same
+     * messageType + payload) is already in flight, the later caller
+     * awaits the first's result instead of issuing a duplicate vault
+     * round-trip. Screen-load, the 30s periodic refresh, and event
+     * handlers routinely fire the same feed.sync / connection.list /
+     * wallet.list within the same second; this collapses each such
+     * burst to a single vault op. Mutations are never coalesced — only
+     * ops on the DEDUP_SAFE_OPS allowlist are.
+     */
+    private val inflightDedup = ConcurrentHashMap<String, CompletableDeferred<VaultResponse?>>()
+
+    /**
      * Get the current OwnerSpace ID for constructing topic names.
      */
     fun getOwnerSpace(): String? = connectionManager.getOwnerSpaceId()
@@ -314,7 +327,60 @@ class OwnerSpaceClient @Inject constructor(
      * @param timeoutMs Timeout in milliseconds (default 30 seconds)
      * @return The vault response, or null if timeout
      */
+    /**
+     * Send a vault op and await its response.
+     *
+     * For idempotent read ops (DEDUP_SAFE_OPS) this coalesces a burst of
+     * identical concurrent requests into one vault round-trip: the first
+     * caller issues the op, later callers with the same messageType +
+     * payload await its result. Everything else passes straight through
+     * to dispatchVaultOp unchanged — mutations are never coalesced.
+     */
     suspend fun sendAndAwaitResponse(
+        messageType: String,
+        payload: JsonObject = JsonObject(),
+        timeoutMs: Long = 30000L
+    ): VaultResponse? {
+        if (messageType !in DEDUP_SAFE_OPS) {
+            return dispatchVaultOp(messageType, payload, timeoutMs)
+        }
+
+        val dedupKey = "$messageType $payload"
+        val mine = CompletableDeferred<VaultResponse?>()
+        val isLeader = inflightDedup.putIfAbsent(dedupKey, mine) == null
+
+        if (!isLeader) {
+            // An identical read op is already in flight — await its
+            // result instead of issuing a duplicate.
+            val shared = inflightDedup[dedupKey]
+            if (shared != null) {
+                android.util.Log.d(TAG, "Coalesced duplicate $messageType into in-flight request")
+                return try {
+                    shared.await()
+                } catch (e: Exception) {
+                    // Leader failed/cancelled — fall back to our own op.
+                    dispatchVaultOp(messageType, payload, timeoutMs)
+                }
+            }
+            // Rare race: leader cleared the slot between putIfAbsent and
+            // this lookup — just issue our own.
+            return dispatchVaultOp(messageType, payload, timeoutMs)
+        }
+
+        // Leader: issue the real op, share the result, clear the slot.
+        return try {
+            val result = dispatchVaultOp(messageType, payload, timeoutMs)
+            mine.complete(result)
+            result
+        } catch (e: Throwable) {
+            mine.completeExceptionally(e)
+            throw e
+        } finally {
+            inflightDedup.remove(dedupKey, mine)
+        }
+    }
+
+    private suspend fun dispatchVaultOp(
         messageType: String,
         payload: JsonObject = JsonObject(),
         timeoutMs: Long = 30000L
@@ -3281,6 +3347,22 @@ class OwnerSpaceClient @Inject constructor(
 
     companion object {
         private const val TAG = "OwnerSpaceClient"
+
+        /**
+         * Idempotent read ops that are safe to coalesce in inflightDedup.
+         * Strictly an allowlist: a mutation must never be deduped, or two
+         * intentionally-identical writes would collapse into one. These
+         * are the read ops that screen-loads and the periodic refresh
+         * fire in bursts.
+         */
+        private val DEDUP_SAFE_OPS = setOf(
+            "feed.sync",
+            "location.peer.get",
+            "connection.list",
+            "wallet.list",
+            "personal-data.get",
+            "secret.list",
+        )
 
         // Handler-authorization error codes returned by the vault gate.
         // Stable strings — feature view-models can match these to route to
