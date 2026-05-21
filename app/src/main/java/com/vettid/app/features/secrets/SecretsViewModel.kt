@@ -432,6 +432,42 @@ class SecretsViewModel @Inject constructor(
         }
     }
 
+    // MARK: - Group Visibility
+
+    /**
+     * Sets visibility for every secret in an alias group at once, so
+     * the catalog/profile/hide choice is made per alias card rather
+     * than per field. Targets are expressed as the (inProfile, hidden)
+     * pair the segmented control maps to; reloads once at the end so
+     * the group toggles don't each trigger a separate refresh.
+     */
+    fun setGroupVisibility(memberIds: List<String>, inProfile: Boolean, hidden: Boolean) {
+        viewModelScope.launch {
+            try {
+                val items = (_state.value as? SecretsState.Loaded)?.items ?: return@launch
+                val members = items.filter { it.id in memberIds && !it.isSystemField }
+                var anyFailed = false
+                for (s in members) {
+                    if (s.isInPublicProfile != inProfile) {
+                        if (!minorSecretsStore.togglePublicProfile(s.id)) anyFailed = true
+                    }
+                    if (s.hideFromCatalog != hidden) {
+                        if (!minorSecretsStore.toggleHideFromCatalog(s.id)) anyFailed = true
+                    }
+                }
+                loadSecrets()
+                if (anyFailed) {
+                    _effects.emit(SecretsEffect.ShowError("Some fields couldn't be updated"))
+                } else {
+                    _effects.emit(SecretsEffect.ShowSuccess("Visibility updated"))
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to set group visibility", e)
+                _effects.emit(SecretsEffect.ShowError(e.message ?: "Failed to update"))
+            }
+        }
+    }
+
     // MARK: - Rename Group
 
     fun renameGroup(groupId: String, newLabel: String) {

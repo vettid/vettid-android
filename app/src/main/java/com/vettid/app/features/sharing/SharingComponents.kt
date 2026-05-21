@@ -79,7 +79,14 @@ internal fun StatusPill(label: String, container: Color) {
 }
 
 @Composable
-internal fun SharedItemRow(item: SharedItem, onRequest: () -> Unit) {
+internal fun SharedItemRow(
+    item: SharedItem,
+    onRequest: () -> Unit,
+    // When false, the AVAILABLE-state "Request" button is omitted —
+    // a grouped item is requested via the alias card's one action.
+    // Status pills still show so per-field state stays visible.
+    showRequestButton: Boolean = true,
+) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
@@ -110,8 +117,10 @@ internal fun SharedItemRow(item: SharedItem, onRequest: () -> Unit) {
             Spacer(Modifier.width(8.dp))
             when (item.status) {
                 RequestStatus.AVAILABLE -> {
-                    FilledTonalButton(onClick = onRequest, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
-                        Text("Request", style = MaterialTheme.typography.labelMedium)
+                    if (showRequestButton) {
+                        FilledTonalButton(onClick = onRequest, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
+                            Text("Request", style = MaterialTheme.typography.labelMedium)
+                        }
                     }
                 }
                 RequestStatus.PENDING -> StatusPill("Pending", MaterialTheme.colorScheme.tertiaryContainer)

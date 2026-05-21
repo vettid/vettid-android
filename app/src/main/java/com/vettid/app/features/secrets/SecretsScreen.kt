@@ -43,6 +43,8 @@ import com.vettid.app.core.storage.SecretCategory
 import com.vettid.app.core.storage.SecretType
 import com.vettid.app.ui.components.DropdownPickerField
 import com.vettid.app.ui.components.FieldDatePickerDialog
+import com.vettid.app.ui.components.FieldVisibility
+import com.vettid.app.ui.components.VisibilitySegmented
 import com.vettid.app.ui.components.commonCountries
 import com.vettid.app.ui.components.usStatesAndTerritories
 import kotlinx.coroutines.flow.collectLatest
@@ -147,6 +149,13 @@ fun SecretsContent(
                         onMoveDown = { /* sort order is vault-driven; UI move is a no-op */ },
                         onRenameGroup = { groupId, newLabel -> viewModel.renameGroup(groupId, newLabel) },
                         onRevealGroup = { label, ids -> viewModel.revealGroup(label, ids) },
+                        onSetGroupVisibility = { ids, vis ->
+                            viewModel.setGroupVisibility(
+                                memberIds = ids,
+                                inProfile = vis == FieldVisibility.PROFILE,
+                                hidden = vis == FieldVisibility.PRIVATE,
+                            )
+                        },
                         onPublishClick = { viewModel.onEvent(SecretsEvent.PublishPublicKeys) },
                         onCriticalSecretsTap = onNavigateToCriticalSecrets
                     )
@@ -349,6 +358,7 @@ private fun SecretsList(
     onMoveDown: (String) -> Unit,
     onRenameGroup: (String, String) -> Unit,
     onRevealGroup: (String, List<String>) -> Unit = { _, _ -> },
+    onSetGroupVisibility: (List<String>, FieldVisibility) -> Unit = { _, _ -> },
     onPublishClick: () -> Unit,
     onCriticalSecretsTap: () -> Unit = {}
 ) {
@@ -493,6 +503,9 @@ private fun SecretsList(
                                 isFirst = idx == 0,
                                 isLast = idx == group.items.lastIndex,
                                 isInGroup = false,
+                                // Visibility is set once for the whole
+                                // alias via the control below, not per row.
+                                showVisibility = false,
                                 onClick = { onSecretClick(secret.id) },
                                 onTogglePublic = { onTogglePublicProfile(secret.id) },
                                 onToggleHideFromCatalog = { onToggleHideFromCatalog(secret.id) },
@@ -500,6 +513,13 @@ private fun SecretsList(
                                 onMoveDown = { onMoveDown(secret.id) }
                             )
                         }
+                        GroupVisibilityControl(
+                            visibility = groupSecretVisibility(group.items),
+                            // PROFILE is a public-key-only state — offer
+                            // it only when every member qualifies.
+                            allowProfile = group.items.all { it.type == SecretType.PUBLIC_KEY },
+                            onVisibilityChange = { onSetGroupVisibility(group.items.map { it.id }, it) },
+                        )
                     }
                 }
             }
@@ -867,12 +887,57 @@ private fun GroupHeader(
     }
 }
 
+// Current visibility of a single secret, for the segmented control.
+private fun secretVisibility(secret: MinorSecret): FieldVisibility = when {
+    secret.hideFromCatalog -> FieldVisibility.PRIVATE
+    secret.isInPublicProfile -> FieldVisibility.PROFILE
+    else -> FieldVisibility.CATALOG
+}
+
+// Representative visibility for an alias group — the shared state when
+// the members agree, otherwise the first member's (re-picking the
+// control re-aligns every member).
+private fun groupSecretVisibility(items: List<MinorSecret>): FieldVisibility {
+    val states = items.map { secretVisibility(it) }.distinct()
+    return states.singleOrNull() ?: states.firstOrNull() ?: FieldVisibility.CATALOG
+}
+
+// One alias-level visibility control, rendered once per group card in
+// place of the per-row segmented controls.
+@Composable
+private fun GroupVisibilityControl(
+    visibility: FieldVisibility,
+    allowProfile: Boolean,
+    onVisibilityChange: (FieldVisibility) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "Visibility",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        VisibilitySegmented(
+            visibility = visibility,
+            allowProfile = allowProfile,
+            allowUseOnly = false,
+            onVisibilityChange = onVisibilityChange,
+        )
+    }
+}
+
 @Composable
 private fun SecretRow(
     secret: MinorSecret,
     isFirst: Boolean,
     isLast: Boolean,
     isInGroup: Boolean = false,
+    // When false, the per-row visibility control / system lock is
+    // omitted — an alias group sets visibility once via GroupVisibilityControl.
+    showVisibility: Boolean = true,
     onClick: () -> Unit,
     onTogglePublic: () -> Unit,
     onToggleHideFromCatalog: () -> Unit,
@@ -907,7 +972,7 @@ private fun SecretRow(
 
             // Visibility selector (3-state) or lock icon for system fields.
             // Placed after the name+value column on the right (see end of Row).
-            if (secret.isSystemField) {
+            if (secret.isSystemField && showVisibility) {
                 Box(
                     modifier = Modifier.size(36.dp),
                     contentAlignment = Alignment.Center
@@ -956,8 +1021,9 @@ private fun SecretRow(
 
             // 3-state visibility selector. Hidden for system fields
             // (gold lock above) and shown otherwise. PROFILE pill is
-            // only enabled for PUBLIC_KEY-typed secrets.
-            if (!secret.isSystemField) {
+            // only enabled for PUBLIC_KEY-typed secrets. Omitted for
+            // grouped rows — the alias card carries one shared control.
+            if (!secret.isSystemField && showVisibility) {
                 Spacer(modifier = Modifier.width(8.dp))
                 val current = when {
                     secret.hideFromCatalog -> com.vettid.app.ui.components.FieldVisibility.PRIVATE

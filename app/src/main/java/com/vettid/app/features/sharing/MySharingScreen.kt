@@ -164,7 +164,10 @@ private fun Loaded(
     onLocationToggle: (Boolean) -> Unit,
     onUpdatePolicy: (SharePolicyRow) -> Unit,
 ) {
-    var editingRow by remember { mutableStateOf<SharePolicyRow?>(null) }
+    // (label, rows-to-write) — a single row for an ungrouped item, the
+    // whole alias group for a grouped card. Editing writes the policy
+    // to every row in the list.
+    var editingTarget by remember { mutableStateOf<Pair<String, List<SharePolicyRow>>?>(null) }
     var showPresencePicker by remember { mutableStateOf(false) }
 
     LazyColumn(
@@ -263,7 +266,7 @@ private fun Loaded(
                 }
             }
         } else {
-            aliasPolicyCards(capabilityRows, keyPrefix = "cap") { editingRow = it }
+            aliasPolicyCards(capabilityRows, keyPrefix = "cap") { label, rows -> editingTarget = label to rows }
         }
 
         item {
@@ -280,17 +283,28 @@ private fun Loaded(
                 }
             }
         } else {
-            aliasPolicyCards(dataRows, keyPrefix = "data") { editingRow = it }
+            aliasPolicyCards(dataRows, keyPrefix = "data") { label, rows -> editingTarget = label to rows }
         }
     }
 
-    editingRow?.let { row ->
+    editingTarget?.let { (label, rows) ->
         PolicyItemEditorSheet(
-            row = row,
-            onDismiss = { editingRow = null },
-            onSave = {
-                onUpdatePolicy(it)
-                editingRow = null
+            // Representative carries the alias/field label for the sheet
+            // title; the edited policy is written to every row.
+            row = rows.first().copy(displayName = label),
+            onDismiss = { editingTarget = null },
+            onSave = { updated ->
+                rows.forEach { row ->
+                    onUpdatePolicy(
+                        row.copy(
+                            allowed = updated.allowed,
+                            tier = updated.tier,
+                            retention = updated.retention,
+                            rateLimitPerHour = updated.rateLimitPerHour,
+                        )
+                    )
+                }
+                editingTarget = null
             },
         )
     }
@@ -308,14 +322,15 @@ private fun Loaded(
 }
 
 /**
- * Renders a section's share-policy rows as alias cards: rows the user
- * filed under one alias collapse into a single card; ungrouped rows are
- * each their own card, listed first.
+ * Renders a section's share-policy rows as alias cards. Rows the user
+ * filed under one alias collapse into a single card with ONE policy
+ * control covering every member — the alias is the sharing decision,
+ * not each field. Ungrouped rows are each their own card, listed first.
  */
 private fun LazyListScope.aliasPolicyCards(
     rows: List<SharePolicyRow>,
     keyPrefix: String,
-    onClick: (SharePolicyRow) -> Unit,
+    onEdit: (label: String, rows: List<SharePolicyRow>) -> Unit,
 ) {
     val groups = buildAliasGroups(rows, aliasOf = { it.alias }, idOf = { it.key })
     val singles = groups.filter { it.label == null }
@@ -323,14 +338,24 @@ private fun LazyListScope.aliasPolicyCards(
     items(singles, key = { "${keyPrefix}_single_${it.key}" }) { group ->
         val row = group.items.first()
         AliasCard {
-            SharePolicyRow(row = row, onClick = { onClick(row) })
+            SharePolicyRow(row = row, onClick = { onEdit(row.displayName, listOf(row)) })
         }
     }
     items(aliasGroups, key = { "${keyPrefix}_group_${it.key}" }) { group ->
+        val label = group.label ?: group.key
+        // One policy control for the whole alias — the representative
+        // SharePolicyRow carries it; member field names list below so
+        // the user sees exactly what the decision covers.
+        val representative = group.items.first().copy(displayName = label)
         AliasCard {
-            AliasCardHeader(label = group.label ?: group.key)
-            group.items.forEach { row ->
-                SharePolicyRow(row = row, onClick = { onClick(row) })
+            SharePolicyRow(row = representative, onClick = { onEdit(label, group.items) })
+            group.items.forEach { member ->
+                Text(
+                    text = member.displayName,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 14.dp, end = 8.dp, bottom = 2.dp),
+                )
             }
         }
     }

@@ -209,19 +209,28 @@ private fun Loaded(
             AliasCard {
                 AliasCardHeader(
                     label = group.label ?: group.key,
+                    // One request action for the whole card; grouped
+                    // rows below carry no per-field Request button.
                     trailing = if (requestable > 0) {
                         {
                             FilledTonalButton(
                                 onClick = { onRequestGroup(group) },
                                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                             ) {
-                                Text("Request all", style = MaterialTheme.typography.labelMedium)
+                                Text("Request", style = MaterialTheme.typography.labelMedium)
                             }
                         }
                     } else null,
                 )
                 group.items.forEach { item ->
-                    SharedItemRow(item = item, onRequest = { onRequest(item.key) })
+                    SharedItemRow(
+                        item = item,
+                        onRequest = { onRequest(item.key) },
+                        // Use-only items need their own critical-use
+                        // flow, so they keep an individual button; plain
+                        // items are covered by the card's Request action.
+                        showRequestButton = item.useOnly,
+                    )
                 }
             }
         }

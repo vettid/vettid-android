@@ -1541,6 +1541,50 @@ class PersonalDataViewModel @Inject constructor(
     /**
      * Toggle whether an item is included in the public profile.
      */
+    /**
+     * Sets visibility for every field in an alias group at once, so the
+     * profile/catalog/hide choice is made per alias card rather than
+     * per field. One store write + one publish at the end, rather than
+     * one per field.
+     */
+    fun setGroupVisibility(itemIds: List<String>, inProfile: Boolean, hidden: Boolean) {
+        viewModelScope.launch {
+            try {
+                var changed = false
+                itemIds.forEach { id ->
+                    val index = dataItems.indexOfFirst { it.id == id }
+                    if (index < 0) return@forEach
+                    val item = dataItems[index]
+                    // System fields are always shared — never toggled.
+                    if (item.isSystemField) return@forEach
+                    var updated = item
+                    if (item.isInPublicProfile != inProfile) {
+                        updated = updated.copy(isInPublicProfile = inProfile)
+                        if (inProfile) publicProfileFields.add(id) else publicProfileFields.remove(id)
+                        changed = true
+                    }
+                    if (item.hideFromCatalog != hidden) {
+                        updated = updated.copy(hideFromCatalog = hidden)
+                        if (hidden) hiddenFromCatalogFields.add(id) else hiddenFromCatalogFields.remove(id)
+                        changed = true
+                    }
+                    if (updated !== item) dataItems[index] = updated
+                }
+                if (!changed) return@launch
+                personalDataStore.updatePublicProfileFields(publicProfileFields.toList())
+                personalDataStore.updateHiddenFromCatalogFields(hiddenFromCatalogFields)
+                ownerSpaceClient.updatePublicProfileSettings(publicProfileFields.toList())
+                _state.value = PersonalDataState.Loaded(items = dataItems.toList())
+                _effects.emit(PersonalDataEffect.ShowSuccess("Visibility updated"))
+                loadPublicMetadata()
+                publishProfile()
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to set group visibility", e)
+                _effects.emit(PersonalDataEffect.ShowError("Failed to update visibility"))
+            }
+        }
+    }
+
     private fun togglePublicProfile(itemId: String) {
         viewModelScope.launch {
             try {

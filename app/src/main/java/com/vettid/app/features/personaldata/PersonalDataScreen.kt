@@ -46,8 +46,10 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import com.vettid.app.ui.components.DropdownPickerField
 import com.vettid.app.ui.components.FieldDatePickerDialog
+import com.vettid.app.ui.components.FieldVisibility
 import com.vettid.app.ui.components.PhoneNumberInput
 import com.vettid.app.ui.components.ProfilePhotoCapture
+import com.vettid.app.ui.components.VisibilitySegmented
 import com.vettid.app.ui.components.commonCountries
 import com.vettid.app.ui.components.usStatesAndTerritories
 import kotlinx.coroutines.flow.collectLatest
@@ -164,6 +166,13 @@ fun PersonalDataContent(
                         onToggleHideFromCatalog = { viewModel.onEvent(PersonalDataEvent.ToggleHideFromCatalog(it)) },
                         onMoveUp = { viewModel.onEvent(PersonalDataEvent.MoveItemUp(it)) },
                         onMoveDown = { viewModel.onEvent(PersonalDataEvent.MoveItemDown(it)) },
+                        onSetGroupVisibility = { ids, vis ->
+                            viewModel.setGroupVisibility(
+                                itemIds = ids,
+                                inProfile = vis == FieldVisibility.PROFILE,
+                                hidden = vis == FieldVisibility.PRIVATE,
+                            )
+                        },
                         onPreviewClick = { viewModel.showPublicProfilePreview() },
                         onEditPhoto = { viewModel.showPhotoCaptureDialog() }
                     )
@@ -272,6 +281,7 @@ private fun PersonalDataList(
     onToggleHideFromCatalog: (String) -> Unit,
     onMoveUp: (String) -> Unit,
     onMoveDown: (String) -> Unit,
+    onSetGroupVisibility: (List<String>, FieldVisibility) -> Unit = { _, _ -> },
     onPreviewClick: () -> Unit,
     onEditPhoto: () -> Unit
 ) {
@@ -361,6 +371,9 @@ private fun PersonalDataList(
                                 item = item,
                                 isFirst = idx == 0,
                                 isLast = idx == group.items.lastIndex,
+                                // Visibility is set once for the whole
+                                // alias via the control below, not per row.
+                                showVisibility = false,
                                 onClick = { onItemClick(item.id) },
                                 onDelete = { onDeleteClick(item.id) },
                                 onTogglePublic = { onTogglePublicProfile(item.id) },
@@ -369,6 +382,10 @@ private fun PersonalDataList(
                                 onMoveDown = { onMoveDown(item.id) }
                             )
                         }
+                        DataGroupVisibilityControl(
+                            visibility = groupDataVisibility(group.items),
+                            onVisibilityChange = { onSetGroupVisibility(group.items.map { it.id }, it) },
+                        )
                     }
                 }
             }
@@ -788,11 +805,54 @@ private fun DataGroupHeader(label: String) {
     }
 }
 
+// Current visibility of a single data field, for the segmented control.
+private fun dataVisibility(item: PersonalDataItem): FieldVisibility = when {
+    item.hideFromCatalog -> FieldVisibility.PRIVATE
+    item.isInPublicProfile -> FieldVisibility.PROFILE
+    else -> FieldVisibility.CATALOG
+}
+
+// Representative visibility for an alias group — the shared state when
+// the members agree, otherwise the first member's (re-picking the
+// control re-aligns every member).
+private fun groupDataVisibility(items: List<PersonalDataItem>): FieldVisibility {
+    val states = items.map { dataVisibility(it) }.distinct()
+    return states.singleOrNull() ?: states.firstOrNull() ?: FieldVisibility.CATALOG
+}
+
+// One alias-level visibility control, rendered once per group card in
+// place of the per-row segmented controls.
+@Composable
+private fun DataGroupVisibilityControl(
+    visibility: FieldVisibility,
+    onVisibilityChange: (FieldVisibility) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "Visibility",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        VisibilitySegmented(
+            visibility = visibility,
+            allowUseOnly = false,
+            onVisibilityChange = onVisibilityChange,
+        )
+    }
+}
+
 @Composable
 private fun CompactDataRow(
     item: PersonalDataItem,
     isFirst: Boolean,
     isLast: Boolean,
+    // When false, the per-row visibility control / system lock is
+    // omitted — an alias group sets visibility once via GroupVisibilityControl.
+    showVisibility: Boolean = true,
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onTogglePublic: () -> Unit,
@@ -852,8 +912,9 @@ private fun CompactDataRow(
             Spacer(modifier = Modifier.width(8.dp))
 
             // Visibility selector (3-state) or lock icon for system
-            // fields. Placed on the right to match the secrets row.
-            if (item.isSystemField) {
+            // fields. Omitted for grouped rows — the alias card carries
+            // one shared control.
+            if (item.isSystemField && showVisibility) {
                 Box(
                     modifier = Modifier.size(36.dp),
                     contentAlignment = Alignment.Center
@@ -865,7 +926,7 @@ private fun CompactDataRow(
                         tint = androidx.compose.ui.graphics.Color(0xFFD4A017) // Gold color
                     )
                 }
-            } else {
+            } else if (!item.isSystemField && showVisibility) {
                 val current = when {
                     item.hideFromCatalog -> com.vettid.app.ui.components.FieldVisibility.PRIVATE
                     item.isInPublicProfile -> com.vettid.app.ui.components.FieldVisibility.PROFILE
