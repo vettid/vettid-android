@@ -202,15 +202,25 @@ class OwnerSpaceClient @Inject constructor(
     /**
      * In-flight dedup ("single-flight") for idempotent read ops. When an
      * op in DEDUP_SAFE_OPS is requested while an identical one (same
-     * messageType + payload) is already in flight, the later caller
-     * awaits the first's result instead of issuing a duplicate vault
-     * round-trip. Screen-load, the 30s periodic refresh, and event
-     * handlers routinely fire the same feed.sync / connection.list /
-     * wallet.list within the same second; this collapses each such
-     * burst to a single vault op. Mutations are never coalesced — only
-     * ops on the DEDUP_SAFE_OPS allowlist are.
+     * messageType + payload) is already in flight AND that leader is
+     * still within DEDUP_COALESCE_WINDOW_MS, the later caller awaits the
+     * leader's result instead of issuing a duplicate vault round-trip.
+     * Screen-load and event handlers fire the same op within the same
+     * second; this collapses that burst to a single vault op.
+     *
+     * The freshness window is load-bearing: a request arriving well
+     * after the leader started is a deliberate RETRY (the caller's
+     * previous attempt is failing/slow). It must NOT coalesce — if the
+     * leader is doomed (its response was lost to a NATS resubscribe),
+     * coalescing every retry into it turns one missed response into a
+     * 30s hang. Past the window, retries bypass and issue fresh.
+     * Mutations are never coalesced — only DEDUP_SAFE_OPS ops are.
      */
-    private val inflightDedup = ConcurrentHashMap<String, CompletableDeferred<VaultResponse?>>()
+    private class InflightOp(
+        val deferred: CompletableDeferred<VaultResponse?>,
+        val startedAtMs: Long,
+    )
+    private val inflightDedup = ConcurrentHashMap<String, InflightOp>()
 
     /**
      * Get the current OwnerSpace ID for constructing topic names.
@@ -346,34 +356,37 @@ class OwnerSpaceClient @Inject constructor(
         }
 
         val dedupKey = "$messageType $payload"
-        val mine = CompletableDeferred<VaultResponse?>()
-        val isLeader = inflightDedup.putIfAbsent(dedupKey, mine) == null
+        val mine = InflightOp(CompletableDeferred(), System.currentTimeMillis())
+        val existing = inflightDedup.putIfAbsent(dedupKey, mine)
 
-        if (!isLeader) {
-            // An identical read op is already in flight — await its
-            // result instead of issuing a duplicate.
-            val shared = inflightDedup[dedupKey]
-            if (shared != null) {
-                android.util.Log.d(TAG, "Coalesced duplicate $messageType into in-flight request")
+        if (existing != null) {
+            // A request for this op is already in flight. A genuine
+            // burst (concurrent screen-load reads) coalesces onto it;
+            // a later RETRY must not — see DEDUP_COALESCE_WINDOW_MS.
+            val ageMs = System.currentTimeMillis() - existing.startedAtMs
+            if (ageMs <= DEDUP_COALESCE_WINDOW_MS) {
+                android.util.Log.d(TAG, "Coalesced duplicate $messageType into in-flight request (${ageMs}ms old)")
                 return try {
-                    shared.await()
+                    existing.deferred.await()
                 } catch (e: Exception) {
                     // Leader failed/cancelled — fall back to our own op.
                     dispatchVaultOp(messageType, payload, timeoutMs)
                 }
             }
-            // Rare race: leader cleared the slot between putIfAbsent and
-            // this lookup — just issue our own.
+            // Leader is stale — this caller is a deliberate retry, not
+            // a burst. Don't coalesce into a possibly-doomed in-flight
+            // request; issue fresh so the retry can actually recover.
+            android.util.Log.d(TAG, "Not coalescing $messageType — stale in-flight leader (${ageMs}ms); retry path")
             return dispatchVaultOp(messageType, payload, timeoutMs)
         }
 
         // Leader: issue the real op, share the result, clear the slot.
         return try {
             val result = dispatchVaultOp(messageType, payload, timeoutMs)
-            mine.complete(result)
+            mine.deferred.complete(result)
             result
         } catch (e: Throwable) {
-            mine.completeExceptionally(e)
+            mine.deferred.completeExceptionally(e)
             throw e
         } finally {
             inflightDedup.remove(dedupKey, mine)
@@ -3347,6 +3360,16 @@ class OwnerSpaceClient @Inject constructor(
 
     companion object {
         private const val TAG = "OwnerSpaceClient"
+
+        /**
+         * How long after a read op becomes the in-flight leader that a
+         * later identical request still coalesces onto it. Sized to a
+         * screen-load burst (sub-second). A request arriving past this
+         * window is a deliberate retry and is issued fresh — so a retry
+         * can recover from a leader whose response was lost (e.g. to a
+         * NATS resubscribe) instead of joining its 30s timeout.
+         */
+        private const val DEDUP_COALESCE_WINDOW_MS = 2_000L
 
         /**
          * Idempotent read ops that are safe to coalesce in inflightDedup.
