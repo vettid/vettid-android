@@ -183,6 +183,12 @@ class OwnerSpaceClient @Inject constructor(
     private var appSubscription: NatsSubscription? = null
     private var eventTypesSubscription: NatsSubscription? = null
 
+    // NATS connection epoch the current subscriptions were created on.
+    // subscribeToVault() compares it to natsClient.epoch to skip a
+    // redundant unsubscribe+resubscribe on the same connection. -1 =
+    // never subscribed.
+    private var subscribedEpoch: Long = -1L
+
     /**
      * In-flight request map for the inbox-based request-response path.
      *
@@ -231,7 +237,25 @@ class OwnerSpaceClient @Inject constructor(
      * Subscribe to vault responses and events.
      * Call this after connecting to NATS.
      */
+    @Synchronized
     fun subscribeToVault(): Result<Unit> {
+        // Idempotent on a stable connection: if we already hold live
+        // subscriptions created on the current connection epoch, reuse
+        // them. Re-subscribing tears forApp.> down and recreates it
+        // under a new sid; a vault response in flight during that gap
+        // lands with no subscriber and is lost. subscribeToVault is
+        // called by both the PIN-unlock reconnect and
+        // VaultProtectionService starting — without this guard the
+        // second call churned the subscription and dropped the first
+        // connection.list response (the post-login slow load).
+        val currentEpoch = natsClient.epoch
+        if (appSubscription != null && eventTypesSubscription != null &&
+            natsClient.isConnected && subscribedEpoch == currentEpoch
+        ) {
+            android.util.Log.d(TAG, "subscribeToVault: already subscribed on epoch $currentEpoch — reusing")
+            return Result.success(Unit)
+        }
+
         // Clean up any existing subscriptions first to prevent duplicates
         unsubscribeFromVault()
 
@@ -265,6 +289,10 @@ class OwnerSpaceClient @Inject constructor(
             android.util.Log.e(TAG, "Failed to subscribe to $eventTypesSubject", it)
         }
 
+        // Record the connection epoch these subscriptions belong to so
+        // a later call on the same connection reuses them instead of
+        // churning forApp.>.
+        subscribedEpoch = currentEpoch
         return Result.success(Unit)
     }
 
@@ -276,6 +304,7 @@ class OwnerSpaceClient @Inject constructor(
         appSubscription = null
         eventTypesSubscription?.unsubscribe()
         eventTypesSubscription = null
+        subscribedEpoch = -1L
         // Don't drain inflightRequests here. unsubscribeFromVault is
         // most often called as the first half of a subscribe-resubscribe
         // sequence (PIN unlock issues new creds, reconnect handlers,

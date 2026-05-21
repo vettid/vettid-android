@@ -82,6 +82,16 @@ class AndroidNatsClient {
     val isConnected: Boolean
         get() = connected.get()
 
+    /**
+     * Monotonic connection generation. Bumped on every (re)connect, so a
+     * caller that recorded the epoch when it subscribed can tell whether
+     * the underlying TCP connection — and therefore its subscriptions —
+     * is still the same one. Used by OwnerSpaceClient.subscribeToVault to
+     * skip a redundant unsubscribe+resubscribe on the same connection.
+     */
+    val epoch: Long
+        get() = connectionEpoch.get()
+
     // --- Byte-level I/O helpers ---
 
     /**

@@ -29,6 +29,14 @@ class NatsClient @Inject constructor() {
         get() = androidClient.isConnected
 
     /**
+     * Monotonic connection generation — see AndroidNatsClient.epoch.
+     * Lets a subscriber detect whether the underlying connection has
+     * been replaced since it last subscribed.
+     */
+    val epoch: Long
+        get() = androidClient.epoch
+
+    /**
      * Connection status for detailed state information.
      */
     val connectionStatus: ConnectionStatus
