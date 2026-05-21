@@ -3,10 +3,8 @@ package com.vettid.app.features.grants
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.google.gson.JsonObject
 import com.vettid.app.core.nats.GrantEvent
 import com.vettid.app.core.nats.OwnerSpaceClient
-import com.vettid.app.core.nats.VaultResponse
 import com.vettid.app.features.feed.ApprovalNotificationKind
 import com.vettid.app.features.feed.FeedNotificationService
 import com.vettid.app.features.feed.FeedRepository
@@ -80,6 +78,12 @@ class GrantsViewModel @Inject constructor(
     private val _outboundAliases = MutableStateFlow<Map<String, String>>(emptyMap())
     val outboundAliases: StateFlow<Map<String, String>> = _outboundAliases.asStateFlow()
 
+    // requestId → alias for incoming pending requests, derived the same
+    // way (the requested items are the user's own), so the Pending tab
+    // groups a peer's "Request all" fan-out back into one alias card.
+    private val _pendingAliases = MutableStateFlow<Map<String, String>>(emptyMap())
+    val pendingAliases: StateFlow<Map<String, String>> = _pendingAliases.asStateFlow()
+
     private val _busy = MutableStateFlow(false)
     val busy: StateFlow<Boolean> = _busy.asStateFlow()
 
@@ -115,10 +119,7 @@ class GrantsViewModel @Inject constructor(
 
     fun refresh() {
         viewModelScope.launch {
-            repo.listOutbound(connectionId.ifEmpty { null }).onSuccess {
-                _outbound.value = it
-                if (!isInbound) updateOutboundAliases(it)
-            }
+            repo.listOutbound(connectionId.ifEmpty { null }).onSuccess { _outbound.value = it }
             repo.listInbound(connectionId.ifEmpty { null }).onSuccess {
                 _inbound.value = it
                 if (isInbound) updateInboundAliases(it)
@@ -127,6 +128,9 @@ class GrantsViewModel @Inject constructor(
                 _pending.value = if (connectionId.isEmpty()) list else list.filter { it.connectionId == connectionId }
             }
             repo.listMyRequests(connectionId.ifEmpty { null }).onSuccess { _myRequests.value = it }
+            // Outbound grants + incoming pending requests both group by
+            // the user's OWN catalog — resolve it once and map both.
+            if (!isInbound) updateOwnAliasMaps()
         }
     }
 
@@ -156,53 +160,23 @@ class GrantsViewModel @Inject constructor(
     }
 
     /**
-     * Builds the grantId → alias map for outbound grants by matching
-     * each grant's item against the user's OWN catalog — personal-data
-     * fields keyed by namespace, secrets keyed by name. Grants whose
-     * item carries no alias are left out and render as a single card.
+     * Resolves the outbound grantId → alias and pending requestId →
+     * alias maps from the user's OWN catalog (the shared/requested
+     * items belong to the user). One catalog fetch covers both —
+     * personal-data fields keyed by namespace, secrets keyed by name.
+     * Items with no alias are left out and render as a single card.
      */
-    private suspend fun updateOutboundAliases(grants: List<GrantSummary>) {
-        if (grants.isEmpty()) {
-            _outboundAliases.value = emptyMap()
-            return
-        }
-        val dataAlias = runCatching { fetchOwnDataAliases() }.getOrDefault(emptyMap())
-        val secretAlias = runCatching { fetchOwnSecretAliases() }.getOrDefault(emptyMap())
-        _outboundAliases.value = grants.mapNotNull { g ->
-            val alias = if (g.itemKind == "secret") secretAlias[g.itemRef] else dataAlias[g.itemRef]
-            if (!alias.isNullOrBlank()) g.grantId to alias else null
+    private suspend fun updateOwnAliasMaps() {
+        val dataAlias = runCatching { repo.ownDataAliases() }.getOrDefault(emptyMap())
+        val secretAlias = runCatching { repo.ownSecretAliases() }.getOrDefault(emptyMap())
+        fun aliasOf(kind: String, ref: String): String =
+            (if (kind == "secret") secretAlias[ref] else dataAlias[ref]).orEmpty()
+        _outboundAliases.value = _outbound.value.mapNotNull { g ->
+            aliasOf(g.itemKind, g.itemRef).takeIf { it.isNotBlank() }?.let { g.grantId to it }
         }.toMap()
-    }
-
-    /** namespace → alias for the user's personal-data fields. */
-    private suspend fun fetchOwnDataAliases(): Map<String, String> {
-        val resp = ownerSpaceClient.sendAndAwaitResponse("personal-data.get", JsonObject(), 10_000L)
-        if (resp !is VaultResponse.HandlerResult || !resp.success || resp.result == null) return emptyMap()
-        val fields = resp.result.getAsJsonObject("fields") ?: return emptyMap()
-        val out = mutableMapOf<String, String>()
-        fields.entrySet().forEach { (namespace, valueJson) ->
-            val alias = valueJson?.takeIf { it.isJsonObject }?.asJsonObject
-                ?.get("alias")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
-            if (alias.isNotBlank()) out[namespace] = alias
-        }
-        return out
-    }
-
-    /** secret name → alias for the user's minor secrets. */
-    private suspend fun fetchOwnSecretAliases(): Map<String, String> {
-        val resp = ownerSpaceClient.sendAndAwaitResponse("credential.secret.list", JsonObject(), 10_000L)
-        if (resp !is VaultResponse.HandlerResult || !resp.success || resp.result == null) return emptyMap()
-        val secrets = resp.result.getAsJsonArray("secrets") ?: return emptyMap()
-        val out = mutableMapOf<String, String>()
-        secrets.forEach { el ->
-            runCatching {
-                val o = el.asJsonObject
-                val name = o.get("name")?.asString ?: return@forEach
-                val alias = o.get("alias")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
-                if (alias.isNotBlank()) out[name] = alias
-            }
-        }
-        return out
+        _pendingAliases.value = _pending.value.mapNotNull { p ->
+            aliasOf(p.itemKind, p.itemRef).takeIf { it.isNotBlank() }?.let { p.requestId to it }
+        }.toMap()
     }
 
     fun sendRequest(

@@ -38,6 +38,11 @@ fun DataGrantApprovalScreen(
     onDone: () -> Unit = {},
 ) {
     val state by viewModel.state.collectAsState()
+    val items by viewModel.items.collectAsState()
+    val alias by viewModel.alias.collectAsState()
+    // A group request fans out one item per pending request, all
+    // sharing one alias; an ungrouped request is a group of one.
+    val isGroup = items.size > 1
 
     LaunchedEffect(state) {
         if (state is DataGrantApprovalViewModel.State.Approved ||
@@ -81,15 +86,20 @@ fun DataGrantApprovalScreen(
             }
             Spacer(Modifier.height(16.dp))
 
+            val onlyItem = items.firstOrNull()
             Text(
-                "${viewModel.peerName} wants access to ${viewModel.itemLabel.ifBlank { "an item" }}",
+                if (isGroup) {
+                    "${viewModel.peerName} wants access to $alias (${items.size} items)"
+                } else {
+                    "${viewModel.peerName} wants access to ${onlyItem?.itemLabel?.ifBlank { "an item" } ?: "an item"}"
+                },
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.SemiBold,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                "If you approve, ${viewModel.peerName} can fetch this item under the limits below. Their vault never sees the underlying credential — only the requested value at fetch time.",
+                "If you approve, ${viewModel.peerName} can fetch ${if (isGroup) "these items" else "this item"} under the limits below. Their vault never sees the underlying credential — only the requested value at fetch time.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -107,9 +117,31 @@ fun DataGrantApprovalScreen(
                 Column(modifier = Modifier.padding(16.dp)) {
                     DetailRow("From", viewModel.peerName)
                     Spacer(Modifier.height(8.dp))
-                    DetailRow("Item", viewModel.itemLabel.ifBlank { viewModel.itemRef })
-                    Spacer(Modifier.height(8.dp))
-                    DetailRow("Type", prettyKind(viewModel.itemKind))
+                    if (isGroup) {
+                        // The whole alias group, listed — approving
+                        // consents to every item at once.
+                        Row(modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                text = "Items",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.width(80.dp),
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                items.forEach { item ->
+                                    Text(
+                                        text = item.itemLabel.ifBlank { item.itemRef },
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        DetailRow("Item", onlyItem?.itemLabel?.ifBlank { onlyItem.itemRef } ?: "")
+                        Spacer(Modifier.height(8.dp))
+                        DetailRow("Type", prettyKind(onlyItem?.itemKind ?: ""))
+                    }
                     Spacer(Modifier.height(8.dp))
                     DetailRow("Mode", prettyMode(viewModel.requestedMode))
                     Spacer(Modifier.height(8.dp))
@@ -188,12 +220,12 @@ fun DataGrantApprovalScreen(
                     onClick = { viewModel.deny() },
                     enabled = state !is DataGrantApprovalViewModel.State.Submitting,
                     modifier = Modifier.weight(1f),
-                ) { Text("Deny") }
+                ) { Text(if (isGroup) "Deny all" else "Deny") }
                 Button(
                     onClick = { viewModel.approve() },
                     enabled = state !is DataGrantApprovalViewModel.State.Submitting,
                     modifier = Modifier.weight(1f),
-                ) { Text("Approve") }
+                ) { Text(if (isGroup) "Approve all" else "Approve") }
             }
             Spacer(Modifier.height(16.dp))
         }

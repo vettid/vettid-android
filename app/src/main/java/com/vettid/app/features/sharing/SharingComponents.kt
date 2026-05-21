@@ -319,12 +319,16 @@ internal fun AliasCard(content: @Composable ColumnScope.() -> Unit) {
 }
 
 /**
- * Header band inside an alias card — the alias name. Read-only here;
- * aliases are renamed on the Secrets / Personal Data screens that own
- * the underlying items.
+ * Header band inside an alias card — the alias name, plus an optional
+ * trailing action slot (e.g. a "Request all" button). The label itself
+ * is read-only; aliases are renamed on the Secrets / Personal Data
+ * screens that own the underlying items.
  */
 @Composable
-internal fun AliasCardHeader(label: String) {
+internal fun AliasCardHeader(
+    label: String,
+    trailing: (@Composable () -> Unit)? = null,
+) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
@@ -346,7 +350,12 @@ internal fun AliasCardHeader(label: String) {
                 style = MaterialTheme.typography.labelMedium,
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.weight(1f),
             )
+            if (trailing != null) {
+                Spacer(Modifier.width(6.dp))
+                trailing()
+            }
         }
     }
 }

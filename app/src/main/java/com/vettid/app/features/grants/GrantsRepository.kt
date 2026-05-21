@@ -45,6 +45,41 @@ class GrantsRepository @Inject constructor(
         }
     }
 
+    /**
+     * namespace → alias for the user's own personal-data fields.
+     * Used to regroup inbound requests/grants by alias (the grantor
+     * owns the data, so its alias lives in the grantor's catalog).
+     */
+    suspend fun ownDataAliases(): Map<String, String> {
+        val resp = ownerSpaceClient.sendAndAwaitResponse("personal-data.get", JsonObject(), 10_000L)
+        if (resp !is VaultResponse.HandlerResult || !resp.success || resp.result == null) return emptyMap()
+        val fields = resp.result.getAsJsonObject("fields") ?: return emptyMap()
+        val out = mutableMapOf<String, String>()
+        fields.entrySet().forEach { (namespace, valueJson) ->
+            val alias = valueJson?.takeIf { it.isJsonObject }?.asJsonObject
+                ?.get("alias")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
+            if (alias.isNotBlank()) out[namespace] = alias
+        }
+        return out
+    }
+
+    /** secret name → alias for the user's own minor secrets. */
+    suspend fun ownSecretAliases(): Map<String, String> {
+        val resp = ownerSpaceClient.sendAndAwaitResponse("credential.secret.list", JsonObject(), 10_000L)
+        if (resp !is VaultResponse.HandlerResult || !resp.success || resp.result == null) return emptyMap()
+        val secrets = resp.result.getAsJsonArray("secrets") ?: return emptyMap()
+        val out = mutableMapOf<String, String>()
+        secrets.forEach { el ->
+            runCatching {
+                val o = el.asJsonObject
+                val name = o.get("name")?.asString ?: return@forEach
+                val alias = o.get("alias")?.takeIf { !it.isJsonNull }?.asString.orEmpty()
+                if (alias.isNotBlank()) out[name] = alias
+            }
+        }
+        return out
+    }
+
     suspend fun approve(requestId: String, expiresAt: Long, maxUses: Int, mode: String): Result<String> {
         val payload = JsonObject().apply {
             addProperty("request_id", requestId)

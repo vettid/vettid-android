@@ -47,6 +47,7 @@ fun GrantsScreen(
     val outbound by viewModel.outbound.collectAsState()
     val outboundAliases by viewModel.outboundAliases.collectAsState()
     val pending by viewModel.pending.collectAsState()
+    val pendingAliases by viewModel.pendingAliases.collectAsState()
     val myRequests by viewModel.myRequests.collectAsState()
     val revealedValue by viewModel.revealedValue.collectAsState()
     val busy by viewModel.busy.collectAsState()
@@ -136,6 +137,7 @@ fun GrantsScreen(
                 )
                 else -> PendingList(
                     pending = pending,
+                    aliases = pendingAliases,
                     onApprove = { viewModel.approve(it.requestId, it.requestedExpiresAt, it.requestedMaxUses, it.requestedMode) },
                     onDeny = { viewModel.deny(it.requestId, "") },
                 )
@@ -275,6 +277,7 @@ private fun OutboundGrantRow(g: GrantSummary, onRevoke: (GrantSummary) -> Unit) 
 @Composable
 private fun PendingList(
     pending: List<PendingRequestSummary>,
+    aliases: Map<String, String>,
     onApprove: (PendingRequestSummary) -> Unit,
     onDeny: (PendingRequestSummary) -> Unit,
 ) {
@@ -282,38 +285,91 @@ private fun PendingList(
         EmptyState("No pending requests.")
         return
     }
-    LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp)) {
-        items(pending) { p ->
-            Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                Text(
-                    "Wants access to ${p.itemLabel.ifEmpty { p.itemRef }}",
-                    style = MaterialTheme.typography.titleSmall,
+    // Alias-card model: a peer's "Request all" fan-out lands as N
+    // pending requests sharing one alias — collapse them into one card
+    // with batch Approve all / Deny all. Ungrouped requests stay single.
+    val groups = remember(pending, aliases) {
+        buildAliasGroups(pending, aliasOf = { aliases[it.requestId].orEmpty() }, idOf = { it.requestId })
+    }
+    val singles = groups.filter { it.label == null }
+    val aliasGroups = groups.filter { it.label != null }
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        items(singles, key = { "single_${it.key}" }) { group ->
+            val p = group.items.first()
+            AliasCard {
+                PendingRequestRow(p)
+                PendingActions(
+                    approveLabel = "Approve",
+                    denyLabel = "Deny",
+                    onApprove = { onApprove(p) },
+                    onDeny = { onDeny(p) },
                 )
+            }
+        }
+        items(aliasGroups, key = { "group_${it.key}" }) { group ->
+            AliasCard {
+                AliasCardHeader(label = group.label ?: group.key)
+                group.items.forEach { p -> PendingRequestRow(p) }
+                PendingActions(
+                    approveLabel = "Approve all",
+                    denyLabel = "Deny all",
+                    onApprove = { group.items.forEach { onApprove(it) } },
+                    onDeny = { group.items.forEach { onDeny(it) } },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun PendingRequestRow(p: PendingRequestSummary) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 1.dp,
+        shape = RoundedCornerShape(8.dp),
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp, horizontal = 8.dp)) {
+            Text(
+                p.itemLabel.ifEmpty { p.itemRef },
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                "${p.requestedMode} · ${formatExpiry(p.requestedExpiresAt)} · ${p.requestedMaxUses} use(s)",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (p.reason.isNotBlank()) {
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    "${p.requestedMode} · ${formatExpiry(p.requestedExpiresAt)} · ${p.requestedMaxUses} use(s)",
-                    style = MaterialTheme.typography.labelMedium,
+                    "Reason: ${p.reason}",
+                    style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
                 )
-                if (p.reason.isNotBlank()) {
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        "Reason: ${p.reason}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                Spacer(Modifier.height(8.dp))
-                Row {
-                    Button(onClick = { onApprove(p) }) { Text("Approve") }
-                    Spacer(Modifier.width(8.dp))
-                    OutlinedButton(onClick = { onDeny(p) }) { Text("Deny") }
-                }
             }
-            HorizontalDivider()
         }
+    }
+}
+
+@Composable
+private fun PendingActions(
+    approveLabel: String,
+    denyLabel: String,
+    onApprove: () -> Unit,
+    onDeny: () -> Unit,
+) {
+    Row(modifier = Modifier.fillMaxWidth().padding(top = 2.dp)) {
+        Button(onClick = onApprove) { Text(approveLabel) }
+        Spacer(Modifier.width(8.dp))
+        OutlinedButton(onClick = onDeny) { Text(denyLabel) }
     }
 }
 

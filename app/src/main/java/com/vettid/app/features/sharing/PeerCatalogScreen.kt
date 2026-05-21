@@ -62,6 +62,7 @@ fun PeerCatalogScreen(
                 is PeerCatalogState.Loaded -> {
                     var requestTarget by remember { mutableStateOf<SharedItem?>(null) }
                     var useTarget by remember { mutableStateOf<SharedItem?>(null) }
+                    var groupRequestTarget by remember { mutableStateOf<AliasGroup<SharedItem>?>(null) }
                     val criticalResult by viewModel.lastCriticalResult.collectAsState()
                     criticalResult?.let { res ->
                         AlertDialog(
@@ -91,6 +92,7 @@ fun PeerCatalogScreen(
                                 requestTarget = item
                             }
                         },
+                        onRequestGroup = { group -> groupRequestTarget = group },
                     )
                     requestTarget?.let { item ->
                         RequestAccessSheet(
@@ -127,6 +129,34 @@ fun PeerCatalogScreen(
                             },
                         )
                     }
+                    groupRequestTarget?.let { group ->
+                        // "Request all" — one RequestAccessSheet for the
+                        // whole alias group; on submit, fan out one
+                        // grant.request per requestable member. The vault
+                        // still tracks each individually; the grantor's
+                        // approval screen regroups them by alias.
+                        val members = group.items.filter {
+                            it.status == RequestStatus.AVAILABLE && !it.useOnly
+                        }
+                        RequestAccessSheet(
+                            itemLabel = "${group.label ?: group.key} (${members.size} item${if (members.size == 1) "" else "s"})",
+                            onDismiss = { groupRequestTarget = null },
+                            onSubmit = { mode, expiresAt, maxUses, reason ->
+                                members.forEach { item ->
+                                    viewModel.onEvent(
+                                        PeerCatalogEvent.RequestGrant(
+                                            key = item.key,
+                                            mode = mode,
+                                            expiresAt = expiresAt,
+                                            maxUses = maxUses,
+                                            reason = reason,
+                                        )
+                                    )
+                                }
+                                groupRequestTarget = null
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -137,6 +167,7 @@ fun PeerCatalogScreen(
 private fun Loaded(
     state: PeerCatalogState.Loaded,
     onRequest: (String) -> Unit,
+    onRequestGroup: (AliasGroup<SharedItem>) -> Unit,
 ) {
     // Alias-card model: items the peer filed under one alias collapse
     // into a single card; ungrouped items are their own card, first.
@@ -172,8 +203,23 @@ private fun Loaded(
             }
         }
         items(aliasGroups, key = { "group_${it.key}" }) { group ->
+            val requestable = group.items.count {
+                it.status == RequestStatus.AVAILABLE && !it.useOnly
+            }
             AliasCard {
-                AliasCardHeader(label = group.label ?: group.key)
+                AliasCardHeader(
+                    label = group.label ?: group.key,
+                    trailing = if (requestable > 0) {
+                        {
+                            FilledTonalButton(
+                                onClick = { onRequestGroup(group) },
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            ) {
+                                Text("Request all", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    } else null,
+                )
                 group.items.forEach { item ->
                     SharedItemRow(item = item, onRequest = { onRequest(item.key) })
                 }
