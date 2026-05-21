@@ -10,6 +10,7 @@ import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.nats.VaultResponse
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -177,44 +178,75 @@ class AuthorizeDeviceViewModel @Inject constructor(
     ) {
         _state.value = AuthorizeDeviceState.Submitting
         viewModelScope.launch {
-            try {
-                val payload = JsonObject().apply {
-                    addProperty("connection_id", scanned.connectionId)
-                    addProperty("approval_token", scanned.approvalToken)
-                    addProperty("device_name", deviceName.ifBlank { "Desktop" })
-                    addProperty("duration_seconds", durationSeconds)
-                    if (forceReplace) addProperty("force_replace", true)
-                }
-                val response = ownerSpaceClient.sendAndAwaitResponse(
-                    messageType = "device.authorize-session",
-                    payload = payload,
-                    timeoutMs = 20000L
-                )
-                when (response) {
-                    is VaultResponse.HandlerResult -> {
-                        if (response.success) _state.value = AuthorizeDeviceState.Done
-                        else _state.value = AuthorizeDeviceState.Error(response.error ?: "Authorization failed")
+            // device.authorize-session needs the pending authorization
+            // the desktop creates via device.request-session. The
+            // desktop's Stage-1 connect can be slow (~8s observed) and
+            // the user can reach this screen and approve before
+            // request-session lands — so a "no pending authorization"
+            // result means "desktop not ready yet": wait and retry
+            // until it appears or AUTHORIZE_RETRY_WINDOW_MS elapses,
+            // rather than failing the pairing.
+            val deadline = System.currentTimeMillis() + AUTHORIZE_RETRY_WINDOW_MS
+            while (true) {
+                try {
+                    val payload = JsonObject().apply {
+                        addProperty("connection_id", scanned.connectionId)
+                        addProperty("approval_token", scanned.approvalToken)
+                        addProperty("device_name", deviceName.ifBlank { "Desktop" })
+                        addProperty("duration_seconds", durationSeconds)
+                        if (forceReplace) addProperty("force_replace", true)
                     }
-                    is VaultResponse.Error -> {
-                        if (response.code == "existing_session_active") {
-                            val existing = parseExistingDevices(response.extra)
-                            _state.value = AuthorizeDeviceState.ConfirmReplace(
-                                scanned = scanned,
-                                info = info,
-                                deviceName = deviceName,
-                                durationSeconds = durationSeconds,
-                                existingDevices = existing,
-                            )
-                        } else {
-                            _state.value = AuthorizeDeviceState.Error(response.message)
+                    val response = ownerSpaceClient.sendAndAwaitResponse(
+                        messageType = "device.authorize-session",
+                        payload = payload,
+                        timeoutMs = 20000L
+                    )
+                    // A "pending authorization" failure = the desktop's
+                    // request-session hasn't landed yet. Retry rather
+                    // than surface it as a pairing failure.
+                    val notReadyMsg = when (response) {
+                        is VaultResponse.HandlerResult ->
+                            if (!response.success) response.error else null
+                        is VaultResponse.Error ->
+                            if (response.code != "existing_session_active") response.message else null
+                        else -> null
+                    }
+                    if (notReadyMsg != null &&
+                        notReadyMsg.contains("pending authorization", ignoreCase = true) &&
+                        System.currentTimeMillis() < deadline
+                    ) {
+                        Log.i(TAG, "authorize-session: desktop not ready yet — retrying")
+                        delay(AUTHORIZE_RETRY_INTERVAL_MS)
+                        continue
+                    }
+                    when (response) {
+                        is VaultResponse.HandlerResult -> {
+                            if (response.success) _state.value = AuthorizeDeviceState.Done
+                            else _state.value = AuthorizeDeviceState.Error(response.error ?: "Authorization failed")
                         }
+                        is VaultResponse.Error -> {
+                            if (response.code == "existing_session_active") {
+                                val existing = parseExistingDevices(response.extra)
+                                _state.value = AuthorizeDeviceState.ConfirmReplace(
+                                    scanned = scanned,
+                                    info = info,
+                                    deviceName = deviceName,
+                                    durationSeconds = durationSeconds,
+                                    existingDevices = existing,
+                                )
+                            } else {
+                                _state.value = AuthorizeDeviceState.Error(response.message)
+                            }
+                        }
+                        null -> _state.value = AuthorizeDeviceState.Error("Request timed out")
+                        else -> _state.value = AuthorizeDeviceState.Error("Unexpected response")
                     }
-                    null -> _state.value = AuthorizeDeviceState.Error("Request timed out")
-                    else -> _state.value = AuthorizeDeviceState.Error("Unexpected response")
+                    return@launch
+                } catch (e: Exception) {
+                    Log.e(TAG, "Authorization failed", e)
+                    _state.value = AuthorizeDeviceState.Error(e.message ?: "Failed")
+                    return@launch
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Authorization failed", e)
-                _state.value = AuthorizeDeviceState.Error(e.message ?: "Failed")
             }
         }
     }
@@ -263,5 +295,14 @@ class AuthorizeDeviceViewModel @Inject constructor(
         // are display-time suggestions, not the source of truth.
         private const val DEFAULT_FALLBACK_DURATION_S = 24L * 60L * 60L
         private const val MAX_FALLBACK_DURATION_S = 30L * 24L * 60L * 60L
+
+        // device.authorize-session needs the pending authorization the
+        // desktop creates with device.request-session. The desktop's
+        // Stage-1 connect can take several seconds, and the user can
+        // reach this screen and approve before request-session lands —
+        // so "no pending authorization" is retried (not failed) for
+        // this long. Well within the invite's 120s TTL.
+        private const val AUTHORIZE_RETRY_WINDOW_MS = 45_000L
+        private const val AUTHORIZE_RETRY_INTERVAL_MS = 2_000L
     }
 }
