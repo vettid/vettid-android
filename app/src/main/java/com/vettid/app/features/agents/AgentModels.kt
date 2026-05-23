@@ -97,9 +97,9 @@ sealed class CreateInvitationState {
     object Ready : CreateInvitationState()
     object Creating : CreateInvitationState()
     data class Created(
-        val inviteToken: String,
         val connectionId: String,
-        val shortLink: String
+        val inviteCode: String,
+        val expiresAt: String
     ) : CreateInvitationState()
     data class Error(val message: String) : CreateInvitationState()
 }

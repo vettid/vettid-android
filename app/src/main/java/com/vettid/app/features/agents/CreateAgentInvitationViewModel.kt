@@ -51,8 +51,13 @@ class CreateAgentInvitationViewModel @Inject constructor(
             _state.value = CreateInvitationState.Creating
 
             try {
+                // Stage 1 of the agent pairing flow — see
+                // vettid-agent/docs/AGENT-PAIRING-FLOW.md. The vault mints
+                // a 12-char invite code + scoped NATS creds, publishes the
+                // payload to invite.<code> on JetStream, and returns the
+                // code for the user to paste into `vettid-agent init`.
                 val response = ownerSpaceClient.sendAndAwaitResponse(
-                    messageType = "agent.create-invitation",
+                    messageType = "agent.create-invite",
                     payload = com.google.gson.JsonObject().apply {
                         addProperty("label", name.ifBlank { "Agent" })
                     }
@@ -62,22 +67,21 @@ class CreateAgentInvitationViewModel @Inject constructor(
                     is VaultResponse.HandlerResult -> {
                         if (response.success) {
                             val result = response.result
-                            val inviteToken = result?.get("invite_token")?.asString ?: ""
                             val connectionId = result?.get("connection_id")?.asString ?: ""
-                            val ownerGuid = result?.get("owner_guid")?.asString ?: ""
+                            val inviteCode = result?.get("invite_code")?.asString ?: ""
+                            val expiresAt = result?.get("expires_at")?.asString ?: ""
 
-                            // Build the shortlink for vettid-agent init
-                            val shortLink = if (inviteToken.isNotEmpty()) {
-                                "https://vettid.com/agent?t=$inviteToken&o=$ownerGuid"
+                            if (inviteCode.isBlank()) {
+                                _state.value = CreateInvitationState.Error(
+                                    "Vault returned an empty invite code"
+                                )
                             } else {
-                                ""
+                                _state.value = CreateInvitationState.Created(
+                                    connectionId = connectionId,
+                                    inviteCode = inviteCode,
+                                    expiresAt = expiresAt
+                                )
                             }
-
-                            _state.value = CreateInvitationState.Created(
-                                inviteToken = inviteToken,
-                                connectionId = connectionId,
-                                shortLink = shortLink
-                            )
                         } else {
                             _state.value = CreateInvitationState.Error(
                                 response.error ?: "Failed to create invitation"

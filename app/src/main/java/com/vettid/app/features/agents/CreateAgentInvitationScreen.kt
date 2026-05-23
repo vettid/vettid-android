@@ -90,8 +90,7 @@ fun CreateAgentInvitationScreen(
                 }
                 is CreateInvitationState.Created -> {
                     CreatedContent(
-                        inviteToken = currentState.inviteToken,
-                        shortLink = currentState.shortLink,
+                        inviteCode = currentState.inviteCode,
                         onDone = onNavigateBack
                     )
                 }
@@ -223,12 +222,12 @@ private fun ReadyContent(
 
 @Composable
 private fun CreatedContent(
-    inviteToken: String,
-    shortLink: String,
+    inviteCode: String,
     onDone: () -> Unit
 ) {
     val context = LocalContext.current
-    val initCommand = "vettid-agent init $shortLink"
+    val dashed = formatInviteCode(inviteCode)
+    val initCommand = "vettid-agent init $inviteCode"
 
     Column(
         modifier = Modifier.fillMaxSize(),
@@ -252,7 +251,7 @@ private fun CreatedContent(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "Run this command on the machine where your agent runs:",
+            text = "Type this code into `vettid-agent init` on the machine where your agent runs:",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
@@ -260,7 +259,7 @@ private fun CreatedContent(
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Command card
+        // Invite code card — large, monospace, dash-grouped (ABCD-EFGH-JKLM).
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
@@ -269,7 +268,7 @@ private fun CreatedContent(
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    text = "INIT COMMAND",
+                    text = "INVITE CODE",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.SemiBold
@@ -277,33 +276,33 @@ private fun CreatedContent(
                 Spacer(modifier = Modifier.height(8.dp))
                 SelectionContainer {
                     Text(
-                        text = initCommand,
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontFamily = FontFamily.Monospace
+                        text = dashed,
+                        style = MaterialTheme.typography.headlineMedium.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold
                         ),
+                        textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
                 Spacer(modifier = Modifier.height(12.dp))
                 OutlinedButton(
                     onClick = {
-                        // Agent init command embeds short-lived
-                        // credentials — auto-clear + sensitive flag.
                         context.secureClipboard().copySensitiveText(initCommand)
-                        Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Copied init command", Toast.LENGTH_SHORT).show()
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(Icons.Default.ContentCopy, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text("Copy Command")
+                    Text("Copy `vettid-agent init` command")
                 }
             }
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        // Security note
+        // Security note — code expires in 2 minutes (matches vault's pairing window).
         Card(
             modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
@@ -322,7 +321,7 @@ private fun CreatedContent(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = "This invitation expires in 24 hours. Do not share it with others.",
+                    text = "This code expires in 2 minutes. You'll be asked to approve the connection after the agent uses it.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface
                 )
@@ -338,4 +337,12 @@ private fun CreatedContent(
             Text("Done")
         }
     }
+}
+
+// formatInviteCode displays a 12-char ambiguity-safe code as three
+// 4-char groups (ABCD-EFGH-JKLM). Anything other than 12 chars falls
+// through unmodified.
+private fun formatInviteCode(code: String): String {
+    if (code.length != 12) return code
+    return "${code.substring(0, 4)}-${code.substring(4, 8)}-${code.substring(8, 12)}"
 }
