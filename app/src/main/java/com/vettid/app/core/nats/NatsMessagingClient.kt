@@ -393,3 +393,42 @@ data class DeviceMetadataSummary(
     val machineFingerprint: String,
     val clientIp: String
 )
+
+/**
+ * Notification that a vettid-agent has completed stage 1 of pairing and is
+ * now awaiting the owner's stage-2 authorization (scope picker + duration).
+ * See vettid-agent/docs/AGENT-PAIRING-FLOW.md.
+ *
+ * Unlike the device version, the owner sees an explicit scope picker — the
+ * agent's `requestedScope` is a hint and the phone is the sole authority
+ * that writes the final ConnectionContract on the vault.
+ */
+data class AgentPendingAuthNotification(
+    val connectionId: String,
+    val approvalToken: String,
+    val agentPubKey: String,
+    val agentMetadata: AgentMetadataSummary?,
+    val binaryFpPrefix: String,
+    val expiresAt: Long,
+    val requestedScope: List<String>,
+    val requestedApprovalMode: String,
+    val requestedDurationSeconds: Long,
+    val defaultDurationSeconds: Long,
+    val maxDurationSeconds: Long
+)
+
+/**
+ * Identity-card fields the agent sends for the user to verify before approving.
+ * Mirrors vault-manager/connections.go AgentMetadata (omitting first_seen_at,
+ * which the vault sets server-side, and ip_address, which the vault enriches).
+ */
+data class AgentMetadataSummary(
+    val agentType: String,
+    val binaryFingerprint: String,
+    val machineFingerprint: String,
+    val hostname: String,
+    val platform: String,
+    val osName: String,
+    val osVersion: String,
+    val appVersion: String
+)

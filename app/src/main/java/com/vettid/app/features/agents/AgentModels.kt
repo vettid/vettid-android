@@ -42,6 +42,44 @@ sealed class AgentApprovalEffect {
     object NavigateBack : AgentApprovalEffect()
 }
 
+// MARK: - Stage-2 Authorization Models
+//
+// vettid-agent has completed stage 1 (resolved invite, generated ephemeral
+// X25519 keypair) and posted agent.request-session. The phone surfaces the
+// agent's identity card + requested scope hints and the owner picks the
+// final granted_scope / approval_mode / duration / rate_limit, which the
+// vault writes into ConnectionContract on authorize-session.
+
+/**
+ * Per-scope toggle state for the AuthorizeAgentScreen's scope picker.
+ * Each requested token gets default-on; the owner can untoggle anything
+ * before approving. Scopes outside the requested set can't be added from
+ * this screen — that would require a fresh request-session round trip.
+ */
+data class ScopeToggle(
+    val token: String,
+    val granted: Boolean,
+)
+
+sealed class AuthorizeAgentState {
+    /** Waiting for the pending-authorization push from the vault. */
+    object Waiting : AuthorizeAgentState()
+
+    /** Form is ready — owner can pick scope/mode/duration and Approve. */
+    data class Ready(
+        val notification: com.vettid.app.core.nats.AgentPendingAuthNotification,
+        val scopes: List<ScopeToggle>,
+        val approvalMode: String,             // "always_ask" | "auto_within_contract"
+        val durationSeconds: Long,
+        val rateLimitMax: Int,
+        val rateLimitPer: String,             // "minute" | "hour"
+    ) : AuthorizeAgentState()
+
+    object Submitting : AuthorizeAgentState()
+    object Done : AuthorizeAgentState()
+    data class Error(val message: String) : AuthorizeAgentState()
+}
+
 // MARK: - Management Models
 
 /**

@@ -115,6 +115,22 @@ class OwnerSpaceClient @Inject constructor(
     /** Flow of device connection_ids that were revoked (so UI can refresh). */
     val deviceSessionRevoked: SharedFlow<String> = _deviceSessionRevoked.asSharedFlow()
 
+    // replay=1 mirrors devicePendingAuth — the AuthorizeAgentScreen
+    // subscribes AFTER the VettIDApp-level auto-nav has consumed the
+    // first emission, so without a replay the form renders empty
+    // (agent_type, fingerprints, requested_scope all blank).
+    private val _agentPendingAuth = MutableSharedFlow<AgentPendingAuthNotification>(
+        replay = 1,
+        extraBufferCapacity = 8,
+    )
+    /**
+     * Flow of vettid-agent connectors awaiting session authorization
+     * (stage 2 of pairing). Emitted when an agent has resolved an invite
+     * code and posted agent.request-session — the owner now needs to
+     * review the identity card, pick scope/duration, and Approve.
+     */
+    val agentPendingAuth: SharedFlow<AgentPendingAuthNotification> = _agentPendingAuth.asSharedFlow()
+
     private val _callEvents = MutableSharedFlow<CallSignalEvent>(extraBufferCapacity = 64)
     /** Flow of call signaling events (vault-routed). */
     val callEvents: SharedFlow<CallSignalEvent> = _callEvents.asSharedFlow()
@@ -2142,6 +2158,14 @@ class OwnerSpaceClient @Inject constructor(
                     handleSecurityEvent(message); return
                 }
 
+                // Agent pairing — connector has requested stage-2 session
+                // authorization. Specific match BEFORE the per-op
+                // catch-all below so the pending-authorization payload
+                // (no request_id field) doesn't get fed into the
+                // approval-request parser.
+                subject.contains(".forApp.agent.pending-authorization") -> {
+                    handleAgentPendingAuth(message); return
+                }
                 // Agent events (push notifications, not request-responses)
                 subject.contains(".forApp.agent.") && !isRequestResponse(subject) -> {
                     handleAgentEvent(message); return
@@ -2597,6 +2621,54 @@ class OwnerSpaceClient @Inject constructor(
             _devicePendingAuth.tryEmit(notif)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to parse device.pending-authorization event", e)
+        }
+    }
+
+    private fun handleAgentPendingAuth(message: NatsMessage) {
+        try {
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+
+            val meta = payload.optJSONObject("agent_metadata")
+            val metadata = if (meta != null) {
+                AgentMetadataSummary(
+                    agentType = meta.optString("agent_type", ""),
+                    binaryFingerprint = meta.optString("binary_fingerprint", ""),
+                    machineFingerprint = meta.optString("machine_fingerprint", ""),
+                    hostname = meta.optString("hostname", ""),
+                    platform = meta.optString("platform", ""),
+                    osName = meta.optString("os_name", ""),
+                    osVersion = meta.optString("os_version", ""),
+                    appVersion = meta.optString("app_version", "")
+                )
+            } else null
+
+            // requested_scope arrives as a JSON array; flatten to List<String>
+            // here so downstream code doesn't have to redo the JSON dance.
+            val scopeArr = payload.optJSONArray("requested_scope")
+            val requestedScope = if (scopeArr != null) {
+                (0 until scopeArr.length()).mapNotNull { idx ->
+                    scopeArr.optString(idx).takeIf { it.isNotEmpty() }
+                }
+            } else emptyList()
+
+            val notif = AgentPendingAuthNotification(
+                connectionId = payload.getString("connection_id"),
+                approvalToken = payload.optString("approval_token", ""),
+                agentPubKey = payload.optString("agent_pubkey", ""),
+                agentMetadata = metadata,
+                binaryFpPrefix = payload.optString("binary_fp_prefix", ""),
+                expiresAt = payload.optLong("expires_at", 0L),
+                requestedScope = requestedScope,
+                requestedApprovalMode = payload.optString("requested_approval_mode", "always_ask"),
+                requestedDurationSeconds = payload.optLong("requested_duration_s", 0L),
+                defaultDurationSeconds = payload.optLong("default_duration_s", 3600L),
+                maxDurationSeconds = payload.optLong("max_duration_s", 24 * 3600L)
+            )
+            android.util.Log.i(TAG, "Agent pending authorization: ${notif.connectionId} (${metadata?.agentType ?: "unknown"})")
+            _agentPendingAuth.tryEmit(notif)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse agent.pending-authorization event", e)
         }
     }
 

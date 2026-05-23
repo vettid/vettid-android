@@ -302,6 +302,12 @@ sealed class Screen(val route: String) {
         fun createRoute(requestId: String) = "agents/approval/$requestId"
     }
     object CreateAgentInvitation : Screen("agents/create-invitation")
+    // Stage-2 authorization for a pairing vettid-agent. Auto-pushed
+    // when OwnerSpaceClient.agentPendingAuth emits — see the
+    // LaunchedEffect block alongside the device equivalent.
+    object AgentAuthorize : Screen("agents/authorize/{connectionId}") {
+        fun createRoute(connectionId: String) = "agents/authorize/$connectionId"
+    }
     // Per-op device approval (desktop requesting a phone-required op).
     // Routed off pendingDeviceApproval in AppState; request data flows
     // through the AppViewModel rather than nav args because the full
@@ -459,6 +465,18 @@ fun VettIDApp(
             // via the notification tap path already.
             if (current?.startsWith("devices/authorize/") == true) return@collect
             navController.navigate(Screen.DeviceAuthorize.createRoute(notif.connectionId))
+        }
+    }
+
+    // Agent pending-authorization → auto-navigate to the agent
+    // authorize screen. Parallel to the device block above; replay=1
+    // on agentPendingAuth means a cold app launch after the
+    // notification was dismissed still hits the cached event.
+    LaunchedEffect(grantsEntryPoint) {
+        grantsEntryPoint.ownerSpaceClient().agentPendingAuth.collect { notif ->
+            val current = navController.currentDestination?.route
+            if (current?.startsWith("agents/authorize/") == true) return@collect
+            navController.navigate(Screen.AgentAuthorize.createRoute(notif.connectionId))
         }
     }
 
@@ -1774,6 +1792,16 @@ fun VettIDApp(
         composable(Screen.CreateAgentInvitation.route) {
             com.vettid.app.features.agents.CreateAgentInvitationScreen(
                 onNavigateBack = { navController.safePopBackStack() }
+            )
+        }
+        composable(
+            route = Screen.AgentAuthorize.route,
+            arguments = listOf(navArgument("connectionId") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val connectionId = backStackEntry.arguments?.getString("connectionId") ?: ""
+            com.vettid.app.features.agents.AuthorizeAgentScreen(
+                connectionId = connectionId,
+                onNavigateBack = { navController.safePopBackStack() },
             )
         }
         // Post-Enrollment verification screen
