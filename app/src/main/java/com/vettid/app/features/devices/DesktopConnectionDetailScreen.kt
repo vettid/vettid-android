@@ -176,10 +176,11 @@ private fun DesktopDetailContent(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         // Header — large avatar + name + status pill. Glyph follows
-        // the connection type so the agent card doesn't look like a
-        // desktop card just because they share the screen. Agent tile
-        // tints the glyph white instead of the dark onPrimaryContainer
-        // so the two are readable at a glance side-by-side.
+        // the connection type (robot for agent, monitor for desktop)
+        // on the same gold tile so the paired-clients family reads
+        // as one visual group. Both tints pinned to #1A1A1A — matches
+        // the brand dark and stays consistent across light/dark
+        // theme variants of onPrimaryContainer.
         val isAgent = loaded.connectionType == "agent"
         Surface(
             modifier = Modifier.size(64.dp),
@@ -191,8 +192,7 @@ private fun DesktopDetailContent(
                     if (isAgent) Icons.Default.SmartToy else Icons.Default.DesktopWindows,
                     contentDescription = null,
                     modifier = Modifier.size(36.dp),
-                    tint = if (isAgent) androidx.compose.ui.graphics.Color.White
-                           else MaterialTheme.colorScheme.onPrimaryContainer,
+                    tint = androidx.compose.ui.graphics.Color(0xFF1A1A1A),
                 )
             }
         }

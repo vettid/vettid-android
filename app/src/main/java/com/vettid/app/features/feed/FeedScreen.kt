@@ -1686,10 +1686,10 @@ private fun ConnectionAvatarCore(
     connectionType: String,
 ) {
     if (connectionType == "agent") {
-        // Gold background like the device tile (brand-consistent) but
-        // the robot flips to white instead of dark — distinguishes
-        // "agent" from "your own desktop" at a glance while staying
-        // on-brand.
+        // Gold background + dark glyph, same as the device tile —
+        // they read as one brand family, and the robot vs. monitor
+        // icon is enough to tell them apart. White glyph looked
+        // washed out on the lighter gold backgrounds.
         Surface(
             modifier = Modifier.size(44.dp),
             shape = CircleShape,
@@ -1700,18 +1700,16 @@ private fun ConnectionAvatarCore(
                     Icons.Default.SmartToy,
                     contentDescription = "Agent",
                     modifier = Modifier.size(24.dp),
-                    tint = androidx.compose.ui.graphics.Color.White
+                    tint = androidx.compose.ui.graphics.Color(0xFF1A1A1A)
                 )
             }
         }
     } else if (connectionType == "device") {
-        // Desktop client — distinct avatar so it's instantly readable
-        // as "this is a paired desktop" vs a peer connection. Icon
-        // tint uses onPrimaryContainer (the semantic foreground color
-        // for primaryContainer) — gold-on-gold was unreadable in both
-        // themes; this gives the icon the same contrast guarantee the
-        // Material color system applies to onPrimaryContainer/
-        // primaryContainer pairings.
+        // Desktop client — gold tile + dark glyph (#1A1A1A) to match
+        // the agent tile so the paired-clients family reads as one
+        // visual group. Material's onPrimaryContainer varied between
+        // themes; pinning to the brand dark keeps both light and
+        // dark themes consistent.
         Surface(
             modifier = Modifier.size(44.dp),
             shape = CircleShape,
@@ -1722,7 +1720,7 @@ private fun ConnectionAvatarCore(
                     Icons.Default.DesktopWindows,
                     contentDescription = "Desktop",
                     modifier = Modifier.size(24.dp),
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer
+                    tint = androidx.compose.ui.graphics.Color(0xFF1A1A1A)
                 )
             }
         }
