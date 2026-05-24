@@ -89,7 +89,12 @@ class AgentManagementViewModel @Inject constructor(
                                         status = obj.get("status")?.asString ?: "unknown",
                                         approvalMode = obj.get("approval_mode")?.asString ?: "always_ask",
                                         scope = obj.getAsJsonArray("scope")?.map { it.asString } ?: emptyList(),
-                                        connectedAt = obj.get("connected_at")?.asString ?: "",
+                                        // Phase A renamed connected_at → paired_at on
+                                        // the wire (docs/AGENT-PAIRED-CONTRACT-MODEL.md).
+                                        // Read both for backwards compatibility with
+                                        // unmigrated enclaves.
+                                        connectedAt = obj.get("paired_at")?.asString
+                                            ?: obj.get("connected_at")?.asString ?: "",
                                         lastActiveAt = obj.get("last_active_at")?.asString,
                                         hostname = obj.get("hostname")?.asString,
                                         platform = obj.get("platform")?.asString

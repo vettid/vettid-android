@@ -64,28 +64,43 @@ class DesktopConnectionDetailViewModel @Inject constructor(
                     _state.value = DesktopDetailState.Error("Not a desktop or agent connection")
                     return@launch
                 }
-                // For agents, hydrate the metadata from agent.list —
-                // ConnectionRecord.deviceMetadata is null for non-device
-                // types per the vault schema. agent.list carries
-                // hostname, platform, scope, approval_mode, last_active,
-                // which we map into the existing display fields so the
-                // detail screen doesn't render a sea of dashes.
-                val (metadata, session) = if (rec.connectionType == "agent") {
+                // For agents, hydrate the metadata + contract from
+                // agent.list. ConnectionRecord.deviceMetadata is null
+                // for non-device types per the vault schema. agent.list
+                // is the authoritative source for the contract surface
+                // (scope / approval_mode / rate_limit) and the
+                // auto-derived agent_name.
+                val agentData = if (rec.connectionType == "agent") {
                     fetchAgentDetails(connectionId)
                 } else {
-                    rec.deviceMetadata to rec.deviceSession
+                    null
                 }
+                val metadata = agentData?.metadata ?: rec.deviceMetadata
+                val session = if (rec.connectionType == "agent") null else rec.deviceSession
+                val deviceName = when {
+                    rec.connectionType == "agent" -> agentData?.agentName
+                        ?: metadata?.hostname
+                        ?: "Agent"
+                    rec.label.isNotBlank() -> rec.label
+                    metadata?.hostname != null -> metadata.hostname!!
+                    else -> "Desktop"
+                }
+                // Status maps to the agent paired/revoked vocabulary
+                // when this is an agent (vault now returns "paired" or
+                // "revoked" directly per Phase A) — for devices it stays
+                // whatever the connection record says.
+                val status = if (rec.connectionType == "agent")
+                    agentData?.status ?: rec.status
+                else rec.status
                 _state.value = DesktopDetailState.Loaded(
                     connectionId = rec.connectionId,
-                    deviceName = rec.label.ifBlank {
-                        metadata?.hostname
-                            ?: if (rec.connectionType == "agent") "Agent" else "Desktop"
-                    },
-                    status = rec.status,
-                    createdAt = rec.createdAt,
+                    deviceName = deviceName,
+                    status = status,
+                    createdAt = agentData?.pairedAt ?: rec.createdAt,
                     metadata = metadata,
                     session = session,
                     connectionType = rec.connectionType,
+                    contract = agentData?.contract,
                 )
                 loadActivity(connectionId)
             } catch (e: Exception) {
@@ -97,63 +112,77 @@ class DesktopConnectionDetailViewModel @Inject constructor(
     /**
      * Fetch the agent record from `agent.list` and map its fields onto
      * the device-shaped state types so the existing detail UI works
-     * without a per-type branch. Returns (null, null) on any failure —
-     * the screen renders empty sections rather than an error, since
-     * the connection record itself was found in the connection list.
+     * without a per-type branch. Returns null on any failure — the
+     * screen renders empty sections rather than an error, since the
+     * connection record itself was found in the connection list.
      */
-    private suspend fun fetchAgentDetails(
-        connectionId: String,
-    ): Pair<DeviceConnectionMetadata?, DeviceConnectionSession?> {
+    private suspend fun fetchAgentDetails(connectionId: String): AgentDetailsLoad? {
         return try {
             val response = ownerSpaceClient.sendAndAwaitResponse(
                 messageType = "agent.list",
                 payload = JsonObject(),
             )
-            val resp = response as? VaultResponse.HandlerResult
-                ?: return null to null
-            if (!resp.success) return null to null
-            val agentsArray = resp.result?.getAsJsonArray("agents") ?: return null to null
+            val resp = response as? VaultResponse.HandlerResult ?: return null
+            if (!resp.success) return null
+            val agentsArray = resp.result?.getAsJsonArray("agents") ?: return null
             val obj = agentsArray.map { it.asJsonObject }
                 .firstOrNull { it.get("connection_id")?.asString == connectionId }
-                ?: return null to null
+                ?: return null
 
             val hostname = obj.get("hostname")?.asString
             val platform = obj.get("platform")?.asString
             val agentName = obj.get("agent_name")?.asString
             val agentType = obj.get("agent_type")?.asString
-            val connectedAtStr = obj.get("connected_at")?.asString
+            val pairedAtStr = obj.get("paired_at")?.asString
+                ?: obj.get("connected_at")?.asString
             val lastActiveStr = obj.get("last_active_at")?.asString
+            val status = obj.get("status")?.asString ?: "paired"
 
-            // Map agent fields onto the existing DeviceConnectionMetadata.
-            // appVersion gets the agent_type label (e.g. "claude-code") so
-            // the screen surfaces "what kind of agent" prominently.
             val metadata = DeviceConnectionMetadata(
                 deviceName = agentName,
                 hostname = hostname,
                 platform = platform,
                 appVersion = agentType,
-                firstSeenAt = parseEpochSecondsLoose(connectedAtStr),
+                firstSeenAt = parseEpochSecondsLoose(pairedAtStr),
             )
 
-            // Synthesize a session record from agent fields too. The
-            // expires-at + status come from the vault's ConnectionContract
-            // but aren't on the AgentManagement summary; fall back to
-            // "active" + 0s remaining. We can fetch the live session
-            // window later via a dedicated agent.get op (TODO).
-            val session = DeviceConnectionSession(
-                sessionId = "",
-                status = obj.get("status")?.asString ?: "active",
-                createdAt = parseEpochSecondsLoose(connectedAtStr),
-                expiresAt = 0L,
-                lastActiveAt = parseEpochSecondsLoose(lastActiveStr),
-                keyRotationCount = 0,
-                durationSeconds = 0L,
+            // Contract — the new user-visible truth of "what is this
+            // agent allowed to do?". Defaults are conservative so the
+            // UI degrades gracefully on missing fields.
+            val scope = obj.getAsJsonArray("scope")?.mapNotNull { it.asString } ?: emptyList()
+            val approvalMode = obj.get("approval_mode")?.asString ?: "always_ask"
+            val rateLimitObj = obj.getAsJsonObject("rate_limit")
+            val contract = AgentContract(
+                scope = scope,
+                approvalMode = approvalMode,
+                rateLimitMax = rateLimitObj?.get("max")?.asInt ?: 0,
+                rateLimitPer = rateLimitObj?.get("per")?.asString ?: "hour",
             )
-            metadata to session
+
+            AgentDetailsLoad(
+                metadata = metadata,
+                contract = contract,
+                status = status,
+                agentName = agentName ?: "",
+                pairedAt = pairedAtStr ?: "",
+                lastActiveAt = lastActiveStr ?: "",
+            )
         } catch (_: Exception) {
-            null to null
+            null
         }
     }
+
+    /** Bundled payload from fetchAgentDetails — pulls all the agent-
+     *  shaped fields together so the load() flow can build Loaded
+     *  state in one go without juggling tuples. */
+    private data class AgentDetailsLoad(
+        val metadata: DeviceConnectionMetadata,
+        val contract: AgentContract,
+        val status: String,
+        val agentName: String,
+        val pairedAt: String,
+        val lastActiveAt: String,
+    )
 
     private fun parseEpochSecondsLoose(iso: String?): Long {
         if (iso.isNullOrBlank()) return 0L
@@ -285,9 +314,23 @@ sealed class DesktopDetailState {
         val metadata: DeviceConnectionMetadata?,
         val session: DeviceConnectionSession?,
         val connectionType: String = "device",
+        /** Agent's Contract — scope/approval/rate. Null for devices. */
+        val contract: AgentContract? = null,
     ) : DesktopDetailState()
     data class Error(val message: String) : DesktopDetailState()
 }
+
+/**
+ * Contract that defines what a paired agent is allowed to do. The
+ * vault stores the authoritative copy; the owner edits via
+ * agent.update-contract. See docs/AGENT-PAIRED-CONTRACT-MODEL.md.
+ */
+data class AgentContract(
+    val scope: List<String>,
+    val approvalMode: String,
+    val rateLimitMax: Int,
+    val rateLimitPer: String,
+)
 
 sealed class ActivityState {
     object Loading : ActivityState()

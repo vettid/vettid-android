@@ -208,61 +208,98 @@ private fun DesktopDetailContent(
         StatusPill(loaded)
         Spacer(Modifier.height(20.dp))
 
-        // Device info
-        SectionCard(title = "Device") {
+        // Identity section — same shape for both flavors but agents
+        // skip the device-only fingerprints / IP / OS rows since they
+        // don't apply.
+        SectionCard(title = if (isAgent) "Identity" else "Device") {
             DetailRow("Hostname", loaded.metadata?.hostname.orDash())
             DetailRow("Platform", loaded.metadata?.platform.orDash())
-            DetailRow("OS", listOfNotNull(
-                loaded.metadata?.osName,
-                loaded.metadata?.osVersion,
-            ).joinToString(" ").ifBlank { "—" })
-            DetailRow("App version", loaded.metadata?.appVersion.orDash())
-            DetailRow("Client IP", loaded.metadata?.clientIp.orDash())
+            if (!isAgent) {
+                DetailRow("OS", listOfNotNull(
+                    loaded.metadata?.osName,
+                    loaded.metadata?.osVersion,
+                ).joinToString(" ").ifBlank { "—" })
+            }
             DetailRow(
-                label = "Binary fingerprint",
-                value = loaded.metadata?.binaryFingerprint.orDash(),
-                mono = true,
+                if (isAgent) "Agent type" else "App version",
+                loaded.metadata?.appVersion.orDash(),
             )
-            DetailRow(
-                label = "Machine fingerprint",
-                value = loaded.metadata?.machineFingerprint.orDash(),
-                mono = true,
-            )
+            if (!isAgent) {
+                DetailRow("Client IP", loaded.metadata?.clientIp.orDash())
+                DetailRow(
+                    label = "Binary fingerprint",
+                    value = loaded.metadata?.binaryFingerprint.orDash(),
+                    mono = true,
+                )
+                DetailRow(
+                    label = "Machine fingerprint",
+                    value = loaded.metadata?.machineFingerprint.orDash(),
+                    mono = true,
+                )
+            }
             DetailRow("Paired", formatIsoDate(loaded.metadata?.firstSeenAt))
         }
 
         Spacer(Modifier.height(12.dp))
 
-        // Session info
-        SectionCard(title = "Session") {
-            val sess = loaded.session
-            if (sess == null) {
-                Text(
-                    "No active session.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                DetailRow("Status", sess.status)
-                DetailRow("Started", formatUnixDate(sess.createdAt))
-                DetailRow("Expires", formatUnixDate(sess.expiresAt))
-                DetailRow("Last active", formatUnixDate(sess.lastActiveAt))
-                val rem = sess.expiresAt - System.currentTimeMillis() / 1000
-                DetailRow("Remaining", if (rem > 0) formatRemainingLong(rem) else "expired")
-                DetailRow("Key rotations", sess.keyRotationCount.toString())
+        if (isAgent) {
+            // Contract section — what this agent is allowed to do.
+            // See docs/AGENT-PAIRED-CONTRACT-MODEL.md. No session
+            // expiry / key-rotations to show; pairing is persistent
+            // until the owner revokes.
+            SectionCard(title = "Contract") {
+                val c = loaded.contract
+                if (c == null) {
+                    Text(
+                        "No contract on record.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    DetailRow(
+                        "Scope",
+                        if (c.scope.isEmpty()) "—" else c.scope.joinToString(", "),
+                    )
+                    DetailRow("Approval", c.approvalMode)
+                    DetailRow(
+                        "Rate limit",
+                        if (c.rateLimitMax <= 0) "unlimited"
+                        else "${c.rateLimitMax} per ${c.rateLimitPer}",
+                    )
+                }
+            }
+        } else {
+            // Session info — devices only.
+            SectionCard(title = "Session") {
+                val sess = loaded.session
+                if (sess == null) {
+                    Text(
+                        "No active session.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    DetailRow("Status", sess.status)
+                    DetailRow("Started", formatUnixDate(sess.createdAt))
+                    DetailRow("Expires", formatUnixDate(sess.expiresAt))
+                    DetailRow("Last active", formatUnixDate(sess.lastActiveAt))
+                    val rem = sess.expiresAt - System.currentTimeMillis() / 1000
+                    DetailRow("Remaining", if (rem > 0) formatRemainingLong(rem) else "expired")
+                    DetailRow("Key rotations", sess.keyRotationCount.toString())
 
-                // Force-end the current session without retiring the
-                // pairing. The desktop falls back to its Start-New-
-                // Session view so the user can re-authorize without
-                // a full re-pair — much lighter than Remove desktop.
-                if (sess.status == "active" && rem > 0) {
-                    Spacer(Modifier.height(12.dp))
-                    OutlinedButton(
-                        onClick = onEndSessionClicked,
-                        enabled = !isWorking,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(if (isWorking) "Ending…" else "End session now")
+                    // Force-end the current session without retiring the
+                    // pairing. The desktop falls back to its Start-New-
+                    // Session view so the user can re-authorize without
+                    // a full re-pair — much lighter than Remove desktop.
+                    if (sess.status == "active" && rem > 0) {
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedButton(
+                            onClick = onEndSessionClicked,
+                            enabled = !isWorking,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (isWorking) "Ending…" else "End session now")
+                        }
                     }
                 }
             }
@@ -351,10 +388,19 @@ private fun DesktopDetailContent(
 
 @Composable
 private fun StatusPill(loaded: DesktopDetailState.Loaded) {
+    val isAgent = loaded.connectionType == "agent"
     val nowSec = System.currentTimeMillis() / 1000
     val rem = (loaded.session?.expiresAt ?: 0L) - nowSec
     val active = loaded.session?.status == "active" && rem > 0
     val (text, color) = when {
+        // Agent vocabulary: paired / revoked only — no session expiry,
+        // no "pending pairing" surface (pending invites are filtered
+        // out of agent.list per Phase A). See
+        // docs/AGENT-PAIRED-CONTRACT-MODEL.md.
+        isAgent -> when (loaded.status) {
+            "revoked" -> "Revoked" to MaterialTheme.colorScheme.error
+            else -> "Paired" to MaterialTheme.colorScheme.primary
+        }
         active -> "Session · ${formatRemainingLong(rem)}" to MaterialTheme.colorScheme.primary
         loaded.session?.status == "expired" || (loaded.session?.status == "active" && rem <= 0) ->
             "Session expired" to MaterialTheme.colorScheme.error
