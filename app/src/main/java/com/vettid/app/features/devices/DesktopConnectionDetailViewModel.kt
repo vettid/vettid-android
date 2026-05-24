@@ -258,11 +258,17 @@ class DesktopConnectionDetailViewModel @Inject constructor(
     }
 
     /**
-     * Tears down the desktop session vault-side. Wipes the per-session key,
-     * marks the connection revoked, and notifies the desktop so it can clear
-     * its local credentials. Used for "Remove desktop" from the detail screen.
+     * Retires the connection vault-side. Routes to `agent.revoke` for
+     * agent connections (no session to end — pairing is persistent until
+     * revoked) and `device.revoke` for desktops (wipes the session key,
+     * marks the connection revoked, and notifies the desktop so it can
+     * clear its local credentials).
      */
     fun remove(connectionId: String, onRemoved: () -> Unit) {
+        val loaded = _state.value as? DesktopDetailState.Loaded
+        val isAgent = loaded?.connectionType == "agent"
+        val messageType = if (isAgent) "agent.revoke" else "device.revoke"
+        val noun = if (isAgent) "agent" else "desktop"
         viewModelScope.launch {
             _isWorking.value = true
             try {
@@ -271,7 +277,7 @@ class DesktopConnectionDetailViewModel @Inject constructor(
                     addProperty("reason", "user_removed")
                 }
                 val response = ownerSpaceClient.sendAndAwaitResponse(
-                    messageType = "device.revoke",
+                    messageType = messageType,
                     payload = payload,
                     timeoutMs = 15_000L,
                 )
@@ -284,15 +290,88 @@ class DesktopConnectionDetailViewModel @Inject constructor(
                             connectionsClient.invalidateListCache()
                             onRemoved()
                         } else {
-                            _toast.value = response.error ?: "Failed to remove desktop"
+                            _toast.value = response.error ?: "Failed to remove $noun"
                         }
                     }
                     is VaultResponse.Error -> _toast.value = response.message
                     null -> _toast.value = "Request timed out"
-                    else -> _toast.value = "Failed to remove desktop"
+                    else -> _toast.value = "Failed to remove $noun"
                 }
             } catch (e: Exception) {
-                _toast.value = e.message ?: "Failed to remove desktop"
+                _toast.value = e.message ?: "Failed to remove $noun"
+            } finally {
+                _isWorking.value = false
+            }
+        }
+    }
+
+    /**
+     * Persist an updated Contract for a paired agent. The vault is the
+     * authoritative store (`agent.update-contract` writes the new
+     * Scope/ApprovalMode/RateLimit on ConnectionContract); on success
+     * we refresh the local Loaded state so the detail surface reflects
+     * the new contract immediately. See
+     * docs/AGENT-PAIRED-CONTRACT-MODEL.md.
+     */
+    fun updateContract(
+        connectionId: String,
+        scope: List<String>,
+        approvalMode: String,
+        rateLimitMax: Int,
+        rateLimitPer: String,
+        onSaved: () -> Unit,
+    ) {
+        viewModelScope.launch {
+            _isWorking.value = true
+            try {
+                val payload = JsonObject().apply {
+                    addProperty("connection_id", connectionId)
+                    val scopeArr = com.google.gson.JsonArray()
+                    scope.forEach { scopeArr.add(it) }
+                    add("scope", scopeArr)
+                    addProperty("approval_mode", approvalMode)
+                    val rateLimit = JsonObject().apply {
+                        addProperty("max", rateLimitMax)
+                        addProperty("per", rateLimitPer)
+                    }
+                    add("rate_limit", rateLimit)
+                }
+                val response = ownerSpaceClient.sendAndAwaitResponse(
+                    messageType = "agent.update-contract",
+                    payload = payload,
+                    timeoutMs = 15_000L,
+                )
+                when (response) {
+                    is VaultResponse.HandlerResult -> {
+                        if (response.success) {
+                            // Optimistic patch — replace the in-memory
+                            // contract so the section card reflects the
+                            // change before agent.list re-fetches.
+                            val current = _state.value as? DesktopDetailState.Loaded
+                            if (current != null) {
+                                _state.value = current.copy(
+                                    contract = AgentContract(
+                                        scope = scope,
+                                        approvalMode = approvalMode,
+                                        rateLimitMax = rateLimitMax,
+                                        rateLimitPer = rateLimitPer,
+                                    )
+                                )
+                            }
+                            _toast.value = "Contract updated."
+                            onSaved()
+                            // Re-pull from authoritative source.
+                            load(connectionId)
+                        } else {
+                            _toast.value = response.error ?: "Failed to update contract"
+                        }
+                    }
+                    is VaultResponse.Error -> _toast.value = response.message
+                    null -> _toast.value = "Request timed out"
+                    else -> _toast.value = "Failed to update contract"
+                }
+            } catch (e: Exception) {
+                _toast.value = e.message ?: "Failed to update contract"
             } finally {
                 _isWorking.value = false
             }

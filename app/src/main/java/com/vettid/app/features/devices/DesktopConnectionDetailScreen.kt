@@ -8,8 +8,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.DesktopWindows
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -39,6 +42,7 @@ import java.util.Locale
 fun DesktopConnectionDetailScreen(
     connectionId: String,
     onNavigateBack: () -> Unit,
+    onNavigateToHistory: (String) -> Unit = {},
     viewModel: DesktopConnectionDetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsState()
@@ -47,6 +51,8 @@ fun DesktopConnectionDetailScreen(
     val activity by viewModel.activity.collectAsState()
     var confirmingRemove by remember { mutableStateOf(false) }
     var confirmingEnd by remember { mutableStateOf(false) }
+    var overflowExpanded by remember { mutableStateOf(false) }
+    var editingContract by remember { mutableStateOf(false) }
 
     LaunchedEffect(connectionId) {
         viewModel.load(connectionId)
@@ -70,7 +76,29 @@ fun DesktopConnectionDetailScreen(
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                     }
-                }
+                },
+                actions = {
+                    if (isAgent) {
+                        IconButton(onClick = { overflowExpanded = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "More")
+                        }
+                        DropdownMenu(
+                            expanded = overflowExpanded,
+                            onDismissRequest = { overflowExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("View agent history") },
+                                leadingIcon = {
+                                    Icon(Icons.Default.History, contentDescription = null)
+                                },
+                                onClick = {
+                                    overflowExpanded = false
+                                    onNavigateToHistory(connectionId)
+                                },
+                            )
+                        }
+                    }
+                },
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -98,6 +126,7 @@ fun DesktopConnectionDetailScreen(
                         activity = activity,
                         onEndSessionClicked = { confirmingEnd = true },
                         onRemoveClicked = { confirmingRemove = true },
+                        onEditContractClicked = { editingContract = true },
                     )
                 }
             }
@@ -131,16 +160,47 @@ fun DesktopConnectionDetailScreen(
         )
     }
 
+    if (editingContract) {
+        val loaded = state as? DesktopDetailState.Loaded
+        val contract = loaded?.contract
+        if (loaded != null && contract != null) {
+            EditContractDialog(
+                initial = contract,
+                isSaving = isWorking,
+                onDismiss = { editingContract = false },
+                onSave = { newScope, newApproval, newMax, newPer ->
+                    viewModel.updateContract(
+                        connectionId = loaded.connectionId,
+                        scope = newScope,
+                        approvalMode = newApproval,
+                        rateLimitMax = newMax,
+                        rateLimitPer = newPer,
+                        onSaved = { editingContract = false },
+                    )
+                },
+            )
+        } else {
+            // Contract not loaded yet — bail out of the edit flow.
+            editingContract = false
+        }
+    }
+
     if (confirmingRemove) {
         val loaded = state as? DesktopDetailState.Loaded
+        val confirmIsAgent = loaded?.connectionType == "agent"
         AlertDialog(
             onDismissRequest = { confirmingRemove = false },
-            title = { Text("Remove desktop?") },
+            title = { Text(if (confirmIsAgent) "Remove agent?" else "Remove desktop?") },
             text = {
                 Text(
-                    "This will end the session and erase the desktop's stored " +
-                        "credentials on its next sync. The desktop will need to " +
-                        "re-pair to reconnect."
+                    if (confirmIsAgent)
+                        "This revokes the agent's pairing. The agent will lose its " +
+                            "vault credentials on its next sync and will need to be " +
+                            "re-paired to reconnect."
+                    else
+                        "This will end the session and erase the desktop's stored " +
+                            "credentials on its next sync. The desktop will need to " +
+                            "re-pair to reconnect."
                 )
             },
             confirmButton = {
@@ -167,6 +227,7 @@ private fun DesktopDetailContent(
     activity: ActivityState,
     onEndSessionClicked: () -> Unit,
     onRemoveClicked: () -> Unit,
+    onEditContractClicked: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -246,7 +307,10 @@ private fun DesktopDetailContent(
             // Contract section — what this agent is allowed to do.
             // See docs/AGENT-PAIRED-CONTRACT-MODEL.md. No session
             // expiry / key-rotations to show; pairing is persistent
-            // until the owner revokes.
+            // until the owner revokes. The contract is owner-authored;
+            // the agent's requested values are only hints at pairing
+            // time, never a source of truth — so the user can edit
+            // freely here at any point.
             SectionCard(title = "Contract") {
                 val c = loaded.contract
                 if (c == null) {
@@ -266,6 +330,16 @@ private fun DesktopDetailContent(
                         if (c.rateLimitMax <= 0) "unlimited"
                         else "${c.rateLimitMax} per ${c.rateLimitPer}",
                     )
+                }
+                Spacer(Modifier.height(12.dp))
+                OutlinedButton(
+                    onClick = onEditContractClicked,
+                    enabled = !isWorking,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.Edit, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Edit contract")
                 }
             }
         } else {
@@ -353,15 +427,20 @@ private fun DesktopDetailContent(
         ) {
             Column(Modifier.padding(16.dp)) {
                 Text(
-                    "Remove desktop",
+                    if (isAgent) "Remove agent" else "Remove desktop",
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.error,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "Ends the session, wipes the desktop's session key, and " +
-                        "tells the desktop client to clear its stored credentials.",
+                    if (isAgent)
+                        "Revokes the pairing. The agent loses its vault " +
+                            "credentials on its next sync and must be re-paired " +
+                            "to reconnect."
+                    else
+                        "Ends the session, wipes the desktop's session key, and " +
+                            "tells the desktop client to clear its stored credentials.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -377,7 +456,11 @@ private fun DesktopDetailContent(
                 ) {
                     Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text(if (isWorking) "Removing…" else "Remove desktop")
+                    Text(
+                        if (isWorking) "Removing…"
+                        else if (isAgent) "Remove agent"
+                        else "Remove desktop"
+                    )
                 }
             }
         }
@@ -516,6 +599,215 @@ private fun formatUnixDate(unixSec: Long): String {
 private fun formatIsoDate(unixSec: Long?): String {
     if (unixSec == null || unixSec <= 0L) return "—"
     return formatUnixDate(unixSec)
+}
+
+/**
+ * Owner-facing editor for an agent's Contract. Lets the user pick scope
+ * tokens (toggles for the known vocabulary plus the union of any custom
+ * tokens already on the contract), approval mode, and rate limit, then
+ * persists via [DesktopConnectionDetailViewModel.updateContract]. Mirrors
+ * the same vocabulary used in AuthorizeAgentScreen so the values shown
+ * here match what the user saw at pairing time.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EditContractDialog(
+    initial: AgentContract,
+    isSaving: Boolean,
+    onDismiss: () -> Unit,
+    onSave: (
+        scope: List<String>,
+        approvalMode: String,
+        rateLimitMax: Int,
+        rateLimitPer: String,
+    ) -> Unit,
+) {
+    // Union of well-known tokens and whatever the agent had granted —
+    // unknown tokens (e.g. `agent.action.kubectl`) still get a row so
+    // they can be flipped off without dropping to a JSON editor.
+    val knownTokens = com.vettid.app.features.agents.AgentScopeLabels.keys.toList()
+    val allTokens = remember(initial.scope) {
+        (knownTokens + initial.scope).distinct().sorted()
+    }
+    val selected = remember(initial.scope) {
+        mutableStateMapOf<String, Boolean>().apply {
+            allTokens.forEach { put(it, initial.scope.contains(it)) }
+        }
+    }
+    var approvalMode by remember(initial.approvalMode) { mutableStateOf(initial.approvalMode) }
+    var rateLimitText by remember(initial.rateLimitMax) {
+        mutableStateOf(if (initial.rateLimitMax > 0) initial.rateLimitMax.toString() else "")
+    }
+    var rateLimitPer by remember(initial.rateLimitPer) { mutableStateOf(initial.rateLimitPer.ifBlank { "hour" }) }
+    var perExpanded by remember { mutableStateOf(false) }
+    val perOptions = listOf("minute", "hour", "day")
+
+    AlertDialog(
+        onDismissRequest = { if (!isSaving) onDismiss() },
+        title = { Text("Edit contract") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                Text(
+                    "You define what this agent is allowed to do. The agent " +
+                        "can request permissions but only you can grant them.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(12.dp))
+                Text("Scope", style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(4.dp))
+                allTokens.forEach { token ->
+                    val meta = com.vettid.app.features.agents.scopeMeta(token)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                meta.label,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (meta.sensitive)
+                                    MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurface,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            Text(
+                                meta.description,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        Switch(
+                            checked = selected[token] == true,
+                            onCheckedChange = { selected[token] = it },
+                            enabled = !isSaving,
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+                Text("Approval", style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(4.dp))
+                ApprovalChoiceRow(
+                    selected = approvalMode == "always_ask",
+                    label = "Ask me every time",
+                    description = "Phone prompts for each operation.",
+                    enabled = !isSaving,
+                    onSelect = { approvalMode = "always_ask" },
+                )
+                ApprovalChoiceRow(
+                    selected = approvalMode == "auto_within_contract",
+                    label = "Auto-approve within scope",
+                    description = "Permitted operations run without prompting.",
+                    enabled = !isSaving,
+                    onSelect = { approvalMode = "auto_within_contract" },
+                )
+                ApprovalChoiceRow(
+                    selected = approvalMode == "auto_all",
+                    label = "Auto-approve everything",
+                    description = "All operations run without prompting. Use with care.",
+                    enabled = !isSaving,
+                    onSelect = { approvalMode = "auto_all" },
+                )
+
+                Spacer(Modifier.height(12.dp))
+                Text("Rate limit", style = MaterialTheme.typography.titleSmall)
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Leave blank or set 0 for unlimited.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    OutlinedTextField(
+                        value = rateLimitText,
+                        onValueChange = { input ->
+                            // Numeric-only, up to 6 digits.
+                            rateLimitText = input.filter { it.isDigit() }.take(6)
+                        },
+                        label = { Text("Max") },
+                        singleLine = true,
+                        enabled = !isSaving,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("per", style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.width(8.dp))
+                    Box(modifier = Modifier.weight(1f)) {
+                        OutlinedButton(
+                            onClick = { perExpanded = true },
+                            enabled = !isSaving,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text(rateLimitPer) }
+                        DropdownMenu(
+                            expanded = perExpanded,
+                            onDismissRequest = { perExpanded = false },
+                        ) {
+                            perOptions.forEach { opt ->
+                                DropdownMenuItem(
+                                    text = { Text(opt) },
+                                    onClick = {
+                                        rateLimitPer = opt
+                                        perExpanded = false
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !isSaving,
+                onClick = {
+                    val newScope = selected.filter { it.value }.keys.sorted()
+                    val newMax = rateLimitText.toIntOrNull() ?: 0
+                    onSave(newScope, approvalMode, newMax, rateLimitPer)
+                },
+            ) { Text(if (isSaving) "Saving…" else "Save") }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !isSaving,
+            ) { Text("Cancel") }
+        },
+    )
+}
+
+@Composable
+private fun ApprovalChoiceRow(
+    selected: Boolean,
+    label: String,
+    description: String,
+    enabled: Boolean,
+    onSelect: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = onSelect, enabled = enabled)
+        Spacer(Modifier.width(8.dp))
+        Column {
+            Text(label, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            Text(
+                description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
 
 private fun formatRemainingLong(seconds: Long): String {
