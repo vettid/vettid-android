@@ -59,7 +59,15 @@ class CreateAgentInvitationViewModel @Inject constructor(
                 val response = ownerSpaceClient.sendAndAwaitResponse(
                     messageType = "agent.create-invite",
                     payload = com.google.gson.JsonObject().apply {
-                        addProperty("label", name.ifBlank { "Agent" })
+                        // Placeholder label for the brief window between
+                        // Stage 1 (this call) and Stage 2 (authorize-
+                        // session, which overwrites PeerAlias with the
+                        // owner-entered name from AuthorizeAgentScreen).
+                        // Using "Pending agent…" instead of generic
+                        // "Agent" so the transient state is self-
+                        // explanatory if the connection list paints
+                        // before the activation event lands.
+                        addProperty("label", name.ifBlank { "Pending agent…" })
                     }
                 )
 
