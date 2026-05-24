@@ -309,7 +309,7 @@ fun FeedContent(
                 ) {
                     ExtendedFloatingActionButton(
                         onClick = { showFabMenu = false; onNavigateToCreateAgentInvitation() },
-                        icon = { Icon(Icons.Default.Computer, contentDescription = null) },
+                        icon = { Icon(Icons.Default.SmartToy, contentDescription = null) },
                         text = { Text("Agent Invitation") },
                         containerColor = MaterialTheme.colorScheme.secondaryContainer,
                         contentColor = MaterialTheme.colorScheme.onSecondaryContainer
@@ -1668,7 +1668,7 @@ private fun ConnectionAvatarCore(
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
-                    Icons.Default.Computer,
+                    Icons.Default.SmartToy,
                     contentDescription = "Agent",
                     modifier = Modifier.size(24.dp),
                     tint = MaterialTheme.colorScheme.onTertiaryContainer
