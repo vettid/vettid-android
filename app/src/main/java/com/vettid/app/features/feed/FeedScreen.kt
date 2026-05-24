@@ -511,12 +511,16 @@ private fun FeedList(
                                 // History (the natural "detail" for
                                 // system events).
                                 item.connectionType == "system" -> onNavigateToConnectionHistory(item.connectionId)
-                                // Desktop clients have a purpose-built
-                                // detail screen (hostname, fingerprint,
-                                // session state, Remove). The shared
-                                // peer-oriented ConnectionDetail screen
-                                // isn't useful for them.
+                                // Desktop clients and agents both use
+                                // the same purpose-built detail screen
+                                // (hostname, fingerprint, session state,
+                                // activity, Remove). Agents additionally
+                                // get a Chat action in that screen's
+                                // top bar. The shared peer-oriented
+                                // ConnectionDetail screen isn't useful
+                                // for either.
                                 item.connectionType == "device" -> onNavigateToDesktopConnectionDetail(item.connectionId)
+                                item.connectionType == "agent" -> onNavigateToDesktopConnectionDetail(item.connectionId)
                                 // Tap on the card (name/photo) opens the
                                 // peer's profile. The dedicated Text button
                                 // handles the messaging entry point — this

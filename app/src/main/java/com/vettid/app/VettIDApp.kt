@@ -1136,7 +1136,10 @@ fun VettIDApp(
             val connectionId = backStackEntry.arguments?.getString("connectionId") ?: ""
             com.vettid.app.features.devices.DesktopConnectionDetailScreen(
                 connectionId = connectionId,
-                onNavigateBack = { navController.safePopBackStack() }
+                onNavigateBack = { navController.safePopBackStack() },
+                onNavigateToConversation = { id ->
+                    navController.navigate(Screen.Conversation.createRoute(id))
+                },
             )
         }
         composable(
@@ -1802,6 +1805,16 @@ fun VettIDApp(
             com.vettid.app.features.agents.AuthorizeAgentScreen(
                 connectionId = connectionId,
                 onNavigateBack = { navController.safePopBackStack() },
+                // On successful authorization also pop the
+                // CreateAgentInvitationScreen underneath — the invite
+                // is consumed, the agent is paired, the code card
+                // serves no further purpose.
+                onAuthorized = {
+                    navController.popBackStack(
+                        Screen.CreateAgentInvitation.route,
+                        inclusive = true,
+                    )
+                },
             )
         }
         // Post-Enrollment verification screen

@@ -39,6 +39,7 @@ import com.vettid.app.core.nats.AgentPendingAuthNotification
 fun AuthorizeAgentScreen(
     connectionId: String,
     onNavigateBack: () -> Unit,
+    onAuthorized: () -> Unit = onNavigateBack,
     viewModel: AuthorizeAgentViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsState()
@@ -47,8 +48,14 @@ fun AuthorizeAgentScreen(
         viewModel.bindConnection(connectionId)
     }
 
+    // Differentiate "successful authorization" (state → Done) from the
+    // user dismissing the screen via back-arrow. The success path lets
+    // the caller pop additional screens off the stack — specifically
+    // the CreateAgentInvitationScreen underneath, so the owner doesn't
+    // have to manually tap Done on a stale invite-code card after the
+    // agent is already paired.
     LaunchedEffect(state) {
-        if (state is AuthorizeAgentState.Done) onNavigateBack()
+        if (state is AuthorizeAgentState.Done) onAuthorized()
     }
 
     Scaffold(

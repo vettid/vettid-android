@@ -38,6 +38,7 @@ import java.util.Locale
 fun DesktopConnectionDetailScreen(
     connectionId: String,
     onNavigateBack: () -> Unit,
+    onNavigateToConversation: (String) -> Unit = {},
     viewModel: DesktopConnectionDetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsState()
@@ -59,13 +60,27 @@ fun DesktopConnectionDetailScreen(
         }
     }
 
+    val isAgent = (state as? DesktopDetailState.Loaded)?.connectionType == "agent"
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Desktop") },
+                title = { Text(if (isAgent) "Agent" else "Desktop") },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                },
+                actions = {
+                    if (isAgent) {
+                        // The peer Conversation screen accepts any
+                        // connection_id including agents — texting
+                        // an agent is the same wire format, the agent
+                        // is just the addressee. Surface it here so
+                        // the owner can chat from the detail view.
+                        IconButton(onClick = { onNavigateToConversation(connectionId) }) {
+                            Icon(Icons.Default.Chat, contentDescription = "Chat with agent")
+                        }
                     }
                 }
             )

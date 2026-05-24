@@ -60,19 +60,21 @@ class DesktopConnectionDetailViewModel @Inject constructor(
                     _state.value = DesktopDetailState.Error("Desktop not found")
                     return@launch
                 }
-                if (rec.connectionType != "device") {
-                    _state.value = DesktopDetailState.Error("Not a desktop connection")
+                if (rec.connectionType != "device" && rec.connectionType != "agent") {
+                    _state.value = DesktopDetailState.Error("Not a desktop or agent connection")
                     return@launch
                 }
                 _state.value = DesktopDetailState.Loaded(
                     connectionId = rec.connectionId,
                     deviceName = rec.label.ifBlank {
-                        rec.deviceMetadata?.hostname ?: "Desktop"
+                        rec.deviceMetadata?.hostname
+                            ?: if (rec.connectionType == "agent") "Agent" else "Desktop"
                     },
                     status = rec.status,
                     createdAt = rec.createdAt,
                     metadata = rec.deviceMetadata,
                     session = rec.deviceSession,
+                    connectionType = rec.connectionType,
                 )
                 loadActivity(connectionId)
             } catch (e: Exception) {
@@ -201,6 +203,7 @@ sealed class DesktopDetailState {
         val createdAt: String,
         val metadata: DeviceConnectionMetadata?,
         val session: DeviceConnectionSession?,
+        val connectionType: String = "device",
     ) : DesktopDetailState()
     data class Error(val message: String) : DesktopDetailState()
 }
