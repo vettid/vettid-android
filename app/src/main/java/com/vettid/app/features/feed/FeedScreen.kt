@@ -1683,17 +1683,21 @@ private fun ConnectionAvatarCore(
     connectionType: String,
 ) {
     if (connectionType == "agent") {
+        // Gold background like the device tile (brand-consistent) but
+        // the robot flips to white instead of dark — distinguishes
+        // "agent" from "your own desktop" at a glance while staying
+        // on-brand.
         Surface(
             modifier = Modifier.size(44.dp),
             shape = CircleShape,
-            color = MaterialTheme.colorScheme.tertiaryContainer
+            color = MaterialTheme.colorScheme.primaryContainer
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
                     Icons.Default.SmartToy,
                     contentDescription = "Agent",
                     modifier = Modifier.size(24.dp),
-                    tint = MaterialTheme.colorScheme.onTertiaryContainer
+                    tint = androidx.compose.ui.graphics.Color.White
                 )
             }
         }

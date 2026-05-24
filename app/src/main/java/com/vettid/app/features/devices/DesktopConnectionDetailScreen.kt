@@ -177,7 +177,9 @@ private fun DesktopDetailContent(
     ) {
         // Header — large avatar + name + status pill. Glyph follows
         // the connection type so the agent card doesn't look like a
-        // desktop card just because they share the screen.
+        // desktop card just because they share the screen. Agent tile
+        // tints the glyph white instead of the dark onPrimaryContainer
+        // so the two are readable at a glance side-by-side.
         val isAgent = loaded.connectionType == "agent"
         Surface(
             modifier = Modifier.size(64.dp),
@@ -189,7 +191,8 @@ private fun DesktopDetailContent(
                     if (isAgent) Icons.Default.SmartToy else Icons.Default.DesktopWindows,
                     contentDescription = null,
                     modifier = Modifier.size(36.dp),
-                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    tint = if (isAgent) androidx.compose.ui.graphics.Color.White
+                           else MaterialTheme.colorScheme.onPrimaryContainer,
                 )
             }
         }
