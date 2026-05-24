@@ -11,6 +11,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import kotlinx.coroutines.delay
 
 @Composable
 fun DeviceApprovalScreen(
@@ -64,6 +65,17 @@ fun DeviceApprovalScreen(
             }
 
             is DeviceApprovalState.Approved -> {
+                // Auto-dismiss the success card after a brief beat so
+                // the user doesn't have to manually tap Done on the
+                // happy path — they approved, they see the
+                // confirmation, the app gets out of the way. Denied
+                // and Timeout still require an explicit dismiss
+                // because the user may want to read the reason.
+                LaunchedEffect(Unit) {
+                    delay(1200)
+                    viewModel.dismiss()
+                    onDismiss()
+                }
                 Icon(
                     Icons.Default.CheckCircle,
                     contentDescription = null,
@@ -74,13 +86,6 @@ fun DeviceApprovalScreen(
                 Text("Approved", style = MaterialTheme.typography.headlineSmall)
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(s.message, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(modifier = Modifier.height(24.dp))
-                Button(onClick = {
-                    viewModel.dismiss()
-                    onDismiss()
-                }) {
-                    Text("Done")
-                }
             }
 
             is DeviceApprovalState.Denied -> {
