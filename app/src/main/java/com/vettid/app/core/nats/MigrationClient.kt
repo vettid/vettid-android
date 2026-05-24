@@ -347,7 +347,7 @@ class MigrationClient @Inject constructor(
         val eventsArray = json.getAsJsonArray("events") ?: return emptyList()
         // Resolve connection_id → peer display name from the cached
         // connections store, so each row can tag "Identity verified —
-        // Al Liebl" without a per-row vault round-trip. Built once per
+        // Jane Doe" without a per-row vault round-trip. Built once per
         // parse so a long list doesn't hit the store O(n) times.
         val nameByConn: Map<String, String> = feedRepository.getCachedConnections()
             .associate { conn ->

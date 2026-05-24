@@ -440,7 +440,7 @@ private fun PeerAcceptedContent(
     //
     // Prefer structured first/last name from the vault record over
     // parsing peerAlias. The alias is a legacy label and may
-    // collapse "Al Liebl" vs "Al Liebl Sr." into the wrong halves;
+    // collapse "Jane Doe" vs "Jane Doe Sr." into the wrong halves;
     // the vault record has them separated authoritatively.
     val firstName = peerFirstName?.takeIf { it.isNotBlank() }
         ?: peerAlias.substringBefore(' ').takeIf { it.isNotBlank() }

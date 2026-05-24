@@ -846,7 +846,7 @@ class FeedViewModel @Inject constructor(
 
     /**
      * Extract peer name from event title.
-     * Title format: "From Al Liebl" or "To Al Liebl" — strip the prefix.
+     * Title format: "From Jane Doe" or "To Jane Doe" — strip the prefix.
      */
     private fun extractPeerName(event: FeedEvent): String {
         val title = event.title
