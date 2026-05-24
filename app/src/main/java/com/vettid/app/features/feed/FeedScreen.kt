@@ -1191,6 +1191,7 @@ private fun ActiveConnectionCard(
         } else null,
     ) {
         val isSystem = item.connectionType == "system"
+        val isAgent = item.connectionType == "agent"
 
         Column(modifier = Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.Top) {
@@ -1249,6 +1250,23 @@ private fun ActiveConnectionCard(
                         label = "Guides",
                         onClick = onSystemGuidesClick,
                         badgeCount = item.systemGuidesBadge,
+                    )
+                }
+            } else if (isAgent) {
+                // Agent connections only get a Chat action — agents
+                // can't take voice/video calls (no audio surface on
+                // the agent side) and the peer-style Actions menu
+                // (BTC send/request, etc.) doesn't apply. The
+                // detail screen for an agent shows session + audit
+                // info; tap the card body to reach it.
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                ) {
+                    ConnectionActionButton(
+                        icon = Icons.AutoMirrored.Filled.Chat,
+                        label = "Chat",
+                        onClick = onMessageClick,
                     )
                 }
             } else {

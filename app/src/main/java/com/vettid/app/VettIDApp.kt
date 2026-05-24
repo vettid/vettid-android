@@ -1137,9 +1137,6 @@ fun VettIDApp(
             com.vettid.app.features.devices.DesktopConnectionDetailScreen(
                 connectionId = connectionId,
                 onNavigateBack = { navController.safePopBackStack() },
-                onNavigateToConversation = { id ->
-                    navController.navigate(Screen.Conversation.createRoute(id))
-                },
             )
         }
         composable(

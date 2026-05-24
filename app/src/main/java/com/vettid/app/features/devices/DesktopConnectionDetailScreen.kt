@@ -6,9 +6,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.DesktopWindows
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -39,7 +39,6 @@ import java.util.Locale
 fun DesktopConnectionDetailScreen(
     connectionId: String,
     onNavigateBack: () -> Unit,
-    onNavigateToConversation: (String) -> Unit = {},
     viewModel: DesktopConnectionDetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsState()
@@ -70,18 +69,6 @@ fun DesktopConnectionDetailScreen(
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    if (isAgent) {
-                        // The peer Conversation screen accepts any
-                        // connection_id including agents — texting
-                        // an agent is the same wire format, the agent
-                        // is just the addressee. Surface it here so
-                        // the owner can chat from the detail view.
-                        IconButton(onClick = { onNavigateToConversation(connectionId) }) {
-                            Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Chat with agent")
-                        }
                     }
                 }
             )
@@ -188,7 +175,10 @@ private fun DesktopDetailContent(
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // Header — large avatar + name + status pill
+        // Header — large avatar + name + status pill. Glyph follows
+        // the connection type so the agent card doesn't look like a
+        // desktop card just because they share the screen.
+        val isAgent = loaded.connectionType == "agent"
         Surface(
             modifier = Modifier.size(64.dp),
             shape = CircleShape,
@@ -196,7 +186,7 @@ private fun DesktopDetailContent(
         ) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(
-                    Icons.Default.DesktopWindows,
+                    if (isAgent) Icons.Default.SmartToy else Icons.Default.DesktopWindows,
                     contentDescription = null,
                     modifier = Modifier.size(36.dp),
                     tint = MaterialTheme.colorScheme.onPrimaryContainer,
