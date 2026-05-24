@@ -87,6 +87,7 @@ class AuthorizeAgentViewModel @Inject constructor(
 
         _state.value = AuthorizeAgentState.Ready(
             notification = notif,
+            agentName = agentDisplayName(notif),
             scopes = toggles,
             // Only enable auto-approve when the agent asked for it.
             // Owner can still flip back to always-ask but not vice-versa.
@@ -137,6 +138,11 @@ class AuthorizeAgentViewModel @Inject constructor(
         )
     }
 
+    fun setAgentName(name: String) {
+        val ready = _state.value as? AuthorizeAgentState.Ready ?: return
+        _state.value = ready.copy(agentName = name)
+    }
+
     fun approve() {
         val ready = _state.value as? AuthorizeAgentState.Ready ?: return
         val notif = ready.notification
@@ -152,10 +158,12 @@ class AuthorizeAgentViewModel @Inject constructor(
             val deadline = System.currentTimeMillis() + AUTHORIZE_RETRY_WINDOW_MS
             while (true) {
                 try {
+                    val resolvedName = ready.agentName.trim()
+                        .ifBlank { agentDisplayName(notif) }
                     val payload = JsonObject().apply {
                         addProperty("connection_id", notif.connectionId)
                         addProperty("approval_token", notif.approvalToken)
-                        addProperty("agent_name", agentDisplayName(notif))
+                        addProperty("agent_name", resolvedName)
                         add("granted_scope", JsonArray().apply {
                             grantedTokens.forEach { add(it) }
                         })

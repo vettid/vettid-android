@@ -75,6 +75,7 @@ fun AuthorizeAgentScreen(
                 is AuthorizeAgentState.Waiting -> WaitingContent()
                 is AuthorizeAgentState.Ready -> ReadyForm(
                     state = s,
+                    onNameChange = viewModel::setAgentName,
                     onToggleScope = viewModel::toggleScope,
                     onApprovalModeChange = viewModel::setApprovalMode,
                     onDurationChange = viewModel::setDuration,
@@ -110,6 +111,7 @@ private fun WaitingContent() {
 @Composable
 private fun ReadyForm(
     state: AuthorizeAgentState.Ready,
+    onNameChange: (String) -> Unit,
     onToggleScope: (String, Boolean) -> Unit,
     onApprovalModeChange: (String) -> Unit,
     onDurationChange: (Long) -> Unit,
@@ -178,6 +180,23 @@ private fun ReadyForm(
                     }
                 }
             }
+
+            Spacer(Modifier.height(16.dp))
+
+            // Name field — deferred to here from Stage 1 (Create
+            // Invitation) so the owner can name what they're actually
+            // seeing. Default is the agent's self-reported type +
+            // hostname; owner can override before approving. Blank
+            // falls back to the same default at submit time.
+            Text("Name this connection", style = MaterialTheme.typography.titleSmall)
+            Spacer(Modifier.height(6.dp))
+            OutlinedTextField(
+                value = state.agentName,
+                onValueChange = onNameChange,
+                singleLine = true,
+                placeholder = { Text(state.agentName.ifBlank { "Agent" }) },
+                modifier = Modifier.fillMaxWidth(),
+            )
 
             Spacer(Modifier.height(16.dp))
 

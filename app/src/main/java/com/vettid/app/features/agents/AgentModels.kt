@@ -68,6 +68,13 @@ sealed class AuthorizeAgentState {
     /** Form is ready — owner can pick scope/mode/duration and Approve. */
     data class Ready(
         val notification: com.vettid.app.core.nats.AgentPendingAuthNotification,
+        // The user-facing label for this agent connection. Seeded from
+        // the agent's self-reported type (and hostname when present)
+        // so the owner can usually just Approve, but editable on the
+        // form. Stage-1 invite creation used to ask the owner to name
+        // a connection they had no info about; deferring to here lets
+        // them name what they're actually approving.
+        val agentName: String,
         val scopes: List<ScopeToggle>,
         val approvalMode: String,             // "always_ask" | "auto_within_contract"
         val durationSeconds: Long,

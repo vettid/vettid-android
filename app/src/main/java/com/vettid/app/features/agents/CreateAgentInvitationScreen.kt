@@ -23,8 +23,13 @@ import androidx.hilt.navigation.compose.hiltViewModel
 
 /**
  * Screen for creating a new agent invitation.
- * User enters a name, the vault creates an invitation,
- * and the screen displays the invite command for `vettid-agent init`.
+ *
+ * The owner taps Create, the vault mints the invite, and the screen
+ * displays the invite command. The connection's user-facing name is
+ * set later on the AuthorizeAgentScreen — at this stage the agent
+ * hasn't introduced itself yet (no type, no machine, no fingerprint),
+ * so naming-by-feel makes no sense. We seed the vault with a
+ * placeholder label that the authorize step overwrites.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -34,7 +39,6 @@ fun CreateAgentInvitationScreen(
 ) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
-    var agentName by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
         viewModel.effects.collect { effect ->
@@ -69,10 +73,8 @@ fun CreateAgentInvitationScreen(
             when (val currentState = state) {
                 is CreateInvitationState.Ready -> {
                     ReadyContent(
-                        agentName = agentName,
-                        onNameChange = { agentName = it },
                         onCreate = {
-                            viewModel.onEvent(CreateInvitationEvent.Create(agentName))
+                            viewModel.onEvent(CreateInvitationEvent.Create(""))
                         }
                     )
                 }
@@ -114,7 +116,7 @@ fun CreateAgentInvitationScreen(
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Button(onClick = {
-                            viewModel.onEvent(CreateInvitationEvent.Create(agentName))
+                            viewModel.onEvent(CreateInvitationEvent.Create(""))
                         }) {
                             Text("Retry")
                         }
@@ -127,8 +129,6 @@ fun CreateAgentInvitationScreen(
 
 @Composable
 private fun ReadyContent(
-    agentName: String,
-    onNameChange: (String) -> Unit,
     onCreate: () -> Unit
 ) {
     Column(
@@ -161,17 +161,6 @@ private fun ReadyContent(
 
         Spacer(modifier = Modifier.height(32.dp))
 
-        OutlinedTextField(
-            value = agentName,
-            onValueChange = onNameChange,
-            label = { Text("Agent Name") },
-            placeholder = { Text("e.g., Claude Code, GitHub Copilot") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-
-        Spacer(modifier = Modifier.height(24.dp))
-
         // Info card
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -198,7 +187,7 @@ private fun ReadyContent(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "After creating the invitation, run the invite command on the machine where your agent runs. The agent will connect to your vault with \"always ask\" approval mode by default.",
+                        text = "Tap Create to generate an invite code. Run the invite command on the machine where your agent runs, then you'll review and name the agent before approving the session.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -210,8 +199,7 @@ private fun ReadyContent(
 
         Button(
             onClick = onCreate,
-            modifier = Modifier.fillMaxWidth(),
-            enabled = agentName.isNotBlank()
+            modifier = Modifier.fillMaxWidth()
         ) {
             Icon(Icons.Default.Add, contentDescription = null)
             Spacer(modifier = Modifier.width(8.dp))
