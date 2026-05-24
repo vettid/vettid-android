@@ -1220,9 +1220,25 @@ private fun ActiveConnectionCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
+                // Agents only get a single Chat action — surface it as
+                // an IconButton in the top-right of the row instead of
+                // a fat full-width action strip below. Keeps the agent
+                // card the same height as a peer's header without the
+                // peer-style Text/Voice/Video/Actions block underneath.
+                if (isAgent) {
+                    IconButton(onClick = onMessageClick) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Chat,
+                            contentDescription = "Chat",
+                        )
+                    }
+                }
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
+            // Skip the leading 8dp gap for agents — they have no
+            // action strip below the header, so the spacer just
+            // stacked with the one inside the pendingRows block.
+            if (!isAgent) Spacer(modifier = Modifier.height(8.dp))
             if (isSystem) {
                 // VettID system connection gets three outward actions
                 // (Messages / Votes / Guides). History lives at the
@@ -1253,22 +1269,9 @@ private fun ActiveConnectionCard(
                     )
                 }
             } else if (isAgent) {
-                // Agent connections only get a Chat action — agents
-                // can't take voice/video calls (no audio surface on
-                // the agent side) and the peer-style Actions menu
-                // (BTC send/request, etc.) doesn't apply. The
-                // detail screen for an agent shows session + audit
-                // info; tap the card body to reach it.
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                ) {
-                    ConnectionActionButton(
-                        icon = Icons.AutoMirrored.Filled.Chat,
-                        label = "Chat",
-                        onClick = onMessageClick,
-                    )
-                }
+                // Agent cards' only action is Chat, surfaced as an
+                // IconButton in the header Row above — no full-width
+                // action strip needed here.
             } else {
                 // Peer connection action strip.
                 Row(
