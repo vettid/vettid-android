@@ -3,6 +3,7 @@ package com.vettid.app.features.agents
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.app.core.nats.ConnectionsClient
 import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.nats.VaultResponse
@@ -22,7 +23,8 @@ private const val TAG = "AgentManagementVM"
 @HiltViewModel
 class AgentManagementViewModel @Inject constructor(
     private val ownerSpaceClient: OwnerSpaceClient,
-    private val natsAutoConnector: NatsAutoConnector
+    private val natsAutoConnector: NatsAutoConnector,
+    private val connectionsClient: ConnectionsClient,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow<AgentManagementState>(AgentManagementState.Loading)
@@ -128,6 +130,13 @@ class AgentManagementViewModel @Inject constructor(
                 when (response) {
                     is VaultResponse.HandlerResult -> {
                         if (response.success) {
+                            // Drop the cached connection list so the
+                            // Feed / Connections screens reflect the
+                            // revoke immediately instead of lagging
+                            // up to ConnectionsClient.listCacheTtlMs
+                            // (30s). loadAgents() below ALSO needs a
+                            // fresh fetch.
+                            connectionsClient.invalidateListCache()
                             _effects.emit(AgentManagementEffect.ShowSuccess("Agent revoked"))
                             loadAgents() // Refresh list
                         } else {

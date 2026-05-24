@@ -6,6 +6,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.Delete
@@ -79,7 +80,7 @@ fun DesktopConnectionDetailScreen(
                         // is just the addressee. Surface it here so
                         // the owner can chat from the detail view.
                         IconButton(onClick = { onNavigateToConversation(connectionId) }) {
-                            Icon(Icons.Default.Chat, contentDescription = "Chat with agent")
+                            Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "Chat with agent")
                         }
                     }
                 }

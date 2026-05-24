@@ -228,9 +228,17 @@ class ConnectionsClient @Inject constructor(
             addProperty("connection_id", connectionId)
         }
 
-        return sendAndAwait("connection.revoke", payload) { result ->
+        val result = sendAndAwait("connection.revoke", payload) { result ->
             result.get("success")?.asBoolean ?: false
         }
+        // Invalidate the list cache on success so the Connections list
+        // reflects the revoke immediately — otherwise the revoked entry
+        // can linger for up to listCacheTtlMs (30s) and the user thinks
+        // the action didn't take. Every caller that uses .list() to
+        // refresh after a revoke benefits without having to know about
+        // the cache.
+        if (result.getOrNull() == true) invalidateListCache()
+        return result
     }
 
     /**
