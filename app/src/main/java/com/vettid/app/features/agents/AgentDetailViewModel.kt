@@ -228,9 +228,9 @@ class AgentDetailViewModel @Inject constructor(
                 val state = _state.value as? AgentDetailState.Loaded ?: return@launch
                 val current2 = state.mint ?: return@launch
                 if (resp is VaultResponse.HandlerResult && resp.success && resp.result != null) {
-                    val jwt = resp.result.get("leash")?.asString.orEmpty()
-                    val jti = resp.result.get("jti")?.asString.orEmpty()
-                    val expiresAt = resp.result.get("expires_at")?.asLong ?: 0L
+                    val jwt = resp.result.safeString("leash").orEmpty()
+                    val jti = resp.result.safeString("jti").orEmpty()
+                    val expiresAt = resp.result.get("expires_at")?.takeIf { !it.isJsonNull }?.asLong ?: 0L
                     _state.value = state.copy(
                         mint = current2.copy(
                             submitting = false,
@@ -280,19 +280,21 @@ class AgentDetailViewModel @Inject constructor(
         val arr = resp.result?.getAsJsonArray("agents") ?: return null
         for (el in arr) {
             val obj = el.asJsonObject
-            if (obj.get("connection_id")?.asString != connectionId) continue
+            if (obj.safeString("connection_id") != connectionId) continue
             return AgentConnection(
                 connectionId = connectionId,
-                agentName = obj.get("agent_name")?.asString ?: "Unknown",
-                agentType = obj.get("agent_type")?.asString ?: "",
-                status = obj.get("status")?.asString ?: "unknown",
-                approvalMode = obj.get("approval_mode")?.asString ?: "always_ask",
-                scope = obj.getAsJsonArray("scope")?.map { it.asString } ?: emptyList(),
-                connectedAt = obj.get("paired_at")?.asString
-                    ?: obj.get("connected_at")?.asString ?: "",
-                lastActiveAt = obj.get("last_active_at")?.asString,
-                hostname = obj.get("hostname")?.asString,
-                platform = obj.get("platform")?.asString,
+                agentName = obj.safeString("agent_name") ?: "Unknown",
+                agentType = obj.safeString("agent_type") ?: "",
+                status = obj.safeString("status") ?: "unknown",
+                approvalMode = obj.safeString("approval_mode") ?: "always_ask",
+                scope = obj.getAsJsonArray("scope")
+                    ?.mapNotNull { if (it.isJsonNull) null else it.asString }
+                    ?: emptyList(),
+                connectedAt = obj.safeString("paired_at")
+                    ?: obj.safeString("connected_at") ?: "",
+                lastActiveAt = obj.safeString("last_active_at"),
+                hostname = obj.safeString("hostname"),
+                platform = obj.safeString("platform"),
             )
         }
         return null
@@ -305,12 +307,12 @@ class AgentDetailViewModel @Inject constructor(
         val out = mutableListOf<VisibilityItem>()
         for (el in arr) {
             val obj = el.asJsonObject
-            val id = obj.get("id")?.asString ?: continue
+            val id = obj.safeString("id") ?: continue
             out += VisibilityItem(
                 secretId = id,
-                name = obj.get("name")?.asString ?: id,
-                category = obj.get("category")?.asString.orEmpty(),
-                discoverability = obj.get("discoverability")?.asString.orEmpty(),
+                name = obj.safeString("name") ?: id,
+                category = obj.safeString("category").orEmpty(),
+                discoverability = obj.safeString("discoverability").orEmpty(),
             )
         }
         return out

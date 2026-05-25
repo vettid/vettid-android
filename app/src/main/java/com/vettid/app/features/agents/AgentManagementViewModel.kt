@@ -3,6 +3,7 @@ package com.vettid.app.features.agents
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.google.gson.JsonObject
 import com.vettid.app.core.nats.ConnectionsClient
 import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.nats.OwnerSpaceClient
@@ -13,6 +14,18 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 private const val TAG = "AgentManagementVM"
+
+/**
+ * Read a string field that may be absent OR JSON null. Gson's JsonNull
+ * is a non-null JsonElement that throws on .asString — Kotlin's
+ * `?.asString` only protects against absent keys, not null values.
+ * This helper handles both cases.
+ */
+internal fun JsonObject.safeString(key: String): String? {
+    val el = get(key) ?: return null
+    if (el.isJsonNull) return null
+    return el.asString
+}
 
 /**
  * ViewModel for agent management screen.
@@ -99,24 +112,30 @@ class AgentManagementViewModel @Inject constructor(
                             if (agentsArray == null || agentsArray.size() == 0) {
                                 _state.value = AgentManagementState.Empty
                             } else {
+                                // Gson's JsonNull is a non-null JsonElement that throws on
+                                // .asString — so Kotlin's `?.asString` doesn't protect against
+                                // it. Use safeString() which returns null on both missing keys
+                                // AND JsonNull values.
                                 val agents = agentsArray.map { element ->
                                     val obj = element.asJsonObject
                                     AgentConnection(
-                                        connectionId = obj.get("connection_id")?.asString ?: "",
-                                        agentName = obj.get("agent_name")?.asString ?: "Unknown",
-                                        agentType = obj.get("agent_type")?.asString ?: "",
-                                        status = obj.get("status")?.asString ?: "unknown",
-                                        approvalMode = obj.get("approval_mode")?.asString ?: "always_ask",
-                                        scope = obj.getAsJsonArray("scope")?.map { it.asString } ?: emptyList(),
+                                        connectionId = obj.safeString("connection_id") ?: "",
+                                        agentName = obj.safeString("agent_name") ?: "Unknown",
+                                        agentType = obj.safeString("agent_type") ?: "",
+                                        status = obj.safeString("status") ?: "unknown",
+                                        approvalMode = obj.safeString("approval_mode") ?: "always_ask",
+                                        scope = obj.getAsJsonArray("scope")
+                                            ?.mapNotNull { if (it.isJsonNull) null else it.asString }
+                                            ?: emptyList(),
                                         // Phase A renamed connected_at → paired_at on
                                         // the wire (docs/AGENT-PAIRED-CONTRACT-MODEL.md).
                                         // Read both for backwards compatibility with
                                         // unmigrated enclaves.
-                                        connectedAt = obj.get("paired_at")?.asString
-                                            ?: obj.get("connected_at")?.asString ?: "",
-                                        lastActiveAt = obj.get("last_active_at")?.asString,
-                                        hostname = obj.get("hostname")?.asString,
-                                        platform = obj.get("platform")?.asString
+                                        connectedAt = obj.safeString("paired_at")
+                                            ?: obj.safeString("connected_at") ?: "",
+                                        lastActiveAt = obj.safeString("last_active_at"),
+                                        hostname = obj.safeString("hostname"),
+                                        platform = obj.safeString("platform"),
                                     )
                                 }
                                 _state.value = AgentManagementState.Loaded(agents)
