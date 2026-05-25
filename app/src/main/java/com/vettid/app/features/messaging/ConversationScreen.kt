@@ -256,6 +256,7 @@ fun ConversationScreen(
                         isLoadingMore = currentState.isLoadingMore,
                         listState = listState,
                         isFromCurrentUser = { viewModel.isFromCurrentUser(it) },
+                        isAgent = isAgent,
                         onLoadMore = { viewModel.loadMoreMessages() },
                         onPaymentRequest = { onPaymentRequest(connection?.connectionId ?: "") },
                         onPayPaymentRequest = { requestId, address, amountSats ->
@@ -312,6 +313,7 @@ private fun MessageList(
     isLoadingMore: Boolean,
     listState: LazyListState,
     isFromCurrentUser: (Message) -> Boolean,
+    isAgent: Boolean,
     onLoadMore: () -> Unit,
     onPaymentRequest: () -> Unit = {},
     onPayPaymentRequest: (requestId: String, address: String, amountSats: Long) -> Unit = { _, _, _ -> },
@@ -345,6 +347,7 @@ private fun MessageList(
             MessageBubble(
                 message = message,
                 isSent = isSent,
+                isAgent = isAgent,
                 onPaymentRequest = onPaymentRequest,
                 onPayPaymentRequest = onPayPaymentRequest,
                 onDeclinePaymentRequest = onDeclinePaymentRequest,
@@ -370,6 +373,12 @@ private fun MessageList(
 fun MessageBubble(
     message: Message,
     isSent: Boolean,
+    /** Agent connections suppress per-message read receipts — the
+     *  recipient is a process, not a human, so "delivered/read"
+     *  indicators would imply a status the agent has no notion of.
+     *  Defaults to false so existing peer-conversation callers
+     *  behave exactly as before. */
+    isAgent: Boolean = false,
     onPaymentRequest: () -> Unit = {},
     onPayPaymentRequest: (requestId: String, address: String, amountSats: Long) -> Unit = { _, _, _ -> },
     onDeclinePaymentRequest: (requestId: String, address: String, amountSats: Long) -> Unit = { _, _, _ -> },
@@ -459,7 +468,7 @@ fun MessageBubble(
                         color = textColor.copy(alpha = 0.7f)
                     )
 
-                    if (isSent) {
+                    if (isSent && !isAgent) {
                         Spacer(modifier = Modifier.width(4.dp))
                         MessageStatusIcon(
                             status = message.status,
