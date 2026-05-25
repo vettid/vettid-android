@@ -446,14 +446,27 @@ private fun VisibilityHeader(
 
 @Composable
 private fun VisibilityRow(item: VisibilityItem, onToggle: (Boolean) -> Unit) {
+    // Primary line: alias if the secret has one, otherwise name. Matches
+    // the vault catalog convention where alias is the user-meaningful
+    // grouping label and name is the per-row detail.
+    val primary = item.alias.ifBlank { item.name }
+    val secondary = buildList {
+        if (item.alias.isNotBlank() && item.alias != item.name) add(item.name)
+        if (item.category.isNotBlank()) add(item.category)
+    }.joinToString(" · ")
+
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(item.name, style = MaterialTheme.typography.bodyMedium)
-            if (item.category.isNotBlank()) {
-                Text(item.category, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(primary, style = MaterialTheme.typography.bodyMedium)
+            if (secondary.isNotBlank()) {
+                Text(
+                    secondary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
         Switch(checked = item.visible, onCheckedChange = onToggle)

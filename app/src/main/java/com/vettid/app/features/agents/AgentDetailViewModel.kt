@@ -23,6 +23,7 @@ private const val TAG = "AgentDetailVM"
 data class VisibilityItem(
     val secretId: String,
     val name: String,
+    val alias: String,            // user-defined label; groups related secrets in the vault
     val category: String,
     val discoverability: String,  // "public" | "cataloged" | "private" | "cataloged-for-use"
 ) {
@@ -315,6 +316,7 @@ class AgentDetailViewModel @Inject constructor(
             out += VisibilityItem(
                 secretId = id,
                 name = obj.safeString("name") ?: id,
+                alias = obj.safeString("alias").orEmpty(),
                 category = obj.safeString("category").orEmpty(),
                 discoverability = obj.safeString("discoverability").orEmpty(),
             )
