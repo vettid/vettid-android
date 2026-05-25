@@ -334,6 +334,23 @@ class ConversationViewModel @Inject constructor(
      * Observe incoming messages via NATS subscription.
      */
     private fun observeIncomingMessages() {
+        // Agent connections don't flow through ownerSpaceClient
+        // .incomingMessages (the vault publishes them on
+        // forApp.agent.message.{sent,received} instead of
+        // forApp.new-message). Listen on the dedicated notification
+        // flow for those — on any emit for our connection, reload
+        // via message.list which has authoritative content. Without
+        // this, agent conversations only updated when the user
+        // navigated away and came back.
+        viewModelScope.launch {
+            ownerSpaceClient.agentMessageNotifications
+                .filter { it == connectionId }
+                .collect {
+                    android.util.Log.d("ConversationVM", "Agent message notification — reloading")
+                    loadMessages()
+                }
+        }
+
         viewModelScope.launch {
             ownerSpaceClient.incomingMessages
                 .filter { it.connectionId == connectionId }

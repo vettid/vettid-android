@@ -76,6 +76,20 @@ class OwnerSpaceClient @Inject constructor(
     /** Flow of connection revocation notices from peers. */
     val connectionRevocations: SharedFlow<ConnectionRevoked> = _connectionRevocations.asSharedFlow()
 
+    private val _agentMessageNotifications = MutableSharedFlow<String>(extraBufferCapacity = 32)
+    /**
+     * Emits the connection_id of any forApp.agent.message.{sent,received}
+     * event the vault publishes. Consumers (ConversationViewModel for
+     * agent connections) collect, filter by their connection_id, and
+     * reload the conversation. Distinct from incomingMessages because
+     * the agent message payload shape doesn't match the peer
+     * IncomingMessage struct — we just need a "something changed,
+     * refresh" signal here, not the message itself; the conversation
+     * pane re-fetches via message.list which has the authoritative
+     * content.
+     */
+    val agentMessageNotifications: SharedFlow<String> = _agentMessageNotifications.asSharedFlow()
+
     private val _connectionAcceptances = MutableSharedFlow<ConnectionPeerAccepted>(extraBufferCapacity = 16)
     /** Flow of connection acceptance notifications (peer accepted our invitation). */
     val connectionAcceptances: SharedFlow<ConnectionPeerAccepted> = _connectionAcceptances.asSharedFlow()
@@ -2082,6 +2096,15 @@ class OwnerSpaceClient @Inject constructor(
                 subject.contains(".forApp.read-receipt") && !subject.contains(".forApp.message.read-receipt") -> {
                     handleReadReceipt(message); return
                 }
+                // Agent chat — both directions:
+                //   .agent.message.sent     (owner→agent, e.g. user typed on another surface)
+                //   .agent.message.received (agent→owner)
+                // We only need to nudge the conversation pane to reload;
+                // the payload doesn't match IncomingMessage's shape so
+                // we emit the connection_id as a notification signal.
+                subject.contains(".forApp.agent.message.") -> {
+                    handleAgentMessageNotification(message); return
+                }
 
                 // Connection lifecycle. The parallel-review flow uses
                 // `peer-reviewing` as the trigger event (replaces the
@@ -2358,6 +2381,35 @@ class OwnerSpaceClient @Inject constructor(
             _credentialRotation.tryEmit(rotationMessage)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to parse credential rotation event", e)
+        }
+    }
+
+    /**
+     * Handle an agent.message.{sent,received} event by extracting the
+     * connection_id from the payload and emitting it as a "refresh
+     * trigger" on agentMessageNotifications. We don't try to parse the
+     * full message here because the vault publishes a different payload
+     * shape than IncomingMessage (no sender_guid; different field
+     * names), and the conversation pane re-fetches via message.list
+     * anyway. The flow is just "something changed for this connection,
+     * reload it".
+     */
+    private fun handleAgentMessageNotification(message: NatsMessage) {
+        try {
+            val rawString = String(message.data, Charsets.UTF_8)
+            val trimmed = rawString.trimStart()
+            if (!trimmed.startsWith("{")) return
+            val json = JSONObject(rawString)
+            val payload = if (json.has("payload")) {
+                val payloadVal = json.get("payload")
+                if (payloadVal is org.json.JSONObject) payloadVal else json
+            } else json
+            val connectionId = payload.optString("connection_id", "")
+            if (connectionId.isEmpty()) return
+            _agentMessageNotifications.tryEmit(connectionId)
+            android.util.Log.d(TAG, "Agent message notification for $connectionId")
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "Failed to parse agent.message notification", e)
         }
     }
 
