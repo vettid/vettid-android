@@ -22,7 +22,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Widgets
+import androidx.compose.material.icons.filled.SmartToy
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -140,7 +140,12 @@ fun ConversationScreen(
                             }
                         }
                         if (isAgent) {
-                            // Agent avatar
+                            // Agent avatar — robot glyph, matching the
+                            // SmartToy icon used on the Connections list
+                            // card (AuthorizeAgentScreen + ConnectionAvatar).
+                            // Widgets (the 4-square grid) was the wrong
+                            // shape; users read it as a placeholder/broken
+                            // icon and asked "why is the agent four shapes".
                             Surface(
                                 modifier = Modifier.size(36.dp),
                                 shape = CircleShape,
@@ -148,7 +153,7 @@ fun ConversationScreen(
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
                                     Icon(
-                                        Icons.Default.Widgets,
+                                        Icons.Default.SmartToy,
                                         contentDescription = "Agent",
                                         modifier = Modifier.size(20.dp),
                                         tint = MaterialTheme.colorScheme.onTertiaryContainer
