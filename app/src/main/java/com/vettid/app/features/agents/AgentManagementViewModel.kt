@@ -153,7 +153,18 @@ class AgentManagementViewModel @Inject constructor(
                                         platform = obj.safeString("platform"),
                                     )
                                 }
-                                _state.value = AgentManagementState.Loaded(agents)
+                                // Filter out revoked / expired connections — the vault
+                                // returns the full history (an agent.revoke flips status
+                                // to "revoked" rather than deleting the row, so a vault
+                                // with many re-pairs accumulates dead entries). Show
+                                // only live ones here; revoked-history surface is a
+                                // separate screen if/when we add it.
+                                val live = agents.filter { it.status != "revoked" && it.status != "expired" }
+                                if (live.isEmpty()) {
+                                    _state.value = AgentManagementState.Empty
+                                } else {
+                                    _state.value = AgentManagementState.Loaded(live)
+                                }
                             }
                         } else {
                             _state.value = AgentManagementState.Error(
