@@ -2778,6 +2778,56 @@ class OwnerSpaceClient @Inject constructor(
         }
     }
 
+    /**
+     * Poll the vault for any PendingLeashRequest rows that exist server-side
+     * and emit each one onto agentLeashMintPending. Used on app resume /
+     * launch to recover requests the app missed while backgrounded — the
+     * forApp.agent.leash-mint-pending push is NATS core, not JetStream,
+     * so requests issued with no live subscriber are otherwise invisible.
+     *
+     * Safe to call on a cold start: emits zero items when nothing is
+     * pending. Each emitted item triggers the existing auto-nav
+     * LaunchedEffect in VettIDApp to navigate to LeashApprovalScreen.
+     */
+    suspend fun pollPendingLeashMints() {
+        val resp = sendAndAwaitResponse("agent.leash-pending-list", JsonObject(), 10000L)
+        if (resp !is VaultResponse.HandlerResult || !resp.success) {
+            android.util.Log.d(TAG, "pollPendingLeashMints: skipped (no successful response)")
+            return
+        }
+        val arr = resp.result?.let {
+            val el = it.get("pending")
+            if (el == null || el.isJsonNull || !el.isJsonArray) null else el.asJsonArray
+        } ?: return
+
+        if (arr.size() == 0) return
+        android.util.Log.i(TAG, "pollPendingLeashMints: ${arr.size()} pending mint(s) recovered")
+
+        for (el in arr) {
+            try {
+                val obj = el.asJsonObject
+                val scopeArr = obj.getAsJsonArray("requested_scope")
+                val requestedScope = if (scopeArr != null) {
+                    scopeArr.mapNotNull { e -> if (e.isJsonNull) null else e.asString }
+                } else emptyList()
+                val notif = AgentLeashMintPendingNotification(
+                    requestId = obj.get("request_id")?.asString ?: continue,
+                    connectionId = obj.get("connection_id")?.asString ?: continue,
+                    agentName = obj.get("agent_name")?.takeIf { !it.isJsonNull }?.asString ?: "Agent",
+                    agentType = obj.get("agent_type")?.takeIf { !it.isJsonNull }?.asString ?: "",
+                    agentPubkey = "",  // not included in pending-list payload — informational only
+                    requestedScope = requestedScope,
+                    durationSeconds = obj.get("duration_secs")?.takeIf { !it.isJsonNull }?.asLong ?: 1800L,
+                    reason = obj.get("reason")?.takeIf { !it.isJsonNull }?.asString ?: "",
+                    expiresAt = obj.get("expires_at")?.takeIf { !it.isJsonNull }?.asLong ?: 0L,
+                )
+                _agentLeashMintPending.tryEmit(notif)
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "pollPendingLeashMints: malformed entry skipped", e)
+            }
+        }
+    }
+
     private fun handleDeviceRevoked(message: NatsMessage) {
         try {
             val json = JSONObject(String(message.data, Charsets.UTF_8))

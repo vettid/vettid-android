@@ -503,6 +503,30 @@ fun VettIDApp(
         }
     }
 
+    // Pending-request recovery: forApp.agent.leash-mint-pending is NATS
+    // core and DROPS messages when no subscriber is live, so a mint
+    // request issued while the app was backgrounded would otherwise be
+    // invisible. On every transition to ON_RESUME, poll the vault for
+    // PendingLeashRequest rows and emit each onto the existing
+    // agentLeashMintPending flow (the auto-nav above picks them up).
+    // Also fires once on first composition so a cold-launched app
+    // recovers anything pending.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    LaunchedEffect(lifecycleOwner, grantsEntryPoint) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                kotlinx.coroutines.GlobalScope.launch {
+                    try {
+                        grantsEntryPoint.ownerSpaceClient().pollPendingLeashMints()
+                    } catch (e: Exception) {
+                        android.util.Log.w("VettIDApp", "pollPendingLeashMints failed", e)
+                    }
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+    }
+
     // Handle call UI events. showCallUI now has replay=1 so a
     // late-arriving collector (e.g. the Activity recreated after the
     // incoming-call notification's Answer action) still receives the
