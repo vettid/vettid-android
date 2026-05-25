@@ -63,11 +63,14 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // TODO: RE-ENABLE FLAG_SECURE before release — disabled temporarily for demo recording
-        // window.setFlags(
-        //     WindowManager.LayoutParams.FLAG_SECURE,
-        //     WindowManager.LayoutParams.FLAG_SECURE
-        // )
+        // FLAG_SECURE: block screenshots + screen recording + display to
+        // non-secure outputs (mirroring, casting). Re-enabled for normal
+        // use — was briefly off for demo recording in May 2026. Toggle
+        // OFF only with explicit reason in PR review.
+        window.setFlags(
+            WindowManager.LayoutParams.FLAG_SECURE,
+            WindowManager.LayoutParams.FLAG_SECURE,
+        )
 
         // Perform runtime security check
         performSecurityCheck()

@@ -34,6 +34,7 @@ sealed class AgentDetailState {
     data class Loaded(
         val agent: AgentConnection,
         val items: List<VisibilityItem>,
+        val mint: MintDialogState? = null,
     ) : AgentDetailState()
     data class Error(val message: String) : AgentDetailState()
 }
@@ -43,12 +44,47 @@ sealed class AgentDetailEvent {
     object ShowAll : AgentDetailEvent()
     object HideAll : AgentDetailEvent()
     object Refresh : AgentDetailEvent()
+    // LEASH mint flow
+    object OpenMint : AgentDetailEvent()
+    object CloseMint : AgentDetailEvent()
+    data class MintToggleScope(val token: String, val granted: Boolean) : AgentDetailEvent()
+    data class MintSetCustomScope(val token: String) : AgentDetailEvent()
+    data class MintSetDuration(val seconds: Long) : AgentDetailEvent()
+    object MintConfirm : AgentDetailEvent()
+    object MintDismissResult : AgentDetailEvent()
 }
 
 sealed class AgentDetailEffect {
     data class ShowError(val message: String) : AgentDetailEffect()
     data class ShowMessage(val message: String) : AgentDetailEffect()
 }
+
+/**
+ * LEASH mint dialog state. Lives next to the visibility list state on
+ * AgentDetailState.Loaded — null when no dialog open, populated while
+ * the form is up, replaced with Result once the vault returns.
+ */
+data class MintDialogState(
+    val scopes: List<MintScopeToggle>,
+    val customScope: String,
+    val durationSeconds: Long,
+    val submitting: Boolean = false,
+    val result: MintResult? = null,
+    val error: String? = null,
+)
+
+data class MintScopeToggle(
+    val token: String,
+    val label: String,
+    val description: String,
+    val granted: Boolean,
+)
+
+data class MintResult(
+    val jwt: String,
+    val jti: String,
+    val expiresAt: Long,
+)
 
 /**
  * ViewModel for the per-agent details screen. Loads the agent's
@@ -92,7 +128,120 @@ class AgentDetailViewModel @Inject constructor(
             AgentDetailEvent.ShowAll -> bulkSet(makeVisible = true)
             AgentDetailEvent.HideAll -> bulkSet(makeVisible = false)
             AgentDetailEvent.Refresh -> viewModelScope.launch { load() }
+            AgentDetailEvent.OpenMint -> openMint()
+            AgentDetailEvent.CloseMint -> closeMint()
+            is AgentDetailEvent.MintToggleScope -> updateMint { m ->
+                m.copy(
+                    scopes = m.scopes.map {
+                        if (it.token == e.token) it.copy(granted = e.granted) else it
+                    },
+                )
+            }
+            is AgentDetailEvent.MintSetCustomScope -> updateMint { m -> m.copy(customScope = e.token) }
+            is AgentDetailEvent.MintSetDuration -> updateMint { m -> m.copy(durationSeconds = e.seconds) }
+            AgentDetailEvent.MintConfirm -> mint()
+            AgentDetailEvent.MintDismissResult -> closeMint()
         }
+    }
+
+    private fun openMint() {
+        val current = (_state.value as? AgentDetailState.Loaded) ?: return
+        val toggles = LeashCommonScopes.map {
+            MintScopeToggle(
+                token = it.token,
+                label = it.label,
+                description = it.description,
+                granted = it.defaultGranted,
+            )
+        }
+        _state.value = current.copy(
+            mint = MintDialogState(
+                scopes = toggles,
+                customScope = "",
+                durationSeconds = DEFAULT_MINT_DURATION_SECONDS,
+            ),
+        )
+    }
+
+    private fun closeMint() {
+        val current = (_state.value as? AgentDetailState.Loaded) ?: return
+        _state.value = current.copy(mint = null)
+    }
+
+    private inline fun updateMint(transform: (MintDialogState) -> MintDialogState) {
+        val current = (_state.value as? AgentDetailState.Loaded) ?: return
+        val mint = current.mint ?: return
+        _state.value = current.copy(mint = transform(mint))
+    }
+
+    private fun mint() {
+        val current = (_state.value as? AgentDetailState.Loaded) ?: return
+        val mint = current.mint ?: return
+        val granted = mint.scopes.filter { it.granted }.map { it.token }.toMutableList()
+        val custom = mint.customScope.trim()
+        if (custom.isNotEmpty()) {
+            if (!isValidLeashScope(custom)) {
+                _state.value = current.copy(
+                    mint = mint.copy(error = "Custom scope token does not match the LEASH grammar."),
+                )
+                return
+            }
+            if (custom !in granted) granted += custom
+        }
+        if (granted.isEmpty()) {
+            _state.value = current.copy(
+                mint = mint.copy(error = "Grant at least one scope before minting."),
+            )
+            return
+        }
+
+        _state.value = current.copy(mint = mint.copy(submitting = true, error = null))
+        viewModelScope.launch {
+            try {
+                val payload = JsonObject().apply {
+                    addProperty("connection_id", current.agent.connectionId)
+                    add("scope", com.google.gson.JsonArray().apply { granted.forEach { add(it) } })
+                    addProperty("duration_secs", mint.durationSeconds)
+                    // agent_pubkey: server requires this, so fetch from the
+                    // connection record vault-side. The pubkey is in the
+                    // ConnectionRecord but agent.list doesn't surface it
+                    // today — pass empty and let the vault populate from
+                    // the record. (If a future vault rev rejects empty,
+                    // we'll need a new agent.get-pubkey op.)
+                    addProperty("agent_pubkey", "")
+                }
+                val resp = ownerSpaceClient.sendAndAwaitResponse("leash.attest", payload, 30_000L)
+                val state = _state.value as? AgentDetailState.Loaded ?: return@launch
+                val current2 = state.mint ?: return@launch
+                if (resp is VaultResponse.HandlerResult && resp.success && resp.result != null) {
+                    val jwt = resp.result.get("leash")?.asString.orEmpty()
+                    val jti = resp.result.get("jti")?.asString.orEmpty()
+                    val expiresAt = resp.result.get("expires_at")?.asLong ?: 0L
+                    _state.value = state.copy(
+                        mint = current2.copy(
+                            submitting = false,
+                            result = MintResult(jwt = jwt, jti = jti, expiresAt = expiresAt),
+                        ),
+                    )
+                } else {
+                    val msg = when (resp) {
+                        is VaultResponse.HandlerResult -> resp.error ?: "Mint failed"
+                        is VaultResponse.Error -> resp.message
+                        else -> "Unexpected response"
+                    }
+                    _state.value = state.copy(mint = current2.copy(submitting = false, error = msg))
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "mint failed", e)
+                val s = _state.value as? AgentDetailState.Loaded ?: return@launch
+                val cm = s.mint ?: return@launch
+                _state.value = s.copy(mint = cm.copy(submitting = false, error = e.message ?: "Mint failed"))
+            }
+        }
+    }
+
+    private companion object {
+        const val DEFAULT_MINT_DURATION_SECONDS = 30L * 60L  // 30 minutes — matches LEASH demo session
     }
 
     private suspend fun load() {
