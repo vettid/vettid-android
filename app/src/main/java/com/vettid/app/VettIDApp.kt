@@ -302,6 +302,12 @@ sealed class Screen(val route: String) {
         fun createRoute(requestId: String) = "agents/approval/$requestId"
     }
     object CreateAgentInvitation : Screen("agents/create-invitation")
+    // Per-agent details screen: capabilities readout + bulk visibility
+    // toggles. Toggles set global Discoverability on each minor secret,
+    // matching the peer-profile model.
+    object AgentDetail : Screen("agents/detail/{connectionId}") {
+        fun createRoute(connectionId: String) = "agents/detail/$connectionId"
+    }
     // Stage-2 authorization for a pairing vettid-agent. Auto-pushed
     // when OwnerSpaceClient.agentPendingAuth emits — see the
     // LaunchedEffect block alongside the device equivalent.
@@ -1760,7 +1766,20 @@ fun VettIDApp(
                 onNavigateBack = { navController.safePopBackStack() },
                 onNavigateToCreateInvitation = {
                     navController.navigate(Screen.CreateAgentInvitation.route)
-                }
+                },
+                onNavigateToAgentDetail = { connectionId ->
+                    navController.navigate(Screen.AgentDetail.createRoute(connectionId))
+                },
+            )
+        }
+        composable(
+            route = Screen.AgentDetail.route,
+            arguments = listOf(navArgument("connectionId") { type = NavType.StringType }),
+        ) { backStackEntry ->
+            val connectionId = backStackEntry.arguments?.getString("connectionId") ?: ""
+            com.vettid.app.features.agents.AgentDetailScreen(
+                connectionId = connectionId,
+                onNavigateBack = { navController.safePopBackStack() },
             )
         }
         composable(

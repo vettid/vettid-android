@@ -28,7 +28,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 fun AgentManagementScreen(
     viewModel: AgentManagementViewModel = hiltViewModel(),
     onNavigateBack: () -> Unit = {},
-    onNavigateToCreateInvitation: () -> Unit = {}
+    onNavigateToCreateInvitation: () -> Unit = {},
+    onNavigateToAgentDetail: (String) -> Unit = {},
 ) {
     val state by viewModel.state.collectAsState()
     val context = LocalContext.current
@@ -99,7 +100,8 @@ fun AgentManagementScreen(
                         items(currentState.agents) { agent ->
                             AgentItem(
                                 agent = agent,
-                                onRevoke = { showRevokeDialog = agent }
+                                onRevoke = { showRevokeDialog = agent },
+                                onClick = { onNavigateToAgentDetail(agent.connectionId) },
                             )
                         }
                     }
@@ -206,7 +208,8 @@ private fun EmptyContent(onCreateInvitation: () -> Unit) {
 @Composable
 private fun AgentItem(
     agent: AgentConnection,
-    onRevoke: () -> Unit
+    onRevoke: () -> Unit,
+    onClick: () -> Unit = {},
 ) {
     val statusColor = when (agent.status) {
         "active" -> MaterialTheme.colorScheme.primary
@@ -219,7 +222,8 @@ private fun AgentItem(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant
-        )
+        ),
+        onClick = onClick,
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(

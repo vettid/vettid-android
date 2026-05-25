@@ -72,8 +72,28 @@ class AuthorizeAgentViewModel @Inject constructor(
         // replay=1), don't clobber their picks.
         if (_state.value is AuthorizeAgentState.Ready) return
 
-        val toggles = notif.requestedScope
+        // Render the FULL canonical capability vocabulary, not just what
+        // the agent listed in requested_scope. The owner gets the same
+        // menu every time and decides what to grant — the agent's hint
+        // only controls the default-on state of each toggle.
+        //
+        // Tokens the agent requested that aren't in the canonical
+        // catalog (e.g. parameterized agent.action.<tool>) are appended
+        // so the owner still sees them — scopeMeta() falls back
+        // gracefully for unknown tokens.
+        val requested = notif.requestedScope.toSet()
+        val canonicalToggles = AgentCapabilityCatalog.map { (token, meta) ->
+            val granted = if (requested.isEmpty()) {
+                meta.defaultGranted
+            } else {
+                requested.contains(token)
+            }
+            ScopeToggle(token = token, granted = granted)
+        }
+        val customToggles = notif.requestedScope
+            .filter { it !in AgentCapabilityCatalog.map { (t, _) -> t } }
             .map { ScopeToggle(token = it, granted = true) }
+        val toggles = canonicalToggles + customToggles
 
         // Duration picker: prefer the agent's hint if it's within
         // [60s, max]. Otherwise fall back to the vault default. The

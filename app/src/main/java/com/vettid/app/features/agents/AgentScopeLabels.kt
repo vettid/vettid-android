@@ -1,15 +1,15 @@
 package com.vettid.app.features.agents
 
 /**
- * Formal scope vocabulary for agent session authorization
- * (vettid-agent/docs/AGENT-PAIRING-FLOW.md §"Locked decisions" #2).
+ * Agent capability vocabulary. Mirrors enclave/vault-manager/
+ * agent_capabilities.go — the vault enforces these tokens directly,
+ * so the phone-side picker must match the constants in that file.
  *
- * The agent sends `requested_scope` as a hint; the phone is the sole
- * authority that writes the final ConnectionContract.Scope on the vault.
- * Tokens not in this map render with the raw token string and a generic
- * "tool-specific action" description so the owner still sees them — we
- * never silently drop a requested scope just because the phone hasn't
- * learned about it yet.
+ * Contract.Scope is now pure capabilities. Categories (CREDIT_CARD,
+ * API_KEY, …) used to appear here as filter tokens — they don't
+ * anymore. Per-secret visibility is the owner's Discoverability
+ * decision on each item, surfaced via the per-secret editor and the
+ * bulk "Visibility" section on Agent Details.
  */
 data class ScopeMeta(
     /** Short label rendered next to the toggle. */
@@ -17,57 +17,63 @@ data class ScopeMeta(
     /** One-line caption explaining what the agent gets if granted. */
     val description: String,
     /**
-     * True for scopes the owner should think twice about. Renders the
-     * toggle row with a warning accent. Currently: anything that lets
-     * the agent change vault state or send on the owner's behalf.
+     * True for capabilities the owner should think twice about.
+     * Renders the toggle row with a warning accent. Currently: anything
+     * that lets the agent read secret values or send on the owner's
+     * behalf.
      */
     val sensitive: Boolean = false,
+    /** Default-on state when the owner first opens the picker. */
+    val defaultGranted: Boolean = true,
 )
 
-val AgentScopeLabels: Map<String, ScopeMeta> = mapOf(
-    "secrets.catalog.read" to ScopeMeta(
-        label = "Read secret catalog",
-        description = "See the list of secret aliases without their values",
-    ),
-    "secrets.get" to ScopeMeta(
-        label = "Read secret values",
-        description = "Retrieve the value of a secret (still subject to per-op approval)",
-        sensitive = true,
-    ),
-    "secrets.put" to ScopeMeta(
-        label = "Write secrets",
-        description = "Create or update secrets in the vault",
-        sensitive = true,
-    ),
-    "message.send" to ScopeMeta(
-        label = "Send messages",
-        description = "Send messages to your connections on your behalf",
-        sensitive = true,
-    ),
-    "message.recv" to ScopeMeta(
-        label = "Receive messages",
-        description = "Observe inbound messages from your connections",
-    ),
-    "call.history" to ScopeMeta(
-        label = "Read call history",
-        description = "See past calls — who, when, and duration",
-    ),
-    "connection.list" to ScopeMeta(
-        label = "List connections",
-        description = "See the names of people you're connected to",
-    ),
-    "connection.get" to ScopeMeta(
-        label = "Read connection details",
-        description = "View details about a specific connection",
-    ),
-)
+/** Canonical capability tokens. Must match agent_capabilities.go. */
+const val CAP_SECRETS_CATALOG_READ = "secrets.catalog.read"
+const val CAP_SECRETS_GET = "secrets.get"
+const val CAP_SECRETS_ACTION = "secrets.action"
+const val CAP_MESSAGE_SEND = "message.send"
+const val CAP_MESSAGE_RECV = "message.recv"
 
 /**
- * Look up display metadata for a scope token. Falls back gracefully for
- * parameterized tokens (e.g. `agent.action.<tool>`) and unknown tokens.
+ * Capability tokens shown on the AuthorizeAgentScreen picker. The
+ * picker renders every entry here regardless of what the agent
+ * requested — the owner gets the full menu.
+ */
+val AgentCapabilityCatalog: List<Pair<String, ScopeMeta>> = listOf(
+    CAP_SECRETS_CATALOG_READ to ScopeMeta(
+        label = "Read secret catalog",
+        description = "See the list of secrets you've made discoverable, without their values",
+    ),
+    CAP_SECRETS_GET to ScopeMeta(
+        label = "Read secret values",
+        description = "Retrieve the value of a specific secret (still per-op approval)",
+        sensitive = true,
+    ),
+    CAP_SECRETS_ACTION to ScopeMeta(
+        label = "Use secrets for actions",
+        description = "Sign / derive / use a secret without ever seeing its value",
+        sensitive = true,
+    ),
+    CAP_MESSAGE_SEND to ScopeMeta(
+        label = "Send messages",
+        description = "Post messages to you (chat content, approval requests)",
+    ),
+    CAP_MESSAGE_RECV to ScopeMeta(
+        label = "Receive your replies",
+        description = "Deliver your chat replies and approval responses",
+    ),
+)
+
+private val AgentCapabilityMap: Map<String, ScopeMeta> = AgentCapabilityCatalog.toMap()
+
+/**
+ * Look up display metadata for a capability token. Falls back gracefully
+ * for parameterized tokens (e.g. `agent.action.<tool>`) and unknown
+ * tokens — the latter still render so an owner can deny something the
+ * vault hasn't been taught about yet.
  */
 fun scopeMeta(token: String): ScopeMeta {
-    AgentScopeLabels[token]?.let { return it }
+    AgentCapabilityMap[token]?.let { return it }
     if (token.startsWith("agent.action.")) {
         val tool = token.removePrefix("agent.action.")
         return ScopeMeta(
@@ -79,6 +85,6 @@ fun scopeMeta(token: String): ScopeMeta {
     return ScopeMeta(
         label = token,
         description = "Custom permission requested by the agent",
-        sensitive = false,
+        sensitive = true,
     )
 }

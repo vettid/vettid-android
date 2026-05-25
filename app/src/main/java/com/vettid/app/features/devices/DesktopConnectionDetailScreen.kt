@@ -625,7 +625,7 @@ private fun EditContractDialog(
     // Union of well-known tokens and whatever the agent had granted —
     // unknown tokens (e.g. `agent.action.kubectl`) still get a row so
     // they can be flipped off without dropping to a JSON editor.
-    val knownTokens = com.vettid.app.features.agents.AgentScopeLabels.keys.toList()
+    val knownTokens = com.vettid.app.features.agents.AgentCapabilityCatalog.map { it.first }
     val allTokens = remember(initial.scope) {
         (knownTokens + initial.scope).distinct().sorted()
     }
