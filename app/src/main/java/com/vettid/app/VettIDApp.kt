@@ -308,6 +308,11 @@ sealed class Screen(val route: String) {
     object AgentDetail : Screen("agents/detail/{connectionId}") {
         fun createRoute(connectionId: String) = "agents/detail/$connectionId"
     }
+    // Approval screen for an agent-initiated LEASH mint request.
+    // Auto-pushed when OwnerSpaceClient.agentLeashMintPending emits.
+    object LeashApprove : Screen("agents/leash-approve/{requestId}") {
+        fun createRoute(requestId: String) = "agents/leash-approve/$requestId"
+    }
     // Stage-2 authorization for a pairing vettid-agent. Auto-pushed
     // when OwnerSpaceClient.agentPendingAuth emits — see the
     // LaunchedEffect block alongside the device equivalent.
@@ -483,6 +488,18 @@ fun VettIDApp(
             val current = navController.currentDestination?.route
             if (current?.startsWith("agents/authorize/") == true) return@collect
             navController.navigate(Screen.AgentAuthorize.createRoute(notif.connectionId))
+        }
+    }
+
+    // Agent-initiated LEASH mint awaiting approval → auto-navigate to
+    // LeashApprovalScreen. Mirrors the agentPendingAuth pattern above;
+    // replay=1 on agentLeashMintPending means a cold app launch still
+    // surfaces the open request.
+    LaunchedEffect(grantsEntryPoint) {
+        grantsEntryPoint.ownerSpaceClient().agentLeashMintPending.collect { notif ->
+            val current = navController.currentDestination?.route
+            if (current?.startsWith("agents/leash-approve/") == true) return@collect
+            navController.navigate(Screen.LeashApprove.createRoute(notif.requestId))
         }
     }
 
@@ -1779,6 +1796,16 @@ fun VettIDApp(
             val connectionId = backStackEntry.arguments?.getString("connectionId") ?: ""
             com.vettid.app.features.agents.AgentDetailScreen(
                 connectionId = connectionId,
+                onNavigateBack = { navController.safePopBackStack() },
+            )
+        }
+        composable(
+            route = Screen.LeashApprove.route,
+            arguments = listOf(navArgument("requestId") { type = NavType.StringType }),
+        ) { backStackEntry ->
+            val requestId = backStackEntry.arguments?.getString("requestId") ?: ""
+            com.vettid.app.features.agents.LeashApprovalScreen(
+                requestId = requestId,
                 onNavigateBack = { navController.safePopBackStack() },
             )
         }

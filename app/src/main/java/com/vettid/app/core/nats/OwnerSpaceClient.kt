@@ -145,6 +145,23 @@ class OwnerSpaceClient @Inject constructor(
      */
     val agentPendingAuth: SharedFlow<AgentPendingAuthNotification> = _agentPendingAuth.asSharedFlow()
 
+    // Mirrors agentPendingAuth's replay=1 contract — VettIDApp's
+    // auto-nav LaunchedEffect consumes the first emission, then
+    // LeashApprovalScreen subscribes; replay ensures the form has the
+    // request details (requested_scope, duration, reason) and doesn't
+    // render an empty approval prompt.
+    private val _agentLeashMintPending = MutableSharedFlow<AgentLeashMintPendingNotification>(
+        replay = 1,
+        extraBufferCapacity = 8,
+    )
+    /**
+     * Flow of agent-initiated LEASH mint requests awaiting owner
+     * approval. Emitted when the vault stores a PendingLeashRequest in
+     * response to an agent's leash_mint_request envelope — the owner
+     * now picks final scope/duration and Approves (or denies).
+     */
+    val agentLeashMintPending: SharedFlow<AgentLeashMintPendingNotification> = _agentLeashMintPending.asSharedFlow()
+
     private val _callEvents = MutableSharedFlow<CallSignalEvent>(extraBufferCapacity = 64)
     /** Flow of call signaling events (vault-routed). */
     val callEvents: SharedFlow<CallSignalEvent> = _callEvents.asSharedFlow()
@@ -2189,6 +2206,13 @@ class OwnerSpaceClient @Inject constructor(
                 subject.contains(".forApp.agent.pending-authorization") -> {
                     handleAgentPendingAuth(message); return
                 }
+                // Agent-initiated LEASH mint awaiting owner approval. Same
+                // dispatch shape as pending-authorization — distinct
+                // subject + distinct flow so the existing AuthorizeAgent
+                // listener doesn't fire on mint requests.
+                subject.contains(".forApp.agent.leash-mint-pending") -> {
+                    handleAgentLeashMintPending(message); return
+                }
                 // Agent events (push notifications, not request-responses)
                 subject.contains(".forApp.agent.") && !isRequestResponse(subject) -> {
                     handleAgentEvent(message); return
@@ -2721,6 +2745,36 @@ class OwnerSpaceClient @Inject constructor(
             _agentPendingAuth.tryEmit(notif)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "Failed to parse agent.pending-authorization event", e)
+        }
+    }
+
+    private fun handleAgentLeashMintPending(message: NatsMessage) {
+        try {
+            val json = JSONObject(String(message.data, Charsets.UTF_8))
+            val payload = if (json.has("payload")) json.getJSONObject("payload") else json
+
+            val scopeArr = payload.optJSONArray("requested_scope")
+            val requestedScope = if (scopeArr != null) {
+                (0 until scopeArr.length()).mapNotNull { idx ->
+                    scopeArr.optString(idx).takeIf { it.isNotEmpty() }
+                }
+            } else emptyList()
+
+            val notif = AgentLeashMintPendingNotification(
+                requestId = payload.getString("request_id"),
+                connectionId = payload.getString("connection_id"),
+                agentName = payload.optString("agent_name", "Agent"),
+                agentType = payload.optString("agent_type", ""),
+                agentPubkey = payload.optString("agent_pubkey", ""),
+                requestedScope = requestedScope,
+                durationSeconds = payload.optLong("duration_secs", 1800L),
+                reason = payload.optString("reason", ""),
+                expiresAt = payload.optLong("expires_at", 0L),
+            )
+            android.util.Log.i(TAG, "Agent LEASH mint pending: ${notif.requestId} (${notif.agentName})")
+            _agentLeashMintPending.tryEmit(notif)
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "Failed to parse agent.leash-mint-pending event", e)
         }
     }
 

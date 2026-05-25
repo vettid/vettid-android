@@ -418,6 +418,28 @@ data class AgentPendingAuthNotification(
 )
 
 /**
+ * Notification that a vettid-agent has published a leash_mint_request
+ * and is awaiting the owner's approval to mint a LEASH bound to its
+ * Ed25519 pubkey. Mirrors vault-manager/agent_handler.go
+ * handleLeashMintRequest's forApp publish.
+ *
+ * Distinct from AgentPendingAuthNotification — that's pairing-time
+ * session authorization; this is a per-mint request issued by an
+ * already-paired agent.
+ */
+data class AgentLeashMintPendingNotification(
+    val requestId: String,
+    val connectionId: String,
+    val agentName: String,
+    val agentType: String,
+    val agentPubkey: String,          // base64url Ed25519; informational on the screen
+    val requestedScope: List<String>,
+    val durationSeconds: Long,
+    val reason: String,
+    val expiresAt: Long,
+)
+
+/**
  * Identity-card fields the agent sends for the user to verify before approving.
  * Mirrors vault-manager/connections.go AgentMetadata (omitting first_seen_at,
  * which the vault sets server-side, and ip_address, which the vault enriches).
