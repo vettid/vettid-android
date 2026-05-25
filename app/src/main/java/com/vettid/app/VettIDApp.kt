@@ -1809,11 +1809,21 @@ fun VettIDApp(
                 // CreateAgentInvitationScreen underneath — the invite
                 // is consumed, the agent is paired, the code card
                 // serves no further purpose.
+                //
+                // popBackStack(route, inclusive) is a no-op when the
+                // named route isn't on the stack. That happens on the
+                // EXTEND path: the agent posts request-session from a
+                // long-lived daemon and VettIDApp auto-navigates to
+                // AuthorizeAgentScreen on top of whatever the owner
+                // was already doing — no CreateAgentInvitation
+                // underneath. Without the fallback the owner is
+                // stranded on DoneContent with no exit.
                 onAuthorized = {
-                    navController.popBackStack(
+                    val popped = navController.popBackStack(
                         Screen.CreateAgentInvitation.route,
                         inclusive = true,
                     )
+                    if (!popped) navController.safePopBackStack()
                 },
             )
         }
