@@ -277,7 +277,10 @@ class AgentDetailViewModel @Inject constructor(
     private suspend fun fetchAgent(connectionId: String): AgentConnection? {
         val resp = ownerSpaceClient.sendAndAwaitResponse("agent.list", JsonObject())
         if (resp !is VaultResponse.HandlerResult || !resp.success) return null
-        val arr = resp.result?.getAsJsonArray("agents") ?: return null
+        val arr = resp.result?.let {
+            val e = it.get("agents")
+            if (e == null || e.isJsonNull || !e.isJsonArray) null else e.asJsonArray
+        } ?: return null
         for (el in arr) {
             val obj = el.asJsonObject
             if (obj.safeString("connection_id") != connectionId) continue
@@ -287,9 +290,7 @@ class AgentDetailViewModel @Inject constructor(
                 agentType = obj.safeString("agent_type") ?: "",
                 status = obj.safeString("status") ?: "unknown",
                 approvalMode = obj.safeString("approval_mode") ?: "always_ask",
-                scope = obj.getAsJsonArray("scope")
-                    ?.mapNotNull { if (it.isJsonNull) null else it.asString }
-                    ?: emptyList(),
+                scope = obj.safeStringList("scope"),
                 connectedAt = obj.safeString("paired_at")
                     ?: obj.safeString("connected_at") ?: "",
                 lastActiveAt = obj.safeString("last_active_at"),
@@ -303,7 +304,10 @@ class AgentDetailViewModel @Inject constructor(
     private suspend fun fetchMinorSecrets(): List<VisibilityItem> {
         val resp = ownerSpaceClient.sendAndAwaitResponse("secret.list", JsonObject())
         if (resp !is VaultResponse.HandlerResult || !resp.success) return emptyList()
-        val arr = resp.result?.getAsJsonArray("secrets") ?: return emptyList()
+        val arr = resp.result?.let {
+            val e = it.get("secrets")
+            if (e == null || e.isJsonNull || !e.isJsonArray) null else e.asJsonArray
+        } ?: return emptyList()
         val out = mutableListOf<VisibilityItem>()
         for (el in arr) {
             val obj = el.asJsonObject

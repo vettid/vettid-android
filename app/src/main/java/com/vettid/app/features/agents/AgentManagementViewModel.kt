@@ -28,6 +28,19 @@ internal fun JsonObject.safeString(key: String): String? {
 }
 
 /**
+ * Read an array field that may be absent OR JSON null. Same hazard as
+ * safeString: getAsJsonArray() does an unchecked cast that throws
+ * ClassCastException when the field is JsonNull (e.g. `"scope": null`
+ * on the wire), and `?.` doesn't catch it because JsonNull is a real
+ * JsonElement.
+ */
+internal fun JsonObject.safeStringList(key: String): List<String> {
+    val el = get(key) ?: return emptyList()
+    if (el.isJsonNull || !el.isJsonArray) return emptyList()
+    return el.asJsonArray.mapNotNull { if (it.isJsonNull) null else it.asString }
+}
+
+/**
  * ViewModel for agent management screen.
  *
  * Lists connected agents, supports revoking connections.
@@ -108,7 +121,11 @@ class AgentManagementViewModel @Inject constructor(
                 when (response) {
                     is VaultResponse.HandlerResult -> {
                         if (response.success) {
-                            val agentsArray = response.result?.getAsJsonArray("agents")
+                            val agentsArray = response.result?.let {
+                                val el = it.get("agents")
+                                if (el == null || el.isJsonNull || !el.isJsonArray) null
+                                else el.asJsonArray
+                            }
                             if (agentsArray == null || agentsArray.size() == 0) {
                                 _state.value = AgentManagementState.Empty
                             } else {
@@ -124,9 +141,7 @@ class AgentManagementViewModel @Inject constructor(
                                         agentType = obj.safeString("agent_type") ?: "",
                                         status = obj.safeString("status") ?: "unknown",
                                         approvalMode = obj.safeString("approval_mode") ?: "always_ask",
-                                        scope = obj.getAsJsonArray("scope")
-                                            ?.mapNotNull { if (it.isJsonNull) null else it.asString }
-                                            ?: emptyList(),
+                                        scope = obj.safeStringList("scope"),
                                         // Phase A renamed connected_at → paired_at on
                                         // the wire (docs/AGENT-PAIRED-CONTRACT-MODEL.md).
                                         // Read both for backwards compatibility with
