@@ -47,6 +47,7 @@ sealed class AgentDetailEvent {
     // LEASH mint flow
     object OpenMint : AgentDetailEvent()
     object CloseMint : AgentDetailEvent()
+    data class MintSetAgentPubkey(val pubkey: String) : AgentDetailEvent()
     data class MintToggleScope(val token: String, val granted: Boolean) : AgentDetailEvent()
     data class MintSetCustomScope(val token: String) : AgentDetailEvent()
     data class MintSetDuration(val seconds: Long) : AgentDetailEvent()
@@ -65,6 +66,7 @@ sealed class AgentDetailEffect {
  * the form is up, replaced with Result once the vault returns.
  */
 data class MintDialogState(
+    val agentPubkeyB64: String,
     val scopes: List<MintScopeToggle>,
     val customScope: String,
     val durationSeconds: Long,
@@ -130,6 +132,7 @@ class AgentDetailViewModel @Inject constructor(
             AgentDetailEvent.Refresh -> viewModelScope.launch { load() }
             AgentDetailEvent.OpenMint -> openMint()
             AgentDetailEvent.CloseMint -> closeMint()
+            is AgentDetailEvent.MintSetAgentPubkey -> updateMint { m -> m.copy(agentPubkeyB64 = e.pubkey.trim()) }
             is AgentDetailEvent.MintToggleScope -> updateMint { m ->
                 m.copy(
                     scopes = m.scopes.map {
@@ -156,6 +159,7 @@ class AgentDetailViewModel @Inject constructor(
         }
         _state.value = current.copy(
             mint = MintDialogState(
+                agentPubkeyB64 = "",
                 scopes = toggles,
                 customScope = "",
                 durationSeconds = DEFAULT_MINT_DURATION_SECONDS,
@@ -177,6 +181,22 @@ class AgentDetailViewModel @Inject constructor(
     private fun mint() {
         val current = (_state.value as? AgentDetailState.Loaded) ?: return
         val mint = current.mint ?: return
+        val pubkey = mint.agentPubkeyB64.trim()
+        if (pubkey.isEmpty()) {
+            _state.value = current.copy(
+                mint = mint.copy(error = "Agent pubkey required — run `vettid-agent leash pubkey` and paste the output."),
+            )
+            return
+        }
+        // Ed25519 pubkey is 32 bytes → 43 base64url chars (no padding) or
+        // 44 with a single '=' pad. Server re-validates; this is just
+        // fast-fail UX.
+        if (pubkey.length !in 43..44 || pubkey.any { !(it.isLetterOrDigit() || it == '-' || it == '_' || it == '=') }) {
+            _state.value = current.copy(
+                mint = mint.copy(error = "Agent pubkey must be a 32-byte base64url Ed25519 key."),
+            )
+            return
+        }
         val granted = mint.scopes.filter { it.granted }.map { it.token }.toMutableList()
         val custom = mint.customScope.trim()
         if (custom.isNotEmpty()) {
@@ -202,13 +222,7 @@ class AgentDetailViewModel @Inject constructor(
                     addProperty("connection_id", current.agent.connectionId)
                     add("scope", com.google.gson.JsonArray().apply { granted.forEach { add(it) } })
                     addProperty("duration_secs", mint.durationSeconds)
-                    // agent_pubkey: server requires this, so fetch from the
-                    // connection record vault-side. The pubkey is in the
-                    // ConnectionRecord but agent.list doesn't surface it
-                    // today — pass empty and let the vault populate from
-                    // the record. (If a future vault rev rejects empty,
-                    // we'll need a new agent.get-pubkey op.)
-                    addProperty("agent_pubkey", "")
+                    addProperty("agent_pubkey", pubkey)
                 }
                 val resp = ownerSpaceClient.sendAndAwaitResponse("leash.attest", payload, 30_000L)
                 val state = _state.value as? AgentDetailState.Loaded ?: return@launch

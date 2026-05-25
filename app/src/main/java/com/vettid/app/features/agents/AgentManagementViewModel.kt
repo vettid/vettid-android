@@ -37,6 +37,7 @@ class AgentManagementViewModel @Inject constructor(
 
     init {
         observeConnectionAndLoad()
+        observeConnectionStatusUpdates()
     }
 
     private fun observeConnectionAndLoad() {
@@ -47,6 +48,24 @@ class AgentManagementViewModel @Inject constructor(
                     Log.d(TAG, "NATS connected, loading agents")
                     loadAgents()
                 }
+            }
+        }
+    }
+
+    /**
+     * Refresh the agents list on connection.activated / connection.revoked.
+     * Without this, ConnectionsClient.listCacheTtlMs (30s) gates how soon a
+     * freshly-paired or freshly-revoked agent shows up — observed as a
+     * ~30s lag between "Approved on phone" and the new agent appearing in
+     * the list. ConnectionsViewModel listens for the same events for the
+     * peers screen; this mirrors that for agents.
+     */
+    private fun observeConnectionStatusUpdates() {
+        viewModelScope.launch {
+            ownerSpaceClient.connectionStatusUpdates.collect { update ->
+                Log.d(TAG, "Connection status update: ${update.type} — refreshing agents list")
+                connectionsClient.invalidateListCache()
+                loadAgents()
             }
         }
     }

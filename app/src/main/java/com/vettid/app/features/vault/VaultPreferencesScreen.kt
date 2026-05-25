@@ -236,6 +236,13 @@ fun VaultPreferencesContent(
                 )
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                 PreferencesItem(
+                    icon = Icons.Default.SmartToy,
+                    title = "Agent Connections",
+                    subtitle = "Manage AI agents that can access your vault",
+                    onClick = onNavigateToAgents
+                )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                PreferencesItem(
                     icon = Icons.Default.List,
                     title = "View Audit Logs",
                     onClick = onNavigateToSecurityAuditLog

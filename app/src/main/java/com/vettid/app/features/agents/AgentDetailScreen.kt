@@ -94,6 +94,7 @@ fun AgentDetailScreen(
                     MintDialog(
                         state = mint,
                         onClose = { viewModel.onEvent(AgentDetailEvent.CloseMint) },
+                        onPubkeyChange = { viewModel.onEvent(AgentDetailEvent.MintSetAgentPubkey(it)) },
                         onToggleScope = { token, granted ->
                             viewModel.onEvent(AgentDetailEvent.MintToggleScope(token, granted))
                         },
@@ -175,6 +176,7 @@ private fun LeashSection(onMint: () -> Unit) {
 private fun MintDialog(
     state: MintDialogState,
     onClose: () -> Unit,
+    onPubkeyChange: (String) -> Unit,
     onToggleScope: (String, Boolean) -> Unit,
     onCustomScopeChange: (String) -> Unit,
     onDurationChange: (Long) -> Unit,
@@ -192,6 +194,24 @@ private fun MintDialog(
         title = { Text("Mint LEASH") },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text("Agent pubkey", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Run `vettid-agent leash pubkey` on the agent and paste the output here. The LEASH binds to this exact key.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(4.dp))
+                OutlinedTextField(
+                    value = state.agentPubkeyB64,
+                    onValueChange = onPubkeyChange,
+                    label = { Text("base64url Ed25519 pubkey") },
+                    singleLine = true,
+                    enabled = !state.submitting,
+                    keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+
+                Spacer(Modifier.height(12.dp))
                 Text("Scopes", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(4.dp))
                 state.scopes.forEach { toggle ->
