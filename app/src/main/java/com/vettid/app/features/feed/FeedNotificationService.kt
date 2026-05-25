@@ -275,6 +275,25 @@ class FeedNotificationService @Inject constructor(
                 }
             }
         }
+        // Agent-initiated LEASH mint requests are the only flow where
+        // the agent expects a near-real-time response. Background
+        // notification lets the user know to open the app; in-app
+        // VettIDApp.kt auto-navs to LeashApprovalScreen on the same
+        // flow.
+        scope.launch {
+            ownerSpaceClient.agentLeashMintPending.collect { notif ->
+                showLeashMintPendingNotification(notif.requestId, notif.agentName, notif.requestedScope)
+            }
+        }
+        // Agent pair-time stage-2 authorization. Same shape as
+        // LEASH mint — the agent posted request-session and is
+        // blocking on the owner's approval. Worth a heads-up if the
+        // app isn't foregrounded.
+        scope.launch {
+            ownerSpaceClient.agentPendingAuth.collect { notif ->
+                showAgentPendingAuthNotification(notif.connectionId, notif.agentMetadata?.agentType ?: "Agent")
+            }
+        }
     }
 
     private suspend fun handleNotification(notification: FeedNotification) {
@@ -759,6 +778,85 @@ class FeedNotificationService @Inject constructor(
         if (!mgr.areNotificationsEnabled()) return
         try { mgr.notify(("critical-use:$requestId").hashCode(), n) }
         catch (e: SecurityException) { Log.w(TAG, "Notification permission not granted for critical-use", e) }
+    }
+
+    /**
+     * Heads-up when an agent has posted a leash_mint_request and is
+     * blocking on owner approval. Tapping the notification brings the
+     * app to foreground; the on-resume agent.leash-pending-list poll
+     * (VettIDApp.kt) emits onto agentLeashMintPending and auto-navs
+     * to LeashApprovalScreen. We don't navigate from the notification
+     * directly because the poll is the single source of truth for
+     * "which requests are still actually pending right now."
+     */
+    private fun showLeashMintPendingNotification(requestId: String, agentName: String, requestedScope: List<String>) {
+        if (isAppForegrounded()) return
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(EXTRA_OPEN_FEED, true)
+            putExtra(EXTRA_EVENT_TYPE, "agent.leash-mint-pending")
+            putExtra(EXTRA_SOURCE_ID, requestId)
+        }
+        val pi = PendingIntent.getActivity(
+            context, ("leash-mint:$requestId").hashCode(), intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val name = agentName.ifBlank { "An agent" }
+        val scopeSummary = when (requestedScope.size) {
+            0 -> "no scopes"
+            1 -> requestedScope[0]
+            else -> "${requestedScope.size} scopes incl. ${requestedScope.first()}"
+        }
+        val n = NotificationCompat.Builder(context, CHANNEL_ID_DEFAULT)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("$name requested a LEASH")
+            .setContentText("Approve or deny — open VettID. ($scopeSummary)")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .setGroup("vettid_leash_mint")
+            .setCategory(NotificationCompat.CATEGORY_SOCIAL)
+            .build()
+        val mgr = NotificationManagerCompat.from(context)
+        if (!mgr.areNotificationsEnabled()) return
+        try { mgr.notify(("leash-mint:$requestId").hashCode(), n) }
+        catch (e: SecurityException) { Log.w(TAG, "Notification permission not granted for leash-mint", e) }
+    }
+
+    /**
+     * Heads-up when a vettid-agent has posted request-session (stage-2
+     * pairing) and is blocking on the owner's authorize-session. Same
+     * shape as leash-mint above; tapping just brings the app forward
+     * and VettIDApp's agentPendingAuth collector handles the nav once
+     * NATS reconnects.
+     */
+    private fun showAgentPendingAuthNotification(connectionId: String, agentType: String) {
+        if (isAppForegrounded()) return
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra(EXTRA_OPEN_FEED, true)
+            putExtra(EXTRA_EVENT_TYPE, "agent.pending-authorization")
+            putExtra(EXTRA_SOURCE_ID, connectionId)
+        }
+        val pi = PendingIntent.getActivity(
+            context, ("agent-pair:$connectionId").hashCode(), intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val label = agentType.ifBlank { "An agent" }
+        val n = NotificationCompat.Builder(context, CHANNEL_ID_DEFAULT)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle("$label is requesting access")
+            .setContentText("Pair or deny — open VettID.")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(pi)
+            .setGroup("vettid_agent_pair")
+            .setCategory(NotificationCompat.CATEGORY_SOCIAL)
+            .build()
+        val mgr = NotificationManagerCompat.from(context)
+        if (!mgr.areNotificationsEnabled()) return
+        try { mgr.notify(("agent-pair:$connectionId").hashCode(), n) }
+        catch (e: SecurityException) { Log.w(TAG, "Notification permission not granted for agent-pair", e) }
     }
 
     /**

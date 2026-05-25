@@ -726,6 +726,14 @@ fun VettIDApp(
                         // stomp on it and land the user on the
                         // desktop's detail page instead.
                         "device.approval.requested",
+                        // Agent-initiated LEASH mint + agent stage-2
+                        // pair. Handled by their respective collectors
+                        // on OwnerSpaceClient flows (agentLeashMintPending
+                        // / agentPendingAuth), populated by either a
+                        // live NATS push or the on-resume pending-list
+                        // recovery poll.
+                        "agent.leash-mint-pending",
+                        "agent.pending-authorization",
                     )
                     if (!approvalEvent) {
                         navController.navigate(Screen.Main.route) {
