@@ -14,9 +14,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.vettid.app.ui.components.QrCodeScanner
 
 /**
@@ -223,14 +225,27 @@ private fun ManualEntryContent(
 
             Spacer(modifier = Modifier.height(32.dp))
 
-            // Invite code input
+            // Invite code input — alphanumeric only, auto-uppercased, dash
+            // auto-inserted after position 4. Stored value mirrors the canonical
+            // "XXXX-XXXX" form the resolver regex expects.
             OutlinedTextField(
                 value = inviteCode,
-                onValueChange = onInviteCodeChange,
+                onValueChange = { raw ->
+                    val cleaned = raw.filter { it.isLetterOrDigit() }
+                        .uppercase()
+                        .take(8)
+                    val formatted = if (cleaned.length > 4) {
+                        cleaned.substring(0, 4) + "-" + cleaned.substring(4)
+                    } else {
+                        cleaned
+                    }
+                    onInviteCodeChange(formatted)
+                },
                 label = { Text("Enrollment Code") },
-                placeholder = { Text("e.g. ABCD-1234") },
+                placeholder = { Text("ABCD-1234") },
                 keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Text,
+                    keyboardType = KeyboardType.Ascii,
+                    capitalization = KeyboardCapitalization.Characters,
                     imeAction = ImeAction.Done
                 ),
                 keyboardActions = KeyboardActions(
@@ -239,7 +254,14 @@ private fun ManualEntryContent(
                         onSubmit()
                     }
                 ),
-                modifier = Modifier.fillMaxWidth(),
+                textStyle = MaterialTheme.typography.headlineSmall.copy(
+                    textAlign = TextAlign.Center,
+                    letterSpacing = 4.sp,
+                    fontWeight = FontWeight.SemiBold
+                ),
+                modifier = Modifier
+                    .widthIn(max = 240.dp)
+                    .align(Alignment.CenterHorizontally),
                 singleLine = true,
                 isError = error != null
             )
@@ -250,7 +272,9 @@ private fun ManualEntryContent(
                 Text(
                     text = error,
                     color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
         }

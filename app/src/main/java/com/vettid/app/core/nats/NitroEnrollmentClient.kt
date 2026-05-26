@@ -247,30 +247,38 @@ class NitroEnrollmentClient @Inject constructor(
                                     }
 
                                     // Verify the attestation document (suspend call — needs runBlocking in callback context)
-                                    val verified = kotlinx.coroutines.runBlocking {
+                                    val verifyResult = kotlinx.coroutines.runBlocking {
                                         verifyAttestationWithNonce(
                                             attestationDoc,
                                             nonce
                                         )
                                     }
 
-                                    if (verified != null) {
-                                        verifiedAttestation = verified
-                                        // Add verified PCR0 to user's trusted set (user consented by enrolling)
-                                        verified.pcrs[0]?.let { pcr0Bytes ->
-                                            val pcr0Hex = pcr0Bytes.joinToString("") { "%02x".format(it) }
-                                            pcrConfigManager.addTrustedPcr0(pcr0Hex)
+                                    verifyResult.fold(
+                                        onSuccess = { verified ->
+                                            verifiedAttestation = verified
+                                            // Add verified PCR0 to user's trusted set (user consented by enrolling)
+                                            verified.pcrs[0]?.let { pcr0Bytes ->
+                                                val pcr0Hex = pcr0Bytes.joinToString("") { "%02x".format(it) }
+                                                pcrConfigManager.addTrustedPcr0(pcr0Hex)
+                                            }
+                                            if (continuation.isActive) {
+                                                continuation.resume(Result.success(verified))
+                                            }
+                                        },
+                                        onFailure = { cause ->
+                                            // Surface the real reason (e.g. "PCR validation failed: PCR0 mismatch",
+                                            // "COSE signature verification failed", "Certificate chain validation
+                                            // failed") so field reports tell us which step rejected the doc.
+                                            val detail = cause.message?.takeIf { it.isNotBlank() }
+                                                ?: cause::class.java.simpleName
+                                            if (continuation.isActive) {
+                                                continuation.resume(
+                                                    Result.failure(NatsException("Attestation verification failed: $detail", cause))
+                                                )
+                                            }
                                         }
-                                        if (continuation.isActive) {
-                                            continuation.resume(Result.success(verified))
-                                        }
-                                    } else {
-                                        if (continuation.isActive) {
-                                            continuation.resume(
-                                                Result.failure(NatsException("Attestation verification failed"))
-                                            )
-                                        }
-                                    }
+                                    )
                                 }
                             } catch (e: Exception) {
                                 Log.e(TAG, "Error processing attestation response", e)
@@ -326,7 +334,7 @@ class NitroEnrollmentClient @Inject constructor(
     private suspend fun verifyAttestationWithNonce(
         attestationDocBase64: String,
         expectedNonce: ByteArray
-    ): VerifiedAttestation? {
+    ): Result<VerifiedAttestation> {
         return try {
             val verified = retryingVerifier.verifyWithRefreshOnMismatch(
                 attestationDocBase64 = attestationDocBase64,
@@ -334,13 +342,10 @@ class NitroEnrollmentClient @Inject constructor(
                 callerTag = TAG,
             )
             Log.i(TAG, "Attestation verified. Module: ${verified.moduleId}")
-            verified
-        } catch (e: AttestationVerificationException) {
-            Log.e(TAG, "Attestation verification failed", e)
-            null
+            Result.success(verified)
         } catch (e: Exception) {
             Log.e(TAG, "Attestation verification failed", e)
-            null
+            Result.failure(e)
         }
     }
 

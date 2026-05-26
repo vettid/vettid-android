@@ -11,14 +11,14 @@
 -repackageclasses ''
 -allowaccessmodification
 
-# Remove debugging information
+# Remove verbose/debug logs from release, but KEEP w/e/wtf so production
+# failures (especially attestation/crypto exceptions) remain diagnosable
+# via logcat field captures. Stripping Log.e gave us no signal during the
+# 2026-05-26 enrollment attestation regression — don't do that again.
 -assumenosideeffects class android.util.Log {
     public static int v(...);
     public static int d(...);
     public static int i(...);
-    public static int w(...);
-    public static int e(...);
-    public static int wtf(...);
 }
 
 # Remove toString() from security-sensitive classes to prevent leaking info
@@ -138,6 +138,15 @@
 -keep class org.bouncycastle.** { *; }
 -keep interface org.bouncycastle.** { *; }
 -keepclassmembers class org.bouncycastle.** { *; }
+
+# Keep Jackson core + CBOR parser — used by NitroAttestationVerifier to
+# decode the COSE_Sign1 attestation document. R8 was previously stripping
+# reflection-loaded internals here, causing every release-build attestation
+# verification to throw and surface as the opaque "Attestation verification
+# failed" toast.
+-keep class com.fasterxml.jackson.core.** { *; }
+-keep class com.fasterxml.jackson.dataformat.cbor.** { *; }
+-keepclassmembers class com.fasterxml.jackson.** { *; }
 
 # Keep NATS client
 -keep class io.nats.client.** { *; }
