@@ -39,8 +39,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import androidx.navigation.navDeepLink
-import com.vettid.app.features.applock.AppLockScreen
-import com.vettid.app.features.applock.PinSetupScreen
 import com.vettid.app.features.calling.ActiveCallScreen
 import com.vettid.app.features.calling.CallHistoryScreen
 import com.vettid.app.features.calling.CallManager
@@ -60,7 +58,6 @@ import com.vettid.app.features.wallet.WalletDetailScreen
 import com.vettid.app.features.wallet.SendBtcScreen
 import com.vettid.app.features.wallet.ReceiveBtcScreen
 import com.vettid.app.features.secrets.AddSecretScreen
-import com.vettid.app.features.setup.FirstTimeSetupScreen
 import com.vettid.app.features.vault.DeployVaultScreen
 import com.vettid.app.features.vault.VaultPreferencesScreenFull
 import com.vettid.app.features.vault.VaultPreferencesContent
@@ -255,10 +252,10 @@ sealed class Screen(val route: String) {
         fun createRoute(backupId: String) = "backups/$backupId"
     }
     object ProteanRecovery : Screen("recovery/protean")
-    // App Lock & Setup
-    object AppLock : Screen("app-lock")
-    object PinSetup : Screen("pin-setup")
-    object FirstTimeSetup : Screen("first-time-setup")
+    // (App Lock / PinSetup / FirstTimeSetup screens removed 2026-05-26:
+    // they were demo stubs that accepted any 4-digit PIN as a successful
+    // unlock and could be reached if anything ever navigated to them.
+    // See SECURITY-REVIEW-2026-05-25.md N-HIGH-2.)
     object DeployVault : Screen("deploy-vault")
     // Calling
     object IncomingCall : Screen("call/incoming")
@@ -1047,9 +1044,6 @@ fun VettIDApp(
                 onNavigateToDeployVault = {
                     navController.navigate(Screen.DeployVault.route)
                 },
-                onNavigateToPinSetup = {
-                    navController.navigate(Screen.PinSetup.route)
-                },
                 onNavigateToCredentialDebug = {
                     navController.navigate(Screen.CredentialDebug.route)
                 },
@@ -1567,36 +1561,9 @@ fun VettIDApp(
                 }
             )
         }
-        // App Lock & Setup routes
-        composable(Screen.AppLock.route) {
-            AppLockScreen(
-                onUnlock = { navController.safePopBackStack() },
-                onBiometricAuth = { /* Trigger biometric prompt */ }
-            )
-        }
-        composable(Screen.PinSetup.route) {
-            PinSetupScreen(
-                onPinCreated = { pin ->
-                    // In production, save PIN securely
-                    navController.safePopBackStack()
-                },
-                onBack = { navController.safePopBackStack() }
-            )
-        }
-        composable(Screen.FirstTimeSetup.route) {
-            FirstTimeSetupScreen(
-                onSetupComplete = {
-                    navController.navigate(Screen.Main.route) {
-                        popUpTo(Screen.FirstTimeSetup.route) { inclusive = true }
-                    }
-                },
-                onEnableBiometrics = { /* Trigger biometric enrollment */ },
-                onEnableNotifications = { /* Request notification permission */ },
-                onSetupPin = {
-                    navController.navigate(Screen.PinSetup.route)
-                }
-            )
-        }
+        // App Lock / PinSetup / FirstTimeSetup screens were removed —
+        // see Screen sealed-class comment above and
+        // SECURITY-REVIEW-2026-05-25.md N-HIGH-2.
         composable(Screen.DeployVault.route) {
             DeployVaultScreen(
                 onDeploymentComplete = {
@@ -2230,7 +2197,6 @@ fun MainScreen(
     onNavigateToArchive: () -> Unit = {},
     onNavigateToPreferences: () -> Unit = {},
     onNavigateToDeployVault: () -> Unit = {},
-    onNavigateToPinSetup: () -> Unit = {},
     onNavigateToCredentialDebug: () -> Unit = {},
     onNavigateToProposals: () -> Unit = {},
     onNavigateToProposalDetail: (String) -> Unit = {},
