@@ -379,6 +379,12 @@ class RuntimeProtection @Inject constructor(
                 "com.google.android.feedback", // Google Play Store (alternate)
                 "com.amazon.venezia",       // Amazon App Store
                 "com.sec.android.app.samsungapps", // Samsung Galaxy Store
+                "com.android.packageinstaller",        // AOSP system installer (sideload)
+                "com.google.android.packageinstaller", // Google-flavored system installer
+                "com.android.shell",                   // adb install
+                "app.grapheneos.apps",                 // GrapheneOS Apps
+                "org.fdroid.fdroid",                   // F-Droid
+                "com.aurora.store",                    // Aurora Store
                 null // Direct install (for development)
             )
 
