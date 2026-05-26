@@ -12,10 +12,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -228,10 +230,25 @@ private fun ManualEntryContent(
             // Invite code input — alphanumeric only, auto-uppercased, dash
             // auto-inserted after position 4. Stored value mirrors the canonical
             // "XXXX-XXXX" form the resolver regex expects.
+            //
+            // We hold a local TextFieldValue so we can pin the cursor to the
+            // end of the formatted string after each keystroke. Without that,
+            // Compose's String-based TextField leaves the IME cursor where it
+            // was *before* the auto-inserted dash, so subsequent characters
+            // get inserted in front of the trailing block and the last four
+            // chars appear in reverse order ("ABCD-1234" → "ABCD-4321").
+            val inviteCodeField = remember(inviteCode) {
+                mutableStateOf(
+                    TextFieldValue(
+                        text = inviteCode,
+                        selection = TextRange(inviteCode.length)
+                    )
+                )
+            }
             OutlinedTextField(
-                value = inviteCode,
-                onValueChange = { raw ->
-                    val cleaned = raw.filter { it.isLetterOrDigit() }
+                value = inviteCodeField.value,
+                onValueChange = { new ->
+                    val cleaned = new.text.filter { it.isLetterOrDigit() }
                         .uppercase()
                         .take(8)
                     val formatted = if (cleaned.length > 4) {
@@ -239,7 +256,13 @@ private fun ManualEntryContent(
                     } else {
                         cleaned
                     }
-                    onInviteCodeChange(formatted)
+                    inviteCodeField.value = TextFieldValue(
+                        text = formatted,
+                        selection = TextRange(formatted.length)
+                    )
+                    if (formatted != inviteCode) {
+                        onInviteCodeChange(formatted)
+                    }
                 },
                 label = { Text("Enrollment Code") },
                 placeholder = { Text("ABCD-1234") },
