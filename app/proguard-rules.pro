@@ -67,6 +67,18 @@
     @com.google.gson.annotations.SerializedName <fields>;
 }
 
+# Keep the CLASS for anything with @SerializedName fields, not just
+# the fields. The field-only rule above lets R8 strip the class's
+# no-arg constructor (Kotlin data classes synthesize one only via the
+# default-values overload), and Gson's reflective instantiation then
+# fails with "Abstract classes can't be instantiated" — which is what
+# broke PCR-manifest fetch in the 2026-05-26 release build, fed the
+# verifier all-zero fallback PCRs, and made every enrollment reject
+# with "PCR0 mismatch".
+-keepclasseswithmembers,allowobfuscation class * {
+    @com.google.gson.annotations.SerializedName <fields>;
+}
+
 # Keep Retrofit service interfaces - DO NOT allow obfuscation
 -keep interface com.vettid.app.core.network.VaultServiceApi { *; }
 -keep interface com.vettid.app.core.network.VaultLifecycleApi { *; }
@@ -80,6 +92,16 @@
 # Keep NATS API classes
 -keep class com.vettid.app.core.nats.** { *; }
 -keepclassmembers class com.vettid.app.core.nats.** { *; }
+
+# Keep attestation DTOs — PcrConfigManager Gson-deserializes
+# ExpectedPcrs, SignedPcrResponse, PcrManifestResponse, PcrSetEntry,
+# PcrApiResponse from both the API and the CloudFront manifest.
+# Without this, R8 obfuscates the data classes so Gson can't find
+# their constructors and every PCR fetch fails with "Abstract classes
+# can't be instantiated", leaving the verifier with the all-zero
+# fallback PCR0 — every attestation then rejects with "PCR0 mismatch".
+-keep class com.vettid.app.core.attestation.** { *; }
+-keepclassmembers class com.vettid.app.core.attestation.** { *; }
 
 # Preserve generic type info on method return types
 -keepclassmembers,allowshrinking,allowobfuscation interface * {
