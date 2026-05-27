@@ -12,16 +12,42 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.vettid.app.ui.components.QrCodeScanner
+
+/**
+ * VisualTransformation that renders the dash separator at position 4
+ * without touching the underlying text. The field stores raw alphanumeric
+ * ("ABCD1234"); the user sees "ABCD-1234" and the IME stays in sync with
+ * the stored text byte-for-byte.
+ */
+private val DashAfterFourTransformation = VisualTransformation { text ->
+    val raw = text.text
+    val transformed = if (raw.length > 4) {
+        raw.substring(0, 4) + "-" + raw.substring(4)
+    } else {
+        raw
+    }
+    TransformedText(
+        text = AnnotatedString(transformed),
+        offsetMapping = object : OffsetMapping {
+            override fun originalToTransformed(offset: Int): Int =
+                if (offset <= 4) offset else offset + 1
+            override fun transformedToOriginal(offset: Int): Int =
+                if (offset <= 4) offset else (offset - 1).coerceAtLeast(0)
+        }
+    )
+}
 
 /**
  * Mode for start phase display
@@ -227,43 +253,26 @@ private fun ManualEntryContent(
 
             Spacer(modifier = Modifier.height(32.dp))
 
-            // Invite code input — alphanumeric only, auto-uppercased, dash
-            // auto-inserted after position 4. Stored value mirrors the canonical
-            // "XXXX-XXXX" form the resolver regex expects.
-            //
-            // We hold a local TextFieldValue so we can pin the cursor to the
-            // end of the formatted string after each keystroke. Without that,
-            // Compose's String-based TextField leaves the IME cursor where it
-            // was *before* the auto-inserted dash, so subsequent characters
-            // get inserted in front of the trailing block and the last four
-            // chars appear in reverse order ("ABCD-1234" → "ABCD-4321").
-            val inviteCodeField = remember(inviteCode) {
-                mutableStateOf(
-                    TextFieldValue(
-                        text = inviteCode,
-                        selection = TextRange(inviteCode.length)
-                    )
-                )
-            }
+            // Invite code input — alphanumeric only, auto-uppercased, capped
+            // at 8 chars. The stored value is the RAW alphanumeric ("ABCD1234"),
+            // and the dash is rendered purely as a VisualTransformation. That
+            // way the underlying text the IME sees never mutates mid-keystroke
+            // (which previously either jumbled the second block when using a
+            // plain String value or pinned the keyboard in caps-lock by
+            // remounting a TextFieldValue holder on every char). The wizard
+            // ViewModel re-introduces the dash in canonical "XXXX-XXXX" form
+            // before calling the resolver.
             OutlinedTextField(
-                value = inviteCodeField.value,
-                onValueChange = { new ->
-                    val cleaned = new.text.filter { it.isLetterOrDigit() }
+                value = inviteCode,
+                onValueChange = { raw ->
+                    val cleaned = raw.filter { it.isLetterOrDigit() }
                         .uppercase()
                         .take(8)
-                    val formatted = if (cleaned.length > 4) {
-                        cleaned.substring(0, 4) + "-" + cleaned.substring(4)
-                    } else {
-                        cleaned
-                    }
-                    inviteCodeField.value = TextFieldValue(
-                        text = formatted,
-                        selection = TextRange(formatted.length)
-                    )
-                    if (formatted != inviteCode) {
-                        onInviteCodeChange(formatted)
+                    if (cleaned != inviteCode) {
+                        onInviteCodeChange(cleaned)
                     }
                 },
+                visualTransformation = DashAfterFourTransformation,
                 label = { Text("Enrollment Code") },
                 placeholder = { Text("ABCD-1234") },
                 keyboardOptions = KeyboardOptions(

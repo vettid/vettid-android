@@ -470,7 +470,17 @@ class EnrollmentWizardViewModel @Inject constructor(
             return
         }
 
-        processQRCode(code)
+        // The field stores raw alphanumeric ("ABCD1234") — the dash is
+        // injected by StartPhaseContent's VisualTransformation for display
+        // only. Re-introduce it here so processQRCode's "XXXX-XXXX" regex
+        // and the downstream resolver see the canonical form.
+        val canonical = if (code.length == 8 && code.all { it.isLetterOrDigit() }) {
+            code.substring(0, 4) + "-" + code.substring(4)
+        } else {
+            code
+        }
+
+        processQRCode(canonical)
     }
 
     private suspend fun processQRCode(qrData: String) {
