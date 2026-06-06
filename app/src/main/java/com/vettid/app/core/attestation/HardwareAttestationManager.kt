@@ -1,9 +1,11 @@
 package com.vettid.app.core.attestation
 
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import android.security.keystore.StrongBoxUnavailableException
 import com.vettid.app.BuildConfig
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.security.KeyPairGenerator
@@ -52,31 +54,50 @@ class HardwareAttestationManager @Inject constructor(
             keyStore.deleteEntry(ATTESTATION_KEY_ALIAS)
         }
 
-        val keyPairGenerator = KeyPairGenerator.getInstance(
-            KeyProperties.KEY_ALGORITHM_EC,
-            ANDROID_KEYSTORE
-        )
-
-        val builder = KeyGenParameterSpec.Builder(
-            ATTESTATION_KEY_ALIAS,
-            KeyProperties.PURPOSE_SIGN
-        )
-            .setAlgorithmParameterSpec(java.security.spec.ECGenParameterSpec("secp256r1"))
-            .setDigests(KeyProperties.DIGEST_SHA256)
-            .setAttestationChallenge(challenge) // This enables attestation
-            .setUserAuthenticationRequired(false)
-
-        // Enable StrongBox if available (Pixel 3+ and other high-security devices)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            try {
+        // Build the attestation key spec; StrongBox is requested only when asked.
+        fun buildSpec(useStrongBox: Boolean): KeyGenParameterSpec {
+            val builder = KeyGenParameterSpec.Builder(
+                ATTESTATION_KEY_ALIAS,
+                KeyProperties.PURPOSE_SIGN
+            )
+                .setAlgorithmParameterSpec(java.security.spec.ECGenParameterSpec("secp256r1"))
+                .setDigests(KeyProperties.DIGEST_SHA256)
+                .setAttestationChallenge(challenge) // This enables attestation
+                .setUserAuthenticationRequired(false)
+            if (useStrongBox) {
                 builder.setIsStrongBoxBacked(true)
-            } catch (e: Exception) {
-                // StrongBox not available, continue with TEE
             }
+            return builder.build()
         }
 
-        keyPairGenerator.initialize(builder.build())
-        keyPairGenerator.generateKeyPair()
+        fun generate(useStrongBox: Boolean) {
+            val keyPairGenerator = KeyPairGenerator.getInstance(
+                KeyProperties.KEY_ALGORITHM_EC,
+                ANDROID_KEYSTORE
+            )
+            keyPairGenerator.initialize(buildSpec(useStrongBox))
+            keyPairGenerator.generateKeyPair()
+        }
+
+        // Prefer StrongBox (Pixel 3+ and other high-security devices) but fall
+        // back to TEE when it is unavailable. StrongBoxUnavailableException is
+        // thrown at generateKeyPair(), NOT when the flag is set, so the retry
+        // must wrap generation itself (mirrors getSecurityLevel() below). The
+        // feature check avoids a doomed first attempt on devices that don't
+        // advertise StrongBox; the catch handles devices that advertise it but
+        // still fail. Either way we report the real SecurityLevel — not a bypass.
+        val tryStrongBox = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+            context.packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE)
+
+        try {
+            generate(tryStrongBox)
+        } catch (e: StrongBoxUnavailableException) {
+            // Clean up the partial alias before retrying on TEE.
+            if (keyStore.containsAlias(ATTESTATION_KEY_ALIAS)) {
+                keyStore.deleteEntry(ATTESTATION_KEY_ALIAS)
+            }
+            generate(false)
+        }
 
         // Get attestation certificate chain
         val certificateChain = keyStore.getCertificateChain(ATTESTATION_KEY_ALIAS)
