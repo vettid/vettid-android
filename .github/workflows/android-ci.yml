@@ -32,6 +32,15 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Pin Gradle to the runner JDK
+        # The committed gradle.properties hardcodes a dev-box JDK path
+        # (org.gradle.java.home=/opt/android-studio/jbr) that doesn't exist on
+        # CI. Override it via the per-environment ~/.gradle/gradle.properties
+        # mechanism that file documents, pointing at the JDK 17 set up above.
+        run: |
+          mkdir -p "${GRADLE_USER_HOME:-$HOME/.gradle}"
+          echo "org.gradle.java.home=$JAVA_HOME" >> "${GRADLE_USER_HOME:-$HOME/.gradle}/gradle.properties"
+
       - name: Unit tests (production/debug)
         run: ./gradlew testProductionDebugUnitTest --stacktrace
 
