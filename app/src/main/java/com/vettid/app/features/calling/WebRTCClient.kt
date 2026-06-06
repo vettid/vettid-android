@@ -53,6 +53,16 @@ class WebRTCClient(
             .createInitializationOptions()
         PeerConnectionFactory.initialize(options)
 
+        // DIAG (#45 calling): route native WebRTC ICE/TURN logs to logcat at
+        // VERBOSE so we can see candidate gathering, TURN ALLOCATE attempts,
+        // and STUN/TURN errors. Noisy; remove once calling is fixed.
+        try {
+            Logging.enableLogToDebugOutput(Logging.Severity.LS_VERBOSE)
+            Log.e(TAG, "DIAG: WebRTC native verbose logging enabled")
+        } catch (e: Throwable) {
+            Log.e(TAG, "DIAG: failed to enable WebRTC verbose logging", e)
+        }
+
         // Create audio device module
         val audioDeviceModule = JavaAudioDeviceModule.builder(context)
             .setUseHardwareAcousticEchoCanceler(true)
@@ -119,7 +129,7 @@ class WebRTCClient(
             }
 
             override fun onIceConnectionChange(state: PeerConnection.IceConnectionState?) {
-                Log.d(TAG, "ICE connection state: $state")
+                Log.e(TAG, "DIAG ICE connection state: $state")
                 when (state) {
                     PeerConnection.IceConnectionState.CONNECTED -> {
                         listener.onConnectionEstablished()
@@ -146,12 +156,15 @@ class WebRTCClient(
             }
 
             override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {
-                Log.d(TAG, "ICE gathering state: $state")
+                Log.e(TAG, "DIAG ICE gathering state: $state")
             }
 
             override fun onIceCandidate(candidate: IceCandidate?) {
                 candidate?.let {
-                    Log.d(TAG, "New ICE candidate: ${it.sdp}")
+                    // DIAG (#45): surface candidate type (host/srflx/relay) — the
+                    // "typ" field in the SDP tells us if relay (TURN) candidates
+                    // are actually being produced.
+                    Log.e(TAG, "DIAG ICE candidate: ${it.sdp}")
                     _iceCandidates.tryEmit(it)
                     listener.onIceCandidate(it)
                 }

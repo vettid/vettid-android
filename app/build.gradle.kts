@@ -17,8 +17,8 @@ android {
         applicationId = "com.vettid.app"
         minSdk = 26
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.0.51"
+        versionCode = 4
+        versionName = "1.0.52"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
