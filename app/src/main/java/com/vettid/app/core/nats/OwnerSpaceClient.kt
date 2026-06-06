@@ -510,11 +510,19 @@ class OwnerSpaceClient @Inject constructor(
         // times out. Common path that hits this: notification tap →
         // ConversationViewModel.init fires multiple vault calls during
         // the post-PIN-unlock window where the sub is still being
-        // established. Wait up to 5s for the sub to come up.
+        // established. Wait up to 20s for the sub to come up — this also
+        // covers a NATS connection replacement/reconnect that lands right as
+        // a request is issued (e.g. the connection churn at call start that
+        // starved the TURN-credential fetch and broke calls — vettid-android
+        // #45). The old 5s window was shorter than a reconnect (~10s observed),
+        // so requests in that window hard-failed with NOT_SUBSCRIBED. This only
+        // runs while connected-but-resubscribing (the "NATS not connected"
+        // early-return above handles the offline case), so it doesn't slow
+        // down genuine offline failures.
         if (appSubscription == null) {
             android.util.Log.w(TAG, "forApp.> sub not yet established for $messageType, waiting...")
             var waited = 0L
-            while (appSubscription == null && waited < 5000L) {
+            while (appSubscription == null && waited < 20000L) {
                 kotlinx.coroutines.delay(100L)
                 waited += 100L
             }
