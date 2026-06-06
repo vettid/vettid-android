@@ -3184,7 +3184,9 @@ class OwnerSpaceClient @Inject constructor(
             val json = JSONObject(String(message.data, Charsets.UTF_8))
 
             val callEvent = when (eventType) {
-                "incoming" -> {
+                // #45: the enclave emits "initiate" for an incoming-call ring;
+                // older app vocabulary expected "incoming". Accept both.
+                "incoming", "initiate" -> {
                     val callId = json.optString("call_id", "")
                     val callerGuid = json.optString("caller_id", "")
                     if (callId.isEmpty() && callerGuid.isEmpty()) {
@@ -3227,16 +3229,22 @@ class OwnerSpaceClient @Inject constructor(
                             ?: json.takeIf { it.has("sdp_m_line_index") }?.getInt("sdp_m_line_index")
                     )
                 }
-                "accepted" -> CallSignalEvent.Accepted(
+                // #45: the enclave emits "accept" and carries the SDP answer in
+                // it. The app previously only matched "accepted", so the answer
+                // was dropped and the caller never set its remote description →
+                // ICE never started. Accept both names.
+                "accepted", "accept" -> CallSignalEvent.Accepted(
                     callId = json.optString("call_id", ""),
                     sdpAnswer = json.optString("sdp_answer", "").takeIf { it.isNotEmpty() },
                     sharedSecret = json.optString("shared_secret", "").takeIf { it.isNotEmpty() }
                 )
-                "rejected" -> CallSignalEvent.Rejected(
+                "rejected", "reject" -> CallSignalEvent.Rejected(
                     callId = json.optString("call_id", ""),
                     reason = json.optString("reason", "").takeIf { it.isNotEmpty() }
                 )
-                "ended" -> CallSignalEvent.Ended(
+                // #45: enclave emits "end"/"cancel"; map both (and the legacy
+                // "cancelled") to Ended so call teardown is recognized.
+                "ended", "end", "cancel", "cancelled" -> CallSignalEvent.Ended(
                     callId = json.optString("call_id", ""),
                     reason = json.optString("reason", "completed"),
                     duration = json.optLong("duration", 0)
