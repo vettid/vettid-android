@@ -1,0 +1,52 @@
+name: Android CI
+
+# Unit tests, lint, and a debug build on every push / PR.
+# Deliberately touches NO signing secrets, so it is safe to run on
+# pull requests from forks. The signed release lives in android-release.yml.
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+# Cancel superseded runs on the same ref to save runner minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit tests (production/debug)
+        run: ./gradlew testProductionDebugUnitTest --stacktrace
+
+      - name: Lint (production/debug)
+        run: ./gradlew lintProductionDebug --stacktrace
+
+      - name: Assemble debug APK (production)
+        run: ./gradlew assembleProductionDebug --stacktrace
+
+      - name: Upload reports & debug APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-reports
+          path: |
+            app/build/reports/**
+            app/build/outputs/apk/production/debug/*.apk
+          if-no-files-found: warn
