@@ -62,6 +62,13 @@ class NitroAttestationVerifier @Inject constructor(
         // Maximum allowed attestation age (5 minutes)
         private const val MAX_ATTESTATION_AGE_MS = 5 * 60 * 1000L
 
+        // Allowed clock skew for the future-timestamp check. The enclave and
+        // device clocks are independently NTP-synced and routinely differ by a
+        // second or more, so a zero-tolerance future check spuriously rejects a
+        // perfectly fresh attestation. Anti-replay still rests on the nonce and
+        // the MAX_ATTESTATION_AGE_MS past window; this only tolerates minor skew.
+        private const val MAX_CLOCK_SKEW_MS = 60 * 1000L
+
         // AWS Nitro Enclave root CA subject
         private const val AWS_NITRO_ROOT_CA_CN = "aws.nitro-enclaves"
 
@@ -724,7 +731,7 @@ class NitroAttestationVerifier @Inject constructor(
         val now = System.currentTimeMillis()
         val age = now - timestamp
 
-        if (age < 0) {
+        if (age < -MAX_CLOCK_SKEW_MS) {
             throw AttestationVerificationException("Attestation timestamp is in the future")
         }
 
