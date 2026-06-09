@@ -3169,6 +3169,9 @@ class OwnerSpaceClient @Inject constructor(
         try {
             // Extract event type from subject (e.g., "OwnerSpace.guid.forApp.call.incoming" -> "incoming")
             val eventType = message.subject.substringAfterLast(".forApp.call.")
+            // DIAG (#45): log every inbound call-signal arrival on the receiver so
+            // we can see whether the answer/candidates reach the caller at all.
+            android.util.Log.e(TAG, "DIAG inbound call event: '$eventType' (${message.data.size}B)")
 
             // Skip request/response echoes — forApp.call.*.response is the vault's
             // ack for forVault.call.*, not a signaling event. Also skip empty bodies

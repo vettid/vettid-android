@@ -428,7 +428,10 @@ class CallSignalingClient @Inject constructor(
         timeoutMs: Long = 30_000,
         transform: (JsonObject) -> T
     ): Result<T> {
+        val signalType = if (payload.has("signal_type")) payload.get("signal_type").asString else "-"
+        android.util.Log.e("CallSignalingClient", "DIAG send: $messageType (signal_type=$signalType) callId=${if (payload.has("call_id")) payload.get("call_id").asString else "-"}")
         val response = ownerSpaceClient.sendAndAwaitResponse(messageType, payload, timeoutMs)
+        android.util.Log.e("CallSignalingClient", "DIAG send result: $messageType (signal_type=$signalType) -> ${if (response == null) "TIMEOUT/null" else response::class.simpleName}")
 
         return when (response) {
             null -> Result.failure(NatsException("Request timed out"))
