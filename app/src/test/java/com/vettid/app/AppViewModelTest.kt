@@ -2,10 +2,12 @@ package com.vettid.app
 
 import com.vettid.app.core.events.ProfilePhotoEvents
 import com.vettid.app.core.nats.AppLifecycleObserver
+import com.vettid.app.core.nats.ConnectionsClient
 import com.vettid.app.core.nats.NatsAutoConnector
 import com.vettid.app.core.nats.NatsMessagingClient
 import com.vettid.app.core.nats.OwnerSpaceClient
 import com.vettid.app.core.network.NatsConnectionInfo
+import com.vettid.app.core.security.LocalDataWiper
 import com.vettid.app.core.storage.CredentialStore
 import com.vettid.app.core.storage.PersonalDataStore
 import kotlinx.coroutines.Dispatchers
@@ -31,6 +33,8 @@ class AppViewModelTest {
     private lateinit var profilePhotoEvents: ProfilePhotoEvents
     private lateinit var personalDataStore: PersonalDataStore
     private lateinit var appLifecycleObserver: AppLifecycleObserver
+    private lateinit var localDataWiper: LocalDataWiper
+    private lateinit var connectionsClient: ConnectionsClient
 
     private val testDispatcher = StandardTestDispatcher()
     private val connectionStateFlow = MutableStateFlow<NatsAutoConnector.AutoConnectState>(
@@ -52,6 +56,8 @@ class AppViewModelTest {
         profilePhotoEvents = mock()
         personalDataStore = mock()
         appLifecycleObserver = mock()
+        localDataWiper = mock()
+        connectionsClient = mock()
 
         // Default mock behavior
         whenever(credentialStore.hasStoredCredential()).thenReturn(false)
@@ -76,6 +82,8 @@ class AppViewModelTest {
             profilePhotoEvents,
             personalDataStore,
             appLifecycleObserver,
+            localDataWiper,
+            connectionsClient,
         )
     }
 
@@ -290,7 +298,7 @@ class AppViewModelTest {
         viewModel = createViewModel()
         advanceUntilIdle()
 
-        viewModel.signOut()
+        viewModel.signOutAndWipe()
         advanceUntilIdle()
 
         verify(natsAutoConnector).disconnect()
@@ -311,7 +319,7 @@ class AppViewModelTest {
         assertTrue(viewModel.appState.first().isAuthenticated)
 
         // Sign out
-        viewModel.signOut()
+        viewModel.signOutAndWipe()
         advanceUntilIdle()
 
         val state = viewModel.appState.first()

@@ -60,13 +60,15 @@ $testSeed
         whenever(ownerSpaceClient.credentialRotation).thenReturn(credentialRotationFlow)
 
         autoConnector = NatsAutoConnector(
+            appContext = mock(),
             natsClient = natsClient,
             connectionManager = connectionManager,
             ownerSpaceClient = ownerSpaceClient,
             credentialStore = credentialStore,
             credentialClient = credentialClient,
             bootstrapClient = bootstrapClient,
-            vaultLifecycleClient = vaultLifecycleClient
+            vaultLifecycleClient = vaultLifecycleClient,
+            appPreferencesStore = mock()
         )
     }
 

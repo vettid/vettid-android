@@ -696,7 +696,7 @@ class TestableProteanCredentialManager(
         val backupRequest = androidx.work.OneTimeWorkRequestBuilder<CredentialBackupWorker>()
             .setConstraints(constraints)
             .setInputData(androidx.work.workDataOf(
-                CredentialBackupWorker.KEY_USER_GUID to getUserGuid()
+                KEY_USER_GUID to getUserGuid()
             ))
             .build()
 
