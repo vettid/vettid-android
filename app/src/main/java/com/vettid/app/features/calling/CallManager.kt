@@ -720,7 +720,6 @@ class CallManager @Inject constructor(
         val now = System.currentTimeMillis()
         cachedIceServers?.let { cached ->
             if (now < iceServerCacheExpiry) {
-                Log.e(TAG, "DIAG TURN fetch: using CACHED creds (${(iceServerCacheExpiry - now) / 1000}s left, ${cached.size} servers)")
                 return cached
             }
         }
@@ -731,19 +730,12 @@ class CallManager @Inject constructor(
 
         // Fetch via the vault over NATS (uses the existing authenticated
         // vault session — no Cognito JWT required).
-        // DIAG (#45 calling): temporary error-level logging to surface the
-        // TURN-credential fetch outcome in release logcat (Log.i/w are filtered
-        // out). Remove once calling is fixed.
-        val t0 = System.currentTimeMillis()
         return try {
             val result = callSignalingClient.getTurnCredentials()
-            val took = System.currentTimeMillis() - t0
             val response = result.getOrNull() ?: run {
-                Log.e(TAG, "DIAG TURN fetch: getTurnCredentials returned null/failure after ${took}ms — STUN fallback", result.exceptionOrNull())
+                Log.w(TAG, "TURN credentials unavailable — falling back to STUN", result.exceptionOrNull())
                 return fallback
             }
-            // urls are non-secret (coturn hostnames); username/credential are NOT logged.
-            Log.e(TAG, "DIAG TURN fetch: response ok after ${took}ms — iceServers=${response.iceServers.size}, expires=${response.expiresAt}, urls=${response.iceServers.flatMap { it.urls }}, hasCreds=${response.iceServers.any { it.username != null && it.credential != null }}")
 
             val servers = response.iceServers.flatMap { config ->
                 config.urls.map { url ->
@@ -760,14 +752,13 @@ class CallManager @Inject constructor(
                 cachedIceServers = servers
                 // 55 min — credentials expire at 60 min.
                 iceServerCacheExpiry = now + (55 * 60 * 1000L)
-                Log.e(TAG, "DIAG TURN fetch: built ${servers.size} ICE servers (TURN creds present) — proceeding")
                 servers
             } else {
-                Log.e(TAG, "DIAG TURN fetch: response had 0 servers — STUN fallback")
+                Log.w(TAG, "TURN response had 0 servers — falling back to STUN")
                 fallback
             }
         } catch (e: Exception) {
-            Log.e(TAG, "DIAG TURN fetch: exception after ${System.currentTimeMillis() - t0}ms — STUN fallback", e)
+            Log.w(TAG, "TURN credential fetch failed — falling back to STUN", e)
             fallback
         }
     }
