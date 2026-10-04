@@ -10,6 +10,7 @@ import com.vettid.core.crypto.envelope.Inner
 import com.vettid.core.crypto.envelope.Mode
 import com.vettid.core.crypto.json.JsonBuilder
 import com.vettid.core.crypto.json.StrictJson
+import com.vettid.core.crypto.json.asObject
 import java.time.Duration
 import java.time.Instant
 
@@ -277,5 +278,34 @@ class Keyring {
         current = null
         retired.forEach { it.first.destroy() }
         retired.clear()
+    }
+
+    /**
+     * The persistent form: the current epoch and the retained receive keys of
+     * previous epochs with their expiry (device storage, encrypted under a
+     * Keystore key). Contains secrets.
+     */
+    @Synchronized
+    fun export(): ByteArray {
+        val b = JsonBuilder()
+        current?.let { b.raw("current", it.export()) }
+        val r = retired.map { (e, until) -> JsonBuilder().uint("until_ms", until.toEpochMilli()).raw("epoch", e.export()).build() }
+        b.raw("retired", JsonBuilder.array(r))
+        return b.bytes()
+    }
+
+    companion object {
+        /** Restores a keyring from [export]. */
+        fun import(state: ByteArray): Keyring {
+            val o = StrictJson.parseObject(state)
+            val k = Keyring()
+            o.optObj("current")?.let { k.current = Epoch.import(it.rawBytes()) }
+            for (r in o.array("retired")) {
+                val ro = r.asObject()
+                val e = Epoch.import(ro.obj("epoch").rawBytes())
+                k.retired.add(e to Instant.ofEpochMilli(ro.uint("until_ms", 0, StrictJson.MAX_SAFE_INTEGER)))
+            }
+            return k
+        }
     }
 }

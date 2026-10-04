@@ -1,0 +1,309 @@
+// Fixtures (spec vectors, JSON bodies of the fake relay, member API and vault) stay on one line each.
+@file:Suppress("MaxLineLength")
+
+package com.vettid.core.vault
+
+import com.vettid.core.crypto.Base64s
+import com.vettid.core.crypto.Ed25519PrivateKey
+import com.vettid.core.crypto.Kid
+import com.vettid.core.crypto.envelope.Envelope
+import com.vettid.core.crypto.envelope.Inner
+import com.vettid.core.crypto.envelope.Mode
+import com.vettid.core.crypto.envelope.Ulid
+import com.vettid.core.crypto.hpke.KemPrivateKey
+import com.vettid.core.crypto.json.JsonBuilder
+import com.vettid.core.crypto.json.StrictJson
+import com.vettid.core.crypto.session.Initiator
+import com.vettid.core.crypto.session.InitiatorConfig
+import com.vettid.core.crypto.session.Keyring
+import com.vettid.core.crypto.session.Mailbox
+import com.vettid.core.crypto.session.PendingInit
+import com.vettid.core.crypto.session.Policy
+import com.vettid.core.crypto.session.Principal
+import com.vettid.core.crypto.session.Purpose
+import com.vettid.core.crypto.session.RelayAddr
+import com.vettid.core.crypto.session.Responder
+import com.vettid.core.crypto.session.ResponderConfig
+import com.vettid.core.relay.DepositTokens
+import com.vettid.core.relay.RelayAuth
+import com.vettid.core.relay.RelayMessage
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import mockwebserver3.Dispatcher
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
+import mockwebserver3.RecordedRequest
+import okhttp3.OkHttpClient
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import java.time.Instant
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.TimeUnit
+
+/**
+ * The vault client against an in-process fake vault built from
+ * `:core:crypto` (the responder side of the handshake, epochs, tokens) and a
+ * local relay that only records deposits. Messages reach the device through
+ * [VaultDevice.handle], as the collector would deliver them.
+ */
+class VaultDeviceTest {
+    private lateinit var relay: MockWebServer
+    private val deposits = LinkedBlockingQueue<Pair<String, ByteArray>>() // mailbox, payload
+
+    /** The fake vault's keys and session with the device. */
+    private inner class FakeVault {
+        val ik = Ed25519PrivateKey.generate()
+        val kem = KemPrivateKey.generate()
+        val relayKey = Ed25519PrivateKey.generate()
+        val relayUrl = relay.url("/").toString().trimEnd('/')
+        val mailbox = Mailbox.id(relayKey.publicKey)
+        val vaultId = "0123456789abcdef0123456789abcdef"
+        val keyring = Keyring()
+        var responder: Responder? = null
+        val sender = RelayAuth.encodeKey(relayKey.publicKey)
+
+        fun principal() = Principal(ik.publicKey, kem.publicKey, RelayAddr(relayUrl, mailbox, relayKey.publicKey))
+
+        fun tokenFor(
+            d: VaultDevice,
+        ) = DepositTokens.mintStanding(relayKey, RelayAuth.encodeKey(d.relayAddr.pk()), d.relayAddr.url, Instant.now())
+
+        fun msg(payload: ByteArray, from: String = sender) = RelayMessage(Ulid.new(), "", from, null, payload)
+
+        /** vault.enrolled (§11.3), sealed to the device's KEM key. */
+        fun enrolled(d: VaultDevice): RelayMessage {
+            val bundle = JsonBuilder().uint("v", 1).uint("suite", 2).raw("ik", JsonBuilder.quote(Base64s.encodeStd(ik.publicKey)))
+                .raw("kem", JsonBuilder.quote(Base64s.encodeStd(kem.publicKey.bytes())))
+                .raw("relay", JsonBuilder().string("url", relayUrl).string("mailbox", mailbox).base64("pk", relayKey.publicKey).build()).bytes()
+            val body = JsonBuilder().string("vault_id", vaultId).base64("vault_bundle", bundle).string("token", tokenFor(d)).uint("state_seq", 2).bytes()
+            val inner = Inner(id = Ulid.new(), type = "vault.enrolled", ts = Instant.now(), body = body)
+            return msg(Envelope.sealSealed(d.kemKey, Kid.ANONYMOUS, Inner.encode(inner, Mode.SEALED)).first)
+        }
+
+        /** Answers the device's hs.init (purpose app). */
+        fun respond(raw: ByteArray, d: VaultDevice): RelayMessage {
+            val p = PendingInit.open(raw, { k -> if (k == kem.publicKey.kid) kem else null }, Instant.now())
+            assertEquals(Purpose.APP, p.body.purpose)
+            assertEquals(vaultId, p.body.ctx)
+            val (r, env) = p.respond(
+                ResponderConfig(identity = ik, token = tokenFor(d), policy = Policy.VAULT_TO_DEVICE, collectSender = d.relayAddr.pk()),
+            )
+            responder = r
+            return msg(env)
+        }
+
+        fun fin(raw: ByteArray, d: VaultDevice) {
+            val (e, _) = responder!!.handleFin(raw, d.relayAddr.pk(), Instant.now())
+            keyring.activate(e, Instant.now())
+        }
+
+        fun seal(type: String, body: String, re: String? = null, status: String? = null, id: String = Ulid.new()): RelayMessage =
+            msg(keyring.current()!!.seal(Inner(id = id, type = type, ts = Instant.now(), re = re, status = status, body = body.toByteArray())))
+
+        fun open(raw: ByteArray): Inner = keyring.open(Envelope.parse(raw), Instant.now()).first
+    }
+
+    private fun nextDeposit(): Pair<String, ByteArray> = deposits.poll(10, TimeUnit.SECONDS) ?: error("no deposit")
+
+    @Before
+    fun start() {
+        relay = MockWebServer()
+        relay.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                val path = request.url.encodedPath
+                return when {
+                    path == "/v1/register" -> MockResponse.Builder().code(201).body(
+                        """{"mailbox_id":"x","limits":{"max_payload_bytes":262144,"message_ttl_seconds":1,"visibility_timeout_seconds":60,""" +
+                            """"max_token_lifetime_seconds":1,"open_token_max_lifetime_seconds":1,"max_claim_bytes":1,"claim_ttl_seconds":1}}""",
+                    ).build()
+                    path.startsWith("/v1/mailbox/") && request.method == "POST" -> {
+                        val o = StrictJson.parseObject(request.body!!.toByteArray())
+                        deposits.add(path.removePrefix("/v1/mailbox/") to o.base64("payload"))
+                        MockResponse.Builder().code(201).body("""{"msg_id":"${Ulid.new()}"}""").build()
+                    }
+                    else -> MockResponse.Builder().code(404).body("""{"code":"not_found","message":""}""").build()
+                }
+            }
+        }
+        relay.start()
+    }
+
+    @After
+    fun stop() = relay.close()
+
+    private fun config(store: DeviceStateStore) =
+        DeviceConfig(name = "phone", relayUrl = relay.url("/").toString().trimEnd('/'), http = OkHttpClient(), store = store, requestTimeout = java.time.Duration.ofSeconds(5))
+
+    /** Enrollment, the first handshake and device.paired: a device with a live session. */
+    private suspend fun pairedDevice(
+        scope: CoroutineScope,
+        store: DeviceStateStore = InMemoryDeviceStateStore(),
+        secrets: DeviceSecrets = DeviceSecrets.generate(),
+    ): Pair<VaultDevice, FakeVault> {
+        val d = VaultDevice.create(config(store), secrets)
+        val v = FakeVault()
+        d.handle(v.enrolled(d))
+        d.awaitEnrolled(java.time.Duration.ofSeconds(1))
+        assertEquals(v.vaultId, d.vaultId)
+        val paired = scope.async(Dispatchers.IO) { d.completeEnrollment(java.time.Duration.ofSeconds(10)) }
+        val (mbx, init) = nextDeposit()
+        assertEquals(v.mailbox, mbx)
+        d.handle(v.respond(init, d))
+        v.fin(nextDeposit().second, d)
+        d.handle(v.seal("device.paired", """{"device_id":"dev-1","role":"app","vault_id":"${v.vaultId}","release":"${"a3".repeat(48)}","release_number":3}"""))
+        paired.await()
+        assertEquals("dev-1", d.deviceId)
+        assertTrue(d.paired.value)
+        assertEquals(3, d.altState.releaseNumber)
+        return d to v
+    }
+
+    @Test
+    fun enrollPairRequestAndEvents() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            // A request and its response (§8.1).
+            val status = async(Dispatchers.IO) { api.status() }
+            val req = v.open(nextDeposit().second)
+            assertEquals("vault.status", req.type)
+            d.handle(v.seal("vault.status", """{"vault_id":"${v.vaultId}","state_seq":4,"header_seq":4,"provisional":false,"devices":1,"connections":0}""", re = req.id, status = Inner.STATUS_OK))
+            assertEquals(4, status.await().stateSeq)
+
+            // An error response carries the spec's code (§10.1).
+            val failing = async(Dispatchers.IO) { runCatching { api.itemGet("nope") } }
+            val r2 = v.open(nextDeposit().second)
+            d.handle(
+                v.msg(
+                    v.keyring.current()!!.seal(
+                        Inner(id = Ulid.new(), type = r2.type, ts = Instant.now(), re = r2.id, status = Inner.STATUS_ERROR, error = com.vettid.core.crypto.envelope.InnerError("not_found")),
+                    ),
+                ),
+            )
+            val e = failing.await().exceptionOrNull() as VaultOpException
+            assertEquals("not_found", e.code)
+
+            // Events reach the inbox and the flow; a duplicate msg_id or inner id is dropped (§8.2).
+            val m = v.seal("message.new", """{"connection_id":"c1","message_id":"m1","direction":"in","text":"hi","sent_at":"2026-10-04T00:00:00.000Z","delivered":true,"read":false}""")
+            d.handle(m)
+            d.handle(m)
+            val id = Ulid.new()
+            d.handle(v.seal("message.new", """{"connection_id":"c1","message_id":"m2","direction":"in","text":"again","sent_at":"x"}""", id = id))
+            d.handle(v.seal("message.new", """{"connection_id":"c1","message_id":"m2","direction":"in","text":"again","sent_at":"x"}""", id = id))
+            assertEquals("hi", VaultJson.str(api.awaitEvent("message.new") { VaultJson.str(it, "text") == "hi" }, "text"))
+            assertEquals("again", VaultJson.str(api.awaitEvent("message.new"), "text"))
+            assertThrows(kotlinx.coroutines.TimeoutCancellationException::class.java) {
+                runBlocking { d.awaitEvent("message.new", java.time.Duration.ofMillis(200)) }
+            }
+
+            // Only the vault's relay key may send to the device (§6.3).
+            d.handle(v.msg(v.keyring.current()!!.seal(Inner(id = Ulid.new(), type = "message.new", ts = Instant.now(), body = "{}".toByteArray())), RelayAuth.encodeKey(Ed25519PrivateKey.generate().publicKey)))
+            assertThrows(kotlinx.coroutines.TimeoutCancellationException::class.java) {
+                runBlocking { d.awaitEvent("message.new", java.time.Duration.ofMillis(200)) }
+            }
+
+            // relay.token.refresh from the vault is answered with a fresh standing token (§7.2).
+            d.handle(v.seal("relay.token.refresh", "{}"))
+            val ans = v.open(nextDeposit().second)
+            assertEquals("relay.token.refresh", ans.type)
+            assertNotNull(ans.re)
+            val tok = VaultJson.str(VaultJson.parseObject(ans.body), "token")!!
+            val c = DepositTokens.verify(tok, d.relayAddr.pk())
+            assertEquals(RelayAuth.encodeKey(v.relayKey.publicKey), c.sub)
+        }
+    }
+
+    @Test
+    fun answersAVaultInitiatedRekey() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val ini = Initiator.create(
+                InitiatorConfig(
+                    purpose = Purpose.REKEY, ctx = "", identity = v.ik, staticKem = v.kem.publicKey, relay = v.principal().relay,
+                    responderIk = d.identityKey, responderEk = null, responderRelayKey = d.relayAddr.pk(), current = v.keyring.current(),
+                    policy = Policy.VAULT_TO_DEVICE,
+                ),
+            )
+            d.handle(v.msg(ini.envelope()))
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), Instant.now())
+            v.keyring.activate(res.epoch, Instant.now())
+            d.handle(v.msg(res.fin))
+            // The device now answers in the new epoch.
+            val status = async(Dispatchers.IO) { d.op("vault.status") }
+            val raw = nextDeposit().second
+            val req = v.open(raw)
+            assertEquals(res.epoch.recvKid, Envelope.parse(raw).recipientKid)
+            d.handle(v.seal("vault.status", """{"vault_id":"x"}""", re = req.id, status = Inner.STATUS_OK))
+            assertEquals("x", VaultJson.str(status.await(), "vault_id"))
+        }
+    }
+
+    @Test
+    fun stateSurvivesARestart() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, v) = pairedDevice(this, store, secrets)
+            d.stop()
+            val again = VaultDevice.load(config(store), secrets)!!
+            assertEquals("dev-1", again.deviceId)
+            assertEquals(v.vaultId, again.vaultId)
+            // The restored keyring still talks to the vault.
+            val r = async(Dispatchers.IO) { again.op("vault.status") }
+            val req = v.open(nextDeposit().second)
+            again.handle(v.seal("vault.status", "{}", re = req.id, status = Inner.STATUS_OK))
+            r.await()
+            assertNull(VaultDevice.load(config(InMemoryDeviceStateStore()), secrets))
+        }
+    }
+
+    @Test
+    fun credentialOperationsSealToUtksAndKeepTheBlob() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            val utk = KemPrivateKey.generate()
+            val create = async(Dispatchers.IO) { api.credentialCreate("password one") }
+            // The pool is empty: credential.utk.get first.
+            val get = v.open(nextDeposit().second)
+            assertEquals("credential.utk.get", get.type)
+            val utkJson = """{"utk_id":"00112233445566aa","ek":"${Base64s.encodeStd(utk.publicKey.bytes())}","expires_at":"2099-01-01T00:00:00.000Z"}"""
+            d.handle(v.seal(get.type, """{"utks":[$utkJson]}""", re = get.id, status = Inner.STATUS_OK))
+            val cr = v.open(nextDeposit().second)
+            assertEquals("credential.create", cr.type)
+            val body = StrictJson.parseObject(cr.body)
+            assertEquals("00112233445566aa", body.string("utk_id"))
+            val payload = com.vettid.core.crypto.credential.CredentialSeal.openPayload(utk, v.vaultId, "00112233445566aa", cr.type, cr.id, body.base64("sealed"))
+            assertEquals("password one", StrictJson.parseObject(payload).string("password"))
+            d.handle(v.seal(cr.type, """{"credential":"QkxPQg==","version":1,"key":"k","utks":[]}""", re = cr.id, status = Inner.STATUS_OK))
+            val ack = v.open(nextDeposit().second)
+            assertEquals("credential.ack", ack.type)
+            assertEquals(1, StrictJson.parseObject(ack.body).uint("version", 0, 10))
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            create.await()
+            assertEquals(1L, d.credentialVersion)
+            assertEquals(0, d.utkCount)
+        }
+    }
+
+    @Test
+    fun deviceStateJsonRoundTrips() {
+        val s = DeviceState("app", "phone", "https://relay.vettid.test", vaultId = "v", outbox = mutableListOf(OutboxEntry("i", "t", "u", "m", "tok", "ZW52")))
+        val b = stateJson.encodeToString(DeviceState.serializer(), s)
+        assertEquals(s, stateJson.decodeFromString(DeviceState.serializer(), b))
+        val api = buildJsonObject { put("x", JsonPrimitive(1)) }
+        assertEquals("{\"x\":1}", String(VaultJson.bytes(api)))
+    }
+}

@@ -9,37 +9,48 @@ naming:
   MatchingDeclarationName:
     active: false
 
-# Protocol modules (:core:crypto, :core:attestation, :core:keystore) port the
-# Go reference byte layout by byte layout: offsets, sizes and lengths are the
+# Protocol modules (:core:crypto, :core:attestation, :core:keystore, and since
+# A2 :core:relay, :core:altchan, :core:vault) port the Go reference byte
+# layout by byte layout and flow by flow: offsets, sizes and lengths are the
 # spec's numbers (named in the spec, not in Kotlin), strict parsers reject
-# input with one throw per rule, and wire records carry the spec's member
-# lists. The rules below that fight that style are excluded there only.
+# input with one throw per rule, wire records carry the spec's member lists,
+# and the typed vault API has one function per message type. The rules below
+# that fight that style are excluded there only. Tests (fakes of the relay,
+# the member API and the vault) are excluded from the flow-shape rules.
 complexity:
   LongParameterList:
     functionThreshold: 8
     constructorThreshold: 10
     ignoreDefaultParameters: true
     ignoreAnnotated: ['Composable']
-    excludes: ['**/core/crypto/**', '**/core/attestation/**']
+    excludes: ['**/core/crypto/**', '**/core/attestation/**', '**/core/altchan/**', '**/core/vault/**']
   ComplexCondition:
-    excludes: ['**/core/crypto/**', '**/core/attestation/**', '**/core/keystore/**']
+    excludes: ['**/core/crypto/**', '**/core/attestation/**', '**/core/keystore/**', '**/core/altchan/**', '**/core/vault/**']
+  CyclomaticComplexMethod:
+    excludes: ['**/test/**', '**/androidTest/**']
   LongMethod:
     threshold: 80
     ignoreAnnotated: ['Composable']
   TooManyFunctions:
     ignoreAnnotatedFunctions: ['Composable']
     ignorePrivate: true
+    excludes: ['**/test/**', '**/androidTest/**', '**/core/relay/**', '**/core/altchan/**', '**/core/vault/**']
 
 style:
   MagicNumber:
     ignorePropertyDeclaration: true
     ignoreCompanionObjectPropertyDeclaration: true
     ignoreAnnotated: ['Composable']
-    excludes: ['**/test/**', '**/theme/**', '**/core/crypto/**', '**/core/attestation/**', '**/core/keystore/**']
+    excludes: ['**/test/**', '**/androidTest/**', '**/theme/**', '**/core/crypto/**', '**/core/attestation/**', '**/core/keystore/**',
+               '**/core/relay/**', '**/core/altchan/**', '**/core/vault/**', '**/core/testing/**']
   ThrowsCount:
-    excludes: ['**/core/crypto/**', '**/core/attestation/**', '**/core/keystore/**']
+    excludes: ['**/core/crypto/**', '**/core/attestation/**', '**/core/keystore/**', '**/core/relay/**', '**/core/altchan/**',
+               '**/core/vault/**']
   ReturnCount:
-    excludes: ['**/core/crypto/**', '**/core/attestation/**']
+    excludes: ['**/test/**', '**/androidTest/**', '**/core/crypto/**', '**/core/attestation/**', '**/core/relay/**', '**/core/altchan/**',
+               '**/core/vault/**']
+  LoopWithTooManyJumpStatements:
+    excludes: ['**/core/altchan/**']
   UnusedPrivateMember:
     ignoreAnnotated: ['Preview']
   MaxLineLength:

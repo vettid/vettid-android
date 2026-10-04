@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- The relay and the member API (ANDROID-PLAN §5). -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- No backup or export of vault data (ANDROID-PLAN §4): nothing leaves the
          device through Auto Backup or device-to-device transfer. -->
     <application
