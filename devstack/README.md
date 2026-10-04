@@ -1,4 +1,4 @@
-# Local dev stack (phases A2, A3)
+# Local dev stack (phases A2–A4)
 
 The vault side of the app, running on the development machine: vettid-vault's
 `cmd/devstack`, reachable from a USB-connected phone through `adb reverse`.
@@ -26,12 +26,13 @@ devstack/devstack.sh down    # stop everything and remove the adb reverse rules
 `up` runs
 
 ```bash
-go run -tags devenclave github.com/vettid/vettid-vault/cmd/devstack@8a34760 \
+go run -tags devenclave github.com/vettid/vettid-vault/cmd/devstack@a7818cd \
   -dev-device-policy devstack/device-policy.json
 ```
 
 (`VAULT_REF` picks another commit; `VAULT_SRC=<checkout>` runs `./cmd/devstack` from a local
-vettid-vault checkout instead) and `adb reverse` of ports 18080–18082. The checkout, if any, is
+vettid-vault checkout instead) and `adb reverse` of ports 18080–18082 on every connected phone (`ANDROID_SERIAL`, space-separated,
+picks some). The checkout, if any, is
 never modified. Requirements: Go ≥ 1.26, podman (or docker) with compose, the LocalStack image
 (pulled on first use), and network access the first time (module and relay builds).
 
@@ -87,6 +88,16 @@ adb uninstall com.vettid.app.devstack
 ANDROID_SERIAL=<serial> ./gradlew --max-workers=2 -PvettidTestBuildType=devStack :app:connectedDevStackAndroidTest
 adb pull /data/local/tmp/a3-exit/ <dir>     # a screenshot of every step
 
+# The A4 exit test: a fresh install onboards, invites the vaultctl peer (QR code and link shown; the
+# peer accepts the link), approves after the 6-digit safety code, exchanges messages both ways
+# (delivered and read receipts), removes the connection and accepts the peer's invitation link
+# (the invitee side), decides a member-authentication request (credential password) and a grant
+# request in Approvals, and marks the connection a favourite.
+adb uninstall com.vettid.app.devstack
+ANDROID_SERIAL=<serial> ./gradlew --max-workers=2 -PvettidTestBuildType=devStack :app:connectedDevStackAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.class=com.vettid.app.A4ExitTest
+adb pull /data/local/tmp/a4-exit/ <dir>
+
 # The A2 exit test (vault client only, TEST attester):
 ANDROID_SERIAL=<serial> ./gradlew --max-workers=2 :core:data:connectedDebugAndroidTest
 # JVM, on the host:
@@ -109,3 +120,15 @@ phone with the `devStack` (or debug) build and an enrolled vault:
 4. Add a new fingerprint in system settings and return: the prompt cannot open (the key was
    invalidated), the lock turns itself off, and Settings says so.
 5. Turn the lock off: no prompt; restarting the app no longer asks.
+
+## Two phones
+
+Both phones reach the same stack (`devstack.sh up` reverses the ports on every connected phone).
+Install the `devStack` build on each (`adb -s <serial> install -r app/build/outputs/apk/devStack/app-devStack.apk`)
+and onboard each with its own address (each address is its own member and vault). Then phone A:
+drawer → Invite a connection → Create invitation; phone B: Connections → Add a connection → Scan a
+QR code (point it at A's screen) or Paste an invitation link (A's Copy/Share link). A sees the
+request with its safety code and approves; messages and approvals then flow between the two. A
+locked test phone stays locked: launch with `--ez vettid.screenshot true`. Debug builds expose test
+tags as resource ids, so the flow can be driven with `adb -s <serial> exec-out uiautomator dump /dev/tty`
+and `adb -s <serial> shell input tap|text`.

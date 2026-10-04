@@ -1,10 +1,7 @@
 package com.vettid.core.data.vault
 
 import android.content.Context
-import com.vettid.core.altchan.AltChannelException
 import com.vettid.core.altchan.AltChannelFlow
-import com.vettid.core.altchan.AltRefusedException
-import com.vettid.core.altchan.AltResultException
 import com.vettid.core.altchan.AltTrust
 import com.vettid.core.altchan.Approval
 import com.vettid.core.altchan.MemberApiClient
@@ -17,9 +14,9 @@ import com.vettid.core.attestation.android.KeyDescription
 import com.vettid.core.attestation.android.RootOfTrust
 import com.vettid.core.attestation.manifest.Release
 import com.vettid.core.crypto.Bytes
-import com.vettid.core.crypto.CryptoException
 import com.vettid.core.data.KeystoreFileStore
 import com.vettid.core.data.account.AccountGateway
+import com.vettid.core.data.social.SocialManager
 import com.vettid.core.data.account.SignInLink
 import com.vettid.core.data.env.AppEnvironment
 import com.vettid.core.keystore.AndroidKeys
@@ -29,20 +26,16 @@ import com.vettid.core.keystore.KeySlot
 import com.vettid.core.keystore.KeystoreException
 import com.vettid.core.keystore.SeedWrapKey
 import com.vettid.core.keystore.SharedPreferencesWrappedKeyStore
-import com.vettid.core.relay.RelayException
 import com.vettid.core.vault.DeviceConfig
 import com.vettid.core.vault.DeviceSecrets
 import com.vettid.core.vault.VaultApi
 import com.vettid.core.vault.VaultDevice
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
-import com.vettid.core.vault.VaultOpException
-import com.vettid.core.vault.VaultStateException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -103,6 +96,26 @@ class VaultManager(
     override val signInHosts: Set<String> = setOf(SignInLink.HOST) + listOfNotNull(hostOf(env.endpoints.apiBase))
 
     private class Session(val device: VaultDevice, val api: VaultApi, val member: MemberApiClient, val alt: AltChannelFlow)
+
+    /** Connections, messages and approvals (A4): the repositories of those features. */
+    val social = SocialManager(
+        scope,
+        api = { session().api },
+        credential = this,
+        store = KeystoreFileStore(File(app.noBackupFilesDir, SOCIAL_FILE), "social"),
+    )
+
+    init {
+        scope.launch {
+            // Lists are re-read whenever the vault opens (unlock, end of onboarding, app start while unlocked).
+            phaseFlow.collect {
+                if (it == AppPhase.Unlocked) {
+                    social.refreshAllQuietly()
+                    launch { runCatching { ensureProfileName() } }
+                }
+            }
+        }
+    }
 
     // --- local account record (encrypted under a Keystore key) ---
 
@@ -170,14 +183,26 @@ class VaultManager(
             }
             alarmFlow.value = null
             windowFlow.value = null
+            social.clear()
             saveLocal(local.copy(setupComplete = false))
         }
     }
 
+    @Suppress("TooGenericExceptionCaught")
     private fun observe(s: Session) {
         observer?.cancel()
         observer = scope.launch {
-            s.device.events.collect { m -> onEvent(m) }
+            s.device.events.collect { m ->
+                onEvent(m)
+                try {
+                    social.onEvent(m)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: RuntimeException) {
+                    // one malformed event must not stop the observer
+                    android.util.Log.w("VaultManager", "event ${m.type} not handled: ${e.javaClass.simpleName}")
+                }
+            }
         }
     }
 
@@ -212,6 +237,17 @@ class VaultManager(
                 phaseFlow.value = AppPhase.Setup(SetupStage.VAULT_ELSEWHERE)
             }
         }
+    }
+
+    /**
+     * The vault's display name (§10.8) is what connections see first (`hs.init` profile, §6.2). A vault
+     * without one gets the member's account name once; the member changes it later in the profile.
+     */
+    private suspend fun ensureProfileName() {
+        val name = local.toInfo()?.displayName?.takeIf { it.isNotBlank() && it != local.email } ?: return
+        val api = session().api
+        val p = api.profileGet()
+        if (p.name.isBlank()) api.profileSet(p.version, name = name.take(PROFILE_NAME_MAX))
     }
 
     // --- AccountRepository ---
@@ -546,42 +582,12 @@ class VaultManager(
     private suspend fun <T> io(block: suspend () -> T): T = withContext(Dispatchers.IO) { block() }
 
     /** Runs [block] on the IO dispatcher and turns every failure into a [VaultFailure]. */
-    @Suppress("CyclomaticComplexMethod", "ThrowsCount")
-    private suspend fun <T> guard(block: suspend () -> T): T = try {
-        io(block)
-    } catch (e: VaultFailure) {
-        throw e
-    } catch (e: TimeoutCancellationException) {
-        throw VaultFailure(FailureKind.NO_RESPONSE, cause = e)
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: MemberApiException) {
-        throw VaultFailure(memberFailure(e), e.code, e.retryAfterSeconds.toLong(), e)
-    } catch (e: VaultOpException) {
-        throw VaultFailure(opFailure(e.code), e.code, cause = e)
-    } catch (e: AltRefusedException) {
-        val kind = if (e.reason == AltRefusedException.Reason.ROLLBACK_RELEASE) FailureKind.ROLLBACK else FailureKind.MANIFEST
-        throw VaultFailure(kind, e.reason.name.lowercase(), cause = e)
-    } catch (e: AttestationException) {
-        throw VaultFailure(FailureKind.ATTESTATION, "enclave", cause = e)
-    } catch (e: AltResultException) {
-        throw VaultFailure(FailureKind.OTHER, "unreadable_result", cause = e)
-    } catch (e: AltChannelException) {
-        throw VaultFailure(FailureKind.NO_RESPONSE, cause = e)
-    } catch (e: VaultStateException) {
-        throw VaultFailure(if (e.message?.contains("no response") == true) FailureKind.NO_RESPONSE else FailureKind.OTHER, cause = e)
-    } catch (e: RelayException) {
-        throw VaultFailure(FailureKind.NETWORK, cause = e)
-    } catch (e: IOException) {
-        throw VaultFailure(FailureKind.NETWORK, cause = e)
-    } catch (e: KeystoreException) {
-        throw VaultFailure(FailureKind.OTHER, "keystore", cause = e)
-    } catch (e: CryptoException) {
-        throw VaultFailure(FailureKind.OTHER, "crypto", cause = e)
-    }
+    private suspend fun <T> guard(block: suspend () -> T): T = vaultGuard(block)
 
     companion object {
         private const val DEVICE_FILE = "vault-device.bin"
+        private const val SOCIAL_FILE = "social.bin"
+        private const val PROFILE_NAME_MAX = 64
         private const val STATE_MEMBER = "member"
         private const val UPDATE_MOVED = "moved"
         private const val KEY_BACKUP = "credential.backup"
@@ -624,6 +630,7 @@ class VaultManager(
             else -> FailureKind.OTHER
         }
 
+        @Suppress("CyclomaticComplexMethod") // one branch per error code
         fun opFailure(code: String): FailureKind = when (code) {
             "bad_pin" -> FailureKind.BAD_PIN
             "bad_password" -> FailureKind.BAD_PASSWORD
@@ -632,6 +639,14 @@ class VaultManager(
             "rotation_required" -> FailureKind.ROTATION_REQUIRED
             "not_found" -> FailureKind.NOT_FOUND
             "unsupported_type" -> FailureKind.NOT_SUPPORTED
+            "connection_unavailable" -> FailureKind.CONNECTION_UNAVAILABLE
+            "claim_unavailable", "accept_failed" -> FailureKind.INVITE_UNAVAILABLE
+            "blocked" -> FailureKind.BLOCKED
+            "credential_locked" -> FailureKind.CREDENTIAL_LOCKED
+            "conflict" -> FailureKind.CONFLICT
+            "limit" -> FailureKind.LIMIT
+            "ttl_not_allowed" -> FailureKind.NOT_SUPPORTED
+            "stale_credential", "utk_invalid" -> FailureKind.NO_RESPONSE
             else -> FailureKind.OTHER
         }
     }

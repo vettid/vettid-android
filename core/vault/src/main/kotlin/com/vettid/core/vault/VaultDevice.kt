@@ -49,6 +49,7 @@ import com.vettid.core.relay.MailboxCollector
 import com.vettid.core.relay.RelayAuth
 import com.vettid.core.relay.RelayClient
 import com.vettid.core.relay.RelayException
+import com.vettid.core.relay.RelayLimits
 import com.vettid.core.relay.RelayMessage
 import com.vettid.core.relay.TokenException
 import kotlinx.coroutines.CompletableDeferred
@@ -229,6 +230,12 @@ class VaultDevice private constructor(
         collector = job
         return job
     }
+
+    /**
+     * The limits this device's relay advertises (RELAY-PROTOCOL §6.1; register
+     * is idempotent). Apps offer invite lifetimes within them (§6.4).
+     */
+    suspend fun relayLimits(): RelayLimits = own.register().limits
 
     /** Stops collecting. */
     fun stop() {

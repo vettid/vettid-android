@@ -44,8 +44,15 @@ import com.vettid.feature.approvals.approvalsDestination
 import com.vettid.feature.connections.connectionsDestination
 import com.vettid.feature.credential.credentialDestination
 import com.vettid.feature.items.itemsDestination
+import com.vettid.feature.connections.ConnectionDetailRoute
+import com.vettid.feature.connections.ConnectionsHost
+import com.vettid.feature.connections.InviteRoute
+import com.vettid.feature.messages.ConversationRoute
+import com.vettid.feature.messages.MessagesHost
 import com.vettid.feature.messages.MessagesRoute
 import com.vettid.feature.messages.messagesDestination
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.feature.settings.SettingsHost
 import com.vettid.feature.settings.helpDestination
 import com.vettid.feature.settings.settingsDestination
@@ -82,8 +89,12 @@ fun AppShell(
 
     val backStackEntry by navController.currentBackStackEntryAsState()
     val current = backStackEntry?.destination
+    val shell: ShellViewModel = hiltViewModel()
+    val badges by shell.badges.collectAsStateWithLifecycle()
     val debugItems = debugTools.drawerItems()
-    val sections = drawerSections() + listOfNotNull(debugItems.takeIf { it.isNotEmpty() })
+    val sections = drawerSections(badges) + listOfNotNull(debugItems.takeIf { it.isNotEmpty() })
+    val navigate: (Any) -> Unit = { navController.navigate(it) }
+    val back: () -> Unit = { navController.popBackStack() }
 
     ModalNavigationDrawer(
         drawerState = drawerState,
@@ -119,9 +130,30 @@ fun AppShell(
                     .then(if (bannerShown) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
             ) {
                 NavHost(navController = navController, startDestination = MessagesRoute) {
-                    messagesDestination(chrome)
-                    connectionsDestination(chrome)
-                    approvalsDestination(chrome)
+                    messagesDestination(
+                        chrome,
+                        MessagesHost(
+                            navigate = navigate,
+                            onBack = back,
+                            onOpenConnection = { navController.navigate(ConnectionDetailRoute(it)) },
+                            onInvite = { navController.navigate(InviteRoute) },
+                        ),
+                    )
+                    connectionsDestination(
+                        chrome,
+                        ConnectionsHost(
+                            navigate = navigate,
+                            onBack = back,
+                            replace = { route ->
+                                navController.popBackStack()
+                                navController.navigate(route)
+                            },
+                            onOpenConversation = { id ->
+                                navController.navigate(ConversationRoute(id)) { launchSingleTop = true }
+                            },
+                        ),
+                    )
+                    approvalsDestination(chrome, navigate = navigate, onBack = back)
                     itemsDestination(chrome)
                     credentialDestination(chrome, navigate = { navController.navigate(it) }, onBack = { navController.popBackStack() })
                     settingsDestination(
@@ -166,13 +198,20 @@ fun AppShell(
 }
 
 @Composable
-private fun drawerSections(): List<List<DrawerItem>> =
+private fun drawerSections(badges: ShellBadges): List<List<DrawerItem>> =
     TopLevelDestination.entries
         .groupBy { it.group }
         .toSortedMap()
         .values
         .map { group ->
-            group.map { DrawerItem(key = it.key, label = stringResource(it.label), icon = it.icon) }
+            group.map {
+                val badge = when (it) {
+                    TopLevelDestination.Approvals -> badges.approvals
+                    TopLevelDestination.Messages -> badges.unread
+                    else -> 0
+                }
+                DrawerItem(key = it.key, label = stringResource(it.label), icon = it.icon, badge = badge)
+            }
         }
 
 private fun selectedKey(current: NavDestination?, debugItems: List<DrawerItem>): String? {

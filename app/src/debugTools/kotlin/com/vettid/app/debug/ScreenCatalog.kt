@@ -4,7 +4,10 @@
 package com.vettid.app.debug
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -28,6 +31,47 @@ import com.vettid.core.data.vault.VaultOverview
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.core.ui.components.StepState
 import com.vettid.core.ui.components.UrgentBanner
+import com.vettid.core.data.social.Approval
+import com.vettid.core.data.social.AuthenticationState
+import com.vettid.core.data.social.ConnectionInfo
+import com.vettid.core.data.social.ConnectionState
+import com.vettid.core.data.social.ConversationSummary
+import com.vettid.core.data.social.GrantEntry
+import com.vettid.core.data.social.InviteInfo
+import com.vettid.core.data.social.InviteTtl
+import com.vettid.core.data.social.MessageInfo
+import com.vettid.core.data.social.OutstandingInvite
+import com.vettid.core.data.social.SafetyCodeRecord
+import com.vettid.core.data.social.ShareItem
+import com.vettid.feature.approvals.ApprovalDetailScreen
+import com.vettid.feature.approvals.ApprovalDetailUiState
+import com.vettid.feature.approvals.ApprovalsScreen
+import com.vettid.feature.approvals.ApprovalsUiState
+import com.vettid.feature.approvals.DecisionActions
+import com.vettid.feature.connections.AcceptActions
+import com.vettid.feature.connections.AcceptScreen
+import com.vettid.feature.connections.AcceptStep
+import com.vettid.feature.connections.AcceptUiState
+import com.vettid.feature.connections.ConnectionDetailScreen
+import com.vettid.feature.connections.ConnectionDetailUiState
+import com.vettid.feature.connections.ConnectionsActions
+import com.vettid.feature.connections.ConnectionsScreen
+import com.vettid.feature.connections.ConnectionsUiState
+import com.vettid.feature.connections.DetailActions
+import com.vettid.feature.connections.DetailConfirm
+import com.vettid.feature.connections.InviteActions
+import com.vettid.feature.connections.InviteScreen
+import com.vettid.feature.connections.InviteStep
+import com.vettid.feature.connections.InviteUiState
+import com.vettid.feature.connections.ScanScreen
+import com.vettid.feature.connections.ScanUiState
+import com.vettid.feature.messages.ConversationActions
+import com.vettid.feature.messages.ConversationScreen
+import com.vettid.feature.messages.ConversationUiState
+import com.vettid.feature.messages.MessagesScreen
+import com.vettid.feature.messages.MessagesUiState
+import com.vettid.feature.messages.NewMessageScreen
+import com.vettid.feature.messages.NewMessageUiState
 import com.vettid.feature.credential.AlarmActions
 import com.vettid.feature.credential.AlarmContent
 import com.vettid.feature.credential.AlarmStep
@@ -105,7 +149,7 @@ private object NoUnlock : UnlockActions {
 }
 
 /**
- * DEBUG ONLY. Every A3 screen with sample state, for screenshots without a
+ * DEBUG ONLY. Every A3 and A4 screen with sample state, for screenshots without a
  * vault: `--es vettid.start screen:<name>` (names below). Sample values are
  * made up; nothing here talks to a vault.
  */
@@ -118,6 +162,44 @@ object ScreenCatalog {
     private val chrome = ShellChrome(accountName = "Sam Rivera", onMenuClick = {}, onAvatarClick = {})
     private val credential = CredentialStatus(true, 7, "Jk4m2Qx9TzA1", "2026-10-04T14:12:00Z", null, true, 300, 3)
     private val alarm = CredentialAlarm("01JABCDEF0123456789ABCDEFG", CredentialAlarm.STATE_FROZEN, "2026-10-04T14:20:00Z", "other")
+
+
+    // --- A4 sample data (made up) ---
+    private val t0: Instant = Instant.parse("2026-10-04T09:00:00Z")
+    private val sam = ConnectionInfo("c1", "Sam Rivera", ConnectionState.ACTIVE, favorite = true, profile = listOf("name" to "Sam Rivera", "city" to "Lisbon"),
+        keyFingerprint = "4e8e e8f7 1c2d 3e4f", createdAt = t0.minusSeconds(86_400 * 30), lastActiveAt = t0.plusSeconds(600))
+    private val alex = ConnectionInfo("c2", "Alexandra Okafor", ConnectionState.ACTIVE, alias = "Alex (work)", createdAt = t0.minusSeconds(86_400 * 3), lastActiveAt = t0.minusSeconds(7200))
+    private val jo = ConnectionInfo("c3", "Jo Lindqvist", ConnectionState.STALE, createdAt = t0.minusSeconds(86_400 * 90))
+    private val connections = listOf(sam, alex, jo)
+    private fun msg(id: String, conn: String, text: String, out: Boolean, min: Long, read: Boolean = true) =
+        MessageInfo(conn, id, out, text, t0.plusSeconds(min * 60), delivered = true, read = read)
+    private val thread = listOf(
+        msg("m1", "c1", "Are we still on for Saturday?", false, 0),
+        msg("m2", "c1", "Yes, 10am at the market. I will bring the bikes.", true, 2),
+        msg("m3", "c1", "Perfect. Sending the address through here so it stays between us.", false, 5),
+        msg("m4", "c1", "Got it, thanks!", true, 6, read = false),
+    )
+    private val conversations = listOf(
+        ConversationSummary(sam, thread.last(), 0),
+        ConversationSummary(alex, msg("m9", "c2", "Can you review the contract tonight?", false, -90, read = false), 2),
+        ConversationSummary(jo, null, 0),
+    )
+    private val invite = InviteInfo(
+        "01JINVITE0000000000000000A",
+        "eyJ2IjoyLCJ0IjoiYyIsInIiOiJodHRwczovL3JlbGF5LnZldHRpZC50ZXN0IiwiYyI6ImFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6IiwiaCI6IngiLCJrIjoieSIsImUiOjE3OTExMDAwMDB9",
+        """{"v":2,"t":"c","r":"https://relay.vettid.test","c":"abcdefghijklmnopqrstuvwxyz","h":"x","k":"y","e":1791100000}""",
+        Instant.now().plusSeconds(540),
+        remote = false,
+    )
+    private val request = Approval.ConnectionRequest("p1", invite.inviteId, "042817", false, "Morgan Lee", null, t0, t0.plusSeconds(604_800))
+    private val approvals: List<Approval> = listOf(
+        request,
+        Approval.Authentication("a1", "c1", "Confirm before I send the keys", t0, t0.plusSeconds(600), "Sam Rivera"),
+        Approval.GrantRequest("g1", "c2", listOf(GrantEntry("item", "01JITEM", "Passport", true), GrantEntry("category", "insurance", "Your insurance card", false)), 1, 604_800, "Booking the trip", t0, t0.plusSeconds(86_400), "Alex (work)"),
+        Approval.CriticalUse("u1", "c1", "Signing key", "Private key", "sign", "SGVsbG8sIFZldHRJRCE=", "x", "Sign the lease agreement", t0, t0.plusSeconds(86_400), "Sam Rivera"),
+        Approval.ShareDecision("r1", "c1", null, listOf(ShareItem("i1", "Allergy list", "health", "data")), "tagged", t0, null, "Sam Rivera"),
+        Approval.DeviceRequest("device.session.pending", "s1", "Office laptop", "desktop", null, t0, t0.plusSeconds(300)),
+    )
 
     @Composable
     private fun Ob(state: OnboardingUiState) = OnboardingContent(state, NoOnboarding) {}
@@ -235,6 +317,54 @@ object ScreenCatalog {
         "settings.delete_confirm" to {
             DeleteVaultContent(DeleteVaultUiState(phrase = "delete my vault", pin = "975310", password = "pw", acknowledged = true, confirming = true), DeleteVaultActions())
         },
+        "messages" to { MessagesScreen(MessagesUiState(loading = false, conversations = conversations, noConnections = false), chrome) },
+        "messages.empty" to { MessagesScreen(MessagesUiState(loading = false), chrome) },
+        "messages.unread" to { MessagesScreen(MessagesUiState(loading = false, conversations = conversations.filter { it.unread > 0 }, unreadOnly = true, noConnections = false), chrome) },
+        "messages.conversation" to { ConversationScreen(ConversationUiState("c1", sam, thread, loading = false, draft = "See you there"), ConversationActions()) },
+        "messages.conversation_empty" to { ConversationScreen(ConversationUiState("c2", alex, emptyList(), loading = false), ConversationActions()) },
+        "messages.conversation_stale" to { ConversationScreen(ConversationUiState("c3", jo, emptyList(), loading = false), ConversationActions()) },
+        "messages.delete" to { ConversationScreen(ConversationUiState("c1", sam, thread, loading = false, deleting = thread[1]), ConversationActions()) },
+        "messages.new" to { NewMessageScreen(NewMessageUiState(false, listOf(sam, alex)), {}, {}, {}) },
+        "connections" to {
+            ConnectionsScreen(
+                ConnectionsUiState(loading = false, connections = connections, invites = listOf(OutstandingInvite("i1", t0.plusSeconds(3600), remote = true))),
+                chrome, ConnectionsActions(),
+            )
+        },
+        "connections.empty" to { ConnectionsScreen(ConnectionsUiState(loading = false), chrome, ConnectionsActions()) },
+        "connections.add" to { ConnectionsScreen(ConnectionsUiState(loading = false, connections = connections, addSheet = true), chrome, ConnectionsActions()) },
+        "connections.detail" to {
+            ConnectionDetailScreen(
+                ConnectionDetailUiState("c1", sam, AuthenticationState("c1", t0, "authenticated", t0), SafetyCodeRecord("042817", t0.minusSeconds(86_400 * 30)), loading = false),
+                DetailActions(),
+            )
+        },
+        "connections.detail_alias" to { ConnectionDetailScreen(ConnectionDetailUiState("c2", alex, null, null, loading = false), DetailActions()) },
+        "connections.detail_edit" to {
+            ConnectionDetailScreen(ConnectionDetailUiState("c2", alex, loading = false, editing = true, aliasInput = "Alex (work)", noteInput = "Met at the 2026 conference"), DetailActions())
+        },
+        "connections.detail_block" to { ConnectionDetailScreen(ConnectionDetailUiState("c1", sam, loading = false, confirm = DetailConfirm.BLOCK), DetailActions()) },
+        "invite.choose" to { InviteScreen(InviteUiState(ttls = InviteTtl.entries.toList()), InviteActions()) },
+        "invite.choose_remote" to { InviteScreen(InviteUiState(ttls = InviteTtl.entries.toList(), ttl = InviteTtl.ONE_DAY), InviteActions()) },
+        "invite.show" to { InviteScreen(InviteUiState(step = InviteStep.SHOWING, invite = invite), InviteActions()) },
+        "invite.request" to { InviteScreen(InviteUiState(step = InviteStep.REQUEST, invite = invite, request = request), InviteActions()) },
+        "invite.connected" to { InviteScreen(InviteUiState(step = InviteStep.CONNECTED, connectionId = "c4", connectionName = "Morgan Lee"), InviteActions()) },
+        "invite.expired" to { InviteScreen(InviteUiState(step = InviteStep.EXPIRED), InviteActions()) },
+        "accept" to { AcceptScreen(AcceptUiState(input = invite.link), AcceptActions()) },
+        "accept.error" to { AcceptScreen(AcceptUiState(input = "not a link", error = FailureKind.INVITE_INVALID), AcceptActions()) },
+        "accept.waiting" to { AcceptScreen(AcceptUiState(step = AcceptStep.WAITING, connectionId = "c4"), AcceptActions()) },
+        "accept.waiting_sas" to { AcceptScreen(AcceptUiState(step = AcceptStep.WAITING, connectionId = "c4", sas = "042817"), AcceptActions()) },
+        "scan" to {
+            ScanScreen(ScanUiState(problem = FailureKind.INVITE_NOT_CONNECTION), {}, {}, {}, {}) { m -> Box(m.background(MaterialTheme.colorScheme.surfaceContainerHigh)) }
+        },
+        "approvals" to { ApprovalsScreen(ApprovalsUiState(loading = false, approvals = approvals), chrome) },
+        "approvals.empty" to { ApprovalsScreen(ApprovalsUiState(loading = false), chrome) },
+        "approvals.connection" to { ApprovalDetailScreen(ApprovalDetailUiState(request.key, request), DecisionActions()) },
+        "approvals.authentication" to { ApprovalDetailScreen(ApprovalDetailUiState(approvals[1].key, approvals[1], password = "pw"), DecisionActions()) },
+        "approvals.grant" to { ApprovalDetailScreen(ApprovalDetailUiState(approvals[2].key, approvals[2]), DecisionActions()) },
+        "approvals.critical" to { ApprovalDetailScreen(ApprovalDetailUiState(approvals[3].key, approvals[3]), DecisionActions()) },
+        "approvals.share" to { ApprovalDetailScreen(ApprovalDetailUiState(approvals[4].key, approvals[4]), DecisionActions()) },
+        "approvals.device" to { ApprovalDetailScreen(ApprovalDetailUiState(approvals[5].key, approvals[5]), DecisionActions()) },
         "gallery" to { GalleryScreen(themeMode = LocalThemeController.current.mode, onThemeModeChange = {}, onBack = {}) },
         "account_sheet" to { AccountSheet(name = "Sam Rivera", detail = EMAIL, onDismiss = {}, onLockVault = {}, onSignOut = {}) },
     )

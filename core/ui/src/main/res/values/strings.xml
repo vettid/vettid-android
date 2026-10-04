@@ -22,4 +22,5 @@
     <string name="core_ui_step_active">in progress</string>
     <string name="core_ui_step_done">done</string>
     <string name="core_ui_step_failed">failed</string>
+    <string name="core_ui_cd_safety_code">Safety code %1$s</string>
 </resources>

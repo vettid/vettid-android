@@ -18,6 +18,15 @@
     <string name="data_failure_rollback">The vault is served by an older software release than this phone last used. VettID did not send your PIN.</string>
     <string name="data_failure_manifest">The vault software list could not be verified. Try again later.</string>
     <string name="data_failure_not_found">Nothing was found.</string>
+    <string name="data_failure_connection_unavailable">This connection cannot be reached right now. Try again later.</string>
+    <string name="data_failure_invite_invalid">That is not a VettID invitation. Check the link or code and try again.</string>
+    <string name="data_failure_invite_expired">This invitation has expired. Ask for a new one.</string>
+    <string name="data_failure_invite_not_connection">That code is not a connection invitation.</string>
+    <string name="data_failure_invite_unavailable">This invitation is no longer available: it was used, cancelled or has expired. Ask for a new one.</string>
+    <string name="data_failure_blocked">You blocked the vault that sent this invitation. Unblock it first to connect.</string>
+    <string name="data_failure_credential_locked">Your credential is locked. Enter your credential password to continue.</string>
+    <string name="data_failure_conflict">This changed on another device. Look again and retry.</string>
+    <string name="data_failure_limit">A limit was reached. Remove something first.</string>
     <string name="data_failure_other">Something went wrong. Try again.</string>
     <string name="data_pin_problem_digits">Use digits only.</string>
     <string name="data_pin_problem_short">Use at least %1$d digits.</string>

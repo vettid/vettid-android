@@ -295,6 +295,19 @@ fun GalleryScreen(
             Section("Notices, steps and the urgent banner (A3)")
             NoticesGallery()
 
+            Section("Conversation (A4): day divider, bubbles")
+            ConversationGallery()
+
+            Section("Invitation QR code and safety code (A4)")
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = Spacing.gutter),
+                horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(Spacing.l),
+            ) {
+                com.vettid.core.ui.components.QrCode(GALLERY_QR, "Sample QR code", size = 200.dp)
+                com.vettid.core.ui.components.SafetyCode("042817")
+            }
+
             Section("Badges, tags, tiles, buttons")
             Row(
                 Modifier.padding(horizontal = Spacing.gutter),
@@ -432,6 +445,29 @@ private fun FormsGallery() {
         com.vettid.core.ui.components.PrimaryButton("Busy", {}, busy = true)
         com.vettid.core.ui.components.PrimaryButton("Delete my vault", {}, destructive = true)
         com.vettid.core.ui.components.SecondaryButton("Secondary action", {})
+    }
+}
+
+// A made-up invitation payload (VAULT-MESSAGING §6.4 shape; not a real claim).
+private const val GALLERY_QR =
+    """{"v":2,"t":"c","r":"https://relay.vettid.test","c":"abcdefghijklmnopqrstuvwxyz","h":"x","k":"y","e":1791100000}"""
+
+@Composable
+private fun ConversationGallery() {
+    Column {
+        com.vettid.core.ui.components.DayDivider("4 Oct 2026")
+        com.vettid.core.ui.components.MessageBubble(
+            "Are we still on for Saturday?",
+            outgoing = false,
+            meta = "09:12",
+            accessibilityLabel = "Sam: Are we still on for Saturday? 09:12",
+        )
+        com.vettid.core.ui.components.MessageBubble(
+            "Yes, 10am at the market.",
+            outgoing = true,
+            meta = "09:14 · Read",
+            accessibilityLabel = "You: Yes, 10am at the market. 09:14, Read",
+        )
     }
 }
 
