@@ -19,8 +19,14 @@ says so (attestation, crypto helpers, WebRTC, QR scanner), with its tests.
 - Shared machine: memory and workers are capped in `gradle.properties`. Run
   builds with `--max-workers=2`, check `free -g` first (wait if < 8 GB
   available), and `./gradlew --stop` when done. No emulator.
-- `./gradlew :app:assembleDebug testDebugUnitTest detekt :app:lintDebug :app:assembleRelease`
-  is what CI runs (`.github/workflows/ci.yml`, plus gitleaks over full history).
+- `./gradlew :app:assembleDebug testDebugUnitTest :core:crypto:test detekt :app:lintDebug :app:assembleRelease`
+  is what CI runs (`.github/workflows/ci.yml`, plus gitleaks over full history, with
+  `.gitleaks.toml` allowlisting the public §16 test-vector values).
+- `:core:crypto` is a pure Kotlin/JVM module (`vettid.jvm.library`); its tests include the
+  vettid-vault §16 vectors (`src/test/resources/vectors`, see `SOURCE.md` there), which must
+  pass byte for byte: a vector that stops matching is a stop-and-report item, never a skip.
+- Keystore instrumented tests run unattended on the locked test phone:
+  `ANDROID_SERIAL=<serial> ./gradlew :core:keystore:connectedDebugAndroidTest`.
 
 ## Device testing
 

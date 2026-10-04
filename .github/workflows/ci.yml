@@ -30,7 +30,8 @@ jobs:
       - name: detekt
         run: ./gradlew detekt
       - name: unit tests
-        run: ./gradlew testDebugUnitTest
+        # :core:crypto is a JVM module: its tests (incl. the §16 vectors) run with `test`.
+        run: ./gradlew testDebugUnitTest :core:crypto:test
       - name: Android lint
         run: ./gradlew :app:lintDebug
       - name: build (debug + release)

@@ -1,0 +1,11 @@
+{
+  "description": "VAULT-MESSAGING §5.2 session-mode envelope: XChaCha20-Poly1305(k_i2r, nonce, aad = bytes[0:44], padded_inner). The kids are arbitrary test values.",
+  "k_i2r_hex": "0808080808080808080808080808080808080808080808080808080808080808",
+  "nonce_hex": "090909090909090909090909090909090909090909090909",
+  "sender_kid_hex": "0202020202020202",
+  "recipient_kid_hex": "0101010101010101",
+  "inner": "{\"v\":1,\"id\":\"01JB2Z6V9K3M4N5P6Q7R8S9T0V\",\"type\":\"test.ping\",\"ts\":\"2026-10-01T12:00:00.000Z\",\"seq\":1,\"body\":{}}",
+  "padded_len": 512,
+  "envelope_len": 572,
+  "envelope_b64": "AgIBAAICAgICAgICAQEBAQEBAQEJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQmwRBPsQ2hTfP0aL7DbEfQTloSFkbKri3K7ZpmIFnHFlxy5oTMM2Wt5C4wsIikypO8+0NATmZAF0l5krLaLHmav2xdLNmfn+8L5hl55HPYJsCmC6f2dWXYLaRcIbuojgwmjBhio7ptRPDYa4mRMGRvQo23Ri2eOL+NDolm3Nqw+Ztsy+mHxPJEY5V5uDjUvJXxJtib0A3U8z9J5qj8ijHBHZC/sLLrBgocRvsIMkaxrHYz1mCT9PiWo4pPHIu0pslsI8jglfi2918ZaLcmxzH9+ukk3uuW1K+1v4Aev3Boc8W6UOCXjSAXiV8GWd+C8+/CeSIzBS1l7g5vHgVHFlJ5Zjvx+KdIWGUcUshM/xL3wkMjrVAo5P1nUzjpYijmNDbKyHKZfZ8H4SAPepXYniHsaznHVn7Wul3NLQmR0yuvkHQpSswjt6uSrVkHUNgXwH5WR3Mu9EIDK4+wGdJmGKMnUIBQ+ty+4/S0CC9jOkhMYUKPo9yNrw2kV5RjG/VEctSPTYo0S1Hcgl8IhpvWy9rGUaO2GJuLEjnrd/r/S0PZX2e0LAUo8gzNPJHOygTL4qtejPw02yaFY7xNlbHgEIWC3zAIBjwexhY5+sKSRgWA1o0rGT+FK9vXV2se2xiHphY+V9T8KgXCPfKfsJy51wPu663HgrsOs84hI3AC7o3k0K3Tg+N6RHrVLD+NrvjfTitU="
+}

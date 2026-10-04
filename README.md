@@ -5,8 +5,10 @@ following the [Android plan](https://github.com/vettid/vettid.org/blob/master/do
 and the vault contract in
 [VAULT-MESSAGING](https://github.com/vettid/vettid.org/blob/master/docs/VAULT-MESSAGING.md).
 
-**Status: phase A0** — project skeleton, design system, component gallery and CI.
-There is no backend connection yet. The v1 app is preserved at the tag
+**Status: phase A1** — project skeleton, design system, component gallery and CI
+(A0); the protocol crypto (suite 2 with post-quantum HPKE MLKEM768X25519,
+passing the vettid-vault test vectors byte for byte), Android Keystore keys and
+attestation checks (A1). There is no backend connection yet. The v1 app is preserved at the tag
 `legacy-v1-final` and the branch `legacy/v1`.
 
 ## v1 scope
@@ -23,7 +25,7 @@ Requirements: JDK 17 or 21 (not 25) and the Android SDK (API 37).
 ```bash
 export JAVA_HOME=/path/to/jdk-21          # e.g. Android Studio's bundled JBR
 ./gradlew :app:assembleDebug              # debug APK, application id com.vettid.app.dev
-./gradlew testDebugUnitTest               # unit tests
+./gradlew testDebugUnitTest :core:crypto:test   # unit tests (incl. the §16 vectors)
 ./gradlew detekt :app:lintDebug           # static analysis
 ./gradlew :app:assembleRelease            # R8-minified, unsigned release APK
 ```
