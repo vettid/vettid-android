@@ -30,12 +30,15 @@ jobs:
       - name: detekt
         run: ./gradlew detekt
       - name: unit tests
-        # :core:crypto is a JVM module: its tests (incl. the §16 vectors) run with `test`.
-        run: ./gradlew testDebugUnitTest :core:crypto:test
+        # :core:crypto and :core:relay are JVM modules: their tests (incl. the
+        # VAULT-MESSAGING §16 and RELAY-PROTOCOL §9 vectors) run with `test`.
+        # Tests against the local dev stack skip themselves here; the
+        # instrumented tests run on a phone, not in CI (devstack/README.md).
+        run: ./gradlew testDebugUnitTest :core:crypto:test :core:relay:test
       - name: Android lint
         run: ./gradlew :app:lintDebug
-      - name: build (debug + release)
-        run: ./gradlew :app:assembleDebug :app:assembleRelease
+      - name: build (debug, devStack, release)
+        run: ./gradlew :app:assembleDebug :app:assembleDevStack :app:assembleRelease
       - name: reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -8,7 +8,7 @@ detekt {
     buildUponDefaultConfig = true
     config.setFrom(rootProject.files("config/detekt/detekt.yml"))
     parallel = false
-    source.setFrom("src/main/kotlin", "src/test/kotlin", "src/debug/kotlin", "src/release/kotlin")
+    source.setFrom("src/main/kotlin", "src/test/kotlin", "src/debug/kotlin", "src/release/kotlin", "src/debugTools/kotlin", "src/devStack/kotlin")
 }
 
 val detektKotlin = libs.findVersion("detektKotlin").get().requiredVersion
