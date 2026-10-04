@@ -27,7 +27,7 @@ class SharedPreferencesWrappedKeyStore(context: Context) : WrappedKeyStore {
     }
 
     override fun remove(slot: KeySlot) {
-        prefs.edit().remove(slot.wire).commit()
+        prefs.edit().remove(slot.wire).apply()
     }
 }
 
