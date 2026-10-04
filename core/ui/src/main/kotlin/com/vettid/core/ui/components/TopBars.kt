@@ -1,6 +1,8 @@
 package com.vettid.core.ui.components
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -20,6 +22,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -29,6 +33,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.vettid.core.ui.R
 import com.vettid.core.ui.theme.Spacing
+import com.vettid.core.ui.theme.VettIdShape
 
 /**
  * Main top bar (Proton inbox): menu, large start-aligned title, optional search,
@@ -70,11 +75,15 @@ fun VettIdTopAppBar(
             }
         }
         val avatarLabel = stringResource(R.string.core_ui_cd_account, accountName)
-        IconButton(
-            onClick = onAvatarClick,
+        // Not an IconButton: its circular clip would cut the tile's corners.
+        Box(
             modifier = Modifier
                 .padding(end = Spacing.s)
+                .size(Spacing.touchTarget)
+                .clip(VettIdShape.tile(Spacing.touchTarget.value.toInt()))
+                .clickable(role = Role.Button, onClick = onAvatarClick)
                 .semantics { this.contentDescription = avatarLabel },
+            contentAlignment = Alignment.Center,
         ) {
             InitialTile(name = accountName, size = 36, style = TileStyle.Self)
         }

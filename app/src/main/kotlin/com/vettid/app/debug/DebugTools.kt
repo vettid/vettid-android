@@ -1,5 +1,6 @@
 package com.vettid.app.debug
 
+import android.app.Activity
 import android.content.Intent
 import androidx.compose.runtime.Composable
 import androidx.navigation.NavGraphBuilder
@@ -19,6 +20,9 @@ interface DebugTools {
 
     /** Theme forced by the launch intent (screenshots), or null. */
     fun themeOverride(intent: Intent): ThemeMode?
+
+    /** Called from onCreate; debug builds use it for screenshot launches. */
+    fun onLaunch(activity: Activity, intent: Intent)
 
     /** Route to open first, from the launch intent (screenshots), or null. */
     fun startRoute(intent: Intent): Any?

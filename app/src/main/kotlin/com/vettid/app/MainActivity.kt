@@ -23,6 +23,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        debugTools.onLaunch(this, intent)
         val launchTheme = debugTools.themeOverride(intent) ?: ThemeMode.System
         val launchRoute = debugTools.startRoute(intent)
         setContent {

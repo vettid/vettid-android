@@ -366,7 +366,7 @@ private fun Swatches() {
     val c = MaterialTheme.colorScheme
     val x = VettIdTheme.colors
     val swatches = listOf(
-        "background" to c.background,
+        "screen" to c.background,
         "drawer" to c.surfaceContainerLow,
         "grouped" to x.groupedBackground,
         "card" to x.card,

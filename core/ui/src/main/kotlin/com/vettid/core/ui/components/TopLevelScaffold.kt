@@ -1,14 +1,16 @@
 package com.vettid.core.ui.components
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 
 /** What the app shell gives every top-level screen: drawer and account sheet hooks. */
 @Immutable
@@ -31,22 +33,15 @@ fun TopLevelScaffold(
     overlay: @Composable BoxScope.() -> Unit = {},
     content: @Composable BoxScope.() -> Unit,
 ) {
-    Box(
-        modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
-    ) {
-        Column(Modifier.fillMaxSize()) {
-            VettIdTopAppBar(
-                title = title,
-                onMenuClick = chrome.onMenuClick,
-                accountName = chrome.accountName,
-                onAvatarClick = chrome.onAvatarClick,
-                onSearchClick = onSearchClick,
-            )
-            Box(Modifier.weight(1f).fillMaxSize(), content = content)
-        }
-        overlay()
+    ScreenSurface(modifier, MaterialTheme.colorScheme.background, overlay) {
+        VettIdTopAppBar(
+            title = title,
+            onMenuClick = chrome.onMenuClick,
+            accountName = chrome.accountName,
+            onAvatarClick = chrome.onAvatarClick,
+            onSearchClick = onSearchClick,
+        )
+        Box(Modifier.weight(1f).fillMaxSize(), content = content)
     }
 }
 
@@ -58,20 +53,29 @@ fun TopLevelScaffold(
 fun DetailScaffold(
     onBackClick: () -> Unit,
     modifier: Modifier = Modifier,
-    background: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.background,
-    actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
+    background: Color = MaterialTheme.colorScheme.background,
+    actions: @Composable RowScope.() -> Unit = {},
     overlay: @Composable BoxScope.() -> Unit = {},
     content: @Composable BoxScope.() -> Unit,
 ) {
-    Box(
-        modifier
-            .fillMaxSize()
-            .background(background),
-    ) {
-        Column(Modifier.fillMaxSize()) {
-            VettIdBackTopBar(onBackClick = onBackClick, actions = actions)
-            Box(Modifier.weight(1f).fillMaxSize(), content = content)
+    ScreenSurface(modifier, background, overlay) {
+        VettIdBackTopBar(onBackClick = onBackClick, actions = actions)
+        Box(Modifier.weight(1f).fillMaxSize(), content = content)
+    }
+}
+
+/** A Surface (so content colour follows the theme) holding a column and an overlay. */
+@Composable
+private fun ScreenSurface(
+    modifier: Modifier,
+    color: Color,
+    overlay: @Composable BoxScope.() -> Unit,
+    column: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
+) {
+    Surface(modifier.fillMaxSize(), color = color) {
+        Box(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize(), content = column)
+            overlay()
         }
-        overlay()
     }
 }

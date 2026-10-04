@@ -26,7 +26,8 @@ says so (attestation, crypto helpers, WebRTC, QR scanner), with its tests.
 
 Debug builds use application id `com.vettid.app.dev`; never install over
 `com.vettid.app`. Screenshot launch extras (debug only):
-`adb shell am start -S -n com.vettid.app.dev/com.vettid.app.MainActivity --es vettid.theme dark|light --es vettid.start gallery|messages|connections|approvals|items|credential|settings|help`.
+`adb shell am start -S -n com.vettid.app.dev/com.vettid.app.MainActivity --es vettid.theme dark|light --es vettid.start gallery|messages|connections|approvals|items|credential|settings|help --ez vettid.screenshot true`
+(`vettid.screenshot` lets the debug app draw over the keyguard of a locked test phone; the phone stays locked).
 Screenshots and the Proton reference images stay out of git (`local/`, or the
 vettid.org repo's `local/android-ui/`).
 
