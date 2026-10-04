@@ -1,0 +1,26 @@
+# gitleaks configuration for vettid-android. Extends the default ruleset.
+#
+# The only allowlisted values are the fixed, test-only VAULT-MESSAGING §16
+# vector values that the vettid-vault repository allowlists too (its
+# .gitleaks.toml): HPKE intermediate values derived from the public
+# all-0x05 key seed and all-0x07 encapsulation randomness, the PUBLIC keys
+# (SPKI) of the §16 release-update test keys (scalars 32 x 0x21 and
+# 32 x 0x22), and the dummy ULIDs built from the §5.3 example ULID
+# (01JB2Z6V9K3M4N5P6Q7R8S9T..), which the generic rule mistakes for keys.
+# They live in core/crypto/src/test/resources/vectors (copied from
+# vettid-vault) and in the tests. Reviewed findings in the v1 history are in
+# .gitleaksignore.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "VAULT-MESSAGING §16 test vectors (test-only, public)"
+regexTarget = "match"
+regexes = [
+  '''3239a1c6d8d76895e408c7e65ee38d8b43f4732c7a74c5ccfbac6bd63f743bce''',
+  '''f8cfa15ec73bf1031bc50dfc462438a3d6a3d933f7edf6b28bc149fd7400e2a6''',
+  '''1d7856a1a77eee3accf4e69fb2353f2421e3f15584739e5c6df73d487b4b66b4''',
+  '''MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAERi26GuT8GpaLTazyDN1tvh''',
+  '''MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE1lqTl3yqPRsIGFL/V6eeRl8W''',
+  '''01JB2Z6V9K3M4N5P6Q7R8S9T[0-9A-Z]{2}''',
+]
