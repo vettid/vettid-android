@@ -224,3 +224,21 @@ private fun SettingsRowLayout(
         }
     }
 }
+
+/** A read-only settings row: label and value (status screens). Not clickable; read as one item. */
+@Composable
+fun SettingsInfoRow(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    icon: ImageVector? = null,
+) {
+    SettingsRowLayout(
+        modifier = modifier.semantics(mergeDescendants = true) {},
+        leading = icon?.let { { RowIcon(it, Color.Unspecified) } },
+        label = label,
+        supporting = value,
+        tag = null,
+        trailing = null,
+    )
+}

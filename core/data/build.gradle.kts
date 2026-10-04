@@ -2,6 +2,9 @@ plugins {
     id("vettid.android.library")
 }
 
+// kotlinx.serialization for the small local records (the account file).
+apply(plugin = "org.jetbrains.kotlin.plugin.serialization")
+
 android {
     // The test APK bundles bcprov, bcutil and bcpkix (the TEST attestation CA), which share these files.
     packaging {
@@ -14,6 +17,11 @@ android {
 dependencies {
     api(projects.core.vault)
     api(projects.core.keystore)
+    api(libs.kotlinx.coroutines.core)
+    implementation(libs.androidx.datastore.preferences)
+    implementation(libs.kotlinx.serialization.json)
+
+    testImplementation(libs.kotlinx.coroutines.test)
 
     // The A2 exit test runs on a phone against the local dev stack (devstack/README.md).
     androidTestImplementation(projects.core.testing)

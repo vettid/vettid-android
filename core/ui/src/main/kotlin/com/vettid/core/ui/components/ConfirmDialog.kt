@@ -6,6 +6,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import com.vettid.core.ui.R
@@ -33,7 +34,7 @@ fun ConfirmDialog(
         title = { Text(title, style = MaterialTheme.typography.titleMedium) },
         text = { Text(text, style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant) },
         confirmButton = {
-            TextButton(onClick = onConfirm) {
+            TextButton(onClick = onConfirm, modifier = Modifier.testTag("confirm_button")) {
                 Text(
                     confirmLabel,
                     color = if (destructive) colors.error else colors.primary,

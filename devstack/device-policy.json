@@ -1,0 +1,6 @@
+{
+  "google_attestation_roots": true,
+  "android_packages": ["com.vettid.app.dev", "com.vettid.app.devstack"],
+  "android_signers_sha256": ["76:B6:CA:87:FE:38:17:85:32:7A:AE:FA:DD:7F:9A:E2:68:35:15:59:BC:34:31:A6:AE:62:55:47:21:D4:69:12"],
+  "grapheneos_boot_keys": true
+}

@@ -27,7 +27,19 @@ import com.vettid.app.debug.debugTools
 import com.vettid.core.ui.components.DrawerItem
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.core.ui.components.VettIdDrawerSheet
-import com.vettid.core.ui.theme.ThemeMode
+import com.vettid.core.data.vault.CredentialAlarm
+import com.vettid.core.ui.components.UrgentBanner
+import com.vettid.feature.credential.CredentialAlarmRoute
+import com.vettid.feature.credential.CredentialRoute
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.testTag
 import com.vettid.feature.approvals.approvalsDestination
 import com.vettid.feature.connections.connectionsDestination
 import com.vettid.feature.credential.credentialDestination
@@ -45,17 +57,21 @@ import kotlinx.coroutines.launch
  */
 @Composable
 fun AppShell(
-    themeMode: ThemeMode,
-    onThemeModeChange: (ThemeMode) -> Unit,
     launchRoute: Any?,
+    accountName: String,
+    accountDetail: String,
+    alarm: CredentialAlarm?,
+    onLockVault: () -> Unit,
+    onSignOut: () -> Unit,
+    onEnableAppLock: () -> Unit,
 ) {
     val navController = rememberNavController()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     var showAccount by rememberSaveable { mutableStateOf(false) }
-
-    val accountName = stringResource(R.string.account_placeholder_name)
-    val accountDetail = stringResource(R.string.account_placeholder_detail)
+    val theme = LocalThemeController.current
+    val uri = LocalUriHandler.current
+    val portal = stringResource(R.string.account_portal_url)
     val chrome = remember(accountName) {
         ShellChrome(
             accountName = accountName,
@@ -85,27 +101,46 @@ fun AppShell(
             )
         },
     ) {
-        NavHost(navController = navController, startDestination = MessagesRoute) {
-            messagesDestination(chrome)
-            connectionsDestination(chrome)
-            approvalsDestination(chrome)
-            itemsDestination(chrome)
-            credentialDestination(chrome)
-            settingsDestination(
-                SettingsHost(
-                    accountName = accountName,
-                    accountDetail = accountDetail,
-                    themeMode = themeMode,
-                    onThemeModeChange = onThemeModeChange,
-                    onBack = { navController.popBackStack() },
-                    onAccountClick = { showAccount = true },
-                ),
-            )
-            helpDestination(onBack = { navController.popBackStack() })
-            debugTools.register(
-                this,
-                DebugHost(themeMode, onThemeModeChange, onBack = { navController.popBackStack() }),
-            )
+        Column(Modifier.fillMaxSize()) {
+            // The clone alarm (§3.5.9): an urgent banner above every screen until it is resolved.
+            val bannerShown = alarm != null && current?.hierarchy?.any { it.hasRoute(CredentialAlarmRoute::class) } != true
+            if (bannerShown) {
+                UrgentBanner(
+                    text = stringResource(com.vettid.feature.credential.R.string.credential_alarm_banner),
+                    actionLabel = stringResource(com.vettid.feature.credential.R.string.credential_alarm_review),
+                    onClick = { navController.navigate(CredentialAlarmRoute) { launchSingleTop = true } },
+                    modifier = Modifier.testTag("alarm_banner"),
+                )
+            }
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxSize()
+                    .then(if (bannerShown) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
+            ) {
+                NavHost(navController = navController, startDestination = MessagesRoute) {
+                    messagesDestination(chrome)
+                    connectionsDestination(chrome)
+                    approvalsDestination(chrome)
+                    itemsDestination(chrome)
+                    credentialDestination(chrome, navigate = { navController.navigate(it) }, onBack = { navController.popBackStack() })
+                    settingsDestination(
+                        SettingsHost(
+                            onBack = { navController.popBackStack() },
+                            navigate = { navController.navigate(it) },
+                            onOpenCredential = { navController.navigateTopLevel(CredentialRoute) },
+                            onEnableAppLock = onEnableAppLock,
+                            onAccountClick = { showAccount = true },
+                            onOpenAccountSite = { uri.openUri(portal) },
+                        ),
+                    )
+                    helpDestination(onBack = { navController.popBackStack() })
+                    debugTools.register(
+                        this,
+                        DebugHost(theme.mode, theme.set, onBack = { navController.popBackStack() }),
+                    )
+                }
+            }
         }
     }
 
@@ -114,7 +149,19 @@ fun AppShell(
     }
 
     if (showAccount) {
-        AccountSheet(name = accountName, detail = accountDetail, onDismiss = { showAccount = false })
+        AccountSheet(
+            name = accountName,
+            detail = accountDetail,
+            onDismiss = { showAccount = false },
+            onLockVault = {
+                showAccount = false
+                onLockVault()
+            },
+            onSignOut = {
+                showAccount = false
+                onSignOut()
+            },
+        )
     }
 }
 

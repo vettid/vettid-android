@@ -1,36 +1,23 @@
 package com.vettid.app.env
 
+import android.content.Context
 import com.vettid.core.altchan.AltTrust
 import com.vettid.core.altchan.Attester
 import com.vettid.core.altchan.KeystoreAttester
-import com.vettid.core.altchan.MemberAuth
-import com.vettid.core.altchan.SessionCookieJar
 import com.vettid.core.data.Endpoints
+import com.vettid.core.data.KeystoreFileStore
+import com.vettid.core.data.account.AccountGateway
+import com.vettid.core.data.account.SessionAccountGateway
+import com.vettid.core.data.env.AppEnvironment
 import okhttp3.OkHttpClient
+import java.io.File
 
 /**
- * Where the app talks to and what it trusts. Release and debug builds use
- * [ProductionEnvironment]; the debug-only `devStack` build type points the app
- * at the local dev stack (devstack/README.md) and is never part of a release.
+ * account.vettid.org, relay.vettid.org, the pinned production anchors, the
+ * Keystore attestation key, and the member session's cookies encrypted under
+ * a Keystore key. Release and debug builds use it; the debug-only `devStack`
+ * build type points the app at the local dev stack instead.
  */
-interface AppEnvironment {
-    val name: String
-    val endpoints: Endpoints
-
-    /** Adds the environment's transport settings (the dev stack's address mapping) to [base]. */
-    fun http(base: OkHttpClient): OkHttpClient
-
-    /** The pinned Nitro root and manifest keys. */
-    suspend fun trust(http: OkHttpClient): AltTrust
-
-    /** The device attestation key (§11.7). */
-    fun attester(): Attester
-
-    /** How the member API knows the member. */
-    fun memberAuth(cookies: SessionCookieJar): MemberAuth
-}
-
-/** account.vettid.org, relay.vettid.org, the pinned production anchors, the Keystore attestation key. */
 object ProductionEnvironment : AppEnvironment {
     override val name = "production"
     override val endpoints = Endpoints.PRODUCTION
@@ -41,5 +28,8 @@ object ProductionEnvironment : AppEnvironment {
 
     override fun attester(): Attester = KeystoreAttester()
 
-    override fun memberAuth(cookies: SessionCookieJar): MemberAuth = MemberAuth.Session(cookies)
+    override fun accountGateway(context: Context, http: OkHttpClient): AccountGateway {
+        val cookies = KeystoreFileStore(File(context.noBackupFilesDir, "member-session.bin"), "member-session").asCookiePersistence()
+        return SessionAccountGateway(endpoints.apiBase, endpoints.manifestUrl, http, cookies)
+    }
 }

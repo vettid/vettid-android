@@ -1,0 +1,638 @@
+package com.vettid.core.data.vault
+
+import android.content.Context
+import com.vettid.core.altchan.AltChannelException
+import com.vettid.core.altchan.AltChannelFlow
+import com.vettid.core.altchan.AltRefusedException
+import com.vettid.core.altchan.AltResultException
+import com.vettid.core.altchan.AltTrust
+import com.vettid.core.altchan.Approval
+import com.vettid.core.altchan.MemberApiClient
+import com.vettid.core.altchan.MemberApiException
+import com.vettid.core.altchan.SignInStatus
+import com.vettid.core.altchan.UnlockOptions
+import com.vettid.core.altchan.UnlockOutcome
+import com.vettid.core.attestation.AttestationException
+import com.vettid.core.attestation.android.KeyDescription
+import com.vettid.core.attestation.android.RootOfTrust
+import com.vettid.core.attestation.manifest.Release
+import com.vettid.core.crypto.Bytes
+import com.vettid.core.crypto.CryptoException
+import com.vettid.core.data.KeystoreFileStore
+import com.vettid.core.data.account.AccountGateway
+import com.vettid.core.data.account.SignInLink
+import com.vettid.core.data.env.AppEnvironment
+import com.vettid.core.keystore.AndroidKeys
+import com.vettid.core.keystore.DeviceAttestationKey
+import com.vettid.core.keystore.DeviceKeys
+import com.vettid.core.keystore.KeySlot
+import com.vettid.core.keystore.KeystoreException
+import com.vettid.core.keystore.SeedWrapKey
+import com.vettid.core.keystore.SharedPreferencesWrappedKeyStore
+import com.vettid.core.relay.RelayException
+import com.vettid.core.vault.DeviceConfig
+import com.vettid.core.vault.DeviceSecrets
+import com.vettid.core.vault.VaultApi
+import com.vettid.core.vault.VaultDevice
+import com.vettid.core.vault.VaultJson
+import com.vettid.core.vault.VaultMessage
+import com.vettid.core.vault.VaultOpException
+import com.vettid.core.vault.VaultStateException
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.intOrNull
+import okhttp3.OkHttpClient
+import java.io.File
+import java.io.IOException
+import java.time.Instant
+import java.time.format.DateTimeParseException
+
+/**
+ * The app's vault on this device: the member session ([AccountGateway]), the
+ * device keys from the Keystore, the device state in an encrypted file, the
+ * vault client and the alternate channel. Implements the repositories the
+ * features use; nothing in a feature touches transport or crypto.
+ *
+ * One instance per process (Hilt singleton). Its [scope] runs the mailbox
+ * collector and the event observer while the app process lives.
+ */
+@Suppress("TooManyFunctions", "LargeClass")
+class VaultManager(
+    context: Context,
+    private val env: AppEnvironment,
+    baseHttp: OkHttpClient,
+    private val scope: CoroutineScope,
+    private val deviceName: String,
+) : AccountRepository, VaultRepository, CredentialRepository {
+    private val app = context.applicationContext
+    private val http = env.http(baseHttp)
+    private val gateway: AccountGateway = env.accountGateway(app, http)
+    private val accountFile = KeystoreFileStore(File(app.noBackupFilesDir, "account.bin"), "account")
+    private val mutex = Mutex()
+    private var session: Session? = null
+    private var observer: Job? = null
+    private var local: LocalAccount = loadLocal()
+
+    private val phaseFlow = MutableStateFlow<AppPhase>(AppPhase.Starting)
+    private val accountFlow = MutableStateFlow(local.toInfo())
+    private val pendingEmailFlow = MutableStateFlow(local.pendingEmail)
+    private val alarmFlow = MutableStateFlow<CredentialAlarm?>(null)
+    private val windowFlow = MutableStateFlow<Instant?>(null)
+
+    override val phase: StateFlow<AppPhase> = phaseFlow.asStateFlow()
+    override val account: StateFlow<AccountInfo?> = accountFlow.asStateFlow()
+    override val pendingEmail: StateFlow<String?> = pendingEmailFlow.asStateFlow()
+    override val alarm: StateFlow<CredentialAlarm?> = alarmFlow.asStateFlow()
+    override val unlockWindow: StateFlow<Instant?> = windowFlow.asStateFlow()
+    override val devHint: String? get() = gateway.devHint
+    override val signInHosts: Set<String> = setOf(SignInLink.HOST) + listOfNotNull(hostOf(env.endpoints.apiBase))
+
+    private class Session(val device: VaultDevice, val api: VaultApi, val member: MemberApiClient, val alt: AltChannelFlow)
+
+    // --- local account record (encrypted under a Keystore key) ---
+
+    @Serializable
+    private data class LocalAccount(
+        val email: String = "",
+        val userGuid: String = "",
+        val firstName: String = "",
+        val lastName: String = "",
+        val pendingEmail: String? = null,
+        val setupComplete: Boolean = false,
+    ) {
+        fun toInfo(): AccountInfo? = if (userGuid.isEmpty()) null else AccountInfo(email, firstName, lastName)
+    }
+
+    private fun loadLocal(): LocalAccount = try {
+        accountFile.load()?.let { json.decodeFromString(LocalAccount.serializer(), String(it)) } ?: LocalAccount()
+    } catch (_: KeystoreException) {
+        LocalAccount()
+    } catch (_: IllegalArgumentException) {
+        LocalAccount()
+    }
+
+    private fun saveLocal(a: LocalAccount) {
+        local = a
+        accountFile.save(json.encodeToString(LocalAccount.serializer(), a).toByteArray())
+        accountFlow.value = a.toInfo()
+        pendingEmailFlow.value = a.pendingEmail
+    }
+
+    // --- session ---
+
+    private suspend fun session(): Session = mutex.withLock {
+        session ?: openSession().also { session = it }
+    }
+
+    private suspend fun openSession(): Session = io {
+        val trust: AltTrust = env.trust(http)
+        val keys = deviceKeys()
+        for (slot in KeySlot.entries) if (!keys.has(slot)) keys.generate(slot)
+        val secrets = DeviceSecrets(keys.ed25519(KeySlot.IDENTITY), keys.kem(), keys.ed25519(KeySlot.RELAY))
+        val store = KeystoreFileStore(File(app.noBackupFilesDir, DEVICE_FILE), "vault-device")
+        val cfg = DeviceConfig(name = deviceName, relayUrl = env.endpoints.relayUrl, http = http, store = store, trust = trust)
+        val device = VaultDevice.load(cfg, secrets) ?: VaultDevice.create(cfg, secrets)
+        val member = gateway.member()
+        val s = Session(device, VaultApi(device), member, AltChannelFlow(member, trust))
+        device.start(scope)
+        observe(s)
+        s
+    }
+
+    private fun deviceKeys() = DeviceKeys(SeedWrapKey.wrapper(), SharedPreferencesWrappedKeyStore(app))
+
+    /** Drops the session after the vault forgot this device: fresh device keys for the next enrollment. */
+    private suspend fun dropSession(forget: Boolean) = mutex.withLock {
+        observer?.cancel()
+        observer = null
+        session?.device?.let { d -> if (forget) d.forget() else d.stop() }
+        session = null
+        if (forget) {
+            io {
+                val keys = deviceKeys()
+                KeySlot.entries.forEach { keys.generate(it) }
+                File(app.noBackupFilesDir, DEVICE_FILE).delete()
+            }
+            alarmFlow.value = null
+            windowFlow.value = null
+            saveLocal(local.copy(setupComplete = false))
+        }
+    }
+
+    private fun observe(s: Session) {
+        observer?.cancel()
+        observer = scope.launch {
+            s.device.events.collect { m -> onEvent(m) }
+        }
+    }
+
+    @Suppress("CyclomaticComplexMethod") // one branch per event the app follows
+    private suspend fun onEvent(m: VaultMessage) {
+        when (m.type) {
+            "vault.locking" -> {
+                windowFlow.value = null
+                val p = phaseFlow.value
+                if (p is AppPhase.Unlocked || p is AppPhase.Setup) phaseFlow.value = AppPhase.Locked
+            }
+            "credential.alarm" -> {
+                val b = m.body
+                val id = VaultJson.str(b, "alarm_id") ?: return
+                windowFlow.value = null
+                alarmFlow.value = CredentialAlarm(id, VaultJson.str(b, "state") ?: CredentialAlarm.STATE_FROZEN, VaultJson.str(b, "at"),
+                    VaultJson.str(b, "presenter"))
+            }
+            "sync.event" -> if (VaultJson.str(m.body, "kind") == "credential.alarm") {
+                val state = VaultJson.str(m.body, "state")
+                val id = VaultJson.str(m.body, "alarm_id")
+                alarmFlow.value = when {
+                    state == CredentialAlarm.STATE_RESOLVED -> null
+                    state != null && id != null -> (alarmFlow.value?.takeIf { it.alarmId == id } ?: CredentialAlarm(id, state, null))
+                        .copy(state = state)
+                    else -> alarmFlow.value
+                }
+            }
+            "device.unlinked" -> {
+                // Replaced by a recovery or moved by a transfer: this app no longer holds the vault.
+                dropSession(forget = true)
+                phaseFlow.value = AppPhase.Setup(SetupStage.VAULT_ELSEWHERE)
+            }
+        }
+    }
+
+    // --- AccountRepository ---
+
+    override suspend fun refresh() {
+        try {
+            phaseFlow.value = evaluate()
+        } catch (e: VaultFailure) {
+            phaseFlow.value = when (e.kind) {
+                FailureKind.UNAUTHORIZED -> AppPhase.SignedOut
+                FailureKind.TERMS_REQUIRED -> AppPhase.TermsRequired(updated = false)
+                else -> AppPhase.Unreachable(e.kind)
+            }
+        }
+    }
+
+    private suspend fun evaluate(): AppPhase = guard {
+        if (!gateway.hasSession()) return@guard AppPhase.SignedOut
+        val me = gateway.me()
+        saveLocal(
+            local.copy(email = me.email, userGuid = me.userGuid, firstName = me.firstName, lastName = me.lastName, pendingEmail = null),
+        )
+        if (me.state != STATE_MEMBER || me.termsNeedAcceptance) return@guard AppPhase.TermsRequired(updated = me.state == STATE_MEMBER)
+        val s = session()
+        val d = s.device
+        if (d.deviceId == null) {
+            if (d.vaultId != null) return@guard AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL) // enrolled, handshake not finished
+            val st = s.member.vaultStatus()
+            return@guard AppPhase.Setup(if (st != null && st.state != "enrolling") SetupStage.VAULT_ELSEWHERE else SetupStage.NEW_VAULT)
+        }
+        val st = s.member.vaultStatus()
+        if (st == null) {
+            // The vault is gone (deleted, or the account was cancelled and restored): start over.
+            dropSession(forget = true)
+            return@guard AppPhase.Setup(SetupStage.NEW_VAULT)
+        }
+        if (st.state != "unlocked") AppPhase.Locked else afterUnlocked(s)
+    }
+
+    private suspend fun afterUnlocked(s: Session): AppPhase {
+        if (s.device.credentialVersion == null) return AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)
+        scope.launch { runCatching { refreshAlarm(s) } }
+        return if (local.setupComplete) AppPhase.Unlocked else AppPhase.Setup(SetupStage.FINISHING)
+    }
+
+    private suspend fun refreshAlarm(s: Session) {
+        val info = s.api.credentialVersion()
+        alarmFlow.value = info.alarm?.let { a ->
+            val id = VaultJson.str(a, "alarm_id") ?: return@let null
+            CredentialAlarm(id, VaultJson.str(a, "state") ?: CredentialAlarm.STATE_FROZEN, VaultJson.str(a, "at"))
+        }
+    }
+
+    override suspend fun startSignIn(email: String) = guard {
+        gateway.start(email.trim())
+        saveLocal(local.copy(pendingEmail = email.trim()))
+    }
+
+    override suspend fun verifySignIn(email: String, link: SignInLink): SignInStatus = guard {
+        val st = gateway.verify(email.trim(), link.token)
+        if (st == SignInStatus.SIGNED_IN) saveLocal(local.copy(pendingEmail = null))
+        st
+    }
+
+    override suspend fun signInPin(pin: String): SignInStatus = guard {
+        val st = gateway.pin(pin)
+        if (st == SignInStatus.SIGNED_IN) saveLocal(local.copy(pendingEmail = null))
+        st
+    }
+
+    override suspend fun signOut() {
+        try {
+            guard { gateway.signOut() }
+        } catch (_: VaultFailure) {
+            // the local session is cleared either way
+        }
+        dropSession(forget = false)
+        windowFlow.value = null
+        phaseFlow.value = AppPhase.SignedOut
+    }
+
+    // --- VaultRepository ---
+
+    override suspend fun enroll(pin: String, onStep: (EnrollStep) -> Unit) = guard {
+        val s = session()
+        onStep(EnrollStep.ENROLL)
+        val out = s.alt.enroll(s.device, local.userGuid, pin, env.attester())
+        if (!out.ok) throw VaultFailure(enrollFailure(out.code), out.code)
+        onStep(EnrollStep.WAIT_FOR_VAULT)
+        s.device.awaitEnrolled()
+        onStep(EnrollStep.HANDSHAKE)
+        s.device.completeEnrollment()
+    }
+
+    override suspend fun createCredential(password: String, backup: Boolean, onStep: (EnrollStep) -> Unit) = guard {
+        val s = session()
+        if (s.device.deviceId == null) {
+            onStep(EnrollStep.HANDSHAKE)
+            s.device.completeEnrollment()
+        }
+        onStep(EnrollStep.CREATE_CREDENTIAL)
+        if (s.device.credentialVersion == null) s.api.credentialCreate(password)
+        onStep(EnrollStep.BACKUP)
+        setSetting(s, KEY_BACKUP, JsonPrimitive(backup))
+        onStep(EnrollStep.CONFIRM)
+        s.api.enrollConfirm()
+        phaseFlow.value = AppPhase.Setup(SetupStage.FINISHING)
+    }
+
+    override suspend fun finishSetup() {
+        io { saveLocal(local.copy(setupComplete = true)) }
+        phaseFlow.value = AppPhase.Unlocked
+    }
+
+    override suspend fun preflight(): PreflightInfo = guard {
+        val s = session()
+        val p = s.alt.preflight(s.device.altState)
+        PreflightInfo(view(p.routed), p.lastNumber, p.softwareUpdated, p.rollback, p.offer?.let { view(it) })
+    }
+
+    @Suppress("ReturnCount", "CyclomaticComplexMethod") // one answer per §11.4 result code
+    override suspend fun unlock(pin: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt {
+        val outcome = try {
+            guard {
+                val s = session()
+                val opts = UnlockOptions(approve = approve?.let { Approval(it.pcr0, it.number) }, cancelRecovery = cancelRecovery)
+                var out: UnlockOutcome = s.alt.unlock(s.device, local.userGuid, pin, env.attester(), opts)
+                if (out.ok && out.result.update?.result == UPDATE_MOVED) {
+                    // §11.10.6: after a move the vault is locked under the new release; unlock again, which reaches it.
+                    out = s.alt.unlock(s.device, local.userGuid, pin, env.attester())
+                }
+                out
+            }
+        } catch (e: VaultFailure) {
+            if (e.kind == FailureKind.TERMS_REQUIRED) phaseFlow.value = AppPhase.TermsRequired(updated = true)
+            return UnlockAttempt.Failed(e.kind, e.code)
+        }
+        val r = outcome.result
+        if (!r.ok) {
+            return when (r.code) {
+                "bad_pin" -> UnlockAttempt.BadPin(r.retryAfterSeconds)
+                "backoff" -> UnlockAttempt.Backoff(r.retryAfterSeconds)
+                "recovery_pending" -> UnlockAttempt.RecoveryPending
+                "state_rollback" -> UnlockAttempt.StateRollback
+                "attestation" -> UnlockAttempt.Failed(FailureKind.ATTESTATION, r.code)
+                "manifest" -> UnlockAttempt.Failed(FailureKind.MANIFEST, r.code)
+                else -> UnlockAttempt.Failed(FailureKind.OTHER, r.code)
+            }
+        }
+        val refused = r.update?.takeIf { it.result == "refused" }
+        val s = session()
+        scope.launch { runCatching { s.device.flushOutbox() } }
+        phaseFlow.value = afterUnlocked(s)
+        return if (refused != null) UnlockAttempt.UpdateRefused(refused.code ?: "refused") else UnlockAttempt.Success
+    }
+
+    override suspend fun lock() = guard {
+        val s = session()
+        val viaRelay = try {
+            withTimeoutOrNull(LOCK_TIMEOUT_MS) { s.api.lock() } != null
+        } catch (_: IOException) {
+            false
+        }
+        if (!viaRelay) s.device.vaultId?.let { s.alt.lock(it) }
+        windowFlow.value = null
+        phaseFlow.value = AppPhase.Locked
+    }
+
+    override suspend fun overview(): VaultOverview = guard {
+        val s = session()
+        val st = s.member.vaultStatus()
+        val vs = if (phaseFlow.value is AppPhase.Unlocked) {
+            try {
+                s.api.status()
+            } catch (_: IOException) {
+                null
+            }
+        } else {
+            null
+        }
+        VaultOverview(
+            vaultId = st?.vaultId ?: s.device.vaultId,
+            state = st?.state,
+            release = st?.release?.let { ReleaseInfoView(it.number, it.status, it.endsAt, it.newestActive, it.notice) },
+            lastRelease = s.device.altState.releaseNumber,
+            recoveryState = st?.recoveryState,
+            provisional = vs?.provisional,
+            devices = vs?.devices,
+            connections = vs?.connections,
+        )
+    }
+
+    override suspend fun changePin(pin: String, newPin: String) = guard {
+        session().api.pinChange(pin, newPin)
+    }
+
+    override suspend fun deleteVault(pin: String, password: String) {
+        guard { session().api.deleteVault(pin, password) }
+        dropSession(forget = true)
+        phaseFlow.value = AppPhase.Setup(SetupStage.NEW_VAULT)
+    }
+
+    override suspend fun recovery(): RecoveryView? = guard {
+        session().member.recoveryStatus()?.let { RecoveryView(it.recoveryId, it.state, it.availableAt, it.expiresAt) }
+    }
+
+    override suspend fun cancelRecovery(recoveryId: String) = guard {
+        session().member.recoveryCancel(recoveryId)
+    }
+
+    override suspend fun attestationInfo(): AttestationInfo = io {
+        val key = DeviceAttestationKey()
+        val present = key.exists()
+        val desc = if (present) {
+            try {
+                KeyDescription.parse(key.chain().first())
+            } catch (_: AttestationException) {
+                null
+            } catch (_: KeystoreException) {
+                null
+            }
+        } else {
+            null
+        }
+        val level = if (present) runCatching { key.level().name }.getOrNull() else null
+        val rot = desc?.rootOfTrust
+        val alt = session?.device?.altState
+        AttestationInfo(
+            environment = env.name,
+            keyPresent = present,
+            keyLevel = level,
+            strongBoxAvailable = AndroidKeys.hasStrongBox(app.packageManager),
+            attestationVersion = desc?.attestationVersion,
+            verifiedBoot = rot?.let { bootState(it.verifiedBootState) },
+            deviceLocked = rot?.deviceLocked,
+            bootKeyFingerprint = rot?.let { Bytes.hex(it.verifiedBootKey()).take(FINGERPRINT_HEX).chunked(GROUP).joinToString(" ") },
+            lastRelease = alt?.releaseNumber ?: 0,
+            lastReleaseFingerprint = alt?.release?.takeIf { it.isNotEmpty() }?.take(FINGERPRINT_HEX)?.chunked(GROUP)?.joinToString(" "),
+        )
+    }
+
+    // --- CredentialRepository ---
+
+    override suspend fun status(): CredentialStatus = guard {
+        val s = session()
+        val info = s.api.credentialVersion()
+        val alarm = info.alarm?.let { a ->
+            VaultJson.str(a, "alarm_id")?.let { CredentialAlarm(it, VaultJson.str(a, "state")
+                ?: CredentialAlarm.STATE_FROZEN, VaultJson.str(a, "at")) }
+        }
+        alarmFlow.value = alarm
+        val settings = s.api.settingsGet().settings
+        val critical = try {
+            countCritical(s)
+        } catch (_: IOException) {
+            null
+        }
+        CredentialStatus(
+            exists = info.exists,
+            version = info.version,
+            keyFingerprint = info.key?.let { k -> k.take(KEY_FINGERPRINT_CHARS) },
+            updatedAt = info.updatedAt,
+            alarm = alarm,
+            backup = (settings[KEY_BACKUP] as? JsonPrimitive)?.booleanOrNull ?: true,
+            unlockTtlSeconds = (settings[KEY_TTL] as? JsonPrimitive)?.intOrNull ?: DEFAULT_TTL,
+            criticalItems = critical,
+        )
+    }
+
+    /** Counts the critical items, a page of at most [LIST_PAGE] at a time (§10.7: a vault holds at most 1,000). */
+    private suspend fun countCritical(s: Session): Int {
+        var n = 0
+        var after: String? = null
+        repeat(MAX_PAGES) {
+            val page = s.api.itemList(sensitivity = "critical", after = after, limit = LIST_PAGE)
+            n += page.items.size
+            after = page.next ?: return n
+        }
+        return n
+    }
+
+    override suspend fun openUnlockWindow(password: String) = guard {
+        val exp = session().api.credentialUnlock(password)
+        windowFlow.value = try {
+            Instant.parse(exp)
+        } catch (_: DateTimeParseException) {
+            null
+        }
+    }
+
+    override suspend fun closeUnlockWindow() = guard {
+        session().api.credentialLock()
+        windowFlow.value = null
+    }
+
+    override suspend fun changePassword(password: String, newPassword: String) = guard {
+        session().api.credentialChangePassword(password, newPassword)
+    }
+
+    override suspend fun rotate(password: String) = guard {
+        val s = session()
+        s.api.credentialRotate(password)
+        windowFlow.value = null
+        refreshAlarm(s)
+    }
+
+    override suspend fun setBackup(on: Boolean) = guard {
+        setSetting(session(), KEY_BACKUP, JsonPrimitive(on))
+    }
+
+    override suspend fun setUnlockTtl(seconds: Int) = guard {
+        require(seconds in MIN_TTL..MAX_TTL)
+        setSetting(session(), KEY_TTL, JsonPrimitive(seconds))
+    }
+
+    override suspend fun confirmAlarm(mine: Boolean) = guard {
+        val a = alarmFlow.value ?: throw VaultFailure(FailureKind.NOT_FOUND)
+        val state = session().api.credentialAlarmConfirm(a.alarmId, mine) ?: CredentialAlarm.STATE_ROTATION_REQUIRED
+        alarmFlow.value = a.copy(state = state)
+    }
+
+    private suspend fun setSetting(s: Session, key: String, value: JsonPrimitive) {
+        val current = s.api.settingsGet()
+        if (current.settings[key] == value) return
+        s.api.settingsSet(current.version, mapOf(key to value))
+    }
+
+    // --- helpers ---
+
+    private fun view(r: Release) = ReleaseView(r.number, r.pcr0, r.status.wire, r.endsAt, r.notes)
+
+    private suspend fun <T> io(block: suspend () -> T): T = withContext(Dispatchers.IO) { block() }
+
+    /** Runs [block] on the IO dispatcher and turns every failure into a [VaultFailure]. */
+    @Suppress("CyclomaticComplexMethod", "ThrowsCount")
+    private suspend fun <T> guard(block: suspend () -> T): T = try {
+        io(block)
+    } catch (e: VaultFailure) {
+        throw e
+    } catch (e: TimeoutCancellationException) {
+        throw VaultFailure(FailureKind.NO_RESPONSE, cause = e)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: MemberApiException) {
+        throw VaultFailure(memberFailure(e), e.code, e.retryAfterSeconds.toLong(), e)
+    } catch (e: VaultOpException) {
+        throw VaultFailure(opFailure(e.code), e.code, cause = e)
+    } catch (e: AltRefusedException) {
+        val kind = if (e.reason == AltRefusedException.Reason.ROLLBACK_RELEASE) FailureKind.ROLLBACK else FailureKind.MANIFEST
+        throw VaultFailure(kind, e.reason.name.lowercase(), cause = e)
+    } catch (e: AttestationException) {
+        throw VaultFailure(FailureKind.ATTESTATION, "enclave", cause = e)
+    } catch (e: AltResultException) {
+        throw VaultFailure(FailureKind.OTHER, "unreadable_result", cause = e)
+    } catch (e: AltChannelException) {
+        throw VaultFailure(FailureKind.NO_RESPONSE, cause = e)
+    } catch (e: VaultStateException) {
+        throw VaultFailure(if (e.message?.contains("no response") == true) FailureKind.NO_RESPONSE else FailureKind.OTHER, cause = e)
+    } catch (e: RelayException) {
+        throw VaultFailure(FailureKind.NETWORK, cause = e)
+    } catch (e: IOException) {
+        throw VaultFailure(FailureKind.NETWORK, cause = e)
+    } catch (e: KeystoreException) {
+        throw VaultFailure(FailureKind.OTHER, "keystore", cause = e)
+    } catch (e: CryptoException) {
+        throw VaultFailure(FailureKind.OTHER, "crypto", cause = e)
+    }
+
+    companion object {
+        private const val DEVICE_FILE = "vault-device.bin"
+        private const val STATE_MEMBER = "member"
+        private const val UPDATE_MOVED = "moved"
+        private const val KEY_BACKUP = "credential.backup"
+        private const val KEY_TTL = "credential.unlock_ttl_seconds"
+        private const val DEFAULT_TTL = 300
+        const val MIN_TTL = 30
+        const val MAX_TTL = 3600
+        private const val LOCK_TIMEOUT_MS = 10_000L
+        private const val LIST_PAGE = 500
+        private const val MAX_PAGES = 4
+        private const val FINGERPRINT_HEX = 16
+        private const val KEY_FINGERPRINT_CHARS = 12
+        private const val GROUP = 4
+        private val json = Json { ignoreUnknownKeys = true }
+
+        private fun hostOf(url: String): String? = runCatching { java.net.URI(url).host }.getOrNull()
+
+        private fun bootState(v: Int) = when (v) {
+            RootOfTrust.VERIFIED -> "Verified"
+            RootOfTrust.SELF_SIGNED -> "SelfSigned"
+            RootOfTrust.UNVERIFIED -> "Unverified"
+            else -> "Failed"
+        }
+
+        fun enrollFailure(code: String?): FailureKind = when (code) {
+            "vault_exists" -> FailureKind.VAULT_EXISTS
+            "attestation" -> FailureKind.ATTESTATION
+            "manifest", "release_key" -> FailureKind.MANIFEST
+            else -> FailureKind.OTHER
+        }
+
+        fun memberFailure(e: MemberApiException): FailureKind = when (e.code) {
+            MemberApiException.UNAUTHORIZED -> FailureKind.UNAUTHORIZED
+            MemberApiException.TERMS_REQUIRED -> FailureKind.TERMS_REQUIRED
+            MemberApiException.RATE_LIMITED -> FailureKind.RATE_LIMITED
+            MemberApiException.VAULT_UNAVAILABLE, MemberApiException.RELEASE_STARTING -> FailureKind.VAULT_UNAVAILABLE
+            MemberApiException.RELEASE_UNAVAILABLE -> FailureKind.RELEASE_ENDED
+            MemberApiException.NOT_FOUND -> FailureKind.NOT_FOUND
+            MemberApiException.MANIFEST_UNAVAILABLE -> FailureKind.MANIFEST
+            else -> FailureKind.OTHER
+        }
+
+        fun opFailure(code: String): FailureKind = when (code) {
+            "bad_pin" -> FailureKind.BAD_PIN
+            "bad_password" -> FailureKind.BAD_PASSWORD
+            "backoff" -> FailureKind.BACKOFF
+            "credential_frozen" -> FailureKind.CREDENTIAL_FROZEN
+            "rotation_required" -> FailureKind.ROTATION_REQUIRED
+            "not_found" -> FailureKind.NOT_FOUND
+            "unsupported_type" -> FailureKind.NOT_SUPPORTED
+            else -> FailureKind.OTHER
+        }
+    }
+}
