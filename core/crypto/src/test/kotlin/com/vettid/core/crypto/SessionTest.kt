@@ -207,6 +207,26 @@ class SessionTest {
     }
 
     @Test
+    fun keyringExportKeepsCurrentAndRetainedEpochs() {
+        val (a1, v1) = pair()
+        val (a2, v2) = pair()
+        val k = Keyring()
+        k.activate(a1, now)
+        k.activate(a2, now.plusSeconds(60)) // a1 retired: receive key kept for 16 days, send key gone
+        val restored = Keyring.import(k.export())
+        val m = Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T0V", type = "x.y", ts = now)
+        // Both the old and the current epoch still open what the peer sends.
+        assertEquals("x.y", restored.open(Envelope.parse(v1.seal(m)), now.plusSeconds(120)).first.type)
+        assertEquals("x.y", restored.open(Envelope.parse(v2.seal(m)), now.plusSeconds(120)).first.type)
+        // Only the current one sends; the retained one expires with its retention.
+        assertEquals("x.y", v2.open(Envelope.parse(restored.current()!!.seal(m))).type)
+        assertThrows(CryptoException.Protocol::class.java) {
+            restored.open(Envelope.parse(v1.seal(m)), now.plus(Epoch.RECEIVE_KEY_RETENTION).plusSeconds(120))
+        }
+        assertEquals(0, Keyring.import(Keyring().export()).let { if (it.current() == null) 0 else 1 })
+    }
+
+    @Test
     fun epochPolicyExportAndImport() {
         val (a, v) = pair()
         assertFalse(a.needsRekey(now.plus(Duration.ofDays(6))))
