@@ -29,6 +29,7 @@ include(":core:relay")
 include(":core:altchan")
 include(":core:vault")
 include(":core:data")
+include(":core:testing")
 
 include(":feature:onboarding")
 include(":feature:messages")
