@@ -1,89 +1,55 @@
-# VettID Android
+# VettID for Android
 
-Privacy-first digital identity app for Android.
+The Android client for the VettID vault: a fresh rewrite (2026) of the v1 app,
+following the [Android plan](https://github.com/vettid/vettid.org/blob/master/docs/ANDROID-PLAN.md)
+and the vault contract in
+[VAULT-MESSAGING](https://github.com/vettid/vettid.org/blob/master/docs/VAULT-MESSAGING.md).
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+**Status: phase A0** — project skeleton, design system, component gallery and CI.
+There is no backend connection yet. The v1 app is preserved at the tag
+`legacy-v1-final` and the branch `legacy/v1`.
 
-## Overview
+## v1 scope
 
-VettID gives you complete control over your digital identity through hardware-secured vaults. Your personal data is encrypted and stored in AWS Nitro Enclaves - even VettID cannot access your information.
+Enrollment, unlock, the Protean Credential and settings; connections and
+messaging; items (secrets and critical secrets, per VAULT-ITEMS); a biometric
+app lock. Calls, desktop/agent pairing, wallet, location and presence come later.
+Minimum Android 12 (API 31).
 
-## Features
+## Building
 
-- **Secure Enrollment** - QR code-based credential setup
-- **Hardware Security** - Keys stored in Android Keystore (TEE/StrongBox)
-- **Biometric Auth** - Fingerprint and face authentication
-- **E2E Encryption** - X25519 + XChaCha20-Poly1305
-- **Vault Communication** - Real-time NATS messaging
-- **PCR Attestation** - Verify enclave integrity
-
-## Requirements
-
-- Android 8.0+ (API 26)
-- Kotlin 1.9+
-- Android Studio Hedgehog or later
-
-## Project Structure
-
-```
-app/src/main/java/com/vettid/app/
-├── core/
-│   ├── crypto/           # X25519, Ed25519, encryption
-│   ├── storage/          # Keystore, secure storage
-│   ├── network/          # API client
-│   ├── nats/             # NATS messaging client
-│   └── attestation/      # Hardware Key Attestation
-├── features/
-│   ├── enrollment/       # QR scanning, credential setup
-│   ├── auth/             # Login, biometrics
-│   ├── vault/            # Vault status, commands
-│   ├── transfer/         # Credential transfer
-│   └── voting/           # Vault-based voting
-└── ui/
-    ├── screens/          # Compose screens
-    └── components/       # Reusable UI components
-```
-
-## Build
+Requirements: JDK 17 or 21 (not 25) and the Android SDK (API 37).
 
 ```bash
-# Debug build
-./gradlew assembleDebug
-
-# Release build
-./gradlew assembleRelease
-
-# Run tests
-./gradlew test
+export JAVA_HOME=/path/to/jdk-21          # e.g. Android Studio's bundled JBR
+./gradlew :app:assembleDebug              # debug APK, application id com.vettid.app.dev
+./gradlew testDebugUnitTest               # unit tests
+./gradlew detekt :app:lintDebug           # static analysis
+./gradlew :app:assembleRelease            # R8-minified, unsigned release APK
 ```
 
-## Security
+Debug builds install next to a release build (`.dev` suffix) and include a
+component gallery (drawer → Component gallery). Release builds are signed
+outside this repository; no signing material is ever committed.
 
-- All cryptographic keys stored in Android Keystore (hardware-backed when available)
-- Hardware Key Attestation for device integrity verification
-- Supports GrapheneOS and other security-focused Android distributions
-- No sensitive data in SharedPreferences or plain files
+## Layout
 
-## Supported Platforms
+| Module | Contents |
+|---|---|
+| `:app` | Activity, navigation shell (drawer + type-safe routes), DI root; debug-only gallery in `src/debug` |
+| `:core:ui` | Theme (navy + gold, light/dark), typography, shapes, spacing, components |
+| `:core:crypto` | Suite 2 crypto, envelopes, sessions (A1) |
+| `:core:keystore` | Android Keystore keys, biometric-gated app-data key (A1) |
+| `:core:attestation` | Nitro + Android key attestation (A1) |
+| `:core:relay` | Relay client (A2) |
+| `:core:altchan` | Member-API alternate channel (A2) |
+| `:core:vault` | Typed vault client (A2) |
+| `:core:data` | Repositories and encrypted caches (A2–A5) |
+| `:feature:*` | onboarding, messages, connections, approvals, items, credential, settings |
 
-- Stock Android with Google attestation
-- GrapheneOS (with hardware attestation support)
-- Other ROMs with hardware-backed Keystore
+Features depend only on `:core:*` modules. Shared build configuration lives in
+convention plugins under `build-logic/`; versions in `gradle/libs.versions.toml`.
 
-## Related Repositories
+## Licence
 
-- [vettid-dev](https://github.com/vettid/vettid-dev) - Backend infrastructure
-- [vettid-ios](https://github.com/vettid/vettid-ios) - iOS app
-- [vettid-desktop](https://github.com/vettid/vettid-desktop) - Desktop app (Tauri/Rust/Svelte)
-- [vettid-agent](https://github.com/vettid/vettid-agent) - Agent connector (Go sidecar)
-- [vettid-service-vault](https://github.com/vettid/vettid-service-vault) - Service integration layer
-- [vettid.org](https://github.com/vettid/vettid.org) - Website
-
-## License
-
-AGPL-3.0-or-later - See [LICENSE](LICENSE) for details.
-
-## Links
-
-- Website: [vettid.org](https://vettid.org)
-- Documentation: [docs.vettid.dev](https://docs.vettid.dev)
+AGPL-3.0 — see [LICENSE](LICENSE).

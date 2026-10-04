@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.VettID" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/vettid_window</item>
+        <item name="android:windowSplashScreenBackground">@color/vettid_window</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+    </style>
+    <color name="vettid_window">#FF14142A</color>
+</resources>

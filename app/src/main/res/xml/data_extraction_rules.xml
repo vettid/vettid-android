@@ -1,14 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-   VettID auto-backup / device-transfer rules.
-   Pairs with android:allowBackup="false" + android:fullBackupContent="false"
-   in the manifest, which already disables cloud backup outright. This file
-   exists so the device-to-device transfer path (Android 12+, opt-out) is
-   also locked down: no path under any data domain is allowed to migrate.
-   See https://developer.android.com/guide/topics/data/autobackup#XMLSyntax
--->
 <data-extraction-rules>
-    <cloud-backup disableIfNoEncryptionCapabilities="true">
+    <cloud-backup>
         <exclude domain="root" path="." />
         <exclude domain="file" path="." />
         <exclude domain="database" path="." />

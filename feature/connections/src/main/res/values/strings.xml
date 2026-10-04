@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="connections_title">Connections</string>
+    <string name="connections_empty_title">No connections yet</string>
+    <string name="connections_empty_body">Invite someone or scan their code to connect</string>
+    <string name="connections_add">Add a connection</string>
+</resources>
