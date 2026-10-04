@@ -289,6 +289,12 @@ fun GalleryScreen(
                 }
             }
 
+            Section("Forms (A3): secret field, strength meter, buttons")
+            FormsGallery()
+
+            Section("Notices, steps and the urgent banner (A3)")
+            NoticesGallery()
+
             Section("Badges, tags, tiles, buttons")
             Row(
                 Modifier.padding(horizontal = Spacing.gutter),
@@ -411,5 +417,43 @@ private fun Swatch(name: String, color: Color, modifier: Modifier) {
                 .background(color),
         )
         Text(name, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun FormsGallery() {
+    var pin by rememberSaveable { mutableStateOf("4028") }
+    Column(Modifier.padding(horizontal = Spacing.gutter), verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
+        com.vettid.core.ui.components.SecretField(pin, { pin = it }, "Vault PIN", isPin = true)
+        com.vettid.core.ui.components.SecretField("weak", {}, "Credential password", error = "Use at least 8 characters.")
+        com.vettid.core.ui.components.StrengthMeter(level = 1, label = "Weak")
+        com.vettid.core.ui.components.StrengthMeter(level = 3, label = "Good")
+        com.vettid.core.ui.components.PrimaryButton("Primary action", {})
+        com.vettid.core.ui.components.PrimaryButton("Busy", {}, busy = true)
+        com.vettid.core.ui.components.PrimaryButton("Delete my vault", {}, destructive = true)
+        com.vettid.core.ui.components.SecondaryButton("Secondary action", {})
+    }
+}
+
+@Composable
+private fun NoticesGallery() {
+    Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
+        com.vettid.core.ui.components.UrgentBanner("Your credential was presented by another device", "Review", {})
+        Column(Modifier.padding(horizontal = Spacing.gutter), verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
+            com.vettid.core.ui.components.NoticeKind.entries.forEach { k ->
+                com.vettid.core.ui.components.NoticeCard(k, "Notice: ${k.name.lowercase()}", "One or two lines of explanation.")
+            }
+            com.vettid.core.ui.components.StepList(
+                listOf(
+                    "Verifying the vault service" to com.vettid.core.ui.components.StepState.DONE,
+                    "Creating your vault" to com.vettid.core.ui.components.StepState.ACTIVE,
+                    "Connecting securely" to com.vettid.core.ui.components.StepState.PENDING,
+                    "Confirming" to com.vettid.core.ui.components.StepState.FAILED,
+                ),
+            )
+        }
+        com.vettid.core.ui.components.SettingsGroup {
+            com.vettid.core.ui.components.SettingsInfoRow("Info row", "A read-only value")
+        }
     }
 }

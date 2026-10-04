@@ -15,4 +15,11 @@
     <string name="core_ui_brand_name">VettID</string>
     <string name="core_ui_favorite_add">Add %1$s to favourites</string>
     <string name="core_ui_favorite_remove">Remove %1$s from favourites</string>
+    <string name="core_ui_cd_show_secret">Show %1$s</string>
+    <string name="core_ui_cd_hide_secret">Hide %1$s</string>
+    <string name="core_ui_cd_strength">Password strength: %1$s</string>
+    <string name="core_ui_step_pending">waiting</string>
+    <string name="core_ui_step_active">in progress</string>
+    <string name="core_ui_step_done">done</string>
+    <string name="core_ui_step_failed">failed</string>
 </resources>

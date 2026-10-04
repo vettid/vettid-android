@@ -47,6 +47,9 @@ android {
     }
 
     // The debug screens (component gallery, screenshot launches) serve both debug build types.
+    // The on-phone exit test runs against the devStack build (devstack/README.md).
+    testBuildType = providers.gradleProperty("vettidTestBuildType").orNull ?: "debug"
+
     sourceSets {
         getByName("debug").kotlin.srcDir("src/debugTools/kotlin")
         getByName("devStack").kotlin.srcDir("src/debugTools/kotlin")
@@ -68,6 +71,8 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.hilt.navigation.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.kotlinx.serialization.json)
 
     implementation(platform(libs.androidx.compose.bom))
@@ -82,4 +87,13 @@ dependencies {
     "devStackImplementation"(projects.core.testing)
 
     testImplementation(libs.junit)
+
+    // The A3 exit test (devStack build, on the phone against the local dev stack) and Compose UI tests.
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    // Espresso 3.7 for API 37 (the version Compose's test library pulls in calls a removed InputManager method).
+    androidTestImplementation(libs.androidx.test.espresso.core)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.junit)
 }

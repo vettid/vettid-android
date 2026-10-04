@@ -10,17 +10,20 @@
     <string name="nav_help">Help</string>
     <string name="drawer_version">VettID %1$s (%2$d)</string>
 
-    <!-- A0 placeholder identity until enrollment exists. -->
     <string name="account_placeholder_name">VettID member</string>
-    <string name="account_placeholder_detail">Vault not enrolled</string>
     <string name="account_options">Options</string>
     <string name="account_vault_status">Vault status</string>
-    <string name="account_vault_status_value">Not enrolled</string>
+    <string name="account_vault_status_value">Unlocked</string>
     <string name="account_lock_vault">Lock vault</string>
     <string name="account_portal">Open account portal</string>
     <string name="account_portal_url" translatable="false">https://account.vettid.org</string>
     <string name="account_sign_out">Sign out of this device</string>
     <string name="account_sign_out_title">Sign out of this device?</string>
-    <string name="account_sign_out_body">This device forgets your vault keys. You will need your PIN and credential password to set it up again.</string>
+    <string name="account_sign_out_body">Ends your account session here. Your vault stays on this phone; sign in again to unlock it.</string>
     <string name="account_sign_out_confirm">Sign out</string>
+
+    <string name="root_starting">Opening VettID</string>
+    <string name="root_unreachable_title">VettID cannot connect</string>
+    <string name="root_retry">Try again</string>
+    <string name="app_lock_enable_failed">The app lock cannot be used on this phone (it needs a fingerprint, face or screen lock).</string>
 </resources>

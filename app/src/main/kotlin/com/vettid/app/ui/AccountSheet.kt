@@ -20,12 +20,14 @@ import com.vettid.core.ui.components.SettingsDivider
 import com.vettid.core.ui.components.SettingsGroup
 import com.vettid.core.ui.components.SettingsRow
 
-/** Avatar sheet (ANDROID-PLAN §4): vault status, lock, account portal, sign out. A0: no actions yet. */
+/** Avatar sheet (ANDROID-PLAN §4): vault status, lock, account portal, sign out. */
 @Composable
 fun AccountSheet(
     name: String,
     detail: String,
     onDismiss: () -> Unit,
+    onLockVault: () -> Unit,
+    onSignOut: () -> Unit,
 ) {
     val uri = LocalUriHandler.current
     val portal = stringResource(R.string.account_portal_url)
@@ -45,7 +47,7 @@ fun AccountSheet(
                 showChevron = false,
             )
             SettingsDivider()
-            SettingsRow(stringResource(R.string.account_lock_vault), {}, icon = Icons.Outlined.Lock, showChevron = false)
+            SettingsRow(stringResource(R.string.account_lock_vault), onLockVault, icon = Icons.Outlined.Lock, showChevron = false)
             SettingsDivider()
             SettingsRow(
                 stringResource(R.string.account_portal),
@@ -70,7 +72,10 @@ fun AccountSheet(
             text = stringResource(R.string.account_sign_out_body),
             confirmLabel = stringResource(R.string.account_sign_out_confirm),
             destructive = true,
-            onConfirm = { confirmSignOut = false },
+            onConfirm = {
+                confirmSignOut = false
+                onSignOut()
+            },
             onDismiss = { confirmSignOut = false },
         )
     }

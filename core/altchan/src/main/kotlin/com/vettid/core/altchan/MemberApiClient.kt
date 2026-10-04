@@ -49,7 +49,32 @@ data class VaultStatus(
     val leased: Boolean,
     val alarmKind: String?,
     val recoveryState: String?,
+    val recoveryAvailableAt: String? = null,
+    /** The sealed release from the routing table (W8); null while not sealed yet. */
+    val release: ReleaseInfo? = null,
 )
+
+/**
+ * `VaultStatus.release` (MEMBER-API "Vault", W8): advisory release status and
+ * the in-app notice (`update_available`, `final_warning`, `ended`, `rescue`,
+ * `unavailable`, or null). The app's own decisions come from the signed
+ * manifest (§11.10.6); this is for display.
+ */
+data class ReleaseInfo(
+    val number: Long?,
+    val status: String,
+    val endsAt: String?,
+    val newestActive: Long?,
+    val notice: String?,
+) {
+    companion object {
+        const val NOTICE_UPDATE_AVAILABLE = "update_available"
+        const val NOTICE_FINAL_WARNING = "final_warning"
+        const val NOTICE_ENDED = "ended"
+        const val NOTICE_RESCUE = "rescue"
+        const val NOTICE_UNAVAILABLE = "unavailable"
+    }
+}
 
 /** `POST /api/auth/verify` / `pin` outcome. */
 enum class SignInStatus { SIGNED_IN, PIN_REQUIRED }
@@ -188,10 +213,16 @@ class MemberApiClient(
     suspend fun vaultStatus(): VaultStatus? {
         val v = call("GET", "/api/vault/status")?.get("vault") as? JsonObject ?: return null
         fun s(o: JsonObject?, k: String) = (o?.get(k) as? JsonString)?.value
+        fun n(o: JsonObject?, k: String) = (o?.get(k) as? JsonNumber)?.raw?.toLongOrNull()
+        val rel = v["release"] as? JsonObject
+        val rec = v["recovery"] as? JsonObject
         return VaultStatus(
             vaultId = v.string("vault_id"), state = v.optString("state") ?: "", sealedRelease = s(v, "sealed_release"),
             leased = (v["leased"] as? JsonBool)?.value ?: false, alarmKind = s(v["alarm"] as? JsonObject, "kind"),
-            recoveryState = s(v["recovery"] as? JsonObject, "state"),
+            recoveryState = s(rec, "state"), recoveryAvailableAt = s(rec, "available_at"),
+            release = rel?.let {
+                ReleaseInfo(n(it, "number"), s(it, "status") ?: "unknown", s(it, "ends_at"), n(it, "newest_active"), s(it, "notice"))
+            },
         )
     }
 

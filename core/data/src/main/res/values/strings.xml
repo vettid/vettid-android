@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="data_failure_network">VettID could not reach the service. Check your connection and try again.</string>
+    <string name="data_failure_unauthorized">You are signed out. Sign in again to continue.</string>
+    <string name="data_failure_terms">Accept the current membership terms on the account site first.</string>
+    <string name="data_failure_rate_limited">Too many attempts. Wait a little and try again.</string>
+    <string name="data_failure_vault_unavailable">The vault service is not available yet. Try again later.</string>
+    <string name="data_failure_release_ended">The vault software release your vault is sealed to has ended. The vault can no longer be opened.</string>
+    <string name="data_failure_bad_pin">That PIN is not correct.</string>
+    <string name="data_failure_bad_password">That credential password is not correct.</string>
+    <string name="data_failure_backoff">Too many wrong attempts. Wait before trying again.</string>
+    <string name="data_failure_frozen">Your credential is frozen after a clone alert. Answer the alert first.</string>
+    <string name="data_failure_rotation_required">Your credential must be rotated before it can be used again.</string>
+    <string name="data_failure_not_supported">Your vault\'s software release does not support this yet.</string>
+    <string name="data_failure_no_response">Your vault did not answer in time. Try again.</string>
+    <string name="data_failure_vault_exists">Your account already has a vault, held by another app.</string>
+    <string name="data_failure_attestation">This phone could not be verified. VettID needs a phone with hardware key attestation and a locked, verified boot.</string>
+    <string name="data_failure_rollback">The vault is served by an older software release than this phone last used. VettID did not send your PIN.</string>
+    <string name="data_failure_manifest">The vault software list could not be verified. Try again later.</string>
+    <string name="data_failure_not_found">Nothing was found.</string>
+    <string name="data_failure_other">Something went wrong. Try again.</string>
+    <string name="data_pin_problem_digits">Use digits only.</string>
+    <string name="data_pin_problem_short">Use at least %1$d digits.</string>
+    <string name="data_pin_problem_long">Use at most %1$d digits.</string>
+    <string name="data_pin_problem_repeated">Do not repeat one digit.</string>
+    <string name="data_pin_problem_sequence">Avoid runs like 123456.</string>
+    <string name="data_pin_problem_pattern">Avoid repeated patterns like 121212.</string>
+    <string name="data_pin_problem_common">This PIN is too common.</string>
+    <string name="data_password_problem_short">Use at least 8 characters.</string>
+    <string name="data_password_problem_long">This password is too long.</string>
+    <string name="data_password_problem_weak">Make it stronger: longer, or a few unrelated words.</string>
+    <string name="data_password_problem_pin">Do not reuse your PIN.</string>
+    <string name="data_password_problem_control">Remove tabs and other control characters.</string>
+    <string name="data_strength_too_short">Too short</string>
+    <string name="data_strength_weak">Weak</string>
+    <string name="data_strength_fair">Fair</string>
+    <string name="data_strength_good">Good</string>
+    <string name="data_strength_strong">Strong</string>
+</resources>

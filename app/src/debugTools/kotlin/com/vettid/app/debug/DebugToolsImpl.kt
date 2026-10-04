@@ -21,6 +21,7 @@ private const val GALLERY_KEY = "debug.gallery"
 private const val EXTRA_THEME = "vettid.theme"
 private const val EXTRA_START = "vettid.start"
 private const val EXTRA_SCREENSHOT = "vettid.screenshot"
+private const val CATALOG_PREFIX = "screen:"
 
 internal val debugTools: DebugTools = object : DebugTools {
     @Composable
@@ -52,10 +53,16 @@ internal val debugTools: DebugTools = object : DebugTools {
         }
     }
 
+    override fun catalogScreen(intent: Intent): (@Composable () -> Unit)? =
+        intent.getStringExtra(EXTRA_START)
+            ?.takeIf { it.startsWith(CATALOG_PREFIX) }
+            ?.let { ScreenCatalog.screens[it.removePrefix(CATALOG_PREFIX)] }
+
     override fun startRoute(intent: Intent): Any? {
         val start = intent.getStringExtra(EXTRA_START)
         return when {
             start == null -> null
+            start.startsWith(CATALOG_PREFIX) -> null
             start == "gallery" -> GalleryRoute
             else -> TopLevelDestination.entries.firstOrNull { it.name.equals(start, ignoreCase = true) }?.route
         }

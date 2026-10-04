@@ -5,6 +5,7 @@ import com.vettid.core.attestation.VerifiedEnclave
 import com.vettid.core.attestation.manifest.ManifestKey
 import com.vettid.core.attestation.manifest.ManifestKeys
 import com.vettid.core.attestation.manifest.ManifestVerifier
+import com.vettid.core.attestation.manifest.Release
 import com.vettid.core.attestation.manifest.ReleaseManifest
 import com.vettid.core.attestation.nitro.NitroRoot
 import com.vettid.core.attestation.nitro.NitroVerifier
@@ -181,6 +182,20 @@ class AltChannelFlow(
         }
     }
 
+    /**
+     * What the app must know before it asks for the PIN (§11.2 step 4,
+     * §11.10.6): the verified manifest and the release the vault is routed
+     * to, compared with the release this device last unlocked into
+     * ([state]). Throws [MemberApiException] `release_unavailable` (410) when
+     * the vault's release has ended, and the verification errors of the
+     * manifest and the enclave.
+     */
+    suspend fun preflight(state: AltState, release: String? = null): UnlockPreflight {
+        val m = manifest(state.manifestSerial)
+        val (_, e) = enclaveFor(release, m, enroll = false)
+        return UnlockPreflight.of(state, e.release, m)
+    }
+
     /** Asks the leaseholder to lock the vault and waits for the slot. */
     suspend fun lock(vaultId: String): Slot {
         val rid = Ulid.new(Instant.now(clock))
@@ -223,5 +238,34 @@ class AltChannelFlow(
     companion object {
         const val MAX_ATTEMPTS = 4
         const val CODE_MANIFEST = "manifest"
+    }
+}
+
+/**
+ * The release check before an unlock (§11.10.6). [routed] is the manifest
+ * entry of the attested instance the vault is routed to.
+ *
+ * - [rollback]: older than the release this device last unlocked into; the
+ *   app MUST NOT send the PIN.
+ * - [softwareUpdated]: newer than the last one (another device moved the
+ *   vault); the app tells the member before sending the PIN.
+ * - [offer]: the newest `active` release when it is newer than the routed
+ *   one; the member may approve the move in this unlock (§11.10.3).
+ */
+data class UnlockPreflight(
+    val routed: Release,
+    val lastNumber: Long,
+    val manifestSerial: Long,
+    val offer: Release?,
+) {
+    val rollback: Boolean get() = lastNumber != 0L && routed.number < lastNumber
+    val softwareUpdated: Boolean get() = lastNumber != 0L && routed.number > lastNumber
+
+    companion object {
+        fun of(state: AltState, routed: Release, m: ReleaseManifest): UnlockPreflight {
+            val newest = m.newest()
+            val offer = newest?.takeIf { it.number > routed.number }
+            return UnlockPreflight(routed, state.releaseNumber, m.serial, offer)
+        }
     }
 }

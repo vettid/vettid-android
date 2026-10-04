@@ -26,6 +26,13 @@ interface DebugTools {
 
     /** Route to open first, from the launch intent (screenshots), or null. */
     fun startRoute(intent: Intent): Any?
+
+    /**
+     * A screen of the debug catalog with sample state, from the launch intent
+     * (`--es vettid.start screen:<name>`, screenshots of every screen without a
+     * vault), or null.
+     */
+    fun catalogScreen(intent: Intent): (@Composable () -> Unit)?
 }
 
 data class DebugHost(

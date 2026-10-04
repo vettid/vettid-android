@@ -16,4 +16,5 @@ internal val debugTools: DebugTools = object : DebugTools {
     override fun themeOverride(intent: Intent): ThemeMode? = null
     override fun onLaunch(activity: Activity, intent: Intent) = Unit
     override fun startRoute(intent: Intent): Any? = null
+    override fun catalogScreen(intent: Intent): (@Composable () -> Unit)? = null
 }

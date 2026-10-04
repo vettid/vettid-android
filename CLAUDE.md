@@ -4,9 +4,10 @@ Guidance for Claude Code in this repository.
 
 ## What this is
 
-The VettID Android app, **rewritten from scratch in 2026** (phases A0–A2 done:
+The VettID Android app, **rewritten from scratch in 2026** (phases A0–A3 done:
 skeleton, design system, CI; crypto, keystore, attestation; relay, alternate
-channel and vault client against a local dev stack). The plan and decisions are in the vettid.org repo:
+channel and vault client against a local dev stack; onboarding, unlock, credential,
+settings screens and the biometric app lock). The plan and decisions are in the vettid.org repo:
 `docs/ANDROID-PLAN.md` (D1–D6, design language §3, screens §4, modules §5, phases §6).
 The app's contract with the vault is `docs/VAULT-MESSAGING.md`; items/tags/share
 rules are `docs/VAULT-ITEMS.md`. The v1 app (NATS, vettid.dev) is on tag
@@ -31,14 +32,23 @@ says so (attestation, crypto helpers, WebRTC, QR scanner), with its tests.
   (also `:core:altchan:` for the real attester against the production policy).
 - `:core:relay` is a JVM module too (`:core:relay:test`, RELAY-PROTOCOL §9 vectors).
 - The local dev stack (`devstack/devstack.sh up|down`, see `devstack/README.md`):
-  vettid-vault's integration stack plus a vaultctl peer, one LocalStack container
-  (≤ 1.5 GB), reachable from the phone through `adb reverse` (ports 18080–18082).
-  Tear it down when done. The A2 exit test runs against it:
+  vettid-vault's `cmd/devstack` run by commit (`go run ...@<commit>`) with
+  `devstack/device-policy.json` (Google roots, the dev packages, the debug signing
+  digest, GrapheneOS boot keys), one LocalStack container (≤ 1.5 GB), reachable from the
+  phone through `adb reverse` (ports 18080–18082). One stack at a time; tear it down when
+  done. The A3 exit test (fresh install → onboarding → enrolled vault with credential with
+  the phone's REAL attestation → lock/unlock, all through the UI):
+  `adb uninstall com.vettid.app.devstack; ANDROID_SERIAL=<serial> ./gradlew -PvettidTestBuildType=devStack :app:connectedDevStackAndroidTest`
+  (screenshots in `/data/local/tmp/a3-exit/`). The A2 exit test:
   `ANDROID_SERIAL=<serial> ./gradlew :core:data:connectedDebugAndroidTest`; the JVM
-  variant is `:core:vault:testDebugUnitTest --tests '*DevStackJvmTest*'`. Both skip
-  without the stack. Never modify the vettid-vault checkout: the script runs a snapshot.
-- `:core:testing` is TEST ONLY (dev-stack helpers, the TEST attester); only test
-  configurations and the debug-only `devStack` build type depend on it.
+  variant is `:core:vault:testDebugUnitTest --tests '*DevStackJvmTest*'`. All skip
+  without the stack. Never modify the vettid-vault checkout.
+- `:core:testing` is TEST ONLY (dev-stack helpers, the TEST attester, `FakeVault` for
+  ViewModel tests); only test configurations and the debug-only `devStack` build type
+  depend on it. The `devStack` app uses the real `KeystoreAttester`.
+- Compose UI tests on the locked phone host their screens in an activity that draws over
+  the keyguard (`feature/onboarding/src/androidTest`); Espresso is pinned to 3.7 (older
+  versions break on API 37).
 
 ## Device testing
 
@@ -46,6 +56,9 @@ Debug builds use application id `com.vettid.app.dev` (`devStack`:
 `com.vettid.app.devstack`); never install over `com.vettid.app`. Screenshot launch extras (debug only):
 `adb shell am start -S -n com.vettid.app.dev/com.vettid.app.MainActivity --es vettid.theme dark|light --es vettid.start gallery|messages|connections|approvals|items|credential|settings|help --ez vettid.screenshot true`
 (`vettid.screenshot` lets the debug app draw over the keyguard of a locked test phone; the phone stays locked).
+Every A3 screen with sample state, no vault needed: `--es vettid.start screen:<name>` (names in
+`app/src/debugTools/.../ScreenCatalog.kt`, e.g. `onboarding.backup_off`, `unlock.updated`,
+`credential.alarm`, `settings.delete_confirm`).
 Screenshots and the Proton reference images stay out of git (`local/`, or the
 vettid.org repo's `local/android-ui/`).
 
@@ -54,7 +67,14 @@ vettid.org repo's `local/android-ui/`).
 - Kotlin, Compose + Material3, Hilt (KSP), coroutines/Flow, type-safe Navigation
   (`@Serializable` route objects, one `NavGraphBuilder.xDestination()` per feature).
 - Features depend only on `:core:*`; no feature touches transport or crypto
-  directly; one ViewModel per screen with immutable UI state.
+  directly; one ViewModel per screen with immutable UI state. ViewModels use the
+  `:core:data` repository interfaces (`AccountRepository`, `VaultRepository`,
+  `CredentialRepository`, `PreferencesRepository`), implemented by `VaultManager`
+  (Hilt bindings in `app/.../di/AppModule.kt`); failures are `VaultFailure(kind)` with
+  member-facing text from `FailureKind.messageRes()`. The root of the UI follows
+  `AppPhase` (one nav destination per phase, so leaving a phase drops its secrets).
+- Preferences in DataStore (`PreferencesRepository`); device state, the account record and
+  the member session in Keystore-encrypted files (`KeystoreFileStore`, no-backup dir).
 - Every user-visible string in `res/values/strings.xml` (prefixed with the module
   name, e.g. `messages_…`, `core_ui_…`); every icon-only control has a content
   description; touch targets ≥ 48dp.

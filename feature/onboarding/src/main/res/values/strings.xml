@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Welcome -->
+    <string name="onboarding_welcome_title">Your vault, only with you</string>
+    <string name="onboarding_welcome_body">VettID keeps your messages, connections and most important secrets in a vault that only you can open.</string>
+    <string name="onboarding_welcome_point_keys">Your keys stay on this phone and in your vault\'s sealed enclave.</string>
+    <string name="onboarding_welcome_point_member">You need a VettID membership (account.vettid.org).</string>
+    <string name="onboarding_welcome_start">Get started</string>
+
+    <!-- Email -->
+    <string name="onboarding_email_title">Sign in to your account</string>
+    <string name="onboarding_email_body">Enter the email address of your VettID account. We will email you a sign-in link.</string>
+    <string name="onboarding_email_label">Email address</string>
+    <string name="onboarding_email_invalid">Enter a valid email address.</string>
+    <string name="onboarding_email_send">Send sign-in link</string>
+
+    <!-- Check email -->
+    <string name="onboarding_check_title">Check your email</string>
+    <string name="onboarding_check_body">If %1$s belongs to a VettID account, a sign-in link is on its way. Open it on this phone. It works once, for 15 minutes.</string>
+    <string name="onboarding_check_paste_label">Or paste the sign-in link</string>
+    <string name="onboarding_check_paste_invalid">That is not a VettID sign-in link.</string>
+    <string name="onboarding_check_continue">Continue</string>
+    <string name="onboarding_check_resend">Send a new link</string>
+
+    <!-- Confirm sign-in -->
+    <string name="onboarding_confirm_title">Sign in on this phone?</string>
+    <string name="onboarding_confirm_body">You are signing in as %1$s. Only continue if you asked for this link.</string>
+    <string name="onboarding_confirm_sign_in">Sign in</string>
+    <string name="onboarding_confirm_cancel">Not now</string>
+    <string name="onboarding_link_expired">This link is not valid any more. Ask for a new one.</string>
+
+    <!-- Account PIN -->
+    <string name="onboarding_account_pin_title">Enter your account PIN</string>
+    <string name="onboarding_account_pin_body">Your account asks for its sign-in PIN, the one you set on the account site. It is not your vault PIN.</string>
+    <string name="onboarding_account_pin_label">Account PIN</string>
+    <string name="onboarding_account_pin_wrong">That account PIN is not correct.</string>
+
+    <!-- Terms -->
+    <string name="onboarding_terms_title">Accept the membership terms</string>
+    <string name="onboarding_terms_body_registered">Your account is registered. To get a vault, become a member by accepting the membership terms on the account site.</string>
+    <string name="onboarding_terms_body_updated">The membership terms have changed. Accept the current terms on the account site to keep using your vault.</string>
+    <string name="onboarding_terms_open">Open the account site</string>
+    <string name="onboarding_terms_check">I have accepted them, check again</string>
+    <string name="onboarding_other_account">Use a different account</string>
+
+    <!-- Vault elsewhere -->
+    <string name="onboarding_elsewhere_title">Your account already has a vault</string>
+    <string name="onboarding_elsewhere_body">A vault has exactly one app, which holds its credential. Another phone is that app.</string>
+    <string name="onboarding_elsewhere_transfer_title">Still have the other phone?</string>
+    <string name="onboarding_elsewhere_transfer_body">Move VettID with a direct transfer from that phone. It needs your PIN and credential password, and no waiting.</string>
+    <string name="onboarding_elsewhere_recovery_title">Lost it?</string>
+    <string name="onboarding_elsewhere_recovery_body">Start a recovery on the account site. After 24 hours this phone can take over with your PIN and password, and the old app is removed.</string>
+    <string name="onboarding_elsewhere_open">Open the account site</string>
+    <string name="onboarding_elsewhere_anyway">Set up a new vault anyway</string>
+
+    <!-- PIN -->
+    <string name="onboarding_pin_title">Choose your vault PIN</string>
+    <string name="onboarding_pin_body">Your PIN unlocks your vault. Only your vault\'s sealed enclave ever checks it, and wrong guesses are slowed down. Use at least 6 digits; avoid dates and simple patterns.</string>
+    <string name="onboarding_pin_label">Vault PIN</string>
+    <string name="onboarding_pin_confirm_title">Confirm your vault PIN</string>
+    <string name="onboarding_pin_confirm_body">Enter the same PIN again.</string>
+    <string name="onboarding_pin_confirm_label">Vault PIN again</string>
+    <string name="onboarding_pin_mismatch">The PINs do not match. Try again.</string>
+    <string name="onboarding_continue">Continue</string>
+
+    <!-- Password -->
+    <string name="onboarding_password_title">Create your credential password</string>
+    <string name="onboarding_password_body">It protects your Protean Credential and your critical items, and VettID asks for it at every critical action. Make it different from your PIN. Nobody, VettID included, can reset it.</string>
+    <string name="onboarding_password_label">Credential password</string>
+    <string name="onboarding_password_confirm_label">Password again</string>
+    <string name="onboarding_password_mismatch">The passwords do not match.</string>
+
+    <!-- Backup -->
+    <string name="onboarding_backup_title">Keep a sealed backup?</string>
+    <string name="onboarding_backup_body">Choose where your credential lives. You can change this later in Credential.</string>
+    <string name="onboarding_backup_on">Backup on (recommended)</string>
+    <string name="onboarding_backup_on_body">Your vault keeps a copy sealed to it and to your password. If you lose this phone, a recovery restores your credential and critical items.</string>
+    <string name="onboarding_backup_off">Backup off</string>
+    <string name="onboarding_backup_off_body">Your credential lives only on this phone. No copy exists anywhere else.</string>
+    <string name="onboarding_backup_off_warning_title">Losing this phone loses your credential</string>
+    <string name="onboarding_backup_off_warning_body">With the backup off, losing or resetting this phone loses your credential and every critical item permanently. A recovery can then only reset the credential, destroying your critical items, or delete the vault.</string>
+    <string name="onboarding_backup_off_ack">I understand that losing this phone loses my credential and critical items</string>
+    <string name="onboarding_backup_submit">Set up my vault</string>
+
+    <!-- Progress -->
+    <string name="onboarding_progress_title">Setting up your vault</string>
+    <string name="onboarding_progress_body">This takes a moment. Keep VettID open.</string>
+    <string name="onboarding_step_enroll">Verifying the vault service and this phone</string>
+    <string name="onboarding_step_wait">Creating your vault</string>
+    <string name="onboarding_step_handshake">Connecting securely</string>
+    <string name="onboarding_step_credential">Creating your Protean Credential</string>
+    <string name="onboarding_step_backup">Saving your backup choice</string>
+    <string name="onboarding_step_confirm">Confirming your vault</string>
+    <string name="onboarding_progress_failed">Setup stopped</string>
+    <string name="onboarding_progress_retry">Try again</string>
+    <string name="onboarding_progress_edit">Change my choices</string>
+
+    <!-- Done -->
+    <string name="onboarding_done_title">Your vault is ready</string>
+    <string name="onboarding_done_body">Your vault is enrolled, this phone holds its credential, and only your PIN opens it.</string>
+    <string name="onboarding_done_next_title">Next: your first connection</string>
+    <string name="onboarding_done_next_body">Invite someone with a QR code or a link, compare the safety code, and start messaging. Connections arrive in the next update.</string>
+    <string name="onboarding_done_go">Go to VettID</string>
+
+    <!-- Development -->
+    <string name="onboarding_dev_title">Development build</string>
+
+    <!-- Unlock -->
+    <string name="unlock_title">Unlock your vault</string>
+    <string name="unlock_body">Enter your vault PIN.</string>
+    <string name="unlock_body_account">Enter the vault PIN for %1$s.</string>
+    <string name="unlock_pin_label">Vault PIN</string>
+    <string name="unlock_submit">Unlock</string>
+    <string name="unlock_checking">Checking your vault\'s software</string>
+    <string name="unlock_retry">Try again</string>
+    <string name="unlock_updated_title">Vault software was updated</string>
+    <string name="unlock_updated_body">Your vault now runs release %1$d (fingerprint %2$s); this phone last used release %3$d. Another of your devices approved this update. Continue only if you expected it.</string>
+    <string name="unlock_updated_ack">Continue</string>
+    <string name="unlock_rollback_title">Older vault software</string>
+    <string name="unlock_rollback_body">Your vault is served by release %1$d, older than release %2$d that this phone last used. VettID will not send your PIN to it.</string>
+    <string name="unlock_status_title">Release %1$d is %2$s</string>
+    <string name="unlock_status_body_ends">It ends on %1$s. Update to keep your vault working.</string>
+    <string name="unlock_status_body">Update to the newest release to keep your vault working.</string>
+    <string name="unlock_offer_title">Update available: release %1$d</string>
+    <string name="unlock_offer_body">Your vault runs release %1$d. Release %2$d (fingerprint %3$s) is available. Anyone can rebuild it and compare the fingerprint.</string>
+    <string name="unlock_offer_notes">Release notes</string>
+    <string name="unlock_offer_approve">Approve the update with this unlock</string>
+    <string name="unlock_bad_pin">That PIN is not correct.</string>
+    <string name="unlock_wait">Too many wrong PINs. Try again in %1$s.</string>
+    <string name="unlock_recovery_title">A recovery is in progress</string>
+    <string name="unlock_recovery_body">Someone started a recovery of this vault from the account site, so it is locked for this phone. If that was you on a new phone, let it finish there. If it was not you, cancel it now: unlocking here with your PIN cancels the recovery.</string>
+    <string name="unlock_recovery_cancel">Cancel the recovery and unlock</string>
+    <string name="unlock_rollback_state_title">Your vault\'s state is older than expected</string>
+    <string name="unlock_rollback_state_body">The vault\'s stored state is older than state this phone has already seen. Someone may have restored an old copy. Contact VettID support before you continue.</string>
+    <string name="unlock_update_refused">The update was refused (%1$s). Your vault stayed on its current release.</string>
+    <string name="unlock_unreadable">Your vault did not recognise this phone. It may have been replaced by a recovery or a transfer.</string>
+    <string name="unlock_sign_out">Sign out</string>
+
+    <!-- App lock -->
+    <string name="app_lock_title">VettID is locked</string>
+    <string name="app_lock_body">Use your fingerprint, face or screen lock to open VettID.</string>
+    <string name="app_lock_unlock">Unlock</string>
+    <string name="app_lock_prompt_title">Unlock VettID</string>
+    <string name="app_lock_prompt_subtitle">Confirm it is you</string>
+</resources>

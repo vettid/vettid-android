@@ -1,123 +1,111 @@
-# Local dev stack (phase A2)
+# Local dev stack (phases A2, A3)
 
 The vault side of the app, running on the development machine: vettid-vault's
-integration stack, reachable from a USB-connected phone through `adb reverse`.
-It is what the A2 exit test and the `devStack` build type talk to.
+`cmd/devstack`, reachable from a USB-connected phone through `adb reverse`.
+It is what the instrumented exit tests and the `devStack` build type talk to.
 
 | Part | What runs |
 |---|---|
-| Relay | the real `vettid-relay` binary, at the version vettid-vault's `go.mod` names (`internal/relaytest`) |
-| AWS | LocalStack 4.9 (S3, SQS, DynamoDB) from vettid-vault's `integration/docker-compose.yml`, `mem_limit: 1536m` |
+| Relay | the real `vettid-relay` binary, at the version vettid-vault's `go.mod` names |
+| AWS | LocalStack (S3, SQS, DynamoDB, SSM) from vettid-vault's `integration/docker-compose.yml`, one container capped at 1.5 GB |
 | Host | `vault-parent` in TCP mode (release build) |
-| Enclave | `vault-enclave` dev build: fake NSM and KMS, TEST-ONLY roots, release 3 |
+| Enclave | `vault-enclave` dev build: fake NSM and KMS, TEST-ONLY roots, release 3, with the dev device policy below |
 | Member API | vettid-vault's stand-in for the vault routes (`internal/memberapitest`): the member is `Authorization: Bearer <user_guid>` |
-| Peer | a second member's vault, enrolled with `vaultctl api-enroll`, driven through the control port |
+| Peer | a second member's vault, enrolled with `vaultctl`, driven through the control port |
 
-Every key in the stack is TEST-ONLY (fixed public seeds in vettid-vault
-`internal/enclavetest`).
+Every key in the stack is TEST-ONLY (fixed public seeds in vettid-vault). Nothing persists across restarts.
 
 ## Running it
 
 ```bash
-devstack/devstack.sh up      # build, start, adb reverse; prints the ready file
+devstack/devstack.sh up      # go run ...cmd/devstack@<commit>, adb reverse; prints ready.json
 devstack/devstack.sh status
 devstack/devstack.sh down    # stop everything and remove the adb reverse rules
 ```
 
-Requirements: Go ≥ 1.26, podman (or docker) with compose, the LocalStack image
-(pulled on first use), a vettid-vault checkout next to this repository
-(`VAULT_DIR` overrides it, `VAULT_REF` picks a commit; default `HEAD`), and
-network access the first time the relay binary is built.
+`up` runs
 
-`up` checks that at least 8 GB of memory are available (the machine is shared;
-it waits and re-checks every 60 s), runs one LocalStack container capped at
-1.5 GB and the Go processes with `GOMAXPROCS=2`. Logs are in
-`~/.cache/vettid-android-devstack/run/logs/` (`devstack.log`, `parent.log`,
-`enclave.log`); request logs carry method, path and status only.
+```bash
+go run -tags devenclave github.com/vettid/vettid-vault/cmd/devstack@8a34760 \
+  -dev-device-policy devstack/device-policy.json
+```
 
-The vettid-vault checkout is never modified: `up` extracts a snapshot of the
-commit (`git archive`) into `~/.cache/vettid-android-devstack/vault-<commit>`
-and copies the runner, `go/devstack_test.go`, into it as
-`devstack/android/`. The runner is a Go test (build tags `devenclave
-integration androiddevstack`) because it reuses vettid-vault's internal test
-packages, which only code inside that module may import.
+(`VAULT_REF` picks another commit; `VAULT_SRC=<checkout>` runs `./cmd/devstack` from a local
+vettid-vault checkout instead) and `adb reverse` of ports 18080–18082. The checkout, if any, is
+never modified. Requirements: Go ≥ 1.26, podman (or docker) with compose, the LocalStack image
+(pulled on first use), and network access the first time (module and relay builds).
+
+The machine is shared: `up` waits until 8 GB of memory are available (re-checking every 60 s),
+and the stack runs its processes with `GOMAXPROCS=2`. One stack at a time; tear it down when
+done. Logs: `~/.cache/vettid-android-devstack/devstack.log` and
+`~/.cache/vettid-devstack/run/logs/` (relay, parent, enclave, compose; request lines carry
+method, path and status only).
+
+## The dev device policy (`device-policy.json`)
+
+The dev enclave verifies device attestation (VAULT-MESSAGING §11.7) against vettid-vault's TEST
+policy. `device-policy.json` extends it so that the phone's **real** Keystore attestation enrolls:
+
+- `google_attestation_roots`: Google's hardware attestation roots, including Key Attestation CA1;
+- `android_packages`: `com.vettid.app.dev` and `com.vettid.app.devstack`;
+- `android_signers_sha256`: the SHA-256 of the debug signing certificate of the machine that
+  builds the APK (`keytool -list -v -keystore ~/.android/debug.keystore -storepass android | grep SHA256`);
+  another developer adds theirs, or points `DEVICE_POLICY` at their own file;
+- `grapheneos_boot_keys`: the pinned GrapheneOS verified-boot keys (`SelfSigned` boot state).
+
+The policy only adds: the TEST attester (`:core:testing` `TestAndroidAttester`, used by the JVM
+tests and the A2 test) keeps working. A release build never carries any of this.
 
 ## Ports (127.0.0.1, also on the phone through `adb reverse`)
 
 | Port | Service |
 |---|---|
-| 18080 | The relay, plain HTTP. Tokens name the relay as `https://relay.vettid.test` (`aud`); clients map that origin to this port (`OriginMapInterceptor`). Request signatures cover method, path and body, not the host, so the mapping changes nothing the relay checks. The enclave and vaultctl reach the same relay through a TLS front with the test TLS root. |
+| 18080 | The relay, plain HTTP. Tokens name the relay `https://relay.vettid.test`; clients map that origin to this port (`OriginMapInterceptor`). |
 | 18081 | The member API stand-in: `/api/vault/{status,enclave,enroll,unlock,lock,requests/<id>}` and `/.well-known/vettid/pcr-manifest.json`. |
-| 18082 | Dev control (TEST-ONLY): `GET /dev/trust` (the test Nitro root and manifest key), `POST /dev/peer/request {type, body}` (`vaultctl request`), `POST /dev/peer/event {type, match, timeout_s}` (waits for a peer event). |
+| 18082 | Dev control (TEST-ONLY): `GET /dev/health`, `/dev/info`, `/dev/trust`, `POST /dev/peer/request`, `/dev/peer/event`. |
+
+## The `devStack` build type
+
+`./gradlew :app:assembleDevStack` builds the debug app (application id `com.vettid.app.devstack`)
+pointed at the stack: endpoints from `BuildConfig` (`DEV_STACK_API`, `DEV_STACK_RELAY`,
+`DEV_STACK_CTL`), cleartext to 127.0.0.1 only, the stack's TEST trust anchors from the control
+port, and **the phone's real Keystore attester** (StrongBox). It is a build type of its own,
+initialised from `debug`; no release variant can carry it.
+
+The stand-in has no sign-in or account routes (`/api/auth/*`, `/api/account/*`), so the
+`devStack` build simulates them in the app (`app/src/devStack/.../DevAccountGateway.kt`): no
+email is sent; paste the token `devstack-sign-in-token` on the "Check your email" screen. Each
+address is its own member (`user_guid` derived from it); `+pin` in the address asks for account
+PIN `1234`; `+registered` and `+terms` show the terms step once.
 
 ## Tests against it
 
 ```bash
-# JVM, on the host (skipped when the stack is not running, so CI skips it):
-./gradlew --max-workers=2 :core:vault:testDebugUnitTest --tests '*DevStackJvmTest*'
+# The A3 exit test: a fresh install of the devStack build, onboarding through the UI with a new
+# test member, enrollment with the phone's real attestation, credential, lock and unlock.
+adb uninstall com.vettid.app.devstack
+ANDROID_SERIAL=<serial> ./gradlew --max-workers=2 -PvettidTestBuildType=devStack :app:connectedDevStackAndroidTest
+adb pull /data/local/tmp/a3-exit/ <dir>     # a screenshot of every step
 
-# On the phone (the A2 exit test; skipped when the stack is not reachable):
+# The A2 exit test (vault client only, TEST attester):
 ANDROID_SERIAL=<serial> ./gradlew --max-workers=2 :core:data:connectedDebugAndroidTest
-# The real Keystore attester against the production policy (no stack needed):
-ANDROID_SERIAL=<serial> ./gradlew --max-workers=2 :core:altchan:connectedDebugAndroidTest
+# JVM, on the host:
+./gradlew --max-workers=2 :core:vault:testDebugUnitTest --tests '*DevStackJvmTest*'
 ```
 
-The exit test (`core/data/src/androidTest/.../A2ExitTest.kt`, scenario in
-`core/testing/.../ExitScenario.kt`) enrolls a vault through the member API
-(PIN), runs the first handshake, creates the Protean Credential (password) and
-confirms the vault, locks and unlocks it with the PIN, stores a critical item
-and reveals it with the password, connects to the vaultctl peer through an
-invitation (the app invites, the peer accepts, the app approves after the SAS),
-and exchanges a message each way. The device keys are wrapped under the
-Keystore and the device state is in a Keystore-encrypted file, as in the app.
-Instrumentation arguments `devstackApi`, `devstackRelay` and `devstackCtl`
-override the default addresses.
+All skip when the stack is not reachable. The phone stays locked: the test activity draws over
+the keyguard (`vettid.screenshot`).
 
-The phone stays locked: nothing in these tests needs the screen.
+## Manual check: the biometric app lock
 
-## The `devStack` build type
+BiometricPrompt needs a finger (or the screen lock) and cannot be automated. On an unlocked
+phone with the `devStack` (or debug) build and an enrolled vault:
 
-`./gradlew :app:assembleDevStack` builds the debug app (application id
-`com.vettid.app.devstack`) pointed at the stack: endpoints from `BuildConfig`
-(`DEV_STACK_API`, `DEV_STACK_RELAY`, `DEV_STACK_CTL`, `DEV_STACK_GUID`, the
-last overridable with `-PdevStackGuid=`), cleartext allowed to 127.0.0.1 only,
-the stack's TEST trust anchors from the control port, and the TEST attester
-(below). It is a build type of its own, initialised from `debug`; no release
-variant can carry it, and the release APK contains none of it (checked: no
-`core/testing`, `OriginMapInterceptor` or `relay.vettid.test` in its dex).
-The app uses it from A3 on (`app/src/main/kotlin/.../env/AppEnvironment.kt`).
-
-## Device attestation: why the tests use a TEST attester
-
-The dev enclave verifies device attestation (VAULT-MESSAGING §11.7) against
-the TEST policy of vettid-vault `internal/enclavetest.Policy()`: only the TEST
-Android attestation CA (root P-384 scalar 48 × 0x41, intermediate P-256 32 ×
-0x42), the package `com.vettid.app`, the TEST signing digest
-SHA-256("VettID TEST ONLY app signing certificate"), and the TEST GrapheneOS
-boot key. The policy is fixed in code; the dev enclave has no flag to extend
-it. A real phone's attestation therefore cannot pass it: its chain ends at a
-Google root, its package is `com.vettid.app.dev` / `.devstack` (or the test
-APK's), its signing digest is the debug key's, and on GrapheneOS its boot
-state is `SelfSigned` with the real GrapheneOS key.
-
-So the instrumented tests use `TestAndroidAttester` (`:core:testing`, a
-port of enclavetest's Android attester): a software P-256 key whose chain the
-TEST CA issues, with a StrongBox / Verified / locked key description. It
-lives in test code and the `devStack` build type only.
-
-The real Keystore attester is tested on its own
-(`KeystoreAttesterDeviceTest`): on the test phone (Pixel 10 Pro, GrapheneOS)
-the StrongBox key's chain ends at Google's pinned *Key Attestation CA1*
-(the 2025 EC root), the key description meets every §11.7 requirement, and
-the boot state is `SelfSigned` with verified boot key
-`4e8ee8f7…8de093`, the pinned GrapheneOS key for the Pixel 10 Pro. A release
-build (package `com.vettid.app`, the release signing key) on this phone would
-pass the production enclave's policy.
-
-**Proposed vettid-vault change** (not made here): a dev-enclave option, e.g.
-`vault-enclave -dev-device-policy FILE`, adding Google's attestation roots, the
-debug package names and the debug signing digest, and the real GrapheneOS
-keys (`pins.GrapheneOSVerifiedBootKeys()`) to the TEST policy, so that the
-`devStack` app can enroll with the phone's real StrongBox key. Also useful
-upstream: making this runner a `cmd/devstack` of vettid-vault (it needs the
-module's internal test packages).
+1. Settings → Security → Biometric app lock: turn on; the prompt appears; authenticate. The
+   switch stays on and "Lock after" appears (default 5 minutes).
+2. Set "Lock after" to Immediately; leave the app (home) and return: the lock screen covers the
+   app and the prompt opens; cancel it, then tap Unlock and authenticate: the app is as you left it.
+3. Force-stop the app and open it: it starts locked.
+4. Add a new fingerprint in system settings and return: the prompt cannot open (the key was
+   invalidated), the lock turns itself off, and Settings says so.
+5. Turn the lock off: no prompt; restarting the app no longer asks.

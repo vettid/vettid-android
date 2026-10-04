@@ -1,34 +1,66 @@
 package com.vettid.app
 
+import android.content.Intent
 import android.graphics.Color
+import android.hardware.biometrics.BiometricManager.Authenticators
+import android.hardware.biometrics.BiometricPrompt
 import android.os.Bundle
+import android.os.CancellationSignal
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import com.vettid.app.debug.debugTools
-import com.vettid.app.ui.AppShell
+import com.vettid.app.ui.LocalThemeController
+import com.vettid.app.ui.ThemeController
+import com.vettid.app.ui.VettIdApp
+import com.vettid.core.data.account.SignInLinkInbox
+import com.vettid.core.data.lock.AppLock
+import com.vettid.core.data.prefs.AppPreferences
+import com.vettid.core.data.prefs.PreferencesRepository
+import com.vettid.core.data.prefs.ThemePreference
+import com.vettid.core.keystore.KeystoreException
 import com.vettid.core.ui.theme.ThemeMode
 import com.vettid.core.ui.theme.VettIdTheme
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.launch
+import java.security.GeneralSecurityException
+import javax.crypto.Cipher
+import javax.inject.Inject
+import com.vettid.feature.onboarding.R as OnboardingR
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+    @Inject
+    lateinit var appLock: AppLock
+
+    @Inject
+    lateinit var prefs: PreferencesRepository
+
+    @Inject
+    lateinit var inbox: SignInLinkInbox
+
+    private var prompting = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         debugTools.onLaunch(this, intent)
-        val launchTheme = debugTools.themeOverride(intent) ?: ThemeMode.System
+        if (savedInstanceState == null) receiveLink(intent)
+        val launchTheme = debugTools.themeOverride(intent)
         val launchRoute = debugTools.startRoute(intent)
+        val catalog = debugTools.catalogScreen(intent)
         setContent {
-            // A0: the theme choice lives in memory; DataStore persistence comes with settings (A3).
-            var themeMode by rememberSaveable { mutableStateOf(launchTheme) }
+            val p by prefs.preferences.collectAsStateWithLifecycle(AppPreferences())
+            val themeMode = launchTheme ?: p.theme.toMode()
             val dark = when (themeMode) {
                 ThemeMode.System -> isSystemInDarkTheme()
                 ThemeMode.Light -> false
@@ -43,13 +75,111 @@ class MainActivity : ComponentActivity() {
                 enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
                 onDispose {}
             }
-            VettIdTheme(themeMode = themeMode) {
-                AppShell(
-                    themeMode = themeMode,
-                    onThemeModeChange = { themeMode = it },
-                    launchRoute = launchRoute,
-                )
+            val controller = remember(themeMode) {
+                ThemeController(themeMode) { m -> lifecycleScope.launch { prefs.setTheme(m.toPreference()) } }
+            }
+            CompositionLocalProvider(LocalThemeController provides controller) {
+                VettIdTheme(themeMode = themeMode) {
+                    if (catalog != null) {
+                        catalog()
+                    } else {
+                        VettIdApp(onUnlockApp = ::promptUnlock, onEnableAppLock = ::promptEnable, launchRoute = launchRoute)
+                    }
+                }
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        receiveLink(intent)
+    }
+
+    /** A sign-in link opened by the App Link (account.vettid.org `/auth/`); only confirmed sign-ins send it. */
+    private fun receiveLink(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW) return
+        intent.dataString?.let { inbox.offer(it) }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        appLock.onForeground()
+    }
+
+    override fun onStop() {
+        appLock.onBackground()
+        super.onStop()
+    }
+
+    // --- biometric app lock (D6): BiometricPrompt, class 3 or the device credential, with a CryptoObject ---
+
+    private fun promptUnlock() {
+        if (prompting) return
+        lifecycleScope.launch {
+            val cipher = appLock.cipherToUnlock() ?: return@launch
+            authenticate(cipher) { c -> appLock.completeUnlock(c) }
+        }
+    }
+
+    @Suppress("ReturnCount")
+    private fun promptEnable() {
+        if (prompting) return
+        val cipher = try {
+            appLock.cipherToEnable()
+        } catch (_: GeneralSecurityException) {
+            enableFailed()
+            return
+        } catch (_: KeystoreException) {
+            enableFailed()
+            return
+        } catch (_: IllegalStateException) {
+            enableFailed() // no biometric and no screen lock on this phone
+            return
+        }
+        authenticate(cipher) { c -> lifecycleScope.launch { appLock.completeEnable(c) } }
+    }
+
+    private fun enableFailed() {
+        Toast.makeText(this, R.string.app_lock_enable_failed, Toast.LENGTH_LONG).show()
+    }
+
+    private fun authenticate(cipher: Cipher, onSuccess: (Cipher) -> Unit) {
+        prompting = true
+        appLock.authenticating = true
+        val prompt = BiometricPrompt.Builder(this)
+            .setTitle(getString(OnboardingR.string.app_lock_prompt_title))
+            .setSubtitle(getString(OnboardingR.string.app_lock_prompt_subtitle))
+            .setAllowedAuthenticators(Authenticators.BIOMETRIC_STRONG or Authenticators.DEVICE_CREDENTIAL)
+            .build()
+        prompt.authenticate(
+            BiometricPrompt.CryptoObject(cipher),
+            CancellationSignal(),
+            mainExecutor,
+            object : BiometricPrompt.AuthenticationCallback() {
+                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                    done()
+                    result.cryptoObject?.cipher?.let(onSuccess)
+                }
+
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) = done()
+
+                private fun done() {
+                    prompting = false
+                    appLock.authenticating = false
+                }
+            },
+        )
+    }
+}
+
+private fun ThemePreference.toMode(): ThemeMode = when (this) {
+    ThemePreference.SYSTEM -> ThemeMode.System
+    ThemePreference.LIGHT -> ThemeMode.Light
+    ThemePreference.DARK -> ThemeMode.Dark
+}
+
+private fun ThemeMode.toPreference(): ThemePreference = when (this) {
+    ThemeMode.System -> ThemePreference.SYSTEM
+    ThemeMode.Light -> ThemePreference.LIGHT
+    ThemeMode.Dark -> ThemePreference.DARK
 }
