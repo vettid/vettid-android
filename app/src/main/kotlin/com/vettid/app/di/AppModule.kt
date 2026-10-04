@@ -10,6 +10,9 @@ import com.vettid.core.data.lock.FileWrappedKeyFile
 import com.vettid.core.data.lock.KeystoreAppLockKeys
 import com.vettid.core.data.prefs.DataStorePreferencesRepository
 import com.vettid.core.data.prefs.PreferencesRepository
+import com.vettid.core.data.social.ApprovalsRepository
+import com.vettid.core.data.social.ConnectionsRepository
+import com.vettid.core.data.social.MessagesRepository
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.VaultManager
@@ -35,6 +38,7 @@ annotation class AppScope
 
 @Module
 @InstallIn(SingletonComponent::class)
+@Suppress("TooManyFunctions") // one provider per binding
 object AppModule {
     private const val READ_TIMEOUT_S = 70L
 
@@ -68,6 +72,15 @@ object AppModule {
 
     @Provides
     fun credentialRepository(m: VaultManager): CredentialRepository = m
+
+    @Provides
+    fun connectionsRepository(m: VaultManager): ConnectionsRepository = m.social
+
+    @Provides
+    fun messagesRepository(m: VaultManager): MessagesRepository = m.social
+
+    @Provides
+    fun approvalsRepository(m: VaultManager): ApprovalsRepository = m.social
 
     @Provides
     @Singleton

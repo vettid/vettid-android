@@ -3,6 +3,37 @@
     <string name="messages_title">Messages</string>
     <string name="messages_empty_title">No messages</string>
     <string name="messages_empty_body">Conversations with your connections appear here</string>
+    <string name="messages_empty_no_connections">Invite someone to connect, then write to them here</string>
+    <string name="messages_empty_unread_title">No unread messages</string>
+    <string name="messages_empty_unread_body">You are all caught up</string>
     <string name="messages_filter">Unread</string>
     <string name="messages_add">New message</string>
+    <string name="messages_invite">Invite a connection</string>
+    <string name="messages_unnamed">Unnamed connection</string>
+    <string name="messages_preview_you">You: %1$s</string>
+    <string name="messages_preview_none">No messages yet</string>
+    <plurals name="messages_row_unread">
+        <item quantity="one">%1$d unread · %2$s</item>
+        <item quantity="other">%1$d unread · %2$s</item>
+    </plurals>
+    <string name="messages_error_title">Could not load messages</string>
+    <string name="messages_retry">Try again</string>
+    <string name="messages_ok">OK</string>
+    <string name="messages_cd_details">About %1$s</string>
+    <string name="messages_conversation_empty_title">Say hello</string>
+    <string name="messages_conversation_empty_body">Messages with %1$s go through your vaults, end to end encrypted</string>
+    <string name="messages_status_sent">Sent</string>
+    <string name="messages_status_delivered">Delivered</string>
+    <string name="messages_status_read">Read</string>
+    <string name="messages_cd_outgoing">You: %1$s. %2$s, %3$s</string>
+    <string name="messages_cd_incoming">%1$s: %2$s. %3$s</string>
+    <string name="messages_reply_hint">Message %1$s</string>
+    <string name="messages_too_long">This message is too long (16 KB at most)</string>
+    <string name="messages_send">Send</string>
+    <string name="messages_inactive">%1$s cannot receive messages right now: the connection is not active.</string>
+    <string name="messages_delete_title">Delete this message?</string>
+    <string name="messages_delete_body">It is removed from your vault only; %1$s keeps their copy.</string>
+    <string name="messages_delete_confirm">Delete</string>
+    <string name="messages_new_title">New message</string>
+    <string name="messages_new_empty_title">No connections yet</string>
 </resources>

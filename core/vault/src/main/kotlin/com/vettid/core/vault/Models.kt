@@ -57,6 +57,14 @@ data class Invite(
     val remote: Boolean = false,
 )
 
+/** `connection.invite.accept` response (§10.4); [sas] only if the vault sends it (not in 0.10.1). */
+@Serializable
+data class AcceptedInvite(
+    @SerialName("connection_id") val connectionId: String,
+    val state: String = "pending",
+    val sas: String? = null,
+)
+
 /** `connection.request.pending` (§10.4): approve after comparing [sas]. */
 @Serializable
 data class ConnectionRequest(

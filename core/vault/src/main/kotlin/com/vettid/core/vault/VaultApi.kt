@@ -376,6 +376,9 @@ class VaultApi(val device: VaultDevice) {
 
     // --- connections (§10.4) ---
 
+    /** The relay's limits: invite lifetimes above `open_token_max_lifetime_seconds` or `claim_ttl_seconds` are not offered (§6.4). */
+    suspend fun relayLimits() = device.relayLimits()
+
     /** [ttlSeconds]: 600, 3600, 86400 or 604800. */
     suspend fun inviteCreate(
         ttlSeconds: Int = INVITE_TTL_DEFAULT): Invite = op("connection.invite.create",
@@ -387,10 +390,13 @@ class VaultApi(val device: VaultDevice) {
         op("connection.invite.cancel") { put("invite_id", inviteId) }
     }
 
-    /** Accepts an invitation link (scanned or pasted); returns the new connection's id (`pending` until the inviter approves). */
-    suspend fun inviteAccept(link: String): String =
-        VaultJson.str(op("connection.invite.accept") { put("link", link) }, "connection_id")
-            ?: throw VaultStateException("no connection_id")
+    /**
+     * Accepts an invitation link (scanned or pasted): the new connection's id
+     * (`pending` until the inviter approves) and, when the vault sends it, the
+     * safety code to compare (§6.3: `sas` depends only on `hs.init`).
+     */
+    suspend fun inviteAccept(link: String): AcceptedInvite =
+        op("connection.invite.accept") { put("link", link) }.decode(AcceptedInvite.serializer())
 
     suspend fun connectionApprove(pendingId: String) {
         op("connection.approve") { put("pending_id", pendingId) }

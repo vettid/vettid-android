@@ -13,12 +13,12 @@
 #   VAULT_REF       vettid-vault commit to run (default below)
 #   VAULT_SRC       run from this vettid-vault checkout instead (go run ./cmd/devstack there)
 #   DEVICE_POLICY   dev device policy file (default: device-policy.json next to this script)
-#   ANDROID_SERIAL  the phone to set up adb reverse on (default: the only device)
+#   ANDROID_SERIAL  the phone(s) to set up adb reverse on, space-separated (default: every connected device)
 #   DEVSTACK_SKIP_MEMCHECK=1  skip the free-memory check (shared machine rule: >= 8 GB)
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VAULT_REF="${VAULT_REF:-8a34760}"
+VAULT_REF="${VAULT_REF:-a7818cd}"
 DEVICE_POLICY="${DEVICE_POLICY:-$HERE/device-policy.json}"
 DATA="${XDG_CACHE_HOME:-$HOME/.cache}/vettid-devstack"
 STATE="${XDG_CACHE_HOME:-$HOME/.cache}/vettid-android-devstack"
@@ -35,14 +35,20 @@ memcheck() {
   done
 }
 
+serials() {
+  if [[ -n "${ANDROID_SERIAL:-}" ]]; then echo "$ANDROID_SERIAL"; return; fi
+  adb devices | awk 'NR > 1 && $2 == "device" {print $1}'
+}
+
 reverse() {
   if ! command -v adb >/dev/null 2>&1; then return 0; fi
-  if [[ -z "${ANDROID_SERIAL:-}" ]] && [[ "$(adb devices | grep -c 'device$' || true)" != 1 ]]; then
-    echo "no single adb device; set ANDROID_SERIAL and run: adb reverse tcp:<port> tcp:<port> for ${PORTS[*]}" >&2
-    return 0
-  fi
-  for p in "${PORTS[@]}"; do adb reverse "tcp:$p" "tcp:$p" >/dev/null; done
-  echo "adb reverse: ${PORTS[*]}" >&2
+  local any=0
+  for s in $(serials); do
+    for p in "${PORTS[@]}"; do adb -s "$s" reverse "tcp:$p" "tcp:$p" >/dev/null; done
+    echo "adb reverse on $s: ${PORTS[*]}" >&2
+    any=1
+  done
+  (( any )) || echo "no adb device; run: adb -s <serial> reverse tcp:<port> tcp:<port> for ${PORTS[*]}" >&2
 }
 
 running() { [[ -f "$STATE/pid" ]] && kill -0 "$(cat "$STATE/pid")" 2>/dev/null; }
@@ -86,7 +92,9 @@ down() {
     for _ in $(seq 1 120); do curl -sf "$CTL/dev/health" >/dev/null 2>&1 || break; sleep 1; done
     rm -f "$STATE/pid"
   fi
-  if command -v adb >/dev/null 2>&1; then for p in "${PORTS[@]}"; do adb reverse --remove "tcp:$p" >/dev/null 2>&1 || true; done; fi
+  if command -v adb >/dev/null 2>&1; then
+    for s in $(serials); do for p in "${PORTS[@]}"; do adb -s "$s" reverse --remove "tcp:$p" >/dev/null 2>&1 || true; done; done
+  fi
   echo "stopped" >&2
 }
 

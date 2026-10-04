@@ -25,5 +25,14 @@ fun FailureKind.messageRes(): Int = when (this) {
     FailureKind.ROLLBACK -> R.string.data_failure_rollback
     FailureKind.MANIFEST -> R.string.data_failure_manifest
     FailureKind.NOT_FOUND -> R.string.data_failure_not_found
+    FailureKind.CONNECTION_UNAVAILABLE -> R.string.data_failure_connection_unavailable
+    FailureKind.INVITE_INVALID -> R.string.data_failure_invite_invalid
+    FailureKind.INVITE_EXPIRED -> R.string.data_failure_invite_expired
+    FailureKind.INVITE_NOT_CONNECTION -> R.string.data_failure_invite_not_connection
+    FailureKind.INVITE_UNAVAILABLE -> R.string.data_failure_invite_unavailable
+    FailureKind.BLOCKED -> R.string.data_failure_blocked
+    FailureKind.CREDENTIAL_LOCKED -> R.string.data_failure_credential_locked
+    FailureKind.CONFLICT -> R.string.data_failure_conflict
+    FailureKind.LIMIT -> R.string.data_failure_limit
     FailureKind.OTHER -> R.string.data_failure_other
 }

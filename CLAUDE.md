@@ -4,10 +4,11 @@ Guidance for Claude Code in this repository.
 
 ## What this is
 
-The VettID Android app, **rewritten from scratch in 2026** (phases A0–A3 done:
+The VettID Android app, **rewritten from scratch in 2026** (phases A0–A4 done:
 skeleton, design system, CI; crypto, keystore, attestation; relay, alternate
 channel and vault client against a local dev stack; onboarding, unlock, credential,
-settings screens and the biometric app lock). The plan and decisions are in the vettid.org repo:
+settings screens and the biometric app lock; connections, invitations with QR code
+and safety code, messages and approvals). The plan and decisions are in the vettid.org repo:
 `docs/ANDROID-PLAN.md` (D1–D6, design language §3, screens §4, modules §5, phases §6).
 The app's contract with the vault is `docs/VAULT-MESSAGING.md`; items/tags/share
 rules are `docs/VAULT-ITEMS.md`. The v1 app (NATS, vettid.dev) is on tag
@@ -39,7 +40,12 @@ says so (attestation, crypto helpers, WebRTC, QR scanner), with its tests.
   done. The A3 exit test (fresh install → onboarding → enrolled vault with credential with
   the phone's REAL attestation → lock/unlock, all through the UI):
   `adb uninstall com.vettid.app.devstack; ANDROID_SERIAL=<serial> ./gradlew -PvettidTestBuildType=devStack :app:connectedDevStackAndroidTest`
-  (screenshots in `/data/local/tmp/a3-exit/`). The A2 exit test:
+  (screenshots in `/data/local/tmp/a3-exit/`). The A4 exit test (invite → the vaultctl peer
+  accepts → safety code → approve; messages both ways; remove, then accept the peer's link;
+  member authentication and a grant request in Approvals; favourite) is
+  `app/src/androidTest/.../A4ExitTest.kt`, run the same way with
+  `-Pandroid.testInstrumentationRunnerArguments.class=com.vettid.app.A4ExitTest`
+  (screenshots in `/data/local/tmp/a4-exit/`). The A2 exit test:
   `ANDROID_SERIAL=<serial> ./gradlew :core:data:connectedDebugAndroidTest`; the JVM
   variant is `:core:vault:testDebugUnitTest --tests '*DevStackJvmTest*'`. All skip
   without the stack. Never modify the vettid-vault checkout.
@@ -56,9 +62,11 @@ Debug builds use application id `com.vettid.app.dev` (`devStack`:
 `com.vettid.app.devstack`); never install over `com.vettid.app`. Screenshot launch extras (debug only):
 `adb shell am start -S -n com.vettid.app.dev/com.vettid.app.MainActivity --es vettid.theme dark|light --es vettid.start gallery|messages|connections|approvals|items|credential|settings|help --ez vettid.screenshot true`
 (`vettid.screenshot` lets the debug app draw over the keyguard of a locked test phone; the phone stays locked).
-Every A3 screen with sample state, no vault needed: `--es vettid.start screen:<name>` (names in
+Every A3 and A4 screen with sample state, no vault needed: `--es vettid.start screen:<name>` (names in
 `app/src/debugTools/.../ScreenCatalog.kt`, e.g. `onboarding.backup_off`, `unlock.updated`,
-`credential.alarm`, `settings.delete_confirm`).
+`credential.alarm`, `settings.delete_confirm`, `messages.conversation`, `invite.request`,
+`connections.detail`, `approvals.critical`). Debug builds expose Compose test tags as resource
+ids, so `uiautomator dump` / `adb shell input` can drive two phones at once (`adb -s <serial>`).
 Screenshots and the Proton reference images stay out of git (`local/`, or the
 vettid.org repo's `local/android-ui/`).
 
@@ -69,8 +77,9 @@ vettid.org repo's `local/android-ui/`).
 - Features depend only on `:core:*`; no feature touches transport or crypto
   directly; one ViewModel per screen with immutable UI state. ViewModels use the
   `:core:data` repository interfaces (`AccountRepository`, `VaultRepository`,
-  `CredentialRepository`, `PreferencesRepository`), implemented by `VaultManager`
-  (Hilt bindings in `app/.../di/AppModule.kt`); failures are `VaultFailure(kind)` with
+  `CredentialRepository`, `PreferencesRepository`; A4: `ConnectionsRepository`,
+  `MessagesRepository`, `ApprovalsRepository` in `core/data/.../social`), implemented by
+  `VaultManager` and its `SocialManager` (Hilt bindings in `app/.../di/AppModule.kt`); failures are `VaultFailure(kind)` with
   member-facing text from `FailureKind.messageRes()`. The root of the UI follows
   `AppPhase` (one nav destination per phase, so leaving a phase drops its secrets).
 - Preferences in DataStore (`PreferencesRepository`); device state, the account record and

@@ -9,6 +9,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
+import com.vettid.app.BuildConfig
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.NavHost
@@ -79,7 +82,9 @@ fun VettIdApp(
     }
 
     val locked = lock == AppLockState.LOCKED
-    Box(Modifier.fillMaxSize()) {
+    // Debug builds expose test tags as resource ids, so that adb (uiautomator) can drive two phones at once.
+    val root = if (BuildConfig.DEBUG) Modifier.fillMaxSize().semantics { testTagsAsResourceId = true } else Modifier.fillMaxSize()
+    Box(root) {
         Box(if (locked) Modifier.fillMaxSize().clearAndSetSemantics {} else Modifier.fillMaxSize()) {
             NavHost(nav, startDestination = StartingDest) {
                 composable<StartingDest> { FullScreenProgress(stringResource(R.string.root_starting)) }

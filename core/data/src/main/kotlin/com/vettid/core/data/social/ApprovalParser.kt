@@ -1,0 +1,216 @@
+package com.vettid.core.data.social
+
+import com.vettid.core.crypto.Base64s
+import com.vettid.core.crypto.Bytes
+import com.vettid.core.crypto.CryptoException
+import com.vettid.core.vault.Connection
+import com.vettid.core.vault.Message
+import com.vettid.core.vault.VaultJson
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import java.time.Instant
+import java.time.format.DateTimeParseException
+
+/**
+ * Turns vault bodies (VAULT-MESSAGING §10.4, §10.5, §10.12, §10.13, §6.8)
+ * into the app's models. Bodies come from the member's own vault inside an
+ * authenticated session; unknown members are ignored (§10.1) and a body
+ * missing a required member yields null.
+ */
+@Suppress("TooManyFunctions")
+object ApprovalParser {
+    /** The event types the Approvals screen shows. */
+    val TYPES = setOf(
+        "connection.request.pending", "connection.authenticate.pending", "grant.pending", "critical-secret-use.pending",
+        "share.pending", "approval.pending", "device.session.pending",
+    )
+
+    private fun JsonObject.s(k: String): String? = VaultJson.str(this, k)
+
+    private fun JsonObject.l(k: String): Long? = VaultJson.long(this, k)
+
+    private fun JsonObject.b(k: String): Boolean? = (this[k] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull
+
+    private fun JsonObject.o(k: String): JsonObject? = this[k] as? JsonObject
+
+    private fun JsonObject.a(k: String): List<JsonObject> = (this[k] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: emptyList()
+
+    fun instant(s: String?): Instant? = s?.let {
+        try {
+            Instant.parse(it)
+        } catch (_: DateTimeParseException) {
+            null
+        }
+    }
+
+    /** One approval from an event of [type] received at [at]. */
+    @Suppress("CyclomaticComplexMethod")
+    fun parse(type: String, body: JsonObject, at: Instant): Approval? = when (type) {
+        "connection.request.pending" -> {
+            val id = body.s("pending_id")
+            val sas = body.s("sas")
+            if (id == null || sas == null) {
+                null
+            } else {
+                Approval.ConnectionRequest(
+                    pendingId = id,
+                    inviteId = body.s("invite_id"),
+                    sas = sas,
+                    remote = body.b("remote") ?: false,
+                    name = body.o("profile")?.s("name")?.takeIf { it.isNotBlank() },
+                    introducedBy = body.s("introduced_by"),
+                    receivedAt = at,
+                    exp = at.plus(CONNECTION_REQUEST_TTL),
+                )
+            }
+        }
+        "connection.authenticate.pending" -> {
+            val id = body.s("request_id")
+            val conn = body.s("connection_id")
+            if (id == null || conn == null) null else Approval.Authentication(id, conn, body.s("context"), at, instant(body.s("exp")))
+        }
+        "grant.pending" -> grant(body, at)
+        "critical-secret-use.pending" -> critical(body, at)
+        "share.pending" -> {
+            val rule = body.s("rule_id")
+            if (rule == null) {
+                null
+            } else {
+                val subject = body.o("subject")
+                Approval.ShareDecision(
+                    ruleId = rule,
+                    subjectConnectionId = subject?.s("connection_id"),
+                    subjectAgentId = subject?.s("agent_id"),
+                    items = body.a("items").mapNotNull { i ->
+                        i.s("item_id")?.let { ShareItem(it, i.s("name") ?: "", i.s("category") ?: "other", i.s("sensitivity") ?: "data") }
+                    },
+                    reason = body.s("reason"),
+                    receivedAt = at,
+                )
+            }
+        }
+        "approval.pending" -> body.s("approval_id")?.let {
+            Approval.DeviceRequest(type, it, body.s("name"), body.s("role"), body.s("type"), at, instant(body.s("exp")))
+        }
+        "device.session.pending" -> body.s("request_id")?.let {
+            Approval.DeviceRequest(type, it, body.s("name"), body.s("role"), null, at, instant(body.s("exp")))
+        }
+        else -> null
+    }
+
+    /** `grant.pending`, or an entry of `grant.list`'s `pending`. */
+    @Suppress("ReturnCount")
+    fun grant(body: JsonObject, at: Instant): Approval.GrantRequest? {
+        val id = body.s("request_id") ?: return null
+        val conn = body.s("connection_id") ?: return null
+        return Approval.GrantRequest(
+            requestId = id,
+            connectionId = conn,
+            entries = body.a("items").mapNotNull { i ->
+                val kind = i.s("kind") ?: return@mapNotNull null
+                GrantEntry(kind, i.s("ref") ?: "", i.s("label"), i.b("available") ?: false)
+            },
+            uses = body.l("uses")?.toInt(),
+            expiresIn = body.l("expires_in"),
+            reason = body.s("reason"),
+            receivedAt = at,
+            exp = instant(body.s("exp")),
+        )
+    }
+
+    /** `critical-secret-use.pending`, or an entry of `critical-secret-use.list`'s `incoming` (which has no `payload`). */
+    @Suppress("ReturnCount")
+    fun critical(body: JsonObject, at: Instant): Approval.CriticalUse? {
+        val id = body.s("request_id") ?: return null
+        val conn = body.s("connection_id") ?: return null
+        val sha = body.s("payload_sha256") ?: return null
+        return Approval.CriticalUse(
+            requestId = id,
+            connectionId = conn,
+            itemName = body.s("name") ?: "",
+            fieldLabel = body.s("label") ?: "",
+            operation = body.s("operation") ?: "",
+            payload = body.s("payload") ?: "",
+            payloadSha256 = sha,
+            context = body.s("context"),
+            receivedAt = at,
+            exp = instant(body.s("exp")),
+        )
+    }
+
+    /** SHA-256 of a base64 payload, standard base64; null if it is not base64. */
+    fun payloadSha256(payloadB64: String): String? = try {
+        Base64s.encodeStd(Bytes.sha256(Base64s.decodeStd(payloadB64)))
+    } catch (_: CryptoException) {
+        null
+    } catch (_: IllegalArgumentException) {
+        null
+    }
+
+    fun connection(c: Connection): ConnectionInfo = ConnectionInfo(
+        id = c.id,
+        name = c.name,
+        state = ConnectionState.of(c.state),
+        alias = c.alias?.takeIf { it.isNotEmpty() },
+        note = c.note?.takeIf { it.isNotEmpty() },
+        favorite = c.favorite,
+        archived = c.archived,
+        tags = c.tags,
+        version = c.version,
+        profile = profileLines(c.profile),
+        keyFingerprint = fingerprint(c.ik),
+        createdAt = instant(c.createdAt),
+        lastActiveAt = instant(c.lastActiveAt),
+    )
+
+    fun message(m: Message): MessageInfo = MessageInfo(
+        connectionId = m.connectionId,
+        messageId = m.messageId,
+        outgoing = m.direction == "out",
+        text = m.text,
+        sentAt = instant(m.sentAt) ?: Instant.EPOCH,
+        delivered = m.delivered,
+        read = m.read,
+    )
+
+    /** The text members of a shared profile (photo and nested values left out), for display as self-asserted. */
+    fun profileLines(p: JsonObject?): List<Pair<String, String>> = p?.entries
+        ?.filter { (k, _) -> k != "photo" }
+        ?.mapNotNull { (k, v: JsonElement) -> (v as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull?.let { k to it } }
+        ?: emptyList()
+
+    /** The first 16 hex digits of a standard-base64 key, in groups of four. */
+    fun fingerprint(b64: String): String? = try {
+        if (b64.isEmpty()) null else Bytes.hex(Base64s.decodeStd(b64)).take(FINGERPRINT_HEX).chunked(GROUP).joinToString(" ")
+    } catch (_: CryptoException) {
+        null
+    } catch (_: IllegalArgumentException) {
+        null
+    }
+
+    /** `connection.authenticate.list` states and `.result` events. */
+    fun authState(o: JsonObject): AuthenticationState? {
+        val conn = o.s("connection_id") ?: return null
+        return AuthenticationState(conn, instant(o.s("verified_at")), o.s("last_result"), instant(o.s("last_at")))
+    }
+
+    fun authResult(o: JsonObject, now: Instant, previous: AuthenticationState?): AuthenticationState? {
+        val conn = o.s("connection_id") ?: return null
+        val ok = o.b("authenticated") ?: false
+        val base = previous ?: AuthenticationState(conn)
+        return base.copy(
+            verifiedAt = if (ok) now else base.verifiedAt,
+            lastResult = if (ok) "authenticated" else o.s("reason") ?: "denied",
+            lastAt = now,
+            keyChanged = o.b("key_changed") ?: false,
+            waitingUntil = null,
+        )
+    }
+
+    private const val FINGERPRINT_HEX = 16
+    private const val GROUP = 4
+}

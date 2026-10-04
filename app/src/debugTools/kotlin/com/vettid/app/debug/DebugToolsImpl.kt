@@ -44,12 +44,15 @@ internal val debugTools: DebugTools = object : DebugTools {
 
     /**
      * `--ez vettid.screenshot true` lets the debug app draw over the keyguard so a
-     * locked test phone can be screenshotted over adb. The device stays locked.
+     * locked test phone can be screenshotted over adb, and keeps the screen on while
+     * it is in front. The device stays locked.
      */
     override fun onLaunch(activity: Activity, intent: Intent) {
         if (intent.getBooleanExtra(EXTRA_SCREENSHOT, false)) {
             activity.setShowWhenLocked(true)
             activity.setTurnScreenOn(true)
+            // Long device tests (A4: waits on another vault) must not lose the screen to the timeout.
+            activity.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
 
