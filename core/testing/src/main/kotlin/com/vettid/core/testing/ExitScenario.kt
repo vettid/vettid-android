@@ -6,6 +6,7 @@ import com.vettid.core.altchan.MemberApiClient
 import com.vettid.core.altchan.MemberAuth
 import com.vettid.core.altchan.Slot
 import com.vettid.core.crypto.envelope.Ulid
+import com.vettid.core.relay.MailboxCollector
 import com.vettid.core.vault.DeviceConfig
 import com.vettid.core.vault.DeviceSecrets
 import com.vettid.core.vault.DeviceStateStore
@@ -36,6 +37,7 @@ class ExitScenario(
     private val attester: Attester,
     private val secrets: DeviceSecrets,
     private val store: DeviceStateStore,
+    private val collectMode: MailboxCollector.Mode = MailboxCollector.Mode.LONG_POLL,
     private val log: (String) -> Unit,
 ) {
     val guid = "android-" + Ulid.new().lowercase()
@@ -45,7 +47,7 @@ class ExitScenario(
         val trust = stack.trust()
         val cfg = DeviceConfig(
             name = "Pixel test", relayUrl = stack.relayUrl, http = stack.http, store = store, trust = trust,
-            pollWait = Duration.ofSeconds(10),
+            pollWait = Duration.ofSeconds(10), collectMode = collectMode,
         )
         val device = VaultDevice.create(cfg, secrets)
         device.start(scope)
