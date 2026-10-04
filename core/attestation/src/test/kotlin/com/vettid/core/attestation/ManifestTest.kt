@@ -73,8 +73,7 @@ class ManifestTest {
         assertThrows(AttestationException.Signature::class.java) { verifier.verify(serve(m, k = ecKeyPair("secp256r1"))) }
         val tampered = String(serve(m)).replace(Base64s.encodeStd(m), Base64s.encodeStd(manifest(8, r3, r4))).toByteArray()
         assertThrows(AttestationException.Signature::class.java) { verifier.verify(tampered) }
-        // Nothing is pinned in this build until W3/O3: production verification fails closed.
-        assertTrue(ManifestKeys.PRODUCTION.isEmpty())
+        // A manifest signed by any other key fails closed under the production keys.
         assertThrows(AttestationException.ManifestKey::class.java) { ManifestVerifier(ManifestKeys.PRODUCTION).verify(serve(m)) }
     }
 
