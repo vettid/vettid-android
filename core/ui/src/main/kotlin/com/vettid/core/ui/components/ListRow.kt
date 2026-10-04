@@ -33,7 +33,7 @@ data class RowAction(
 /**
  * List row (Proton mailbox): initial tile, name and preview lines, date on the
  * first line's end and an optional trailing action under it. [emphasized] marks
- * unread rows (bold, full-contrast text).
+ * unread rows (bold, full-contrast text); [tileStyle] marks favourites.
  */
 @Composable
 fun VettIdListRow(
@@ -42,6 +42,7 @@ fun VettIdListRow(
     supporting: String? = null,
     meta: String? = null,
     tileName: String = title,
+    tileStyle: TileStyle = TileStyle.Connection,
     emphasized: Boolean = false,
     action: RowAction? = null,
     onClick: (() -> Unit)? = null,
@@ -56,7 +57,7 @@ fun VettIdListRow(
             .padding(start = Spacing.gutter, end = Spacing.xs, top = Spacing.m, bottom = Spacing.m),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        InitialTile(name = tileName, size = 40)
+        InitialTile(name = tileName, size = 40, style = tileStyle)
         Spacer(Modifier.width(Spacing.l))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {

@@ -31,7 +31,6 @@ import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.QrCode2
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
-import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.TaskAlt
@@ -57,6 +56,7 @@ import com.vettid.core.ui.components.AvatarSheetContent
 import com.vettid.core.ui.components.BottomFloatingControls
 import com.vettid.core.ui.components.CenteredTitle
 import com.vettid.core.ui.components.ConfirmDialog
+import com.vettid.core.ui.components.ConnectionRow
 import com.vettid.core.ui.components.CountBadge
 import com.vettid.core.ui.components.DetailCard
 import com.vettid.core.ui.components.DrawerItem
@@ -67,7 +67,6 @@ import com.vettid.core.ui.components.InitialTile
 import com.vettid.core.ui.components.LargeTitle
 import com.vettid.core.ui.components.PillAction
 import com.vettid.core.ui.components.RookLogo
-import com.vettid.core.ui.components.RowAction
 import com.vettid.core.ui.components.SettingsAccountRow
 import com.vettid.core.ui.components.SettingsDivider
 import com.vettid.core.ui.components.SettingsGroup
@@ -132,11 +131,11 @@ fun GalleryScreen(
 
             Section("Typography")
             Column(Modifier.padding(horizontal = Spacing.gutter)) {
-                Text("Headline · Settings", style = MaterialTheme.typography.headlineMedium)
+                Text("Headline · Plus Jakarta Sans", style = MaterialTheme.typography.headlineMedium)
                 Text("Title · Messages", style = MaterialTheme.typography.titleLarge)
-                Text("Body large · list title, 17sp", style = MaterialTheme.typography.bodyLarge)
+                Text("Body large · Inter, list title 16sp", style = MaterialTheme.typography.bodyLarge)
                 Text(
-                    "Body medium · preview line, 15sp",
+                    "Body medium · preview line, 14sp",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -176,7 +175,6 @@ fun GalleryScreen(
             }
 
             Section("List rows")
-            var starred by remember { mutableStateOf(setOf(1)) }
             SampleRows.forEachIndexed { i, row ->
                 VettIdListRow(
                     title = row.first,
@@ -184,12 +182,18 @@ fun GalleryScreen(
                     meta = row.third,
                     emphasized = i == 0,
                     onClick = {},
-                    action = RowAction(
-                        icon = if (i in starred) Icons.Outlined.Star else Icons.Outlined.StarOutline,
-                        contentDescription = if (i in starred) "Unstar" else "Star",
-                        active = i in starred,
-                        onClick = { starred = if (i in starred) starred - i else starred + i },
-                    ),
+                )
+            }
+
+            Section("Connection rows (star = favourite)")
+            var favorites by remember { mutableStateOf(setOf("Bob Okafor")) }
+            SampleConnections.forEach { (name, status) ->
+                ConnectionRow(
+                    name = name,
+                    supporting = status,
+                    favorite = name in favorites,
+                    onFavoriteChange = { fav -> favorites = if (fav) favorites + name else favorites - name },
+                    onClick = {},
                 )
             }
 
@@ -295,6 +299,7 @@ fun GalleryScreen(
                 CountBadge(120)
                 TagLabel("New")
                 InitialTile("Alice", size = 40)
+                InitialTile("Bob", size = 40, style = TileStyle.Favorite)
                 InitialTile("Mesmer", size = 40, style = TileStyle.Self)
             }
             Spacer(Modifier.height(Spacing.l))
@@ -330,6 +335,12 @@ fun GalleryScreen(
         )
     }
 }
+
+private val SampleConnections = listOf(
+    "Alice Moreau" to "Active · verified",
+    "Bob Okafor" to "Active",
+    "Clinic — Dr. Chen" to "Pending",
+)
 
 private val SampleRows = listOf(
     Triple("Alice Moreau", "Are we still on for Friday?", "10:42"),
@@ -375,10 +386,12 @@ private fun Swatches() {
         "gold fill" to c.primaryContainer,
         "gold content" to c.primary,
         "tile" to x.tile,
+        "favourite" to x.favoriteTile,
         "error" to c.error,
+        "outline" to c.outline,
     )
     Column(Modifier.padding(horizontal = Spacing.gutter), verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
-        swatches.chunked(5).forEach { row ->
+        swatches.chunked(4).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
                 row.forEach { (name, color) -> Swatch(name, color, Modifier.weight(1f)) }
             }

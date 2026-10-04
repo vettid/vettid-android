@@ -42,7 +42,14 @@ vettid.org repo's `local/android-ui/`).
   description; touch targets ≥ 48dp.
 - Colours only through `MaterialTheme.colorScheme` / `VettIdTheme.colors`:
   `primary` = gold content, `primaryContainer` = gold fill; never hard-code colours
-  in screens. Gold is the single accent. `ContrastTest` guards WCAG AA.
+  in screens. Gold (#FFC125, the website's `--gold`) is the single accent; on light
+  surfaces gold text/icons use `--gold-ink-light` (#7F640A). Palette values follow
+  the website tokens (`website/assets/site.css` in vettid.org). `ContrastTest` guards WCAG AA.
+- Type: Plus Jakarta Sans for headings, Inter for body (as on the website), bundled
+  as upstream variable TTFs in `core/ui/src/main/res/font` (sources, checksums and
+  OFL licences in `core/ui/fonts/`). Icons: Material Icons Outlined.
+- Connection tiles: indigo for all connections, teal for favourites (the owner's
+  `favorite` flag), gold for the member's own avatar; use `ConnectionRow`.
 - Reuse `:core:ui` components (top bar, drawer, list row, empty state, floating
   controls, pill bar, settings groups, avatar sheet, confirm dialog) before adding new ones;
   every new component goes into the debug gallery.

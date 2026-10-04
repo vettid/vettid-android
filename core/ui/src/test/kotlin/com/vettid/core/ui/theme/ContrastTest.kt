@@ -24,6 +24,16 @@ class ContrastTest {
     }
 
     @Test
+    fun brandGoldIsTheWebsiteToken() {
+        assertEquals(Color(0xFFFFC125), VettIdPalette.Gold)
+        // Bright gold is a fill colour only: on white it fails even the 3:1 icon minimum.
+        assertTrue(contrastRatio(VettIdPalette.Gold, Color.White) < 3.0)
+        assertEquals(VettIdPalette.Gold, VettIdSchemes.dark.primary)
+        assertEquals(VettIdPalette.Gold, VettIdSchemes.light.primaryContainer)
+        assertEquals(VettIdPalette.GoldDeep, VettIdSchemes.light.primary)
+    }
+
+    @Test
     fun darkSchemeMeetsAa() = checkScheme("dark", VettIdSchemes.dark, VettIdSchemes.darkExtras)
 
     @Test
@@ -47,6 +57,9 @@ class ContrastTest {
         assertContrast("$theme primary/surfaceContainerHigh", c.primary, c.surfaceContainerHigh, 3.0)
         assertContrast("$theme onPrimaryContainer/primaryContainer", c.onPrimaryContainer, c.primaryContainer, 4.5)
         assertContrast("$theme onTile/tile", x.onTile, x.tile, 4.5)
+        assertContrast("$theme onFavoriteTile/favoriteTile", x.onFavoriteTile, x.favoriteTile, 4.5)
+        // A favourite tile must stand apart from the screen and from a plain tile.
+        assertContrast("$theme favoriteTile/background", x.favoriteTile, c.background, 3.0)
         assertContrast("$theme onAvatar/avatar", x.onAvatar, x.avatar, 4.5)
         assertContrast("$theme error/background", c.error, c.background, 4.5)
     }

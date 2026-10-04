@@ -7,44 +7,49 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 
 /**
- * Raw brand palette. Screens never use these directly: they read
- * [androidx.compose.material3.MaterialTheme.colorScheme] or [VettIdTheme.colors].
+ * Raw brand palette, aligned with the website tokens (vettid.org
+ * `website/assets/site.css`; token names in comments). Screens never use these
+ * directly: they read [androidx.compose.material3.MaterialTheme.colorScheme] or
+ * [VettIdTheme.colors].
  *
- * Gold (#F4B942) is the single accent (ANDROID-PLAN D2). On light surfaces gold
- * is too pale for text and icons (1.8:1), so "gold content" uses [GoldDeep]
- * there and the bright gold is kept for fills.
+ * Gold (#FFC125, `--gold`) is the single accent. On light surfaces it is too pale
+ * for text and icons (1.6:1), so "gold content" there uses [GoldDeep]
+ * (`--gold-ink-light`, 5.6:1 on white) and the bright gold is kept for fills.
  */
 object VettIdPalette {
-    val Gold = Color(0xFFF4B942)
-    val GoldDeep = Color(0xFF8A6500)
-    val Ink = Color(0xFF101018)
+    val Gold = Color(0xFFFFC125) // --gold
+    val GoldDeep = Color(0xFF7F640A) // --gold-ink-light
+    val Ink = Color(0xFF101018) // --ink-on-light
     val White = Color(0xFFFFFFFF)
 
     // Navy ramp (dark theme surfaces), after the website's surface tokens.
     val Navy950 = Color(0xFF0B0B18)
-    val Navy900 = Color(0xFF14142A)
-    val Navy850 = Color(0xFF1B1B37)
+    val Navy900 = Color(0xFF14142A) // --surface-1
+    val Navy850 = Color(0xFF1B1B3A) // --surface-2
     val Navy800 = Color(0xFF26264A)
     val Navy700 = Color(0xFF30305A)
     val Navy600 = Color(0xFF3E3E6C)
-    val Indigo = Color(0xFF3A3A8C)
+    val Indigo = Color(0xFF2E2D88) // --surface-indigo
+
+    /** Favourite connections' tiles: a teal that sits with navy and gold. */
+    val Teal = Color(0xFF1F7A6B)
 
     // Light theme neutrals.
     val Paper = Color(0xFFFFFFFF)
     val Mist50 = Color(0xFFF7F7FA)
-    val Mist100 = Color(0xFFF0F0F5)
+    val Mist100 = Color(0xFFF4F4F6) // --band-light
     val Mist200 = Color(0xFFE6E6EE)
-    val Mist300 = Color(0xFFD9D9DF)
+    val Mist300 = Color(0xFFD9D9DF) // --border-light
 
-    val InkHigh = Color(0xFFF7F7FA)
+    val InkHigh = Color(0xFFF7F7FA) // --ink-hi
     val InkBody = Color(0xFFA9A9C2)
-    val InkMuteLight = Color(0xFF4C4C58)
+    val InkMuteLight = Color(0xFF4C4C58) // --ink-on-light-mute
 
-    val Success = Color(0xFF3FD97F)
+    val Success = Color(0xFF3FD97F) // --success
     val SuccessDeep = Color(0xFF1E7A46)
-    val Warning = Color(0xFFFFB020)
+    val Warning = Color(0xFFFFB020) // --warn
     val WarningDeep = Color(0xFF8A5A00)
-    val ErrorDark = Color(0xFFFF8A8A)
+    val ErrorDark = Color(0xFFFF6B6B) // --error
     val ErrorLight = Color(0xFFB3261E)
 }
 
@@ -55,6 +60,9 @@ data class VettIdColors(
     val tile: Color,
     /** Letter on [tile]. */
     val onTile: Color,
+    /** Tile of a favourite connection (`connection.update` favorite, VAULT-MESSAGING 10.4). */
+    val favoriteTile: Color,
+    val onFavoriteTile: Color,
     /** The member's own avatar tile (gold). */
     val avatar: Color,
     val onAvatar: Color,
@@ -71,6 +79,8 @@ data class VettIdColors(
 internal val DarkVettIdColors = VettIdColors(
     tile = VettIdPalette.Indigo,
     onTile = VettIdPalette.InkHigh,
+    favoriteTile = VettIdPalette.Teal,
+    onFavoriteTile = VettIdPalette.White,
     avatar = VettIdPalette.Gold,
     onAvatar = VettIdPalette.Ink,
     success = VettIdPalette.Success,
@@ -83,6 +93,8 @@ internal val DarkVettIdColors = VettIdColors(
 internal val LightVettIdColors = VettIdColors(
     tile = VettIdPalette.Indigo,
     onTile = VettIdPalette.White,
+    favoriteTile = VettIdPalette.Teal,
+    onFavoriteTile = VettIdPalette.White,
     avatar = VettIdPalette.Gold,
     onAvatar = VettIdPalette.Ink,
     success = VettIdPalette.SuccessDeep,

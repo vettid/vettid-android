@@ -21,8 +21,8 @@ import com.vettid.core.ui.theme.VettIdTheme
 fun initialOf(name: String): String =
     name.trim().firstOrNull { it.isLetterOrDigit() }?.uppercase() ?: "?"
 
-/** Visual role of an [InitialTile]. */
-enum class TileStyle { Connection, Self }
+/** Visual role of an [InitialTile]: a connection, a favourite connection, or the member. */
+enum class TileStyle { Connection, Favorite, Self }
 
 /**
  * Rounded-square tile with an initial (Proton's avatar tile). Decorative by
@@ -38,6 +38,7 @@ fun InitialTile(
     val colors = VettIdTheme.colors
     val (bg: Color, fg: Color) = when (style) {
         TileStyle.Connection -> colors.tile to colors.onTile
+        TileStyle.Favorite -> colors.favoriteTile to colors.onFavoriteTile
         TileStyle.Self -> colors.avatar to colors.onAvatar
     }
     Box(
