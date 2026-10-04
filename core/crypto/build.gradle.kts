@@ -1,3 +1,7 @@
 plugins {
-    id("vettid.android.library")
+    id("vettid.jvm.library")
+}
+
+dependencies {
+    implementation(libs.bouncycastle.bcprov)
 }

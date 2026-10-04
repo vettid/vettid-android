@@ -9,12 +9,20 @@ naming:
   MatchingDeclarationName:
     active: false
 
+# Protocol modules (:core:crypto, :core:attestation, :core:keystore) port the
+# Go reference byte layout by byte layout: offsets, sizes and lengths are the
+# spec's numbers (named in the spec, not in Kotlin), strict parsers reject
+# input with one throw per rule, and wire records carry the spec's member
+# lists. The rules below that fight that style are excluded there only.
 complexity:
   LongParameterList:
     functionThreshold: 8
     constructorThreshold: 10
     ignoreDefaultParameters: true
     ignoreAnnotated: ['Composable']
+    excludes: ['**/core/crypto/**', '**/core/attestation/**']
+  ComplexCondition:
+    excludes: ['**/core/crypto/**', '**/core/attestation/**', '**/core/keystore/**']
   LongMethod:
     threshold: 80
     ignoreAnnotated: ['Composable']
@@ -27,7 +35,11 @@ style:
     ignorePropertyDeclaration: true
     ignoreCompanionObjectPropertyDeclaration: true
     ignoreAnnotated: ['Composable']
-    excludes: ['**/test/**', '**/theme/**']
+    excludes: ['**/test/**', '**/theme/**', '**/core/crypto/**', '**/core/attestation/**', '**/core/keystore/**']
+  ThrowsCount:
+    excludes: ['**/core/crypto/**', '**/core/attestation/**', '**/core/keystore/**']
+  ReturnCount:
+    excludes: ['**/core/crypto/**', '**/core/attestation/**']
   UnusedPrivateMember:
     ignoreAnnotated: ['Preview']
   MaxLineLength:
