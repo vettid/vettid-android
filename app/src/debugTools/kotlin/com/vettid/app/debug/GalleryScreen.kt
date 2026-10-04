@@ -422,7 +422,7 @@ private fun Swatch(name: String, color: Color, modifier: Modifier) {
 
 @Composable
 private fun FormsGallery() {
-    var pin by rememberSaveable { mutableStateOf("4028") }
+    var pin by rememberSaveable { mutableStateOf("402816") }
     Column(Modifier.padding(horizontal = Spacing.gutter), verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
         com.vettid.core.ui.components.SecretField(pin, { pin = it }, "Vault PIN", isPin = true)
         com.vettid.core.ui.components.SecretField("weak", {}, "Credential password", error = "Use at least 8 characters.")

@@ -35,7 +35,7 @@ class AltRequestsTest {
     @Test
     fun enrollIsSealedPaddedAndBound() {
         val att = TestSupport.SoftAttester()
-        val built = AltRequests.buildEnroll("guid-1", "2468", enclave.verified(manifest), manifest, att, app, "v4.public.open", AltState(), now)
+        val built = AltRequests.buildEnroll("guid-1", "246802", enclave.verified(manifest), manifest, att, app, "v4.public.open", AltState(), now)
         val req = built.request
         assertEquals(AltChannel.REQUEST_ENVELOPE_SIZE, req.envelope().size) // 13,444
         assertEquals(enclave.etk.publicKey.kid.toString(), req.etkKid)
@@ -46,7 +46,7 @@ class AltRequestsTest {
         val o = StrictJson.parseObject(inner.body)
         assertEquals("guid-1", o.string("user_guid"))
         assertEquals(req.requestId, o.string("request_id"))
-        assertEquals("2468", o.string("pin"))
+        assertEquals("246802", o.string("pin"))
         assertEquals(manifest.serial, o.uint("manifest_serial", 1, 1 shl 40))
         assertArrayEquals(ik.publicKey, o.obj("app").base64("ik"))
         assertEquals("v4.public.open", o.obj("app").string("open_token"))
@@ -66,7 +66,7 @@ class AltRequestsTest {
     fun unlockCarriesSignatureAssertionAndFloors() {
         val att = TestSupport.SoftAttester()
         val state = AltState(release = TestSupport.pcr0, releaseNumber = 3, stateSeq = 9, headerSeq = mapOf(TestSupport.pcr0 to 5L), manifestSerial = 7)
-        val b = AltRequests.buildUnlock("guid-1", "0123456789abcdef0123456789abcdef", "2468", enclave.verified(manifest), manifest, att, ik, "v4.public.tok", state, UnlockOptions(), now)
+        val b = AltRequests.buildUnlock("guid-1", "0123456789abcdef0123456789abcdef", "246802", enclave.verified(manifest), manifest, att, ik, "v4.public.tok", state, UnlockOptions(), now)
         assertEquals(AltChannel.REQUEST_ENVELOPE_SIZE, b.request.envelope().size)
         assertFalse(b.releaseChanged)
         val inner = enclave.open(b.request.envelope())
@@ -76,7 +76,7 @@ class AltRequestsTest {
         val tss = Timestamps.formatMillis(inner.ts)
         val signing = AltChannel.unlockSigningString(
             AltChannel.UnlockFields(
-                "guid-1", "0123456789abcdef0123456789abcdef", b.request.requestId, tss, enclave.etk.publicKey.kid, 9, 5, "2468", "v4.public.tok",
+                "guid-1", "0123456789abcdef0123456789abcdef", b.request.requestId, tss, enclave.etk.publicKey.kid, 9, 5, "246802", "v4.public.tok",
                 manifest.sha256Hex,
             ),
         )
@@ -91,19 +91,19 @@ class AltRequestsTest {
         val att = TestSupport.SoftAttester()
         val newer = AltState(release = "b1".repeat(48), releaseNumber = 4)
         val e = assertThrows(AltRefusedException::class.java) {
-            AltRequests.buildUnlock("g", "v", "2468", enclave.verified(manifest), manifest, att, ik, "t", newer, UnlockOptions(), now)
+            AltRequests.buildUnlock("g", "v", "246802", enclave.verified(manifest), manifest, att, ik, "t", newer, UnlockOptions(), now)
         }
         assertEquals(AltRefusedException.Reason.ROLLBACK_RELEASE, e.reason)
         val seen = AltState(manifestSerial = 8)
         assertEquals(
             AltRefusedException.Reason.MANIFEST_OLDER,
             assertThrows(AltRefusedException::class.java) {
-                AltRequests.buildUnlock("g", "v", "2468", enclave.verified(manifest), manifest, att, ik, "t", seen, UnlockOptions(), now)
+                AltRequests.buildUnlock("g", "v", "246802", enclave.verified(manifest), manifest, att, ik, "t", seen, UnlockOptions(), now)
             }.reason,
         )
         // Abandoning an unconfirmed move back to the previous release is allowed (§11.10.4).
         val moved = AltState(release = "b1".repeat(48), releaseNumber = 4, previousRelease = TestSupport.pcr0, previousReleaseNumber = 3)
-        val b = AltRequests.buildUnlock("g", "v", "2468", enclave.verified(manifest), manifest, att, ik, "t", moved, UnlockOptions(abandon = true), now)
+        val b = AltRequests.buildUnlock("g", "v", "246802", enclave.verified(manifest), manifest, att, ik, "t", moved, UnlockOptions(abandon = true), now)
         val o = StrictJson.parseObject(enclave.open(b.request.envelope()).body)
         assertEquals(TestSupport.pcr0, o.obj("release_update").string("to"))
         assertTrue(b.releaseChanged)

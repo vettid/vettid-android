@@ -138,14 +138,15 @@ class CredentialAndItemsTest {
             AltChannel.UnlockFields(
                 "u", vaultId, requestId, ts, Kid(ByteArray(8)), 1, 2, pin, "v4.public.x", "a".repeat(64), cancelRecovery = cancel,
             )
-        val f = fields("1234", cancel = true)
+        val f = fields("123456", cancel = true)
         assertTrue(AltChannel.unlockSigningString(f).endsWith("\n\ncancel_recovery"))
         assertThrows(CryptoException.Format::class.java) {
-            AltChannel.unlockSigningString(fields("12\n34"))
+            AltChannel.unlockSigningString(fields("123\n456"))
         }
-        assertTrue(AltChannel.isValidPin("1234"))
+        assertTrue(AltChannel.isValidPin("123456"))
+        assertFalse(AltChannel.isValidPin("12345"))
         assertFalse(AltChannel.isValidPin("123"))
-        assertFalse(AltChannel.isValidPin("12a4"))
+        assertFalse(AltChannel.isValidPin("12a456"))
         assertThrows(CryptoException.Format::class.java) { DeviceAttest.android(emptyList()) }
         assertThrows(CryptoException.Format::class.java) { DeviceAttest.android(List(11) { byteArrayOf(1) }) }
         val da = DeviceAttest.android(listOf(byteArrayOf(1, 2), byteArrayOf(3)))

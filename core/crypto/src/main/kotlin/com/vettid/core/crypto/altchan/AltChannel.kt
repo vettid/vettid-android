@@ -49,8 +49,8 @@ object AltChannel {
         return Bytes.labeledHash(Labels.DEVATT, requestId.toByteArray(), vaultId.toByteArray(), ts.toByteArray())
     }
 
-    /** 4–32 ASCII digits. */
-    fun isValidPin(p: String): Boolean = p.length in 4..32 && p.all { it in '0'..'9' }
+    /** 6–32 ASCII digits (VAULT-MESSAGING 0.10.1 §11.3). */
+    fun isValidPin(p: String): Boolean = p.length in 6..32 && p.all { it in '0'..'9' }
 
     internal fun validVaultId(s: String, allowEmpty: Boolean): Boolean =
         if (s.isEmpty()) allowEmpty else s.length <= 128 && s.all { it.code in 0x21..0x7e }
