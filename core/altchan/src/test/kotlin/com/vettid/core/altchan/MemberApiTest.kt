@@ -207,13 +207,13 @@ class MemberApiTest {
     fun enrollUnlockLock() = runBlocking<Unit> {
         val p = Party()
         val f = flow()
-        val out = f.enroll(p, "guid-1", "2468", TestSupport.SoftAttester())
+        val out = f.enroll(p, "guid-1", "246802", TestSupport.SoftAttester())
         assertTrue(out.ok)
         assertEquals("0123456789abcdef0123456789abcdef", out.vaultId)
         assertEquals("inst-a", out.instanceId)
         p.vaultId = out.vaultId
         p.state = AltRequests.applyEnrolled(p.state, 1)
-        val u = f.unlock(p, "guid-1", "2468", TestSupport.SoftAttester())
+        val u = f.unlock(p, "guid-1", "246802", TestSupport.SoftAttester())
         assertTrue(u.ok)
         assertEquals(5, p.state.stateSeq)
         assertEquals(3L, p.state.headerSeq[TestSupport.pcr0])
@@ -227,7 +227,7 @@ class MemberApiTest {
     fun reSealsAfterInstanceMoved() = runBlocking<Unit> {
         enclaves.add(TestSupport.Enclave("inst-b"))
         instanceMovedFirst = true
-        val out = flow().enroll(Party(), "guid-1", "2468", TestSupport.SoftAttester())
+        val out = flow().enroll(Party(), "guid-1", "246802", TestSupport.SoftAttester())
         assertTrue(out.ok)
         assertEquals("inst-b", out.instanceId)
         assertEquals(2, log.count { it == "POST /api/vault/enroll" })
@@ -236,7 +236,7 @@ class MemberApiTest {
     @Test
     fun refetchesTheManifestOnceAfterAManifestResult() = runBlocking<Unit> {
         manifestFailFirst = true
-        val out = flow().enroll(Party(), "guid-1", "2468", TestSupport.SoftAttester())
+        val out = flow().enroll(Party(), "guid-1", "246802", TestSupport.SoftAttester())
         assertTrue(out.ok)
         assertEquals(2, log.count { it == "GET ${MemberApiClient.MANIFEST_PATH}" })
     }
@@ -245,7 +245,7 @@ class MemberApiTest {
     fun refusesAnOlderManifest() = runBlocking<Unit> {
         val p = Party()
         p.state = AltState(manifestSerial = 9)
-        val e = assertThrows(AltRefusedException::class.java) { runBlocking { flow().enroll(p, "guid-1", "2468", TestSupport.SoftAttester()) } }
+        val e = assertThrows(AltRefusedException::class.java) { runBlocking { flow().enroll(p, "guid-1", "246802", TestSupport.SoftAttester()) } }
         assertEquals(AltRefusedException.Reason.MANIFEST_OLDER, e.reason)
     }
 

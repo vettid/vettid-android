@@ -2,7 +2,7 @@ package com.vettid.core.data.policy
 
 /**
  * The vault PIN rules the app enforces when a PIN is chosen (enrollment,
- * PIN change). VAULT-MESSAGING allows 4–32 ASCII digits (§6.7.1, §11.3); the
+ * PIN change). VAULT-MESSAGING requires 6–32 ASCII digits (§11.3); the
  * app asks for at least [MIN_LENGTH] and refuses PINs that are guessed first
  * (one repeated digit, straight runs, short repeated patterns, the most
  * common choices). The PIN is guessed only online, through the enclave and
