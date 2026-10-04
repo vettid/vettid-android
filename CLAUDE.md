@@ -1,140 +1,50 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code in this repository.
 
-## IMPORTANT: Always Use Scripts First
+## What this is
 
-**Before running individual AWS, adb, or other CLI commands, ALWAYS check for existing scripts in the `scripts/` directory.** This project has well-tested scripts for common operations like:
-- Vault decommission/reset
-- Deployment
-- Log viewing
+The VettID Android app, **rewritten from scratch in 2026** (phase A0 done: skeleton,
+design system, CI). The plan and decisions are in the vettid.org repo:
+`docs/ANDROID-PLAN.md` (D1–D6, design language §3, screens §4, modules §5, phases §6).
+The app's contract with the vault is `docs/VAULT-MESSAGING.md`; items/tags/share
+rules are `docs/VAULT-ITEMS.md`. The v1 app (NATS, vettid.dev) is on tag
+`legacy-v1-final` / branch `legacy/v1`; port code from there only where the plan
+says so (attestation, crypto helpers, WebRTC, QR scanner), with its tests.
 
-Running individual commands (like `aws s3 rm` or direct Lambda invocations) instead of using the proper scripts can cause incomplete operations, data inconsistencies, or missed cleanup steps. The scripts handle all edge cases and proper sequencing.
+## Build
 
-## Build Commands
+- JDK 17 or 21 (system JDK 25 does not work with AGP). Locally:
+  `export JAVA_HOME=/opt/android-studio/jbr`.
+- Shared machine: memory and workers are capped in `gradle.properties`. Run
+  builds with `--max-workers=2`, check `free -g` first (wait if < 8 GB
+  available), and `./gradlew --stop` when done. No emulator.
+- `./gradlew :app:assembleDebug testDebugUnitTest detekt :app:lintDebug :app:assembleRelease`
+  is what CI runs (`.github/workflows/ci.yml`, plus gitleaks over full history).
 
-```bash
-# Build debug APK
-./gradlew assembleDebug
+## Device testing
 
-# Build release APK (ProGuard enabled)
-./gradlew assembleRelease
+Debug builds use application id `com.vettid.app.dev`; never install over
+`com.vettid.app`. Screenshot launch extras (debug only):
+`adb shell am start -S -n com.vettid.app.dev/com.vettid.app.MainActivity --es vettid.theme dark|light --es vettid.start gallery|messages|connections|approvals|items|credential|settings|help`.
+Screenshots and the Proton reference images stay out of git (`local/`, or the
+vettid.org repo's `local/android-ui/`).
 
-# Run unit tests
-./gradlew test
+## Conventions
 
-# Run single test class
-./gradlew test --tests "com.vettid.app.ExampleTest"
-
-# Run instrumented tests
-./gradlew connectedAndroidTest
-
-# Lint checks
-./gradlew lint
-
-# Clean build
-./gradlew clean
-```
-
-## Architecture
-
-**Stack**: Kotlin 1.9, Jetpack Compose, Hilt DI, Retrofit, Tink, Argon2, Coroutines
-
-**Package structure** (`app/src/main/java/com/vettid/app/`):
-- `core/crypto/` - CryptoManager handles X25519 key exchange, ChaCha20-Poly1305 encryption, Argon2id hashing, HKDF key derivation. Hardware-backed EC keys in Android Keystore for attestation.
-- `core/attestation/` - HardwareAttestationManager generates hardware-backed attestation certificates. Supports StrongBox (Pixel 3+), TEE, and software fallback.
-- `core/storage/` - CredentialStore uses EncryptedSharedPreferences for credential persistence (encrypted blob, UTK pool, LAT, password salt).
-- `core/network/` - ApiClient wraps Retrofit for VettID Ledger Service API (multi-step enrollment, action-based auth).
-- `features/auth/` - BiometricAuthManager handles fingerprint/face authentication with device credential fallback.
-- `di/` - Hilt AppModule provides singleton instances of core managers.
-- `ui/` - Compose screens and theme.
-
-**Navigation flow** (VettIDApp.kt): Welcome → Enrollment (QR scan) → Authentication (biometric) → Main (vault/credentials/settings tabs)
-
-## Key Ownership Model
-
-**Ledger (Backend) Owns:**
-- CEK (Credential Encryption Key) - X25519 private key for encrypting credential blob
-- LTK (Ledger Transaction Key) - X25519 private key for decrypting password hashes
-
-**Mobile Stores:**
-- Encrypted credential blob (opaque, cannot decrypt locally)
-- UTK pool (User Transaction Keys) - X25519 **public** keys for encrypting password
-- LAT (Ledger Auth Token) - 256-bit hex token for verifying server authenticity
-- Password salt - For Argon2id hashing
-
-## API Endpoints
-
-Base URL: `https://api.vettid.com/`
-
-**Enrollment (Multi-Step):**
-- `POST /api/v1/enroll/start` - Start enrollment with invitation code
-- `POST /api/v1/enroll/set-password` - Set encrypted password hash
-- `POST /api/v1/enroll/finalize` - Complete enrollment, receive credential package
-
-**Authentication (Action-Specific):**
-- `POST /api/v1/action/request` - Request scoped action token (requires Cognito token)
-- `POST /api/v1/auth/execute` - Execute auth with action token (NOT Cognito token)
-
-**Vault (Phase 5 - Not Yet Deployed):**
-- `GET /member/vaults/{id}/status` - Vault status
-- `POST /member/vaults/{id}/start` - Start vault
-- `POST /member/vaults/{id}/stop` - Stop vault
-
-## Crypto Flow
-
-**Password Encryption (for API):**
-1. Hash password: `Argon2id(password, salt)` → 32-byte hash
-2. Generate ephemeral X25519 keypair
-3. Compute shared secret: `X25519(ephemeral_private, UTK_public)`
-4. Derive key: `HKDF-SHA256(shared, "password-encryption")` → 32-byte key
-5. Encrypt: `ChaCha20-Poly1305(password_hash, key, nonce)`
-6. Send: `encrypted_password_hash`, `ephemeral_public_key`, `nonce`, `key_id`
-
-## Platform Requirements
-
-- minSdk 26 (Android 8.0)
-- targetSdk 34
-- Java 17
-- Supports GrapheneOS and other security-focused ROMs with hardware-backed Keystore
-
-## Development Scripts
-
-### Vault Decommission (Reset for Re-enrollment)
-
-Use this to completely reset a user's vault for testing re-enrollment:
-
-```bash
-# Decommission by user_guid
-./scripts/decommission-vault.sh af44310d-2051-46a1-afd8-ee275b53f804
-
-# Decommission and clear app data
-./scripts/decommission-vault.sh af44310d-2051-46a1-afd8-ee275b53f804 --clear-app
-
-# Auto-detect user_guid from device logs and clear app
-./scripts/decommission-vault.sh --from-device --clear-app
-```
-
-This script:
-1. Calls the decommission Lambda to clear backend data (DynamoDB, S3)
-2. Sends NATS message via SSM to clear enclave credential
-3. Optionally clears app data on connected device
-
-**Prerequisites:** AWS CLI configured, Lambda/SSM access, adb for device operations
-
-### Quick Device Commands
-
-```bash
-# Install and launch app
-./gradlew installProductionDebug && adb shell am start -n com.vettid.app/.MainActivity
-
-# Clear app data only (keeps vault on server)
-adb shell pm clear com.vettid.app
-
-# View enrollment logs
-adb logcat -s EnrollmentWizardVM:* NitroEnrollmentClient:* NitroAttestation:*
-
-# Test deep link enrollment
-adb shell am start -d "vettid://enroll/TEST123"
-```
-
+- Kotlin, Compose + Material3, Hilt (KSP), coroutines/Flow, type-safe Navigation
+  (`@Serializable` route objects, one `NavGraphBuilder.xDestination()` per feature).
+- Features depend only on `:core:*`; no feature touches transport or crypto
+  directly; one ViewModel per screen with immutable UI state.
+- Every user-visible string in `res/values/strings.xml` (prefixed with the module
+  name, e.g. `messages_…`, `core_ui_…`); every icon-only control has a content
+  description; touch targets ≥ 48dp.
+- Colours only through `MaterialTheme.colorScheme` / `VettIdTheme.colors`:
+  `primary` = gold content, `primaryContainer` = gold fill; never hard-code colours
+  in screens. Gold is the single accent. `ContrastTest` guards WCAG AA.
+- Reuse `:core:ui` components (top bar, drawer, list row, empty state, floating
+  controls, pill bar, settings groups, avatar sheet, confirm dialog) before adding new ones;
+  every new component goes into the debug gallery.
+- Every destructive action uses `ConfirmDialog`; every critical action asks for the
+  credential password. No backup/export of vault data (`allowBackup=false`).
+- Commits: explicit paths only (never `git add -A`); PRs into `master`.

@@ -1,0 +1,64 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    # Build (debug + R8 release), unit tests, Android lint and detekt. Touches no
+    # signing secrets: the release APK is built unsigned.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+      - name: detekt
+        run: ./gradlew detekt
+      - name: unit tests
+        run: ./gradlew testDebugUnitTest
+      - name: Android lint
+        run: ./gradlew :app:lintDebug
+      - name: build (debug + release)
+        run: ./gradlew :app:assembleDebug :app:assembleRelease
+      - name: reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: reports
+          path: |
+            **/build/reports/**
+            **/build/test-results/**
+          if-no-files-found: ignore
+          retention-days: 14
+
+  gitleaks:
+    # Pinned binary over the FULL history (the gitleaks-action fails on a
+    # branch's first push, where there is no "before" commit). Reviewed findings
+    # in the v1 history are listed in .gitleaksignore.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: install gitleaks v8.30.1 (checksum-verified)
+        run: |
+          curl -sSLo gl.tgz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gl.tgz" | sha256sum -c -
+          tar -xzf gl.tgz gitleaks
+      - name: scan full history
+        run: ./gitleaks git --redact --verbose .

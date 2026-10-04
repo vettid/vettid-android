@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="approvals_title">Approvals</string>
+    <string name="approvals_empty_title">Nothing to approve</string>
+    <string name="approvals_empty_body">Requests that need your decision appear here</string>
+</resources>

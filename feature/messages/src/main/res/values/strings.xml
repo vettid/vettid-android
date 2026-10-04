@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="messages_title">Messages</string>
+    <string name="messages_empty_title">No messages</string>
+    <string name="messages_empty_body">Conversations with your connections appear here</string>
+    <string name="messages_filter">Unread</string>
+    <string name="messages_add">New message</string>
+</resources>

@@ -1,0 +1,37 @@
+# Findings in the v1 app history (legacy-v1-final and earlier), all in files removed by the
+# rewrite. Reviewed 2026-10-04: public keys, PCR/signing public keys, test fixtures and spec
+# examples, plus one test-API key for the retired vettid.dev test endpoint (TEST-COORDINATION.md).
+# New findings are not covered by this list.
+08845c16ec3634e0e1f93cad21ecaec535eeded1:TEST-COORDINATION.md:generic-api-key:1118
+08845c16ec3634e0e1f93cad21ecaec535eeded1:TEST-COORDINATION.md:generic-api-key:1119
+1d390a18ab2f7ecb348c05824cef33b12110cc6d:app/src/main/java/com/vettid/app/core/attestation/PcrConfigManager.kt:generic-api-key:49
+1d390a18ab2f7ecb348c05824cef33b12110cc6d:app/src/main/java/com/vettid/app/core/attestation/PcrConfigManager.kt:generic-api-key:51
+4951fc81511f40d6bdf2d63a95b31b7a58f5e5a7:app/src/main/java/com/vettid/app/core/attestation/PcrConfigManager.kt:generic-api-key:62
+4e2bd862717c6faeb1da48db52ecfe030e8d0f2e:TEST-COORDINATION.md:generic-api-key:444
+4ff288c85d1fb289d0e90a9f46a2e0fa484540ca:TEST-COORDINATION.md:generic-api-key:1179
+54ae8e6854196883fb515532104398a7d3d31a7e:TEST-COORDINATION.md:generic-api-key:1221
+5f3b9cfe27a23ebe6b1365497f7f00ef37667e80:app/src/androidTest/java/com/vettid/app/core/nats/TcpConnectivityTest.kt:generic-api-key:406
+7f7d8b6f14e1d4ded9926019b9cc69edb40701f7:TEST-COORDINATION.md:curl-auth-header:126
+875f748eb04acc0e4b368f64c1196994d5db3196:docs/protean_credential_system_design.md:generic-api-key:2068
+875f748eb04acc0e4b368f64c1196994d5db3196:docs/protean_credential_system_design.md:generic-api-key:2072
+875f748eb04acc0e4b368f64c1196994d5db3196:docs/protean_credential_system_design.md:generic-api-key:3373
+875f748eb04acc0e4b368f64c1196994d5db3196:docs/protean_credential_system_design.md:generic-api-key:3406
+875f748eb04acc0e4b368f64c1196994d5db3196:docs/protean_credential_system_design.md:generic-api-key:3445
+875f748eb04acc0e4b368f64c1196994d5db3196:docs/protean_credential_system_design.md:generic-api-key:3536
+8af67bf8e351930e4fe9c0b13499c656a8fa4c22:TEST-COORDINATION.md:generic-api-key:1024
+8af67bf8e351930e4fe9c0b13499c656a8fa4c22:TEST-COORDINATION.md:generic-api-key:1025
+a4c16c6fa9b1b2b76b927f0d54003e4416acc563:TEST-COORDINATION.md:curl-auth-header:197
+a4c16c6fa9b1b2b76b927f0d54003e4416acc563:TEST-COORDINATION.md:generic-api-key:203
+b82bc93599959fd9f3e967acf7b8740fc3cc7833:app/src/main/java/com/vettid/app/core/attestation/PcrConfigManager.kt:generic-api-key:49
+b82bc93599959fd9f3e967acf7b8740fc3cc7833:app/src/main/java/com/vettid/app/core/attestation/PcrConfigManager.kt:generic-api-key:51
+bc8cb09f98bc714e4bacf2c9882b847c33ef8a77:app/src/test/java/com/vettid/app/core/crypto/SessionCryptoTest.kt:generic-api-key:359
+c853fe859eee168a0b40f8f1294889a2f857068b:app/src/main/java/com/vettid/app/core/attestation/PcrConfigManager.kt:generic-api-key:48
+c853fe859eee168a0b40f8f1294889a2f857068b:app/src/main/java/com/vettid/app/core/attestation/PcrConfigManager.kt:generic-api-key:49
+ce41623db38023f127eeb6d32c1b2ea56cb06188:CLAUDE.md:generic-api-key:35
+e47cea0a5f253e9579c4b6ce00dfd3260331bed0:app/src/test/java/com/vettid/app/core/crypto/CryptoManagerTest.kt:generic-api-key:221
+e47cea0a5f253e9579c4b6ce00dfd3260331bed0:app/src/test/java/com/vettid/app/core/crypto/CryptoManagerTest.kt:generic-api-key:228
+e47cea0a5f253e9579c4b6ce00dfd3260331bed0:app/src/test/java/com/vettid/app/core/crypto/CryptoManagerTest.kt:generic-api-key:229
+e47cea0a5f253e9579c4b6ce00dfd3260331bed0:app/src/test/java/com/vettid/app/core/crypto/CryptoManagerTest.kt:generic-api-key:236
+e47cea0a5f253e9579c4b6ce00dfd3260331bed0:app/src/test/java/com/vettid/app/core/storage/CredentialStoreTest.kt:generic-api-key:131
+e47cea0a5f253e9579c4b6ce00dfd3260331bed0:app/src/test/java/com/vettid/app/core/storage/CredentialStoreTest.kt:generic-api-key:157
+e47cea0a5f253e9579c4b6ce00dfd3260331bed0:app/src/test/java/com/vettid/app/core/storage/CredentialStoreTest.kt:generic-api-key:38

@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_title">Settings</string>
+    <string name="settings_section_vault">Vault</string>
+    <string name="settings_vault_status">Vault status</string>
+    <string name="settings_vault_release">Vault release</string>
+    <string name="settings_vault_lock">Lock vault</string>
+    <string name="settings_vault_pin">Change vault PIN</string>
+    <string name="settings_section_security">Security</string>
+    <string name="settings_security_credential">Credential password</string>
+    <string name="settings_security_recovery">Recovery</string>
+    <string name="settings_security_attestation">Attestation</string>
+    <string name="settings_security_app_lock">Biometric app lock</string>
+    <string name="settings_security_app_lock_body">Ask for a fingerprint, face or screen lock when opening VettID</string>
+    <string name="settings_security_lock_timeout">Lock after</string>
+    <string name="settings_section_privacy">Privacy</string>
+    <string name="settings_privacy_profile">Shared profile</string>
+    <string name="settings_privacy_sharing">Sharing rules</string>
+    <string name="settings_section_app">App</string>
+    <string name="settings_app_theme">Theme</string>
+    <string name="settings_app_notifications">Notifications</string>
+    <string name="settings_theme_system">System default</string>
+    <string name="settings_theme_light">Light</string>
+    <string name="settings_theme_dark">Dark</string>
+    <string name="settings_not_enrolled">Not enrolled</string>
+    <string name="settings_timeout_5min">5 minutes</string>
+
+    <string name="help_title">Help</string>
+    <string name="help_section_learn">Learn</string>
+    <string name="help_about">About VettID</string>
+    <string name="help_security">How VettID protects you</string>
+    <string name="help_section_support">Support</string>
+    <string name="help_contact">Contact us</string>
+    <string name="help_url_about" translatable="false">https://vettid.org/about</string>
+    <string name="help_url_security" translatable="false">https://vettid.org/security</string>
+    <string name="help_url_contact" translatable="false">https://vettid.org/contact</string>
+</resources>

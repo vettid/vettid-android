@@ -2,166 +2,28 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Permissions -->
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.CAMERA" />
-
-    <!-- Calling permissions -->
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
-    <uses-permission android:name="android.permission.VIBRATE" />
-    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-
-    <!--
-      Location tracking is strictly opt-in (settings: VaultPreferencesScreen
-      / LocationSettingsScreen). The manifest declarations are required so
-      the runtime permission prompts can render at all; LocationCollectionWorker
-      defensively re-checks PackageManager.PERMISSION_GRANTED on every fire
-      and short-circuits if the user hasn't granted (or has revoked) any of
-      the three. ACCESS_BACKGROUND_LOCATION is only meaningful on API 29+;
-      on older devices the system ignores it. SECURITY (#100): if a future
-      build introduces a "Lite" flavor that ships without the location
-      feature, remove these declarations from that flavor's manifest
-      overlay rather than leaving them as residual install-time prompts.
-    -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
-
-    <!-- Foreground service for vault protection -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL" />
-    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
-    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
-
-    <!-- Hardware features -->
-    <uses-feature android:name="android.hardware.camera" android:required="false" />
-    <uses-feature android:name="android.hardware.microphone" android:required="false" />
-    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
-
+    <!-- No backup or export of vault data (ANDROID-PLAN §4): nothing leaves the
+         device through Auto Backup or device-to-device transfer. -->
     <application
-        android:name=".VettIDApplication"
+        android:name=".VettIdApplication"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
-        android:fullBackupContent="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
-        android:roundIcon="@mipmap/ic_launcher_round"
+        android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.VettID"
-        android:networkSecurityConfig="@xml/network_security_config"
-        android:usesCleartextTraffic="false"
-        tools:targetApi="31">
-
-        <!-- Disable default WorkManager initializer so Hilt can provide HiltWorkerFactory -->
-        <provider
-            android:name="androidx.startup.InitializationProvider"
-            android:authorities="${applicationId}.androidx-startup"
-            android:exported="false"
-            tools:node="merge">
-            <meta-data
-                android:name="androidx.work.WorkManagerInitializer"
-                android:value="androidx.startup"
-                tools:node="remove" />
-        </provider>
+        android:enableOnBackInvokedCallback="true"
+        tools:targetApi="33">
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:label="@string/app_name"
-            android:launchMode="singleTask"
-            android:taskAffinity=""
-            android:excludeFromRecents="false"
-            android:theme="@style/Theme.VettID">
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-
-            <!-- Deep link for enrollment (vettid.dev) -->
-            <intent-filter android:autoVerify="true">
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:scheme="https"
-                    android:host="vettid.dev"
-                    android:pathPrefix="/enroll" />
-            </intent-filter>
-
-            <!-- Deep link for connections (vettid.dev) -->
-            <intent-filter android:autoVerify="true">
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:scheme="https"
-                    android:host="vettid.dev"
-                    android:pathPrefix="/connect" />
-            </intent-filter>
-
-            <!-- Custom scheme for enrollment -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="vettid" android:host="enroll" />
-            </intent-filter>
-
-            <!-- Custom scheme for connections -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="vettid" android:host="connect" />
-            </intent-filter>
-
-            <!-- Deep link for voting (vettid.dev) -->
-            <intent-filter android:autoVerify="true">
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:scheme="https"
-                    android:host="vettid.dev"
-                    android:pathPrefix="/votes" />
-            </intent-filter>
-
-            <!-- Custom scheme for voting -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="vettid" android:host="votes" />
-            </intent-filter>
         </activity>
-
-        <!-- Vault protection foreground service -->
-        <service
-            android:name=".core.notifications.VaultProtectionService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
-
-        <!-- Incoming call foreground service -->
-        <service
-            android:name=".features.calling.CallForegroundService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="phoneCall" />
-
-        <!-- Feed notification action receiver -->
-        <receiver
-            android:name=".features.feed.FeedActionReceiver"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="com.vettid.app.FEED_ACTION" />
-            </intent-filter>
-        </receiver>
     </application>
-
 </manifest>

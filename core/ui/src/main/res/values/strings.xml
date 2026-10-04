@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="core_ui_cd_open_menu">Open navigation menu</string>
+    <string name="core_ui_cd_search">Search</string>
+    <string name="core_ui_cd_account">Account: %1$s</string>
+    <string name="core_ui_cd_back">Back</string>
+    <string name="core_ui_cd_logo">VettID</string>
+    <string name="core_ui_cancel">Cancel</string>
+    <plurals name="core_ui_badge_count">
+        <item quantity="one">%1$d pending</item>
+        <item quantity="other">%1$d pending</item>
+    </plurals>
+    <string name="core_ui_filter_on">%1$s filter on</string>
+    <string name="core_ui_filter_off">%1$s filter off</string>
+    <string name="core_ui_brand_name">VettID</string>
+</resources>
