@@ -96,3 +96,75 @@ interface CredentialRepository {
     /** Answers the alarm: [mine] = "that was me" (§3.5.9). Either way a rotation follows. */
     suspend fun confirmAlarm(mine: Boolean)
 }
+
+/**
+ * Moving the vault to another phone (VAULT-MESSAGING §11.11 recovery, §6.7.1
+ * direct transfer), on both phones. Every failure is a [VaultFailure].
+ */
+@Suppress("TooManyFunctions")
+interface MoveRepository {
+    // --- recovery, on the new phone (§11.11) ---
+
+    /** Where a recovery on this phone stands. */
+    suspend fun recoveryStage(): RecoveryStage
+
+    /** The account's vault and its recovery (member API `GET /api/vault/status` and `GET /api/vault/recovery`). */
+    suspend fun recoveryTarget(): RecoveryTarget
+
+    /**
+     * Registers this phone with the portal's code (§11.11.3), attested. A typed
+     * [code] uses the vault and recovery ids of [target].
+     */
+    suspend fun registerRecovery(vaultId: String, recoveryId: String, code: String): RecoveryRegistration
+
+    /** The release check before the PIN (§11.10.6), as for an unlock. */
+    suspend fun recoveryPreflight(): PreflightInfo
+
+    /** Unlocks with the PIN (§11.11.5 step 1) and runs the first handshake (step 2). */
+    suspend fun recoveryUnlock(pin: String, approve: ReleaseView? = null): UnlockAttempt
+
+    /** `credential.recover` with the password (§11.11.5 step 3). */
+    suspend fun recoverCredential(password: String): RecoverOutcome
+
+    /** Backup off: a new credential under [password]; the old one and every critical item are destroyed (§11.11.5 step 4). */
+    suspend fun resetCredential(password: String)
+
+    /** Backup off: deletes the vault with the PIN alone (§11.11.5 step 4, §12.5). Irreversible. */
+    suspend fun deleteRecoveredVault(pin: String)
+
+    // --- direct transfer, the new phone (§6.7.1) ---
+
+    /**
+     * Starts the transfer from the old phone's code ([code]: the scanned QR or a
+     * pasted link) and returns the SAS once the handshake checked out.
+     */
+    suspend fun transferIn(code: String): String
+
+    /**
+     * Waits for the old phone's approval, then takes the credential over (`credential.get`,
+     * `credential.ack`, `credential.utk.get`). [FailureKind.REJECTED] when the owner rejected it;
+     * [FailureKind.NO_RESPONSE] after 10 minutes.
+     */
+    suspend fun awaitTransferIn()
+
+    /** Drops a transfer this phone started and has not completed. */
+    suspend fun abandonTransferIn()
+
+    // --- direct transfer, the old phone (§6.7.1) ---
+
+    /** `device.transfer.create`. */
+    suspend fun transferCreate(): TransferOfferView
+
+    /** Waits until [until] for the new phone's `device.transfer.pending`; null when the code expired first. */
+    suspend fun awaitTransferPending(transferId: String, until: Instant): TransferPendingView?
+
+    /** Approves with the PIN and the password; on success this phone no longer holds the vault ([AppPhase.Replaced]). */
+    suspend fun transferApprove(transferId: String, pin: String, password: String)
+
+    suspend fun transferReject(transferId: String)
+
+    // --- the old phone after a move ---
+
+    /** The member read "This phone no longer holds your vault": set up this phone again. */
+    suspend fun acknowledgeReplaced()
+}

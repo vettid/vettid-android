@@ -25,12 +25,19 @@ import com.vettid.core.crypto.Base64s
 import com.vettid.core.crypto.CryptoException
 import com.vettid.core.crypto.Ed25519
 import com.vettid.core.crypto.Ed25519PrivateKey
+import com.vettid.core.crypto.altchan.AltChannel
+import com.vettid.core.crypto.altchan.DeviceAttest
 import com.vettid.core.crypto.envelope.Envelope
 import com.vettid.core.crypto.envelope.Inner
 import com.vettid.core.crypto.envelope.Mode
+import com.vettid.core.crypto.envelope.Timestamps
 import com.vettid.core.crypto.envelope.Ulid
 import com.vettid.core.crypto.hpke.KemPrivateKey
 import com.vettid.core.crypto.hpke.KemPublicKey
+import com.vettid.core.crypto.invite.InviteBundle
+import com.vettid.core.crypto.invite.InviteKind
+import com.vettid.core.crypto.invite.InviteQr
+import com.vettid.core.crypto.json.JsonBuilder
 import com.vettid.core.crypto.json.StrictJson
 import com.vettid.core.crypto.session.Epoch
 import com.vettid.core.crypto.session.Initiator
@@ -76,6 +83,7 @@ import java.io.IOException
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
+import java.time.temporal.ChronoUnit
 import java.util.concurrent.ConcurrentHashMap
 
 /** The device's own keys (§3.2), unwrapped from the Keystore (`:core:keystore` DeviceKeys) for the device's lifetime. */
@@ -149,6 +157,10 @@ class VaultStateException(message: String) : IOException("vault client: $message
  */
 class PairingRejectedException : IOException("vault client: pairing rejected on the owner's phone")
 
+/** A scanned or pasted code is not a direct-transfer code (§6.7.1: a pairing QR of kind `p`, bundle kind `app`). */
+class NotATransferCodeException(val expired: Boolean = false) :
+    IOException(if (expired) "vault client: the transfer code has expired" else "vault client: not a transfer code")
+
 /**
  * One owner device of a vault (VAULT-MESSAGING §6.7, §9.1, §11.3), the
  * Kotlin counterpart of vettid-vault's reference `client.Device`.
@@ -190,6 +202,7 @@ class VaultDevice private constructor(
     private val eventFlow =
         MutableSharedFlow<VaultMessage>(extraBufferCapacity = EVENT_BUFFER, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     private val pairedState = MutableStateFlow(st.deviceId != null)
+    private val sasState = MutableStateFlow<String?>(null)
     private var collector: Job? = null
 
     /** Every event from the vault (no responses), as it arrives. */
@@ -199,6 +212,15 @@ class VaultDevice private constructor(
     val paired: StateFlow<Boolean> = pairedState.asStateFlow()
 
     val vaultId: String? get() = st.vaultId
+
+    /** True while this app recovers a vault (§11.11): registered, until `credential.recover` or `credential.reset`. */
+    val recovering: Boolean get() = st.recovery != null
+
+    /**
+     * The SAS of the pairing handshake in progress (§6.3, 0.10.3): set once the
+     * vault's `hs.resp` checked out and this device sent `hs.fin`; null before.
+     */
+    val pairingSas: StateFlow<String?> = sasState.asStateFlow()
     val deviceId: String? get() = st.deviceId
     val name: String get() = st.name
 
@@ -371,6 +393,17 @@ class VaultDevice private constructor(
             req
         }
 
+    /** Forgets a registration the enclave refused (§11.11.3), so that a new code can be tried. */
+    suspend fun dropRecoveryRegistration() = lock.withLock {
+        if (st.deviceId != null || st.vault != null) return@withLock
+        st.recovery = null
+        st.vaultId = null
+        save()
+    }
+
+    /** True when the device has pinned a vault (enrolled, recovering after its unlock, or pairing). */
+    val hasVault: Boolean get() = st.vault != null
+
     fun openRecoveryResult(raw: ByteArray, requestId: String): RecoveryResult =
         RecoveryResult.parse(AltResults.open(raw, secrets.kem, AltResults.TYPE_RECOVERY_RESULT, requestId))
 
@@ -423,20 +456,87 @@ class VaultDevice private constructor(
         pairedState.value = true
     }
 
-    private suspend fun startInit(purpose: Purpose, ctx: String, depositToken: String, profile: ByteArray?) {
+    @Suppress("LongParameterList")
+    private suspend fun startInit(
+        purpose: Purpose,
+        ctx: String,
+        depositToken: String,
+        profile: ByteArray?,
+        deviceAttest: DeviceAttest? = null,
+        id: String? = null,
+        at: Instant = now(),
+    ) {
         val v = requireVault()
         val tok = mintForVault()
         val i = Initiator.create(
             InitiatorConfig(
                 purpose = purpose, ctx = ctx, identity = secrets.identity, staticKem = secrets.kem.publicKey, relay = relayAddr,
-                token = tok, profile = profile, responderIk = Base64s.decodeStd(v.ik),
+                token = tok, profile = profile, deviceAttest = deviceAttest, responderIk = Base64s.decodeStd(v.ik),
                 responderEk = KemPublicKey.parse(Base64s.decodeStd(v.kem)),
-                responderRelayKey = Base64s.decodeStd(v.relayPk), policy = Policy.VAULT_TO_DEVICE, now = now(),
+                responderRelayKey = Base64s.decodeStd(v.relayPk), policy = Policy.VAULT_TO_DEVICE, id = id, now = at,
             ),
         )
         relayFor(v.relayUrl).deposit(v.mailbox, depositToken, i.envelope())
         ini?.abort()
         ini = i
+    }
+
+    // --- direct transfer, the new app's side (§6.7.1) ---
+
+    /**
+     * Starts a direct transfer to this phone from the old app's QR or link
+     * (§6.7.1), as vettid-vault's `PairAttested`: fetches the claim from the
+     * link's relay, checks it against the QR, pins the vault from the bundle and
+     * sends `hs.init` (purpose app, ctx = the bundle's invite id) with the device
+     * attestation over the §11.7 challenge (the `hs.init` id, an empty vault id
+     * and its `ts`). The vault answers with `hs.resp` at once; this device sends
+     * `hs.fin`, and the SAS appears in [pairingSas]. Returns when `hs.init` is sent.
+     */
+    suspend fun startTransfer(link: String, attester: Attester) {
+        val q = try {
+            InviteQr.parseLink(link)
+        } catch (_: CryptoException) {
+            throw NotATransferCodeException()
+        } catch (_: IllegalArgumentException) {
+            throw NotATransferCodeException()
+        }
+        if (q.kind != InviteKind.APP) throw NotATransferCodeException()
+        if (!now().isBefore(Instant.ofEpochSecond(q.exp))) throw NotATransferCodeException(expired = true)
+        val blob = relayFor(q.relay).getClaim(q.claimId)
+        lock.withLock {
+            if (st.deviceId != null) throw VaultStateException("already paired with a vault")
+            val t = now()
+            val b = try {
+                InviteBundle.open(blob, q, t)
+            } catch (e: CryptoException.Time) {
+                throw NotATransferCodeException(expired = true).also { it.initCause(e) }
+            }
+            if (b.kind != InviteKind.APP) throw NotATransferCodeException()
+            setVault(b.vault)
+            st.vaultId = null
+            sasState.value = null
+            val at = t.truncatedTo(ChronoUnit.MILLIS)
+            val id = Ulid.new(at)
+            val attest = attester.attest(AltChannel.devattChallenge(id, "", Timestamps.formatMillis(at)))
+            val profile = JsonBuilder().string("name", st.name).bytes()
+            startInit(Purpose.APP, b.inviteId, b.token, profile, attest, id, at)
+            save()
+        }
+    }
+
+    /**
+     * Waits for the transfer's `device.paired` (the old app's approval completes
+     * the transfer, §6.7.1) or `device.pair.rejected` ([PairingRejectedException]).
+     */
+    suspend fun awaitTransfer(timeout: Duration) = awaitPaired(timeout)
+
+    /** Drops a transfer this device started and has not completed (left the screen, timed out). */
+    suspend fun abandonTransfer() = lock.withLock {
+        if (st.deviceId != null) return@withLock
+        dropPairing()
+        st.vault = null
+        sasState.value = null
+        save()
     }
 
     // --- sending (§8) ---
@@ -645,6 +745,7 @@ class VaultDevice private constructor(
      * denylisted that token); a redelivery finds no epoch to open it and is dropped.
      */
     private fun dropPairing() {
+        sasState.value = null
         ini?.abort()
         ini = null
         awaiting.forEach { it.abort() }
@@ -726,6 +827,7 @@ class VaultDevice private constructor(
         keyring.activate(res.epoch, t)
         save()
         relayFor(v.relayUrl).deposit(v.mailbox, v.token, res.fin)
+        res.sas?.let { sasState.value = it }
     }
 
     /** Answers a vault-initiated rekey (§6.5). */

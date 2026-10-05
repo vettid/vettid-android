@@ -23,6 +23,7 @@ import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Password
 import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.PhonelinkSetup
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Storage
@@ -83,6 +84,9 @@ data object RecoveryRoute
 data object AttestationRoute
 
 @Serializable
+data object TransferOutRoute
+
+@Serializable
 data object DeleteVaultRoute
 
 /** What Settings needs from the app shell. */
@@ -111,6 +115,7 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 changePin = { host.navigate(ChangePinRoute) },
                 credential = host.onOpenCredential,
                 recovery = { host.navigate(RecoveryRoute) },
+                transfer = { host.navigate(TransferOutRoute) },
                 attestation = { host.navigate(AttestationRoute) },
                 setAppLock = { on -> if (on) host.onEnableAppLock() else vm.disableAppLock() },
                 acknowledgeInvalidated = vm::acknowledgeInvalidated,
@@ -136,7 +141,12 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
     composable<RecoveryRoute> {
         val vm: RecoveryViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
-        RecoveryContent(state, vm::cancel, host.onOpenAccountSite, host.onBack)
+        RecoveryContent(state, vm::cancel, host.onOpenAccountSite, host.onBack, onTransfer = { host.navigate(TransferOutRoute) })
+    }
+    composable<TransferOutRoute> {
+        val vm: TransferOutViewModel = hiltViewModel()
+        val state by vm.uiState.collectAsStateWithLifecycle()
+        TransferOutContent(state, vm, onOpenRecovery = { host.navigate(RecoveryRoute) }, onBack = host.onBack)
     }
     composable<AttestationRoute> {
         val vm: AttestationViewModel = hiltViewModel()
@@ -198,6 +208,7 @@ data class SettingsActions(
     val changePin: () -> Unit = {},
     val credential: () -> Unit = {},
     val recovery: () -> Unit = {},
+    val transfer: () -> Unit = {},
     val attestation: () -> Unit = {},
     val setAppLock: (Boolean) -> Unit = {},
     val acknowledgeInvalidated: () -> Unit = {},
@@ -263,6 +274,11 @@ fun SettingsContent(state: SettingsUiState, actions: SettingsActions) {
                 SettingsRow(
                     stringResource(R.string.settings_security_credential), actions.credential, icon = Icons.Outlined.Key,
                     supporting = stringResource(R.string.settings_security_credential_body),
+                )
+                SettingsDivider()
+                SettingsRow(
+                    stringResource(R.string.settings_security_transfer), actions.transfer, icon = Icons.Outlined.PhonelinkSetup,
+                    supporting = stringResource(R.string.settings_security_transfer_body), modifier = Modifier.testTag("transfer"),
                 )
                 SettingsDivider()
                 SettingsRow(stringResource(R.string.settings_security_recovery), actions.recovery, icon = Icons.Outlined.Restore)

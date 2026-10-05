@@ -28,6 +28,25 @@ sealed interface AppPhase {
 
     /** The vault is open and this app is its holder. */
     data object Unlocked : AppPhase
+
+    /**
+     * This phone no longer holds the vault: a direct transfer moved it to a new
+     * phone, or a recovery replaced this app (§6.7.1, §11.11.5). Shown until the
+     * member moves on (survives restarts).
+     */
+    data class Replaced(val reason: ReplacedReason) : AppPhase
+}
+
+/** Why this phone no longer holds the vault (`device.unlinked{reason}`, §10.3). */
+enum class ReplacedReason {
+    /** A direct transfer to a new phone (`transferred`). */
+    TRANSFERRED,
+
+    /** A recovery on another phone (`replaced`). */
+    RECOVERED,
+
+    /** The vault no longer knows this phone (`unknown_device` at unlock, or no reason given). */
+    UNKNOWN,
 }
 
 enum class SetupStage {
@@ -42,6 +61,9 @@ enum class SetupStage {
 
     /** Everything done; the member has not left the final onboarding screen yet. */
     FINISHING,
+
+    /** This phone is recovering the vault (§11.11): registered with the code, until the credential is recovered or reset. */
+    RECOVERING,
 }
 
 /** The signed-in member, for display. */
@@ -205,9 +227,65 @@ enum class FailureKind {
     CREDENTIAL_LOCKED,
     CONFLICT,
     LIMIT,
+
+    /** The owner rejected this phone's transfer on their old phone (`device.pair.rejected`, §6.7). */
+    REJECTED,
     OTHER,
 }
 
 /** A failed action: [kind] for the UI, [code] the spec's or API's code. */
 class VaultFailure(val kind: FailureKind, val code: String? = null, val retryAfterSeconds: Long = 0, cause: Throwable? = null) :
     Exception("$kind${code?.let { " ($it)" } ?: ""}", cause)
+
+// --- recovery on a new phone (§11.11) and direct transfer (§6.7.1) ---
+
+/** The account's recovery as this (new) phone sees it: the vault the account has and the member API's recovery record. */
+data class RecoveryTarget(val vaultId: String?, val recovery: RecoveryView?)
+
+/** Where a recovery on this phone stands (it survives restarts). */
+enum class RecoveryStage {
+    /** Not registered yet: scan or type the code. */
+    CODE,
+
+    /** Registered (§11.11.3): unlock with the PIN. */
+    PIN,
+
+    /** Unlocked and paired as a restricted app: the credential password (§11.11.5). */
+    PASSWORD,
+}
+
+/** `vault.recovery.register`'s answer (§11.11.3), or the member API's gate before it. */
+sealed interface RecoveryRegistration {
+    data object Registered : RecoveryRegistration
+
+    /**
+     * Refused: [code] is the enclave's (`no_recovery`, `used`, `expired`, `too_early`, `bad_code`,
+     * `attestation`, `bad_request`, `retry`) or `not_available` (the API's `409 recovery_not_available`).
+     */
+    data class Refused(val code: String) : RecoveryRegistration
+}
+
+/** `credential.recover`'s outcome (§11.11.5). */
+enum class RecoverOutcome {
+    /** The credential was handed over: this phone holds the vault; the old app is removed. */
+    RECOVERED,
+
+    /** `credential_lost`: the backup was off. Only a new credential or deleting the vault remain. */
+    CREDENTIAL_LOST,
+
+    /** `credential_required`: the vault has no credential (should not happen past enrollment). */
+    CREDENTIAL_REQUIRED,
+}
+
+/** A direct transfer the old phone opened (`device.transfer.create`, §6.7.1). */
+data class TransferOfferView(
+    val transferId: String,
+    /** The QR content: the compact JSON pairing payload (§6.4). */
+    val qrPayload: String,
+    /** The same code as a link, for pasting. */
+    val link: String,
+    val expiresAt: Instant,
+)
+
+/** `device.transfer.pending` (§6.7.1): the new phone's handshake checked out. */
+data class TransferPendingView(val transferId: String, val name: String, val sas: String)

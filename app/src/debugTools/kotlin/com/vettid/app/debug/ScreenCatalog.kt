@@ -97,6 +97,24 @@ import com.vettid.feature.onboarding.UnlockActions
 import com.vettid.feature.onboarding.UnlockContent
 import com.vettid.feature.onboarding.UnlockMessage
 import com.vettid.feature.onboarding.UnlockUiState
+import com.vettid.feature.onboarding.CodeRefusal
+import com.vettid.feature.onboarding.RecoverActions
+import com.vettid.feature.onboarding.RecoverContent
+import com.vettid.feature.onboarding.RecoverStep
+import com.vettid.feature.onboarding.RecoverUiState
+import com.vettid.feature.onboarding.ReplacedScreen
+import com.vettid.feature.onboarding.TransferInActions
+import com.vettid.feature.onboarding.TransferInContent
+import com.vettid.feature.onboarding.TransferInStep
+import com.vettid.feature.onboarding.TransferInUiState
+import com.vettid.feature.settings.TransferOutActions
+import com.vettid.feature.settings.TransferOutContent
+import com.vettid.feature.settings.TransferOutStep
+import com.vettid.feature.settings.TransferOutUiState
+import com.vettid.core.data.vault.RecoveryTarget
+import com.vettid.core.data.vault.ReplacedReason
+import com.vettid.core.data.vault.TransferOfferView
+import com.vettid.core.data.vault.TransferPendingView
 import com.vettid.feature.settings.AttestationContent
 import com.vettid.feature.settings.ChangePinContent
 import com.vettid.feature.settings.ChangePinUiState
@@ -115,6 +133,13 @@ import java.time.Instant
 /** No-op actions for the catalog. */
 private object NoOnboarding : OnboardingActions {
     override fun start() = Unit
+    override fun startRecovery() = Unit
+    override fun startTransfer() = Unit
+    override fun recover() = Unit
+    override fun transfer() = Unit
+    override fun leaveMove() = Unit
+    override fun newVaultAfterMove() = Unit
+    override fun acknowledgeReplaced() = Unit
     override fun setEmail(v: String) = Unit
     override fun submitEmail() = Unit
     override fun resendLink() = Unit
@@ -140,6 +165,54 @@ private object NoOnboarding : OnboardingActions {
     override fun run() = Unit
     override fun editAfterFailure() = Unit
     override fun finish() = Unit
+}
+
+private object NoRecover : RecoverActions {
+    override fun reload() = Unit
+    override fun scan() = Unit
+    override fun type() = Unit
+    override fun back(): Boolean = false
+    override fun scanned(text: String) = Unit
+    override fun setCode(v: String) = Unit
+    override fun submitCode() = Unit
+    override fun retryPreflight() = Unit
+    override fun setApproveOffer(approve: Boolean) = Unit
+    override fun setPin(v: String) = Unit
+    override fun submitPin() = Unit
+    override fun setPassword(v: String) = Unit
+    override fun setPasswordConfirm(v: String) = Unit
+    override fun submitPassword() = Unit
+    override fun chooseNewCredential() = Unit
+    override fun chooseDelete() = Unit
+    override fun submitNewPassword() = Unit
+    override fun submitDelete() = Unit
+    override fun confirm() = Unit
+    override fun dismissConfirm() = Unit
+    override fun finish() = Unit
+}
+
+private object NoTransferIn : TransferInActions {
+    override fun scan() = Unit
+    override fun paste() = Unit
+    override fun back(): Boolean = false
+    override fun scanned(text: String) = Unit
+    override fun setInput(v: String) = Unit
+    override fun submitInput() = Unit
+    override fun cancel() = Unit
+    override fun again() = Unit
+    override fun finish() = Unit
+}
+
+private object NoTransferOut : TransferOutActions {
+    override fun create() = Unit
+    override fun codesMatch() = Unit
+    override fun askReject(show: Boolean) = Unit
+    override fun reject() = Unit
+    override fun setPin(v: String) = Unit
+    override fun setPassword(v: String) = Unit
+    override fun approve() = Unit
+    override fun askApprove(show: Boolean) = Unit
+    override fun leave() = Unit
 }
 
 private object NoUnlock : UnlockActions {
@@ -214,7 +287,31 @@ object ScreenCatalog {
     )
 
     @Composable
-    private fun Ob(state: OnboardingUiState) = OnboardingContent(state, NoOnboarding) {}
+    private fun Ob(state: OnboardingUiState) = OnboardingContent(state, NoOnboarding, {})
+
+    // --- recovery and transfer sample data (made up) ---
+    private const val VID = "3f9c2a7be41d4c0e9b8a6f5d2c1e0a9b"
+    private val rec = RecoveryView("01JABCDEF0123456789ABCDEFG", "available", "2026-10-05T14:00:00Z", "2026-10-06T14:00:00Z")
+    private val recState = RecoverUiState(step = RecoverStep.INTRO, target = RecoveryTarget(VID, rec))
+    private val pinState = recState.copy(step = RecoverStep.PIN, preflight = PreflightInfo(release(3), 0, false, false, null), pin = "975310")
+
+    @Composable
+    private fun Rec(state: RecoverUiState) = RecoverContent(state, NoRecover, {}, {}, {}) { m -> Box(m.background(MaterialTheme.colorScheme.surfaceContainerHigh)) }
+
+    @Composable
+    private fun TIn(state: TransferInUiState) = TransferInContent(state, NoTransferIn, {}) { m -> Box(m.background(MaterialTheme.colorScheme.surfaceContainerHigh)) }
+
+    private val transferOffer = TransferOfferView(
+        "01JTRANSFER000000000000000",
+        """{"v":2,"t":"p","r":"https://relay.vettid.test","c":"abcdefghijklmnopqrstuvwxyz","h":"x","k":"y","e":1791100000}""",
+        "eyJ2IjoyLCJ0IjoicCIsInIiOiJodHRwczovL3JlbGF5LnZldHRpZC50ZXN0IiwiYyI6ImFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6In0",
+        Instant.now().plusSeconds(540),
+    )
+    private val transferPending = TransferPendingView(transferOffer.transferId, "Pixel 10 Pro", "042817")
+    private val out = TransferOutUiState(step = TransferOutStep.SHOWING, offer = transferOffer, secondsLeft = 540)
+
+    @Composable
+    private fun TOut(state: TransferOutUiState) = TransferOutContent(state, NoTransferOut, {}, {})
 
     val screens: Map<String, @Composable () -> Unit> = linkedMapOf(
         "onboarding.welcome" to { Ob(onboarding) },
@@ -256,6 +353,46 @@ object ScreenCatalog {
             )
         },
         "onboarding.done" to { Ob(onboarding.copy(step = OnboardingStep.DONE)) },
+        "onboarding.replaced" to { ReplacedScreen(ReplacedReason.TRANSFERRED, {}, {}) },
+        "onboarding.replaced_recovered" to { ReplacedScreen(ReplacedReason.RECOVERED, {}, {}) },
+        "onboarding.replaced_unknown" to { ReplacedScreen(ReplacedReason.UNKNOWN, {}, {}) },
+        "recover" to { Rec(recState) },
+        "recover.none" to { Rec(recState.copy(target = RecoveryTarget(VID, null))) },
+        "recover.pending" to { Rec(recState.copy(target = RecoveryTarget(VID, rec.copy(state = "pending")))) },
+        "recover.cancelled" to { Rec(recState.copy(target = RecoveryTarget(VID, rec.copy(state = "cancelled")))) },
+        "recover.expired" to { Rec(recState.copy(target = RecoveryTarget(VID, rec.copy(state = "expired")))) },
+        "recover.scan" to { Rec(recState.copy(step = RecoverStep.SCAN, refusal = CodeRefusal.NOT_A_CODE)) },
+        "recover.type" to { Rec(recState.copy(step = RecoverStep.TYPE, codeInput = "SK01 TG8W K2FY J1Y5 MEHJ 5R5J 7QZK WHX0")) },
+        "recover.bad_code" to { Rec(recState.copy(step = RecoverStep.TYPE, codeInput = "SK01 TG8W K2FY J1Y5 MEHJ 5R5J 7QZK WHX1", refusal = CodeRefusal.BAD_CODE, wrongCodes = 2)) },
+        "recover.voided" to { Rec(recState.copy(step = RecoverStep.TYPE, refusal = CodeRefusal.VOIDED, wrongCodes = 5)) },
+        "recover.too_early" to { Rec(recState.copy(step = RecoverStep.SCAN, target = RecoveryTarget(VID, rec.copy(state = "pending")), refusal = CodeRefusal.TOO_EARLY)) },
+        "recover.code_expired" to { Rec(recState.copy(step = RecoverStep.SCAN, refusal = CodeRefusal.EXPIRED)) },
+        "recover.registering" to { Rec(recState.copy(step = RecoverStep.REGISTERING)) },
+        "recover.pin" to { Rec(pinState) },
+        "recover.pin_offer" to { Rec(pinState.copy(preflight = PreflightInfo(release(3, "deprecated"), 0, false, false, release(4)), approveOffer = true)) },
+        "recover.pin_backoff" to { Rec(pinState.copy(pin = "", pinWrong = true, waitSeconds = 75)) },
+        "recover.pin_ended" to { Rec(pinState.copy(preflight = null, preflightError = FailureKind.RELEASE_ENDED)) },
+        "recover.pin_cancelled" to { Rec(pinState.copy(pin = "", error = FailureKind.OTHER, errorCode = "unknown_device")) },
+        "recover.password" to { Rec(recState.copy(step = RecoverStep.PASSWORD, password = "correct horse battery")) },
+        "recover.password_wrong" to { Rec(recState.copy(step = RecoverStep.PASSWORD, error = FailureKind.BAD_PASSWORD)) },
+        "recover.lost" to { Rec(recState.copy(step = RecoverStep.LOST)) },
+        "recover.new_password" to {
+            Rec(recState.copy(step = RecoverStep.NEW_PASSWORD, password = "a new long passphrase", passwordConfirm = "a new long passphrase", passwordStrength = PasswordPolicy.Strength.STRONG))
+        },
+        "recover.new_confirm" to { Rec(recState.copy(step = RecoverStep.NEW_PASSWORD, password = "a new long passphrase", passwordConfirm = "a new long passphrase", confirming = true)) },
+        "recover.delete" to { Rec(recState.copy(step = RecoverStep.DELETE, pin = "975310")) },
+        "recover.delete_confirm" to { Rec(recState.copy(step = RecoverStep.DELETE, pin = "975310", confirming = true)) },
+        "recover.done" to { Rec(recState.copy(step = RecoverStep.DONE)) },
+        "recover.done_reset" to { Rec(recState.copy(step = RecoverStep.DONE, reset = true)) },
+        "recover.deleted" to { Rec(recState.copy(step = RecoverStep.DELETED)) },
+        "transfer_in" to { TIn(TransferInUiState()) },
+        "transfer_in.scan" to { TIn(TransferInUiState(step = TransferInStep.SCAN)) },
+        "transfer_in.paste" to { TIn(TransferInUiState(step = TransferInStep.PASTE, input = "not a code", inputProblem = FailureKind.INVITE_INVALID)) },
+        "transfer_in.connecting" to { TIn(TransferInUiState(step = TransferInStep.CONNECTING)) },
+        "transfer_in.compare" to { TIn(TransferInUiState(step = TransferInStep.COMPARE, sas = "042817", secondsLeft = 563)) },
+        "transfer_in.done" to { TIn(TransferInUiState(step = TransferInStep.DONE)) },
+        "transfer_in.rejected" to { TIn(TransferInUiState(step = TransferInStep.REJECTED)) },
+        "transfer_in.timed_out" to { TIn(TransferInUiState(step = TransferInStep.TIMED_OUT)) },
         "unlock" to { UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), pin = "1234"), NoUnlock) },
         "unlock.updated" to {
             UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(4, "deprecated"), 3, true, false, release(5))), NoUnlock)
@@ -322,6 +459,18 @@ object ScreenCatalog {
                 {}, {}, {},
             )
         },
+        "settings.transfer" to { TOut(TransferOutUiState()) },
+        "settings.transfer_show" to { TOut(out) },
+        "settings.transfer_compare" to { TOut(out.copy(step = TransferOutStep.COMPARE, pending = transferPending, secondsLeft = 571)) },
+        "settings.transfer_approve" to { TOut(out.copy(step = TransferOutStep.APPROVE, pending = transferPending, pin = "975310", password = "pw", secondsLeft = 512)) },
+        "settings.transfer_approve_confirm" to {
+            TOut(out.copy(step = TransferOutStep.APPROVE, pending = transferPending, pin = "975310", password = "pw", confirmApprove = true))
+        },
+        "settings.transfer_bad_pin" to { TOut(out.copy(step = TransferOutStep.APPROVE, pending = transferPending, error = FailureKind.BAD_PIN, waitSeconds = 30)) },
+        "settings.transfer_reject_confirm" to { TOut(out.copy(step = TransferOutStep.COMPARE, pending = transferPending, confirmReject = true)) },
+        "settings.transfer_expired" to { TOut(TransferOutUiState(step = TransferOutStep.EXPIRED)) },
+        "settings.transfer_rejected" to { TOut(TransferOutUiState(step = TransferOutStep.REJECTED)) },
+        "settings.transfer_exists" to { TOut(TransferOutUiState(error = FailureKind.OTHER, errorCode = "exists")) },
         "settings.attestation" to {
             AttestationContent(LoadState(false, AttestationInfo("devStack", true, "STRONG_BOX", true, 400, "SelfSigned", true, "4e8e e8f7 1c2d 3e4f", 3, "0303 0303 0303 0303")), {})
         },

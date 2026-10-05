@@ -154,7 +154,7 @@ class AltRequestsTest {
     @Test
     fun recoveryQrAndRegister() {
         val rid = Ulid.new()
-        val qr = RecoveryCode.parseQr("""{"v":1,"t":"r","vault_id":"0123456789abcdef0123456789abcdef","recovery_id":"$rid","code":"${"k".repeat(32)}"}""".toByteArray())
+        val qr = RecoveryCode.parseQr("""{"v":1,"t":"r","vault_id":"0123456789abcdef0123456789abcdef","recovery_id":"$rid","code":"${"K".repeat(32)}"}""".toByteArray())
         assertEquals(rid, qr.recoveryId)
         assertThrows(AltResultException::class.java) { RecoveryCode.parseQr("""{"v":1,"t":"x","vault_id":"a","recovery_id":"$rid","code":"c"}""".toByteArray()) }
         val att = TestSupport.SoftAttester()

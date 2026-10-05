@@ -16,6 +16,7 @@ import com.vettid.core.data.social.ConnectionsRepository
 import com.vettid.core.data.social.MessagesRepository
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.CredentialRepository
+import com.vettid.core.data.vault.MoveRepository
 import com.vettid.core.data.vault.VaultManager
 import com.vettid.core.data.vault.VaultRepository
 import dagger.Module
@@ -73,6 +74,9 @@ object AppModule {
 
     @Provides
     fun credentialRepository(m: VaultManager): CredentialRepository = m
+
+    @Provides
+    fun moveRepository(m: VaultManager): MoveRepository = m
 
     @Provides
     fun connectionsRepository(m: VaultManager): ConnectionsRepository = m.social

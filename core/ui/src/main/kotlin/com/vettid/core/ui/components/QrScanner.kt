@@ -1,4 +1,4 @@
-package com.vettid.feature.connections
+package com.vettid.core.ui.components
 
 import android.Manifest
 import android.content.pm.PackageManager

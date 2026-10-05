@@ -10,6 +10,9 @@ import com.vettid.core.crypto.envelope.Envelope
 import com.vettid.core.crypto.envelope.Inner
 import com.vettid.core.crypto.envelope.Mode
 import com.vettid.core.crypto.envelope.Ulid
+import com.vettid.core.crypto.invite.InviteBundle
+import com.vettid.core.crypto.invite.InviteKind
+import com.vettid.core.crypto.invite.InviteQr
 import com.vettid.core.crypto.hpke.KemPrivateKey
 import com.vettid.core.crypto.json.JsonBuilder
 import com.vettid.core.crypto.json.StrictJson
@@ -61,6 +64,7 @@ import java.util.concurrent.TimeUnit
 class VaultDeviceTest {
     private lateinit var relay: MockWebServer
     private val deposits = LinkedBlockingQueue<Pair<String, ByteArray>>() // mailbox, payload
+    private val claims = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
 
     /** The fake vault's keys and session with the device. */
     private inner class FakeVault {
@@ -135,6 +139,9 @@ class VaultDeviceTest {
                         deposits.add(path.removePrefix("/v1/mailbox/") to o.base64("payload"))
                         MockResponse.Builder().code(201).body("""{"msg_id":"${Ulid.new()}"}""").build()
                     }
+                    path.startsWith("/v1/claim/") && request.method == "GET" -> claims.remove(path.removePrefix("/v1/claim/"))?.let {
+                        MockResponse.Builder().code(200).addHeader("Content-Type", "application/octet-stream").body(okio.Buffer().write(it)).build()
+                    } ?: MockResponse.Builder().code(404).body("""{"code":"claim_unknown","message":""}""").build()
                     else -> MockResponse.Builder().code(404).body("""{"code":"not_found","message":""}""").build()
                 }
             }
@@ -357,6 +364,104 @@ class VaultDeviceTest {
             assertEquals(1L, d.credentialVersion)
             assertEquals(0, d.utkCount)
         }
+    }
+
+    /** A test attester that records the challenge (the dev stack's TEST attester checks it for real). */
+    private class RecordingAttester : com.vettid.core.altchan.Attester {
+        val pair: java.security.KeyPair = java.security.KeyPairGenerator.getInstance("EC").apply {
+            initialize(java.security.spec.ECGenParameterSpec("secp256r1"))
+        }.generateKeyPair()
+        var challenge: ByteArray? = null
+
+        override fun attest(challenge: ByteArray): com.vettid.core.crypto.altchan.DeviceAttest {
+            this.challenge = challenge
+            return com.vettid.core.crypto.altchan.DeviceAttest.android(listOf(pair.public.encoded))
+        }
+
+        override fun assert(message: ByteArray): com.vettid.core.crypto.altchan.DeviceAssertion = error("not used")
+    }
+
+    /** The old app's transfer QR (§6.7.1): a claim with an app bundle on the vault's relay. */
+    private fun transferLink(v: FakeVault, inviteId: String, kind: InviteKind = InviteKind.APP, exp: Instant = Instant.now().plusSeconds(600)): String {
+        val e = exp.truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+        val tok = DepositTokens.mintOpen(v.relayKey, v.relayUrl, Instant.now(), java.time.Duration.ofMinutes(10))
+        val (blob, kb, h) = InviteBundle.seal(InviteBundle(kind, inviteId, false, v.principal(), tok, e).marshal())
+        val claimId = "abcdefghijklmnopqrstuvwxy" + "234567"[claims.size % 6]
+        claims[claimId] = blob
+        return InviteQr(kind, v.relayUrl, claimId, h, kb, e.epochSecond).link()
+    }
+
+    /** §6.7.1: the new app scans, sends the attested hs.init, shows the SAS after hs.fin, and is paired at the approval. */
+    @Test
+    fun directTransferToThisPhone() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            val inviteId = Ulid.new()
+            val att = RecordingAttester()
+            d.startTransfer(transferLink(v, inviteId), att)
+            val (mbx, init) = nextDeposit()
+            assertEquals(v.mailbox, mbx)
+            val p = PendingInit.open(init, { k -> if (k == v.kem.publicKey.kid) v.kem else null }, Instant.now())
+            assertEquals(Purpose.APP, p.body.purpose)
+            assertEquals(inviteId, p.body.ctx)
+            assertEquals("phone", StrictJson.parseObject(p.body.profile!!).string("name"))
+            // §6.7: the attestation is over the challenge with the hs.init id, an empty vault id and its ts.
+            assertNotNull(p.body.deviceAttest)
+            val ts = com.vettid.core.crypto.envelope.Timestamps.formatMillis(p.inner.ts)
+            org.junit.Assert.assertArrayEquals(com.vettid.core.crypto.altchan.AltChannel.devattChallenge(p.inner.id, "", ts), att.challenge)
+            assertNull(d.pairingSas.value)
+            val (r, env) = p.respond(ResponderConfig(identity = v.ik, token = v.tokenFor(d), policy = Policy.VAULT_TO_DEVICE, collectSender = d.relayAddr.pk()))
+            d.handle(v.msg(env))
+            val fr = r.handleFin(nextDeposit().second, d.relayAddr.pk(), Instant.now())
+            v.keyring.activate(fr.epoch, Instant.now())
+            // Both sides show the same code.
+            assertEquals(fr.sas, d.pairingSas.value)
+            val paired = async(Dispatchers.IO) { d.awaitTransfer(java.time.Duration.ofSeconds(10)) }
+            d.handle(v.seal("device.paired", """{"device_id":"dev-2","role":"app","vault_id":"${v.vaultId}","release":"${"a3".repeat(48)}","release_number":3,"token":"${v.tokenFor(d)}","transfer":true,"credential_version":5}"""))
+            paired.await()
+            assertEquals("dev-2", d.deviceId)
+            assertEquals(v.vaultId, d.vaultId)
+            assertTrue(d.paired.value)
+            assertEquals(3, d.altState.releaseNumber)
+        }
+    }
+
+    /** 0.10.5: device.pair.rejected ends the new phone's wait; it can scan a new code afterwards. */
+    @Test
+    fun aRejectedTransferEndsTheWait() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val v = FakeVault()
+            val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            val p = PendingInit.open(nextDeposit().second, { k -> if (k == v.kem.publicKey.kid) v.kem else null }, Instant.now())
+            val (r, env) = p.respond(ResponderConfig(identity = v.ik, token = v.tokenFor(d), policy = Policy.VAULT_TO_DEVICE, collectSender = d.relayAddr.pk()))
+            d.handle(v.msg(env))
+            v.keyring.activate(r.handleFin(nextDeposit().second, d.relayAddr.pk(), Instant.now()).epoch, Instant.now())
+            val waiting = async(Dispatchers.IO) { runCatching { d.awaitTransfer(java.time.Duration.ofSeconds(10)) } }
+            d.handle(v.seal("device.pair.rejected", "{}"))
+            assertTrue(waiting.await().exceptionOrNull() is PairingRejectedException)
+            assertNull(d.pairingSas.value)
+            assertNull(d.deviceId)
+            d.abandonTransfer()
+            assertTrue(!d.hasVault)
+            // A new code works.
+            d.startTransfer(transferLink(v, Ulid.new()), RecordingAttester())
+            assertEquals(v.mailbox, nextDeposit().first)
+        }
+    }
+
+    @Test
+    fun onlyAnUnexpiredAppTransferCodeIsUsed() = runBlocking<Unit> {
+        val v = FakeVault()
+        val d = VaultDevice.create(config(InMemoryDeviceStateStore()), DeviceSecrets.generate())
+        assertThrows(NotATransferCodeException::class.java) { runBlocking { d.startTransfer("not a link", RecordingAttester()) } }
+        val desktop = transferLink(v, Ulid.new(), InviteKind.DESKTOP)
+        assertThrows(NotATransferCodeException::class.java) { runBlocking { d.startTransfer(desktop, RecordingAttester()) } }
+        val expired = transferLink(v, Ulid.new(), exp = Instant.now().minusSeconds(5))
+        val e = assertThrows(NotATransferCodeException::class.java) { runBlocking { d.startTransfer(expired, RecordingAttester()) } }
+        assertTrue(e.expired)
+        assertNull(deposits.poll(200, TimeUnit.MILLISECONDS))
     }
 
     @Test

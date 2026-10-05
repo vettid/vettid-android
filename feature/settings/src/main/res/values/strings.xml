@@ -10,6 +10,8 @@
     <string name="settings_security_credential">Credential</string>
     <string name="settings_security_credential_body">Password, rotation, backup, unlock window</string>
     <string name="settings_security_recovery">Recovery</string>
+    <string name="settings_security_transfer">Move to a new phone</string>
+    <string name="settings_security_transfer_body">Direct transfer: no waiting, with your PIN and password</string>
     <string name="settings_security_attestation">Attestation</string>
     <string name="settings_security_app_lock">Biometric app lock</string>
     <string name="settings_security_app_lock_body">Ask for a fingerprint, face or screen lock when opening VettID</string>
@@ -84,7 +86,8 @@
 
     <!-- Recovery -->
     <string name="settings_recovery_title">Recovery</string>
-    <string name="settings_recovery_body">If you lose this phone, start a recovery on the account site. Your vault locks at once; after 24 hours a new phone can take over with your PIN and credential password. The new app replaces this one. If you still have this phone, move VettID to the new one with a direct transfer instead.</string>
+    <string name="settings_recovery_body">If you lose this phone, start a recovery on the account site. Your vault locks at once; after 24 hours the site shows a code that a new phone scans, and with your PIN and credential password the new phone takes over. This phone is then signed out of the vault. While you still have this phone, use Move to a new phone instead: no waiting.</string>
+    <string name="settings_recovery_transfer">Move to a new phone</string>
     <string name="settings_recovery_backup_off">Your credential backup is off: a recovery cannot bring back your credential or critical items.</string>
     <string name="settings_recovery_none">No recovery is in progress.</string>
     <string name="settings_recovery_active_title">A recovery is in progress</string>
@@ -133,4 +136,48 @@
     <string name="help_url_about" translatable="false">https://vettid.org/about</string>
     <string name="help_url_security" translatable="false">https://vettid.org/security</string>
     <string name="help_url_contact" translatable="false">https://vettid.org/contact</string>
+
+    <!-- Direct transfer, the old phone (VAULT-MESSAGING §6.7.1) -->
+    <string name="settings_transfer_title">Move to a new phone</string>
+    <string name="settings_transfer_body">Move your vault, your credential and your connections to a new phone. This phone is then signed out of the vault and keeps nothing of it.</string>
+    <string name="settings_transfer_steps_title">How it works</string>
+    <string name="settings_transfer_steps_body">1. On the new phone, install VettID, choose Move from my old phone and sign in to your account.
+2. Show the code here and scan it with the new phone.
+3. Check that both phones show the same 6 digits, then approve here with your vault PIN and credential password.</string>
+    <string name="settings_transfer_lost">Lost your old phone instead? Start a recovery on the account site.</string>
+    <string name="settings_transfer_start">Show the code</string>
+    <string name="settings_transfer_show_title">Scan this code with your new phone</string>
+    <string name="settings_transfer_show_body">On the new phone, choose Move from my old phone, then scan. Only your new phone should see this code.</string>
+    <string name="settings_transfer_qr_cd">Transfer code for your new phone</string>
+    <string name="settings_transfer_expires">Valid for %1$s more</string>
+    <string name="settings_transfer_link_label">Or paste this code on the new phone</string>
+    <string name="settings_transfer_copy">Copy</string>
+    <string name="settings_transfer_copied">Copied</string>
+    <string name="settings_transfer_waiting">Waiting for your new phone</string>
+    <string name="settings_transfer_cancel">Cancel the transfer</string>
+    <string name="settings_transfer_compare_title">Compare the code</string>
+    <string name="settings_transfer_compare_body">%1$s wants to take over your vault. Continue only if it shows the same code.</string>
+    <string name="settings_transfer_match">The codes match</string>
+    <string name="settings_transfer_reject">Reject</string>
+    <string name="settings_transfer_reject_title">Reject the transfer?</string>
+    <string name="settings_transfer_reject_body">Nothing changes: your vault stays on this phone. The new phone is told it was rejected.</string>
+    <string name="settings_transfer_approve_title">Approve the move</string>
+    <string name="settings_transfer_approve_body">Your vault checks your PIN and your credential password, then hands the vault to %1$s. This phone is signed out of the vault at once.</string>
+    <string name="settings_transfer_pin">Vault PIN</string>
+    <string name="settings_transfer_password">Credential password</string>
+    <string name="settings_transfer_approve">Move my vault</string>
+    <string name="settings_transfer_approve_confirm_title">Move your vault to %1$s?</string>
+    <string name="settings_transfer_approve_confirm_body">This phone will no longer hold your vault or your credential. You cannot undo this from here.</string>
+    <string name="settings_transfer_approve_confirm">Move</string>
+    <string name="settings_transfer_window">%1$s left to approve</string>
+    <string name="settings_transfer_bad_pin">That PIN is not correct.</string>
+    <string name="settings_transfer_bad_password">That password is not correct.</string>
+    <string name="settings_transfer_wait">Too many wrong tries. Try again in %1$s.</string>
+    <string name="settings_transfer_expired_title">The code expired</string>
+    <string name="settings_transfer_expired_body">Nothing changed: your vault stays on this phone. Show a new code to try again.</string>
+    <string name="settings_transfer_again">Show a new code</string>
+    <string name="settings_transfer_rejected_title">Transfer rejected</string>
+    <string name="settings_transfer_rejected_body">Nothing changed: your vault stays on this phone.</string>
+    <string name="settings_transfer_exists">Another transfer is already open. It ends within 10 minutes; try again then.</string>
+    <string name="settings_transfer_alarm">Your credential has an open clone alarm. Resolve it in Credential before moving to a new phone.</string>
 </resources>

@@ -214,8 +214,8 @@ class AltChannelFlow(
      */
     suspend fun recoveryRegister(
         vaultId: String,
-        build: (VerifiedEnclave) -> SealedRequest,
-        open: (ByteArray, String) -> RecoveryResult,
+        build: suspend (VerifiedEnclave) -> SealedRequest,
+        open: suspend (ByteArray, String) -> RecoveryResult,
     ): RecoveryResult {
         val m = manifest(0)
         var attempt = 1

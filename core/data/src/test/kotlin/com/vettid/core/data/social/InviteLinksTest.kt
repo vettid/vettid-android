@@ -71,4 +71,26 @@ class InviteLinksTest {
         assertEquals(false, InviteLinks.isConnectUri("vettid://other#abc"))
         assertEquals(false, InviteLinks.isConnectUri("not a uri"))
     }
+
+    /** §6.7.1: the transfer QR is the pairing QR of kind `p`; nothing else is a transfer code. */
+    @Test
+    fun transferCodes() {
+        val q = qr(InviteKind.APP)
+        val ok = InviteLinks.TransferParsed.Ok(q.link(), Instant.ofEpochSecond(exp))
+        assertEquals(ok, InviteLinks.parseTransfer(String(q.marshal()), now))
+        assertEquals(ok, InviteLinks.parseTransfer("  " + q.link() + "\n", now))
+        assertEquals(InviteLinks.TransferParsed.NotATransfer, InviteLinks.parseTransfer(qr().link(), now))
+        assertEquals(InviteLinks.TransferParsed.NotATransfer, InviteLinks.parseTransfer(qr(InviteKind.DESKTOP).link(), now))
+        assertEquals(InviteLinks.TransferParsed.Expired, InviteLinks.parseTransfer(qr(InviteKind.APP, now.epochSecond).link(), now))
+        assertEquals(InviteLinks.TransferParsed.Invalid, InviteLinks.parseTransfer("hello", now))
+        assertEquals(InviteLinks.TransferParsed.Invalid, InviteLinks.parseTransfer("", now))
+        // A recovery QR (§11.11.2) is not a transfer code either.
+        assertEquals(
+            InviteLinks.TransferParsed.Invalid,
+            InviteLinks.parseTransfer(
+                """{"v":1,"t":"r","vault_id":"v","recovery_id":"01JA0RECVERY0000000000001X","code":"SK01TG8WK2FYJ1Y5MEHJ5R5J7QZKWHX0"}""",
+                now,
+            ),
+        )
+    }
 }

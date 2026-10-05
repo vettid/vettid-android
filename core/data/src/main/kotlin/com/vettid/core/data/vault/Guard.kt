@@ -8,6 +8,8 @@ import com.vettid.core.attestation.AttestationException
 import com.vettid.core.crypto.CryptoException
 import com.vettid.core.keystore.KeystoreException
 import com.vettid.core.relay.RelayException
+import com.vettid.core.vault.NotATransferCodeException
+import com.vettid.core.vault.PairingRejectedException
 import com.vettid.core.vault.VaultOpException
 import com.vettid.core.vault.VaultStateException
 import kotlinx.coroutines.CancellationException
@@ -41,6 +43,10 @@ internal suspend fun <T> vaultGuard(block: suspend () -> T): T = try {
     throw VaultFailure(FailureKind.NO_RESPONSE, cause = e)
 } catch (e: VaultStateException) {
     throw VaultFailure(if (e.message?.contains("no response") == true) FailureKind.NO_RESPONSE else FailureKind.OTHER, cause = e)
+} catch (e: PairingRejectedException) {
+    throw VaultFailure(FailureKind.REJECTED, "rejected", cause = e)
+} catch (e: NotATransferCodeException) {
+    throw VaultFailure(if (e.expired) FailureKind.INVITE_EXPIRED else FailureKind.INVITE_INVALID, "not_transfer", cause = e)
 } catch (e: RelayException) {
     throw VaultFailure(FailureKind.NETWORK, cause = e)
 } catch (e: IOException) {

@@ -138,6 +138,53 @@ class VaultApi(val device: VaultDevice) {
         device.endRecovery()
     }
 
+    /**
+     * After a direct transfer (§6.7.1 step 5): fetches the blob the vault kept
+     * (`credential.get`), confirms it (`credential.ack`) and fills the UTK pool
+     * (`credential.utk.get`).
+     */
+    suspend fun credentialTakeOver() {
+        cred.fetch()
+        cred.keep(op("credential.utk.get"))
+    }
+
+    // --- direct transfer, the old app's side (§6.7.1, §10.3) ---
+
+    /** `device.transfer.create`: the QR link (pairing kind `p`, TTL 10 minutes) for the new phone. */
+    suspend fun transferCreate(): TransferOffer = op("device.transfer.create").let { o ->
+        TransferOffer(
+            VaultJson.str(o, "transfer_id") ?: throw VaultStateException("transfer without id"),
+            VaultJson.str(o, "link") ?: throw VaultStateException("transfer without link"),
+            VaultJson.str(o, "exp"),
+        )
+    }
+
+    /** Waits for `device.transfer.pending{transfer_id, name, sas}`: the new app's handshake checked out. */
+    suspend fun awaitTransferPending(transferId: String, timeout: Duration): TransferPending =
+        device.awaitEvent("device.transfer.pending", timeout) { VaultJson.str(it, "transfer_id") == transferId }.body.let {
+            TransferPending(transferId, VaultJson.str(it, "name") ?: "", VaultJson.str(it, "sas") ?: "")
+        }
+
+    /**
+     * `device.transfer.approve` with the blob and, sealed to a UTK, the PIN and the
+     * password. `{}` means the transfer is complete: this app has been removed.
+     */
+    suspend fun transferApprove(transferId: String, pin: String, password: String) {
+        cred.credOp(
+            "device.transfer.approve",
+            {
+                put("password", password)
+                put("pin", pin)
+            },
+            extra = { put("transfer_id", transferId) },
+        )
+    }
+
+    /** `device.transfer.reject`: cancels the transfer before or after the scan. */
+    suspend fun transferReject(transferId: String) {
+        op("device.transfer.reject") { put("transfer_id", transferId) }
+    }
+
     /** Answers a clone alarm (§3.5.9): [mine] = "that was me". Returns the alarm's new state. */
     suspend fun credentialAlarmConfirm(alarmId: String, mine: Boolean): String? = VaultJson.str(
         op("credential.alarm.confirm") {

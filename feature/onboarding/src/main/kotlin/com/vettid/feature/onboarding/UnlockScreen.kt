@@ -30,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
@@ -81,7 +82,6 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
             )
         },
     ) {
-        val uri = LocalUriHandler.current
         Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
             if (state.loading) {
                 val label = stringResource(R.string.unlock_checking)
@@ -94,57 +94,7 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
             state.preflightError?.let { NoticeCard(if (blocked) NoticeKind.URGENT
                 else NoticeKind.WARNING, stringResource(R.string.unlock_title), stringResource(it.messageRes())) }
             if (p != null) {
-                if (p.rollback) {
-                    NoticeCard(
-                        NoticeKind.URGENT,
-                        stringResource(R.string.unlock_rollback_title),
-                        stringResource(R.string.unlock_rollback_body, p.routed.number.toInt(), p.lastNumber.toInt()),
-                    )
-                } else if (p.softwareUpdated) {
-                    NoticeCard(
-                        NoticeKind.WARNING,
-                        stringResource(R.string.unlock_updated_title),
-                        stringResource(R.string.unlock_updated_body, p.routed.number.toInt(), p.routed.fingerprint, p.lastNumber.toInt()),
-                        modifier = Modifier.testTag("software_updated"),
-                        actions = if (!state.updateAcknowledged) {
-                            { TextButton(onClick = actions::acknowledgeUpdate) { Text(stringResource(R.string.unlock_updated_ack)) } }
-                        } else {
-                            null
-                        },
-                    )
-                }
-                if (p.routed.status == "deprecated" || p.routed.status == "retired") {
-                    val ends = p.routed.endsAt?.let {
-                        DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withZone(ZoneId.systemDefault()).format(it) }
-                    NoticeCard(
-                        if (p.routed.status == "retired") NoticeKind.URGENT else NoticeKind.WARNING,
-                        stringResource(R.string.unlock_status_title, p.routed.number.toInt(), p.routed.status),
-                        ends?.let { stringResource(R.string.unlock_status_body_ends, it) } ?: stringResource(R.string.unlock_status_body),
-                    )
-                }
-                val offer = p.offer
-                if (offer != null && !p.rollback) {
-                    NoticeCard(
-                        NoticeKind.INFO,
-                        stringResource(R.string.unlock_offer_title, offer.number.toInt()),
-                        stringResource(R.string.unlock_offer_body, p.routed.number.toInt(), offer.number.toInt(), offer.fingerprint),
-                        modifier = Modifier.testTag("release_offer"),
-                        actions = { TextButton(onClick = { uri.openUri(offer.notes) }) {
-                            Text(stringResource(R.string.unlock_offer_notes)) } },
-                    )
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = Spacing.touchTarget)
-                            .toggleable(value = state.approveOffer, role = Role.Checkbox, onValueChange = actions::setApproveOffer)
-                            .testTag("approve_offer"),
-                    ) {
-                        Checkbox(checked = state.approveOffer, onCheckedChange = null)
-                        Spacer(Modifier.width(Spacing.s))
-                        Text(stringResource(R.string.unlock_offer_approve), style = MaterialTheme.typography.bodyMedium)
-                    }
-                }
+                PreflightNotices(p, state.updateAcknowledged, actions::acknowledgeUpdate, state.approveOffer, actions::setApproveOffer)
             }
             if (state.stateRollback) {
                 NoticeCard(
@@ -214,4 +164,71 @@ fun AppLockScreen(onUnlock: () -> Unit) {
             Spacer(Modifier.height(Spacing.l))
         },
     ) {}
+}
+
+/**
+ * The release check's notices before the PIN (§11.10.6): an older release (the PIN is not sent), a newer
+ * one to acknowledge, a deprecated or retired release, and the newest active release to approve with
+ * this unlock. Shared by the unlock and the recovery's PIN step.
+ */
+@Composable
+internal fun PreflightNotices(
+    p: PreflightInfo,
+    updateAcknowledged: Boolean,
+    onAcknowledgeUpdate: () -> Unit,
+    approveOffer: Boolean,
+    onApproveOffer: (Boolean) -> Unit,
+) {
+    val uri = LocalUriHandler.current
+    if (p.rollback) {
+        NoticeCard(
+            NoticeKind.URGENT,
+            stringResource(R.string.unlock_rollback_title),
+            stringResource(R.string.unlock_rollback_body, p.routed.number.toInt(), p.lastNumber.toInt()),
+        )
+    } else if (p.softwareUpdated) {
+        NoticeCard(
+            NoticeKind.WARNING,
+            stringResource(R.string.unlock_updated_title),
+            stringResource(R.string.unlock_updated_body, p.routed.number.toInt(), p.routed.fingerprint, p.lastNumber.toInt()),
+            modifier = Modifier.testTag("software_updated"),
+            actions = if (!updateAcknowledged) {
+                { TextButton(onClick = onAcknowledgeUpdate) { Text(stringResource(R.string.unlock_updated_ack)) } }
+            } else {
+                null
+            },
+        )
+    }
+    if (p.routed.status == "deprecated" || p.routed.status == "retired") {
+        val ends = p.routed.endsAt?.let {
+            DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withZone(ZoneId.systemDefault()).format(it) }
+        NoticeCard(
+            if (p.routed.status == "retired") NoticeKind.URGENT else NoticeKind.WARNING,
+            stringResource(R.string.unlock_status_title, p.routed.number.toInt(), p.routed.status),
+            ends?.let { stringResource(R.string.unlock_status_body_ends, it) } ?: stringResource(R.string.unlock_status_body),
+        )
+    }
+    val offer = p.offer
+    if (offer != null && !p.rollback) {
+        NoticeCard(
+            NoticeKind.INFO,
+            stringResource(R.string.unlock_offer_title, offer.number.toInt()),
+            stringResource(R.string.unlock_offer_body, p.routed.number.toInt(), offer.number.toInt(), offer.fingerprint),
+            modifier = Modifier.testTag("release_offer"),
+            actions = { TextButton(onClick = { uri.openUri(offer.notes) }) {
+                Text(stringResource(R.string.unlock_offer_notes)) } },
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = Spacing.touchTarget)
+                .toggleable(value = approveOffer, role = Role.Checkbox, onValueChange = onApproveOffer)
+                .testTag("approve_offer"),
+        ) {
+            Checkbox(checked = approveOffer, onCheckedChange = null)
+            Spacer(Modifier.width(Spacing.s))
+            Text(stringResource(R.string.unlock_offer_approve), style = MaterialTheme.typography.bodyMedium)
+        }
+    }
 }
