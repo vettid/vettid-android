@@ -40,8 +40,10 @@ says so (attestation, crypto helpers, WebRTC, QR scanner), with its tests.
   done. The A3 exit test (fresh install → onboarding → enrolled vault with credential with
   the phone's REAL attestation → lock/unlock, all through the UI):
   `adb uninstall com.vettid.app.devstack; ANDROID_SERIAL=<serial> ./gradlew -PvettidTestBuildType=devStack :app:connectedDevStackAndroidTest`
-  (screenshots in `/data/local/tmp/a3-exit/`). The A4 exit test (invite → the vaultctl peer
-  accepts → safety code → approve; messages both ways; remove, then accept the peer's link;
+  (screenshots in `/data/local/tmp/a3-exit/`). The A4 exit test (VAULT-MESSAGING 0.10.3: invite → the
+  vaultctl peer accepts → the same safety code on both sides → both approve; messages both ways; remove,
+  then accept the peer's invitation URL, compare, both approve; a `vettid://connect#` link to an already
+  connected peer → "already connected";
   member authentication and a grant request in Approvals; favourite) is
   `app/src/androidTest/.../A4ExitTest.kt`, run the same way with
   `-Pandroid.testInstrumentationRunnerArguments.class=com.vettid.app.A4ExitTest`

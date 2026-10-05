@@ -5,6 +5,8 @@ import com.vettid.core.crypto.envelope.Inner
 import com.vettid.core.crypto.envelope.Mode
 import com.vettid.core.crypto.hpke.KemPrivateKey
 import com.vettid.core.crypto.session.Epoch
+import com.vettid.core.crypto.session.HsFin
+import com.vettid.core.crypto.session.HsInit
 import com.vettid.core.crypto.session.Initiator
 import com.vettid.core.crypto.session.InitiatorConfig
 import com.vettid.core.crypto.session.InitiatorResult
@@ -18,6 +20,7 @@ import com.vettid.core.crypto.session.RelayAddr
 import com.vettid.core.crypto.session.Relay
 import com.vettid.core.crypto.session.ResponderConfig
 import com.vettid.core.crypto.session.Rotation
+import com.vettid.core.crypto.session.Schedule
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -70,11 +73,54 @@ class SessionTest {
     private fun pair(): Pair<Epoch, Epoch> {
         val i = appInit()
         val p = PendingInit.open(i.envelope(), vault.lookup, now)
-        assertEquals(i.sas, p.sas)
         val (r, resp) = p.respond(respCfg())
         val res = i.handleResp(resp, vault.relayKey.publicKey, now)
-        val (ve, _) = r.handleFin(res.fin, app.relayKey.publicKey, now)
-        return res.epoch to ve
+        val fr = r.handleFin(res.fin, app.relayKey.publicKey, now)
+        // 0.10.3: both sides know the same 6-digit SAS only after the nonces are exchanged.
+        assertEquals(6, res.sas!!.length)
+        assertEquals(res.sas, fr.sas)
+        return res.epoch to fr.epoch
+    }
+
+    @Test
+    fun sasCommitmentFields() {
+        val i = appInit()
+        // hs.init commits to n_I (32 bytes of SHA-256); the responder's n_R follows in hs.resp.
+        assertEquals(32, i.body.sasCommit()!!.size)
+        val (_, resp) = PendingInit.open(i.envelope(), vault.lookup, now).respond(respCfg())
+        val res = i.handleResp(resp, vault.relayKey.publicKey, now)
+        assertEquals(32, res.resp.sasNonce()!!.size)
+        // One hs.resp per hs.init: once hs.fin is out (n_I revealed), another hs.resp is refused.
+        assertThrows(CryptoException.Used::class.java) { i.handleResp(resp, vault.relayKey.publicKey, now) }
+    }
+
+    @Test
+    fun sasCommitMismatchAbortsTheHandshake() {
+        val i = appInit()
+        val (r, resp) = PendingInit.open(i.envelope(), vault.lookup, now).respond(respCfg())
+        val res = i.handleResp(resp, vault.relayKey.publicKey, now)
+        // A correctly signed hs.fin whose n_I does not open sas_commit (only the initiator can send one).
+        val th = Schedule.th(i.envelope(), resp.copyOf(1140))
+        val bad = HsFin(Schedule.signFin(app.ik, th), ByteArray(32) { 0x55 }).marshal(Purpose.APP)
+        val forged = res.epoch.seal(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T0W", type = "hs.fin", ts = now, body = bad))
+        assertThrows(CryptoException.Protocol::class.java) { r.handleFin(forged, app.relayKey.publicKey, now) }
+        // The state is destroyed: the genuine hs.fin is refused afterwards.
+        assertThrows(CryptoException.Used::class.java) { r.handleFin(res.fin, app.relayKey.publicKey, now) }
+    }
+
+    @Test
+    fun sasFieldsPresentExactlyForSasPurposes() {
+        val i = appInit()
+        val body = i.body
+        // Without sas_commit, an app hs.init is malformed.
+        val stripped = HsInit(body.purpose, body.ctx, body.from, body.eph, body.token, suites = body.suites)
+        assertThrows(CryptoException.Format::class.java) { stripped.marshal() }
+        // hs.fin of a SAS purpose must reveal n_I; one of a rekey must not.
+        val sig = ByteArray(64)
+        assertThrows(CryptoException.Format::class.java) { HsFin(sig).marshal(Purpose.CONNECTION) }
+        assertThrows(CryptoException.Format::class.java) { HsFin(sig, ByteArray(32)).marshal(Purpose.REKEY) }
+        assertThrows(CryptoException.Format::class.java) { HsFin(sig, ByteArray(31)).marshal(Purpose.APP) }
+        assertEquals(false, Purpose.REKEY.hasSas || Purpose.RECONNECT.hasSas)
     }
 
     @Test
@@ -155,7 +201,7 @@ class SessionTest {
             ),
         )
         val res: InitiatorResult = i.handleResp(resp, vault.relayKey.publicKey, now)
-        val (v2, _) = r.handleFin(res.fin, app.relayKey.publicKey, now)
+        val v2 = r.handleFin(res.fin, app.relayKey.publicKey, now).epoch
         assertNotEquals(Bytes.hex(a.id), Bytes.hex(res.epoch.id))
 
         // A message sealed in the old epoch before activation still opens after it (receive keys kept).

@@ -1,6 +1,7 @@
 package com.vettid.app
 
 import android.content.Intent
+import android.net.Uri
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.ExperimentalTestApi
@@ -17,6 +18,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.espresso.Espresso
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import com.vettid.core.data.social.InviteLinks
 import com.vettid.core.testing.DevStack
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonArray
@@ -38,15 +40,21 @@ import org.junit.runner.RunWith
  *
  * `./gradlew -PvettidTestBuildType=devStack :app:connectedDevStackAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.vettid.app.A4ExitTest`
  *
+ * Adapted to VAULT-MESSAGING 0.10.3 (commit-then-reveal SAS, both members approve).
  * A fresh install onboards a new test member (as in A3), then, all through the UI:
- * 1. invites the peer: the QR code and link are shown, the peer accepts the link,
- *    the request arrives with its 6-digit safety code and is approved;
+ * 1. invites the peer: the QR code and the invitation URL (`<relay>/connect#<link>`) are
+ *    shown, the peer accepts the link, the request arrives with its 6-digit safety code,
+ *    which equals the code the peer's vault shows (`connection.request.outgoing`); the app
+ *    approves, waits for the peer, and the peer approves;
  * 2. sends a message and receives one;
- * 3. removes the connection, then accepts the peer's invitation by pasting its link (the
- *    invitee side); the peer approves;
- * 4. decides approvals: a member-authentication request (with the credential
+ * 3. removes the connection, then accepts the peer's invitation by pasting its URL (the
+ *    invitee side): the code appears once the handshake has run, equals the peer's
+ *    (`connection.request.pending`); the app approves, then the peer;
+ * 4. opens another invitation of the peer as a `vettid://connect#` link: the app asks
+ *    first, then says it is already connected (`exists`);
+ * 5. decides approvals: a member-authentication request (with the credential
  *    password; the peer gets a verified signature) and a grant request (denied);
- * 5. marks the connection a favourite.
+ * 6. marks the connection a favourite.
  * Screenshots go to `/data/local/tmp/a4-exit/`. Skipped when the stack is not reachable.
  */
 @OptIn(ExperimentalTestApi::class)
@@ -100,6 +108,13 @@ class A4ExitTest {
 
     private fun str(o: kotlinx.serialization.json.JsonObject, k: String) = (o[k] as JsonPrimitive).content
 
+    /** The 6 digits of the safety code on screen (its content description). */
+    private fun shownSas(): String = rule.onAllNodes(hasContentDescription("Safety code", substring = true)).onFirst()
+        .fetchSemanticsNode().config.getOrNull(SemanticsProperties.ContentDescription)?.joinToString("")?.filter { it.isDigit() } ?: ""
+
+    /** The bare payload inside an invitation URL (what `connection.invite.accept` takes, §6.4). */
+    private fun bare(text: String): String = (InviteLinks.parse(text) as InviteLinks.Parsed.Ok).link
+
     @Test
     @Suppress("LongMethod")
     fun inviteSasMessagesBothWaysAcceptAndApprovals() {
@@ -127,19 +142,27 @@ class A4ExitTest {
             waitTag("invite_link", LONG_WAIT_MS)
             waitTag("invite_qr")
             screenshot("invite-qr")
-            val link = textOf("invite_link")
-            assertTrue("link $link", link.length > LINK_MIN)
-            val accepted = peer("connection.invite.accept", buildJsonObject { put("link", link) })
+            val url = textOf("invite_link")
+            assertTrue("invitation URL $url", url.startsWith("https://relay.vettid.test/connect#") && url.length > LINK_MIN)
+            val accepted = peer("connection.invite.accept", buildJsonObject { put("link", bare(url)) })
             val peerConn1 = str(accepted, "connection_id")
+            assertEquals("waiting", str(accepted, "state"))
             waitTag("connection_request", LONG_WAIT_MS)
             waitText(PEER_NAME)
-            val sas = rule.onAllNodes(hasContentDescription("Safety code", substring = true)).onFirst()
-                .fetchSemanticsNode().config.getOrNull(SemanticsProperties.ContentDescription)?.joinToString("") ?: ""
-            assertEquals("safety code of 6 digits: $sas", SAS_DIGITS, sas.count { it.isDigit() })
+            val sas = shownSas()
+            assertEquals("safety code of 6 digits: $sas", SAS_DIGITS, sas.length)
+            // Both members see the same code (0.10.3): the peer's vault has it in connection.request.outgoing.
+            val peerSide = runBlocking { stack.peerRequestWithSas("outgoing", peerConn1, PEER_WAIT_S) }
+            assertEquals(sas, str(peerSide, "sas"))
             screenshot("invite-request-sas")
             primary()
+            waitTag("waiting_peer", LONG_WAIT_MS)
+            screenshot("invite-waiting-peer")
+            val known1 = runBlocking { stack.peerActiveConnections() }
+            peer("connection.approve", buildJsonObject { put("connection_id", peerConn1) })
             waitTag("connected", LONG_WAIT_MS)
-            peerEvent("connection.event", mapOf("event" to "added"))
+            // The peer's own connection.event arrives during its approve request (not kept by the harness): poll.
+            assertEquals(peerConn1, runBlocking { stack.peerAwaitNewConnection(known1, PEER_WAIT_S) })
             screenshot("invite-connected")
 
             // --- 2. Messages both ways. ---
@@ -180,20 +203,41 @@ class A4ExitTest {
             screenshot("connections-add")
             tag("add_paste").performClick()
             waitTag("invite_input")
-            tag("invite_input").performTextInput(str(peerInvite, "link"))
+            // The URL form on the invitation's relay (§6.4, 0.10.2); the app passes the bare payload to its vault.
+            val peerUrl = InviteLinks.url(str(peerInvite, "link"))!!
+            tag("invite_input").performTextInput(peerUrl)
             screenshot("accept-paste")
             primary()
-            waitTag("accept_waiting", LONG_WAIT_MS)
-            screenshot("accept-waiting")
-            val pending = peerEvent("connection.request.pending")
+            waitTag("accept_compare", LONG_WAIT_MS)
+            val sas2 = shownSas()
+            val pending = runBlocking { stack.peerRequestWithSas("incoming", timeoutSeconds = PEER_WAIT_S) }
+            assertEquals(SAS_DIGITS, sas2.length)
+            assertEquals(sas2, str(pending, "sas"))
+            screenshot("accept-compare-sas")
+            primary() // The codes match: approve
+            waitTag("accept_approved", LONG_WAIT_MS)
+            screenshot("accept-approved-waiting")
+            val known2 = runBlocking { stack.peerActiveConnections() }
             peer("connection.approve", buildJsonObject { put("pending_id", str(pending, "pending_id")) })
             waitTag("connected", LONG_WAIT_MS)
             screenshot("accept-connected")
-            val added = peerEvent("connection.event", mapOf("event" to "added"))
-            val peerConn2 = str(added, "connection_id")
+            val peerConn2 = runBlocking { stack.peerAwaitNewConnection(known2, PEER_WAIT_S) }
             text("Done").performClick()
 
-            // --- 4. Approvals: member authentication (password) and a grant request (denied). ---
+            // --- 4. Another invitation, opened as the relay page's vettid: link: already connected (exists). ---
+            val again = peer("connection.invite.create", buildJsonObject { put("ttl_seconds", INVITE_TTL) })
+            context.startActivity(
+                Intent(Intent.ACTION_VIEW, Uri.parse("vettid://connect#" + str(again, "link")))
+                    .setPackage(context.packageName).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            )
+            waitText("Open an invitation", LONG_WAIT_MS)
+            screenshot("accept-opened-link")
+            primary()
+            waitTag("accept_exists", LONG_WAIT_MS)
+            screenshot("accept-exists")
+            text("Done").performClick()
+
+            // --- 5. Approvals: member authentication (password) and a grant request (denied). ---
             peer("connection.authenticate.request", buildJsonObject {
                 put("connection_id", peerConn2)
                 put("context", "A4 exit test")
@@ -229,7 +273,7 @@ class A4ExitTest {
             waitText("Nothing to approve", LONG_WAIT_MS)
             screenshot("approvals-done")
 
-            // --- 5. Favourite, and the connection's details. ---
+            // --- 6. Favourite, and the connection's details. ---
             drawer("Connections")
             waitText(PEER_NAME, LONG_WAIT_MS)
             rule.onAllNodes(hasContentDescription("Add $PEER_NAME to favourites")).onFirst().performClick()

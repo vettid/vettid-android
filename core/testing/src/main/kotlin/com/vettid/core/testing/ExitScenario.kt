@@ -99,12 +99,18 @@ class ExitScenario(
             val invite = vault.inviteCreate()
             val accepted = stack.peerRequest("connection.invite.accept", buildJsonObject { put("link", invite.link) })
             val peerConn = (accepted["connection_id"] as JsonPrimitive).content
+            // 0.10.3: the handshake runs first; both sides see the same SAS and each member approves.
             val pending = vault.awaitEvent("connection.request.pending")
-            log("connection request, SAS ${VaultJson.str(pending, "sas")}")
+            val sas = VaultJson.str(pending, "sas")
+            val outgoing = stack.peerRequestWithSas("outgoing", peerConn)
+            check(sas != null && sas == VaultJson.str(outgoing, "sas")) { "SAS differs: $sas / $outgoing" }
+            log("connection request, SAS $sas on both sides")
             vault.connectionApprove(VaultJson.str(pending, "pending_id")!!)
+            val known = stack.peerActiveConnections()
+            stack.peerRequest("connection.approve", buildJsonObject { put("connection_id", peerConn) })
             val added = vault.awaitEvent("connection.event") { VaultJson.str(it, "event") == "added" }
             val conn = VaultJson.str(added, "connection_id")!!
-            stack.peerEvent("connection.event", mapOf("event" to "added"))
+            check(stack.peerAwaitNewConnection(known) == peerConn) { "the peer's connection is not its accept's id" }
             log("connected: $conn (peer side $peerConn)")
 
             // --- messages both ways (§10.5) ---

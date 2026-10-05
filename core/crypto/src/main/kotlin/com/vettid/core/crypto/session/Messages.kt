@@ -26,6 +26,13 @@ enum class Purpose(val wire: String) {
 
     val isPairing: Boolean get() = this == APP || this == DESKTOP || this == AGENT
 
+    /**
+     * Whether a handshake of this purpose has a SAS, and so the commitment
+     * fields (§6.2, 0.10.3): app, desktop, agent and connection. Rekeys and
+     * reconnects carry none.
+     */
+    val hasSas: Boolean get() = isPairing || this == CONNECTION
+
     companion object {
         fun of(s: String): Purpose = entries.firstOrNull { it.wire == s } ?: throw CryptoException.Format("purpose")
     }
@@ -149,14 +156,27 @@ internal object HsLimits {
     const val MAX_CTX_LEN = 128
     const val MAX_ROTATIONS = 32
     const val MAX_OPAQUE_JSON = 16 * 1024
+
+    /** n_I, n_R and sas_commit are 32 bytes (§6.2). */
+    const val SAS_NONCE_SIZE = 32
 }
 
-// Token rules per purpose: 1 required, 0 optional, -1 forbidden (§6.2).
+// Token rules per purpose: 1 required, 0 optional, -1 forbidden (§6.2). A
+// connection handshake carries a request token and no reconnect_token, which
+// follows in connection.approved (0.10.3).
 private fun tokenRules(p: Purpose): Pair<Int, Int> = when (p) {
-    Purpose.APP, Purpose.DESKTOP, Purpose.AGENT -> 1 to -1
-    Purpose.CONNECTION, Purpose.RECONNECT -> 1 to 1
+    Purpose.APP, Purpose.DESKTOP, Purpose.AGENT, Purpose.CONNECTION -> 1 to -1
+    Purpose.RECONNECT -> 1 to 1
     Purpose.REKEY -> 0 to 0
 }
+
+// The commitment rule of §6.2 (0.10.3): a 32-byte value exactly for purposes with a SAS, absent otherwise.
+private fun checkSasField(p: Purpose, v: ByteArray?, what: String) {
+    if (p.hasSas != (v != null) || (v != null && v.size != HsLimits.SAS_NONCE_SIZE)) throw CryptoException.Format(what)
+}
+
+private fun optSasField(o: JsonObject, name: String): ByteArray? =
+    if (o.has(name)) o.base64(name, HsLimits.SAS_NONCE_SIZE) else null
 
 private fun checkTokenRule(rule: Int, v: String?) {
     when {
@@ -195,7 +215,13 @@ class HsInit(
     val profile: ByteArray? = null,
     val rotations: List<Rotation> = emptyList(),
     val deviceAttest: DeviceAttest? = null,
+    /** SHA-256("vettid/vms/2/sas-commit" || n_I), exactly for purposes with a SAS (§6.2, §6.3, 0.10.3). */
+    sasCommit: ByteArray? = null,
 ) {
+    private val sasCommit = sasCommit?.copyOf()
+
+    fun sasCommit(): ByteArray? = sasCommit?.copyOf()
+
     @Suppress("CyclomaticComplexMethod")
     internal fun validate() {
         if (!validCtx(ctx)) throw CryptoException.Format("ctx")
@@ -209,6 +235,7 @@ class HsInit(
         if (rotations.isNotEmpty() && purpose != Purpose.RECONNECT) throw CryptoException.Format("rotations")
         if (rotations.size > HsLimits.MAX_ROTATIONS) throw CryptoException.Format("rotations")
         if (deviceAttest != null && purpose != Purpose.APP) throw CryptoException.Format("device_attest")
+        checkSasField(purpose, sasCommit, "sas_commit")
     }
 
     fun marshal(): ByteArray {
@@ -228,6 +255,7 @@ class HsInit(
         }
         if (rotations.isNotEmpty()) b.raw("rotations", marshalRotations(rotations))
         deviceAttest?.let { b.raw("device_attest", it.marshal()) }
+        sasCommit?.let { b.base64("sas_commit", it) }
         return b.bytes()
     }
 
@@ -255,6 +283,7 @@ class HsInit(
                 profile = profile,
                 rotations = rotations.orEmpty(),
                 deviceAttest = o.optObj("device_attest")?.let { DeviceAttest.parse(it) },
+                sasCommit = optSasField(o, "sas_commit"),
             )
             init.validate()
             return init
@@ -269,10 +298,15 @@ class HsResp(
     val suite: Int,
     val rotations: List<Rotation>,
     sig: ByteArray,
+    /** n_R, exactly for purposes with a SAS (0.10.3). */
+    sasNonce: ByteArray? = null,
 ) {
     private val sig = sig.copyOf()
+    private val sasNonce = sasNonce?.copyOf()
 
     fun sig(): ByteArray = sig.copyOf()
+
+    fun sasNonce(): ByteArray? = sasNonce?.copyOf()
 
     internal fun validate(p: Purpose) {
         val (tr, rr) = tokenRules(p)
@@ -281,6 +315,7 @@ class HsResp(
         if (suite !in 0..255 || sig.size != Suite.ED25519_SIGNATURE_SIZE) throw CryptoException.Format("hs.resp")
         if (rotations.isNotEmpty() && p != Purpose.RECONNECT) throw CryptoException.Format("rotations")
         if (rotations.size > HsLimits.MAX_ROTATIONS) throw CryptoException.Format("rotations")
+        checkSasField(p, sasNonce, "sas_nonce")
     }
 
     fun marshal(p: Purpose): ByteArray {
@@ -290,6 +325,7 @@ class HsResp(
         reconnectToken?.let { b.string("reconnect_token", it) }
         b.uint("suite", suite.toLong())
         if (rotations.isNotEmpty()) b.raw("rotations", marshalRotations(rotations))
+        sasNonce?.let { b.base64("sas_nonce", it) }
         b.base64("sig", sig)
         return b.bytes()
     }
@@ -305,6 +341,7 @@ class HsResp(
                 suite = o.uint("suite", 0, 255).toInt(),
                 rotations = rotations.orEmpty(),
                 sig = o.base64("sig", Suite.ED25519_SIGNATURE_SIZE),
+                sasNonce = optSasField(o, "sas_nonce"),
             )
             r.validate(p)
             return r
@@ -312,14 +349,31 @@ class HsResp(
     }
 }
 
-/** The hs.fin body `{sig}`. */
-object HsFin {
-    fun marshal(sig: ByteArray): ByteArray {
+/** The hs.fin body `{sig, sas_nonce?}` (§6.2): `sas_nonce` reveals n_I for purposes with a SAS (0.10.3). */
+class HsFin(sig: ByteArray, sasNonce: ByteArray? = null) {
+    private val sig = sig.copyOf()
+    private val sasNonce = sasNonce?.copyOf()
+
+    fun sig(): ByteArray = sig.copyOf()
+
+    fun sasNonce(): ByteArray? = sasNonce?.copyOf()
+
+    fun marshal(p: Purpose): ByteArray {
         if (sig.size != Suite.ED25519_SIGNATURE_SIZE) throw CryptoException.Format("hs.fin")
-        return JsonBuilder().base64("sig", sig).bytes()
+        checkSasField(p, sasNonce, "sas_nonce")
+        val b = JsonBuilder().base64("sig", sig)
+        sasNonce?.let { b.base64("sas_nonce", it) }
+        return b.bytes()
     }
 
-    fun parse(body: ByteArray): ByteArray = StrictJson.parseObject(body).base64("sig", Suite.ED25519_SIGNATURE_SIZE)
+    companion object {
+        fun parse(body: ByteArray, p: Purpose): HsFin {
+            val o = StrictJson.parseObject(body)
+            val f = HsFin(o.base64("sig", Suite.ED25519_SIGNATURE_SIZE), optSasField(o, "sas_nonce"))
+            checkSasField(p, f.sasNonce, "sas_nonce")
+            return f
+        }
+    }
 }
 
 /** hs.* inner types. */

@@ -37,10 +37,11 @@ import java.time.Instant
 /**
  * Connections, messages and approvals on this device (ANDROID-PLAN §4, A4),
  * over the vault client. Lists live in memory and are re-read from the vault
- * (which keeps the history) on unlock and on its events; approvals that only
- * arrive as events (connection requests, share decisions, member
- * authentication, desktop and agent requests) and the safety codes this app
- * showed are kept in [store], a Keystore-encrypted file.
+ * (which keeps the history) on unlock and on its events: connections,
+ * connection requests (`connection.request.list`, VAULT-MESSAGING 0.10.2),
+ * grant and critical-item requests. Approvals that only arrive as events
+ * (share decisions, member authentication, desktop and agent requests) and the
+ * safety codes this app showed are kept in [store], a Keystore-encrypted file.
  *
  * [onEvent] gets every event of the vault ([com.vettid.core.data.vault.VaultManager]
  * forwards them); nothing here touches transport or crypto beyond the typed API.
@@ -61,6 +62,8 @@ class SocialManager(
     private val messagesFlow = MutableStateFlow<Map<String, List<MessageInfo>>>(emptyMap())
     private val storedFlow = MutableStateFlow(local.events)
     private val listedFlow = MutableStateFlow<List<Approval>>(emptyList())
+    private val requestsFlow = MutableStateFlow<List<Approval>>(emptyList())
+    private val endsFlow = MutableStateFlow<Map<String, RequestEnd>>(emptyMap())
     private val nowFlow = MutableStateFlow(now())
     private var ttls: List<InviteTtl>? = null
 
@@ -72,8 +75,11 @@ class SocialManager(
             .stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     override val approvals: StateFlow<List<Approval>> =
-        combine(storedFlow, listedFlow, connectionsFlow, nowFlow) { stored, listed, cs, now -> merge(stored, listed, cs, now) }
-            .stateIn(scope, SharingStarted.Eagerly, emptyList())
+        combine(storedFlow, listedFlow, requestsFlow, connectionsFlow, nowFlow) { stored, listed, requests, cs, now ->
+            merge(stored, listed + requests, cs, now)
+        }.stateIn(scope, SharingStarted.Eagerly, emptyList())
+
+    override val requestEnds: StateFlow<Map<String, RequestEnd>> = endsFlow.asStateFlow()
 
     private fun now(): Instant = Instant.now(clock)
 
@@ -85,19 +91,22 @@ class SocialManager(
     @Serializable
     private data class StoredSas(val sas: String, val at: Long)
 
-    /** A safety code approved by the member, waiting for its connection's `added` event. */
-    @Serializable
-    private data class ApprovedSas(val name: String? = null, val sas: String, val at: Long)
-
+    /**
+     * [safety]: the safety code of each connection, as this app showed it, by connection id.
+     * [requestSas]: the codes of open requests by request id (`pending_id` or the outgoing
+     * `connection_id`), until `connection.event{added}` names the request it came from (0.10.2).
+     */
     @Serializable
     private data class Local(
         val events: List<StoredEvent> = emptyList(),
         val safety: Map<String, StoredSas> = emptyMap(),
-        val approved: List<ApprovedSas> = emptyList(),
+        val requestSas: Map<String, StoredSas> = emptyMap(),
     )
 
     private fun load(): Local = try {
-        store.load()?.let { json.decodeFromString(Local.serializer(), String(it, Charsets.UTF_8)) } ?: Local()
+        // Connection requests come from the vault's list since 0.10.2; drop ones stored from events by A4.
+        store.load()?.let { json.decodeFromString(Local.serializer(), String(it, Charsets.UTF_8)) }
+            ?.let { l -> l.copy(events = l.events.filterNot { it.type == "connection.request.pending" }) } ?: Local()
     } catch (_: KeystoreException) {
         Local()
     } catch (_: SerializationException) {
@@ -127,6 +136,8 @@ class SocialManager(
         authFlow.value = emptyMap()
         messagesFlow.value = emptyMap()
         listedFlow.value = emptyList()
+        requestsFlow.value = emptyList()
+        endsFlow.value = emptyMap()
         ttls = null
     }
 
@@ -149,6 +160,8 @@ class SocialManager(
             "message.new" -> runCatching { VaultJson.decode(com.vettid.core.vault.Message.serializer(), b) }
                 .getOrNull()?.let { upsert(ApprovalParser.message(it)) }
             in ApprovalParser.TYPES -> store(m.type, b)
+            "connection.request.pending" -> ApprovalParser.incoming(b, now())?.let { onRequest(it, it.pendingId, it.sas) }
+            "connection.request.outgoing" -> ApprovalParser.outgoing(b, now())?.let { onRequest(it, it.connectionId, it.sas) }
             "connection.event" -> onConnectionEvent(b)
             "connection.authenticate.result" -> {
                 val conn = VaultJson.str(b, "connection_id") ?: return
@@ -195,15 +208,81 @@ class SocialManager(
 
     private suspend fun dropApproval(key: String) = edit { l -> l.copy(events = l.events.filterNot { keyOf(it) == key }) }
 
+    // --- connection requests (§6.4, §10.4; 0.10.2, 0.10.3) ---
+
+    private fun requestId(a: Approval): String? = when (a) {
+        is Approval.ConnectionRequest -> a.pendingId
+        is Approval.OutgoingRequest -> a.connectionId
+        else -> null
+    }
+
+    /** A request event (`connection.request.pending` / `.outgoing`): shown at once, its code remembered. */
+    private suspend fun onRequest(a: Approval, id: String, sas: String?) {
+        requestsFlow.update { l ->
+            val old = l.firstOrNull { requestId(it) == id }
+            val next = when {
+                // An event never takes back what a decision already moved on (approved stays approved).
+                old is Approval.ConnectionRequest && a is Approval.ConnectionRequest ->
+                    a.copy(state = maxOf(old.state, a.state), peerApproved = old.peerApproved || a.peerApproved)
+                old is Approval.OutgoingRequest && a is Approval.OutgoingRequest ->
+                    a.copy(state = maxOf(old.state, a.state), peerApproved = old.peerApproved || a.peerApproved, name = a.name ?: old.name)
+                else -> a
+            }
+            l.filterNot { requestId(it) == id } + next
+        }
+        endsFlow.update { it - id }
+        if (sas != null) rememberSas(id, sas)
+    }
+
+    private suspend fun rememberSas(id: String, sas: String) {
+        if (local.requestSas[id]?.sas == sas) return
+        edit { l -> l.copy(requestSas = l.requestSas + (id to StoredSas(sas, now().toEpochMilli()))) }
+    }
+
+    private fun patchRequest(id: String, f: (Approval) -> Approval) =
+        requestsFlow.update { l -> l.map { if (requestId(it) == id) f(it) else it } }
+
+    private suspend fun endRequest(id: String, end: RequestEnd?) {
+        requestsFlow.update { l -> l.filterNot { requestId(it) == id } }
+        if (end != null) endsFlow.update { it + (id to end) }
+        edit { l -> l.copy(requestSas = l.requestSas - id) }
+    }
+
+    private suspend fun refreshRequestsQuietly() {
+        try {
+            refreshRequests()
+        } catch (_: VaultFailure) {
+            // a release before 0.10.2 has no request list; the screens retry
+        }
+    }
+
+    override suspend fun refreshRequests() {
+        val list = vaultGuard { api().requestList() }
+        val t = now()
+        fun entries(k: String) = (list[k] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+        val parsed = entries("incoming").mapNotNull { ApprovalParser.incoming(it, t) } +
+            entries("outgoing").mapNotNull { ApprovalParser.outgoing(it, t) }
+        requestsFlow.value = parsed
+        val codes = parsed.mapNotNull { a ->
+            when (a) {
+                is Approval.ConnectionRequest -> a.pendingId to a.sas
+                is Approval.OutgoingRequest -> a.sas?.let { a.connectionId to it }
+                else -> null
+            }
+        }
+        val missing = codes.filter { (id, sas) -> local.requestSas[id]?.sas != sas }
+        if (missing.isNotEmpty()) {
+            edit { l -> l.copy(requestSas = l.requestSas + missing.associate { (id, sas) -> id to StoredSas(sas, t.toEpochMilli()) }) }
+        }
+    }
+
     private suspend fun onConnectionEvent(b: JsonObject) {
         val conn = VaultJson.str(b, "connection_id") ?: return
-        val known = connectionsFlow.value.any { it.id == conn }
         runCatching { refresh() }
         when (VaultJson.str(b, "event")) {
-            "added" -> {
-                if (!known) recordApprovedSas(conn)
-                runCatching { load(conn) }
-            }
+            "added" -> onAdded(conn, VaultJson.str(b, "pending_id") ?: conn)
+            // An outgoing request ended without a connection other than by this member's decline (§6.4).
+            "failed" -> endRequest(conn, RequestEnd.FAILED)
             "removed" -> {
                 messagesFlow.update { it - conn }
                 authFlow.update { it - conn }
@@ -212,18 +291,39 @@ class SocialManager(
         }
     }
 
-    /** Ties the safety code the member approved to the connection it made (by the presented name, else the only one). */
-    private suspend fun recordApprovedSas(conn: String) {
-        val c = connectionsFlow.value.firstOrNull { it.id == conn } ?: return
-        val since = now().minus(SAS_MATCH_WINDOW).toEpochMilli()
-        edit { l ->
-            val recent = l.approved.filter { it.at >= since }
-            val match = recent.lastOrNull { it.name != null && it.name == c.name } ?: recent.singleOrNull()
-            if (match == null) {
-                l.copy(approved = recent)
-            } else {
-                l.copy(safety = l.safety + (conn to StoredSas(match.sas, match.at)), approved = recent - match)
+    /** A new connection: the code of the request it came from becomes the connection's ([req], §10.4 `pending_id`). */
+    private suspend fun onAdded(conn: String, req: String) {
+        val t = now().toEpochMilli()
+        val code = local.requestSas[req] ?: when (val a = requestsFlow.value.firstOrNull { requestId(it) == req }) {
+            is Approval.ConnectionRequest -> StoredSas(a.sas, t)
+            is Approval.OutgoingRequest -> a.sas?.let { StoredSas(it, t) }
+            else -> null
+        }
+        requestsFlow.update { l -> l.filterNot { requestId(it) == req } }
+        edit { l -> l.copy(safety = if (code != null) l.safety + (conn to code) else l.safety, requestSas = l.requestSas - req) }
+        runCatching { load(conn) }
+    }
+
+    /** `sync.event{kind: "connection.request"}`: another device's decision, the peer's approval, or an expiry (§10.1). */
+    private suspend fun onRequestSync(b: JsonObject) {
+        val id = VaultJson.str(b, "pending_id") ?: VaultJson.str(b, "connection_id") ?: return
+        when (VaultJson.str(b, "state")) {
+            "approved" -> patchRequest(id) { a ->
+                when (a) {
+                    is Approval.ConnectionRequest -> a.copy(state = RequestState.APPROVED)
+                    is Approval.OutgoingRequest -> a.copy(state = RequestState.APPROVED)
+                    else -> a
+                }
             }
+            "peer_approved" -> patchRequest(id) { a ->
+                when (a) {
+                    is Approval.ConnectionRequest -> a.copy(peerApproved = true)
+                    is Approval.OutgoingRequest -> a.copy(peerApproved = true)
+                    else -> a
+                }
+            }
+            "declined" -> endRequest(id, RequestEnd.DECLINED)
+            "expired" -> endRequest(id, RequestEnd.EXPIRED)
         }
     }
 
@@ -239,6 +339,7 @@ class SocialManager(
             }
             "message.read" -> patch(s("connection_id") ?: return, s("message_id") ?: return) { it.copy(read = true) }
             "connection.changed", "block.added", "block.removed" -> runCatching { refresh() }
+            "connection.request" -> onRequestSync(b)
             "connection.authenticate.decided" -> s("request_id")?.let { dropApproval("auth:$it") }
             "grant.request.decided" -> s("request_id")?.let { id ->
                 dropApproval("grant:$id")
@@ -325,10 +426,27 @@ class SocialManager(
             InviteLinks.Parsed.NotAConnection -> throw VaultFailure(FailureKind.INVITE_NOT_CONNECTION)
             InviteLinks.Parsed.Invalid -> throw VaultFailure(FailureKind.INVITE_INVALID)
         }
-        val r = vaultGuard { api().inviteAccept(link) }
-        val sas = r.sas
-        if (sas != null) edit { l -> l.copy(safety = l.safety + (r.connectionId to StoredSas(sas, now().toEpochMilli()))) }
-        return AcceptedConnection(r.connectionId, r.sas)
+        val r = vaultGuard {
+            try {
+                val a = api().inviteAccept(link)
+                AcceptedConnection(a.connectionId, a.name?.takeIf { it.isNotBlank() }, exists = false, exp = ApprovalParser.instant(a.exp))
+            } catch (e: com.vettid.core.vault.VaultOpException) {
+                // §6.4 "Already connected" (0.10.2): the vault's own id for that peer; no handshake was made.
+                val existing = e.body?.let { VaultJson.str(it, "connection_id") }
+                if (e.code != "exists" || existing == null) throw e
+                AcceptedConnection(existing, exists = true)
+            }
+        }
+        if (!r.exists) {
+            val waiting = Approval.OutgoingRequest(
+                r.connectionId, null, remote = false, name = r.name, state = RequestState.WAITING, peerApproved = false,
+                introducedBy = null, receivedAt = now(), exp = r.exp,
+            )
+            // The outgoing event may already have arrived (it follows hs.resp): keep it then.
+            requestsFlow.update { l -> if (l.any { requestId(it) == r.connectionId }) l else l + waiting }
+            endsFlow.update { it - r.connectionId }
+        }
+        return r
     }
 
     private suspend fun updateMeta(id: String, change: suspend (VaultApi, Long) -> Unit) = vaultGuard {
@@ -456,6 +574,7 @@ class SocialManager(
     override suspend fun refreshApprovals() {
         val t = now()
         val a = vaultGuard { api() }
+        refreshRequestsQuietly()
         val listed = mutableListOf<Approval>()
         var grantsOk = false
         var criticalOk = false
@@ -501,6 +620,7 @@ class SocialManager(
 
     private fun withName(a: Approval, names: Map<String, String>): Approval = when (a) {
         is Approval.ConnectionRequest -> a
+        is Approval.OutgoingRequest -> a
         is Approval.Authentication -> a.copy(connectionName = names[a.connectionId])
         is Approval.GrantRequest -> a.copy(connectionName = names[a.connectionId])
         is Approval.CriticalUse -> a.copy(connectionName = names[a.connectionId])
@@ -526,16 +646,49 @@ class SocialManager(
         listedFlow.update { l -> l.filterNot { it.key == key } }
     }
 
-    override suspend fun approveConnection(pendingId: String) {
-        val req = find("connection:$pendingId") as? Approval.ConnectionRequest
-        decide("connection:$pendingId") { it.connectionApprove(pendingId) }
-        if (req != null) edit { l -> l.copy(approved = l.approved + ApprovedSas(req.name, req.sas, now().toEpochMilli())) }
+    /** Runs a decision on a connection request; `not_found` means it already ended. */
+    private suspend fun decideRequest(id: String, block: suspend (VaultApi) -> Unit) {
+        try {
+            vaultGuard { block(api()) }
+        } catch (e: VaultFailure) {
+            if (e.kind == FailureKind.NOT_FOUND) endRequest(id, null)
+            throw e
+        }
     }
 
-    override suspend fun declineConnection(pendingId: String) = decide("connection:$pendingId") { it.connectionDecline(pendingId) }
+    private fun markApproved(id: String) = patchRequest(id) { a ->
+        when (a) {
+            is Approval.ConnectionRequest -> a.copy(state = RequestState.APPROVED)
+            is Approval.OutgoingRequest -> a.copy(state = RequestState.APPROVED)
+            else -> a
+        }
+    }
 
-    override suspend fun blockConnectionRequest(pendingId: String) =
-        decide("connection:$pendingId") { it.blockAdd(pendingId = pendingId) }
+    // The connection becomes active with both approvals (0.10.3): the request stays, approved, until `added`.
+    override suspend fun approveConnection(pendingId: String) {
+        decideRequest(pendingId) { it.connectionApprove(pendingId) }
+        markApproved(pendingId)
+    }
+
+    override suspend fun declineConnection(pendingId: String) {
+        decideRequest(pendingId) { it.connectionDecline(pendingId) }
+        endRequest(pendingId, RequestEnd.DECLINED)
+    }
+
+    override suspend fun blockConnectionRequest(pendingId: String) {
+        decideRequest(pendingId) { it.blockAdd(pendingId = pendingId) }
+        endRequest(pendingId, RequestEnd.DECLINED)
+    }
+
+    override suspend fun approveOutgoing(connectionId: String) {
+        decideRequest(connectionId) { it.outgoingApprove(connectionId) }
+        markApproved(connectionId)
+    }
+
+    override suspend fun declineOutgoing(connectionId: String) {
+        decideRequest(connectionId) { it.outgoingDecline(connectionId) }
+        endRequest(connectionId, RequestEnd.DECLINED)
+    }
 
     override suspend fun approveAuthentication(requestId: String, password: String) {
         credential.openUnlockWindow(password)
@@ -552,16 +705,30 @@ class SocialManager(
 
     override suspend fun approveCriticalUse(requestId: String, password: String) {
         val req = find("critical:$requestId") as? Approval.CriticalUse ?: throw VaultFailure(FailureKind.NOT_FOUND)
-        // The password authorizes exactly this payload (§10.13): when the app has it, its hash must be the one listed.
-        if (req.payload.isNotEmpty() && ApprovalParser.payloadSha256(req.payload) != req.payloadSha256) {
-            throw VaultFailure(FailureKind.OTHER, "payload_mismatch")
-        }
+        // §10.13: the approval is offered only for a payload the member saw and that matches payload_sha256;
+        // the hash sealed with the password is the one computed from that payload.
+        if (!req.payloadVerified) throw VaultFailure(FailureKind.OTHER, "payload_mismatch")
         val sha = try {
-            com.vettid.core.crypto.Base64s.decodeStd(req.payloadSha256, SHA256_BYTES)
+            com.vettid.core.crypto.Bytes.sha256(com.vettid.core.crypto.Base64s.decodeStd(req.payload))
         } catch (e: com.vettid.core.crypto.CryptoException) {
-            throw VaultFailure(FailureKind.OTHER, "payload_sha256", cause = e)
+            throw VaultFailure(FailureKind.OTHER, "payload", cause = e)
         }
         decide("critical:$requestId") { it.criticalUseApprove(password, requestId, sha) }
+    }
+
+    override suspend fun loadCriticalUse(requestId: String) {
+        val key = "critical:$requestId"
+        val body = try {
+            vaultGuard { api().criticalUseGet(requestId) }
+        } catch (e: VaultFailure) {
+            if (e.kind == FailureKind.NOT_FOUND) {
+                dropApproval(key)
+                listedFlow.update { l -> l.filterNot { it.key == key } }
+            }
+            throw e
+        }
+        // Kept as the event would have been; the screen shows the payload only if it matches the listed hash.
+        store("critical-secret-use.pending", body)
     }
 
     override suspend fun denyCriticalUse(requestId: String) = decide("critical:$requestId") { it.criticalUseDeny(requestId) }
@@ -588,8 +755,6 @@ class SocialManager(
 
     companion object {
         private const val HISTORY = 200
-        private const val SHA256_BYTES = 32
-        private val SAS_MATCH_WINDOW: Duration = Duration.ofMinutes(15)
         private val AUTH_WAIT: Duration = Duration.ofMinutes(10)
         private val ORDER = compareBy<MessageInfo>({ it.sentAt }, { it.messageId })
         private val json = Json { ignoreUnknownKeys = true }

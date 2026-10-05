@@ -14,6 +14,8 @@ import com.vettid.core.data.social.InviteTtl
 import com.vettid.core.data.social.MessageInfo
 import com.vettid.core.data.social.MessagesRepository
 import com.vettid.core.data.social.OutstandingInvite
+import com.vettid.core.data.social.RequestEnd
+import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.social.SafetyCodeRecord
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
@@ -34,7 +36,7 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
     val fail = mutableMapOf<String, VaultFailure>()
     var lastPassword: String? = null
     var lastText: String? = null
-    var acceptResult = AcceptedConnection("conn-new", null)
+    var acceptResult = AcceptedConnection("conn-new", "Inviter")
     var ttls = InviteTtl.entries.toList()
     var invite = InviteInfo("01JINVITE0000000000000000A", "link", "{}", Instant.parse("2026-10-04T12:10:00Z"), remote = false)
     var outstanding = listOf<OutstandingInvite>()
@@ -45,6 +47,7 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
     override val authentication = MutableStateFlow<Map<String, AuthenticationState>>(emptyMap())
     val messageMap = MutableStateFlow<Map<String, List<MessageInfo>>>(emptyMap())
     override val approvals = MutableStateFlow<List<Approval>>(emptyList())
+    override val requestEnds = MutableStateFlow<Map<String, RequestEnd>>(emptyMap())
     override val conversations = MutableStateFlow<List<ConversationSummary>>(emptyList())
 
     /** Sets the connections and messages and recomputes [conversations]. */
@@ -176,16 +179,50 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
 
     override suspend fun refreshApprovals() = call("refreshApprovals")
 
+    override suspend fun refreshRequests() = call("refreshRequests")
+
     private fun drop(key: String) = approvals.update { l -> l.filterNot { it.key == key } }
+
+    private fun approved(key: String) = approvals.update { l ->
+        l.map {
+            when {
+                it.key != key -> it
+                it is Approval.ConnectionRequest -> it.copy(state = RequestState.APPROVED)
+                it is Approval.OutgoingRequest -> it.copy(state = RequestState.APPROVED)
+                else -> it
+            }
+        }
+    }
 
     override suspend fun approveConnection(pendingId: String) {
         call("approveConnection")
-        drop("connection:$pendingId")
+        approved("connection:$pendingId")
     }
 
     override suspend fun declineConnection(pendingId: String) {
         call("declineConnection")
         drop("connection:$pendingId")
+        requestEnds.update { it + (pendingId to RequestEnd.DECLINED) }
+    }
+
+    override suspend fun approveOutgoing(connectionId: String) {
+        call("approveOutgoing")
+        approved("outgoing:$connectionId")
+    }
+
+    override suspend fun declineOutgoing(connectionId: String) {
+        call("declineOutgoing")
+        drop("outgoing:$connectionId")
+        requestEnds.update { it + (connectionId to RequestEnd.DECLINED) }
+    }
+
+    /** Payloads [loadCriticalUse] returns, by request id. */
+    val criticalPayloads = mutableMapOf<String, String>()
+
+    override suspend fun loadCriticalUse(requestId: String) {
+        call("loadCriticalUse")
+        val p = criticalPayloads[requestId] ?: return
+        approvals.update { l -> l.map { if (it is Approval.CriticalUse && it.requestId == requestId) it.copy(payload = p) else it } }
     }
 
     override suspend fun blockConnectionRequest(pendingId: String) {

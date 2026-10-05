@@ -13,6 +13,8 @@ import com.vettid.core.data.social.InviteInfo
 import com.vettid.core.data.social.InviteLinks
 import com.vettid.core.data.social.InviteTtl
 import com.vettid.core.data.social.OutstandingInvite
+import com.vettid.core.data.social.RequestEnd
+import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.social.SafetyCodeRecord
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
@@ -112,16 +114,19 @@ data class InviteUiState(
     val connectionName: String? = null,
     val busy: Boolean = false,
     val confirmBlock: Boolean = false,
+    /** The request arrived already approved by in-person auto-approval (§6.4), not by this member here. */
+    val autoApproved: Boolean = false,
     val error: FailureKind? = null,
 )
 
 /**
- * Invite a connection (§6.4, A4): choose the lifetime (10 minutes in person,
- * longer for a remote link), show the QR code and the link, then the
- * request with its safety code when they accept, approve, and see the
- * connection appear. Leaving the screen keeps the invitation (Connections
- * lists it until it is used, cancelled or expires) and the request
- * (Approvals).
+ * Invite a connection (§6.4, A4; 0.10.3): choose the lifetime (10 minutes in
+ * person, longer for a remote link), show the QR code and the link; once the
+ * other vault has completed the handshake the request arrives with its safety
+ * code, which both members compare; each approves on their own phone, and the
+ * connection appears once both have. Leaving the screen keeps the invitation
+ * (Connections lists it until it is used, cancelled or expires) and the
+ * request (Approvals).
  */
 @HiltViewModel
 class InviteViewModel @Inject constructor(
@@ -145,14 +150,22 @@ class InviteViewModel @Inject constructor(
             approvals.approvals.collect { list ->
                 val s = state.value
                 val inv = s.invite ?: return@collect
-                if (s.step != InviteStep.SHOWING) return@collect
                 val req = list.filterIsInstance<Approval.ConnectionRequest>().firstOrNull { it.inviteId == inv.inviteId }
-                if (req != null) state.update { it.copy(step = InviteStep.REQUEST, request = req) }
+                when {
+                    req != null && s.step == InviteStep.SHOWING -> {
+                        before = connections.connections.value.map { it.id }.toSet()
+                        // In-person auto-approval (§6.4): already approved here; the code is still shown to compare.
+                        val step = if (req.state == RequestState.APPROVED) InviteStep.CONNECTING else InviteStep.REQUEST
+                        state.update { it.copy(step = step, request = req, autoApproved = req.state == RequestState.APPROVED) }
+                    }
+                    req != null && (s.step == InviteStep.REQUEST || s.step == InviteStep.CONNECTING) ->
+                        state.update { it.copy(request = req) }
+                }
             }
         }
         viewModelScope.launch {
             connections.connections.collect { cs ->
-                if (state.value.step != InviteStep.CONNECTING) return@collect
+                if (state.value.step != InviteStep.CONNECTING && state.value.step != InviteStep.REQUEST) return@collect
                 val added = cs.firstOrNull { it.id !in before && it.state == ConnectionState.ACTIVE } ?: return@collect
                 state.update { it.copy(step = InviteStep.CONNECTED, connectionId = added.id, connectionName = added.displayName) }
             }
@@ -181,11 +194,20 @@ class InviteViewModel @Inject constructor(
         }
     }
 
+    /** This member's approval; the connection is made once the other member approves too (0.10.3). */
     fun approve() {
         val req = state.value.request ?: return
-        before = connections.connections.value.map { it.id }.toSet()
-        decide { approvals.approveConnection(req.pendingId) }
-        state.update { if (it.error == null) it.copy(step = InviteStep.CONNECTING) else it }
+        state.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            try {
+                approvals.approveConnection(req.pendingId)
+                state.update {
+                    if (it.step == InviteStep.CONNECTED) it.copy(busy = false) else it.copy(busy = false, step = InviteStep.CONNECTING)
+                }
+            } catch (e: VaultFailure) {
+                state.update { it.copy(busy = false, error = e.kind) }
+            }
+        }
     }
 
     fun decline() {
@@ -216,49 +238,102 @@ class InviteViewModel @Inject constructor(
                 block()
                 state.update { if (finish) InviteUiState(ttls = it.ttls, ttl = it.ttl) else it.copy(busy = false) }
             } catch (e: VaultFailure) {
-                state.update {
-                    it.copy(busy = false, error = e.kind, step = if (it.step == InviteStep.CONNECTING) InviteStep.REQUEST else it.step)
-                }
+                state.update { it.copy(busy = false, error = e.kind) }
             }
         }
     }
 }
 
-/** The steps of accepting an invitation. */
-enum class AcceptStep { INPUT, ACCEPTING, WAITING, CONNECTED }
+/** The steps of accepting an invitation (§6.4, 0.10.3). */
+enum class AcceptStep {
+    /** Paste (or confirm an opened link). */
+    INPUT,
+    ACCEPTING,
+
+    /** The vaults run the handshake; no safety code yet. */
+    WAITING,
+
+    /** The safety code is known: compare, then approve or decline. */
+    COMPARE,
+
+    /** This member approved; the inviter's approval is awaited. */
+    APPROVED,
+    CONNECTED,
+
+    /** This vault is already connected to the inviter (or has asked to connect). */
+    EXISTS,
+
+    /** The request ended without a connection. */
+    ENDED,
+}
 
 /** Immutable UI state of the accept screen. */
 data class AcceptUiState(
     val step: AcceptStep = AcceptStep.INPUT,
     val input: String = "",
+    /** The screen was opened from a link (App Link or `vettid://`): the member confirms first. */
+    val fromLink: Boolean = false,
     val connectionId: String? = null,
+    /** The inviter's name from the invitation, else the connection's. */
+    val name: String? = null,
     val sas: String? = null,
+    val remote: Boolean = false,
+    val end: RequestEnd? = null,
     val connectionName: String? = null,
+    val busy: Boolean = false,
     val error: FailureKind? = null,
 )
 
 /**
- * Accept an invitation (§6.4): a pasted link or a scanned code. The vault
- * fetches the claim and sends the handshake; the connection is pending until
- * the inviter approves, then it appears here (and in Connections).
+ * Accept an invitation (§6.4, 0.10.2/0.10.3): a pasted or opened link or a
+ * scanned code. The vault fetches the claim and runs the handshake; once it
+ * has, the safety code appears here (`connection.request.outgoing`) and the
+ * member compares it with the inviter's screen and approves or declines their
+ * own side. The connection is made once both have approved. A vault already
+ * connected to the inviter says so (`exists`).
  */
 @HiltViewModel
 class AcceptViewModel @Inject constructor(
     savedState: SavedStateHandle,
     private val repo: ConnectionsRepository,
+    private val approvals: ApprovalsRepository,
 ) : ViewModel() {
-    private val state = MutableStateFlow(AcceptUiState(input = savedState.get<String>(AcceptRoute.ARG).orEmpty()))
+    private val state = MutableStateFlow(
+        AcceptUiState(
+            input = savedState.get<String>(AcceptRoute.ARG).orEmpty(),
+            fromLink = savedState.get<Boolean>(AcceptRoute.ARG_OPENED) ?: false,
+        ),
+    )
     val uiState: StateFlow<AcceptUiState> = state.asStateFlow()
 
     init {
-        // A scanned code arrives with the route: accept it at once.
-        if (state.value.input.isNotBlank()) accept()
+        // A scanned code arrives with the route: accept it at once. An opened link waits for the member.
+        if (state.value.input.isNotBlank() && !state.value.fromLink) accept()
         viewModelScope.launch {
-            repo.connections.collect { cs ->
+            val sources = combine(approvals.approvals, repo.connections, approvals.requestEnds) { a, c, e -> Triple(a, c, e) }
+            sources.collect { (list, cs, ends) ->
                 val s = state.value
-                val c = cs.firstOrNull { it.id == s.connectionId } ?: return@collect
-                if (s.step == AcceptStep.WAITING && c.state == ConnectionState.ACTIVE) {
-                    state.update { it.copy(step = AcceptStep.CONNECTED, connectionName = c.displayName) }
+                val id = s.connectionId ?: return@collect
+                if (s.step !in FOLLOWED) return@collect
+                val active = cs.firstOrNull { it.id == id && it.state == ConnectionState.ACTIVE }
+                val req = list.filterIsInstance<Approval.OutgoingRequest>().firstOrNull { it.connectionId == id }
+                val end = ends[id]
+                state.update {
+                    when {
+                        active != null -> it.copy(step = AcceptStep.CONNECTED, connectionName = active.displayName)
+                        end != null && req == null -> it.copy(step = AcceptStep.ENDED, end = end)
+                        req == null -> it
+                        else -> it.copy(
+                            sas = req.sas ?: it.sas,
+                            name = it.name ?: req.name,
+                            remote = req.remote,
+                            step = when (req.state) {
+                                RequestState.WAITING -> AcceptStep.WAITING
+                                RequestState.PENDING -> if (it.step == AcceptStep.APPROVED) AcceptStep.APPROVED else AcceptStep.COMPARE
+                                RequestState.APPROVED -> AcceptStep.APPROVED
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -273,15 +348,52 @@ class AcceptViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val r = repo.acceptInvite(text)
-                state.update { it.copy(step = AcceptStep.WAITING, connectionId = r.connectionId, sas = r.sas) }
-                // It may already be there (an in-person invite with auto-approval).
-                repo.connections.first().firstOrNull { it.id == r.connectionId && it.state == ConnectionState.ACTIVE }?.let { c ->
-                    state.update { s -> s.copy(step = AcceptStep.CONNECTED, connectionName = c.displayName) }
+                if (r.exists) {
+                    val c = repo.connections.value.firstOrNull { it.id == r.connectionId }
+                    state.update { it.copy(step = AcceptStep.EXISTS, connectionId = r.connectionId, connectionName = c?.displayName) }
+                    return@launch
                 }
+                state.update { it.copy(step = AcceptStep.WAITING, connectionId = r.connectionId, name = r.name) }
+                // The code may have arrived already (the handshake is quick): show it.
+                runCatching { approvals.refreshRequests() }
             } catch (e: VaultFailure) {
                 state.update { it.copy(step = AcceptStep.INPUT, error = e.kind) }
             }
         }
+    }
+
+    /** This member's approval of their side, after comparing the codes. */
+    fun approve() {
+        val id = state.value.connectionId ?: return
+        state.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            try {
+                approvals.approveOutgoing(id)
+                state.update {
+                    if (it.step == AcceptStep.COMPARE) it.copy(busy = false, step = AcceptStep.APPROVED) else it.copy(busy = false)
+                }
+            } catch (e: VaultFailure) {
+                state.update { it.copy(busy = false, error = e.kind) }
+            }
+        }
+    }
+
+    /** Declines (the codes differ, or the member changed their mind); the inviter is not told (§6.4). */
+    fun decline() {
+        val id = state.value.connectionId ?: return
+        state.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            try {
+                approvals.declineOutgoing(id)
+                state.update { it.copy(busy = false, step = AcceptStep.ENDED, end = RequestEnd.DECLINED) }
+            } catch (e: VaultFailure) {
+                state.update { it.copy(busy = false, error = e.kind) }
+            }
+        }
+    }
+
+    private companion object {
+        val FOLLOWED = setOf(AcceptStep.WAITING, AcceptStep.COMPARE, AcceptStep.APPROVED)
     }
 }
 

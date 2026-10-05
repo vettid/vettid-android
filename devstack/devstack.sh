@@ -18,7 +18,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VAULT_REF="${VAULT_REF:-a7818cd}"
+VAULT_REF="${VAULT_REF:-19c0315}"
 DEVICE_POLICY="${DEVICE_POLICY:-$HERE/device-policy.json}"
 DATA="${XDG_CACHE_HOME:-$HOME/.cache}/vettid-devstack"
 STATE="${XDG_CACHE_HOME:-$HOME/.cache}/vettid-android-devstack"

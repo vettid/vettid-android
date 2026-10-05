@@ -41,9 +41,13 @@ class VaultApi(val device: VaultDevice) {
     /** `message.new`: incoming and (from other devices) outgoing messages. */
     val messages: Flow<Message> get() = events("message.new").map { it.body.decode(Message.serializer()) }
 
-    /** `connection.request.pending`: a connection asks to be approved. */
-    val connectionRequests: Flow<ConnectionRequest>
-        get() = events("connection.request.pending").map { it.body.decode(ConnectionRequest.serializer()) }
+    /** `connection.request.pending`: a connection asks to be approved (its handshake has checked out). */
+    val connectionRequests: Flow<IncomingRequest>
+        get() = events("connection.request.pending").map { it.body.decode(IncomingRequest.serializer()) }
+
+    /** `connection.request.outgoing`: the safety code of this vault's outgoing request (0.10.3). */
+    val outgoingRequests: Flow<OutgoingRequest>
+        get() = events("connection.request.outgoing").map { it.body.decode(OutgoingRequest.serializer()) }
 
     /** `connection.event`: added, removed, stale, rekeyed, reconnected, failed, profile. */
     val connectionEvents: Flow<ConnectionEvent> get() = events("connection.event").map { it.body.decode(ConnectionEvent.serializer()) }
@@ -391,20 +395,39 @@ class VaultApi(val device: VaultDevice) {
     }
 
     /**
-     * Accepts an invitation link (scanned or pasted): the new connection's id
-     * (`pending` until the inviter approves) and, when the vault sends it, the
-     * safety code to compare (§6.3: `sas` depends only on `hs.init`).
+     * Accepts an invitation (the bare payload, §6.4): an outgoing request in
+     * state `waiting`, whose safety code follows in `connection.request.outgoing`
+     * (0.10.3). A vault already connected to the inviter, or with an outgoing
+     * request to it, answers `exists` with `{connection_id}` ([VaultOpException.body]).
      */
     suspend fun inviteAccept(link: String): AcceptedInvite =
         op("connection.invite.accept") { put("link", link) }.decode(AcceptedInvite.serializer())
 
+    /** Approves an incoming request (the inviter's side) after comparing the safety code. */
     suspend fun connectionApprove(pendingId: String) {
         op("connection.approve") { put("pending_id", pendingId) }
     }
 
+    /** Declines an incoming request (any state; not sent to the peer, §6.4). */
     suspend fun connectionDecline(pendingId: String) {
         op("connection.decline") { put("pending_id", pendingId) }
     }
+
+    /** Approves this vault's outgoing request (the accepter's side, 0.10.2); `bad_request` while it is `waiting`. */
+    suspend fun outgoingApprove(connectionId: String) {
+        op("connection.approve") { put("connection_id", connectionId) }
+    }
+
+    /** Declines this vault's outgoing request, in any state, `waiting` included (0.10.4). */
+    suspend fun outgoingDecline(connectionId: String) {
+        op("connection.decline") { put("connection_id", connectionId) }
+    }
+
+    /**
+     * Pending incoming and outgoing requests with their safety codes (§10.4):
+     * `{incoming: [...], outgoing: [...]}`, entries as [IncomingRequest] and [OutgoingRequest].
+     */
+    suspend fun requestList(): JsonObject = op("connection.request.list")
 
     suspend fun connectionList(): List<Connection> =
         VaultJson.decode(ListSerializer(Connection.serializer()), op("connection.list")["connections"] ?: JsonArray(emptyList()))
@@ -583,6 +606,13 @@ class VaultApi(val device: VaultDevice) {
 
     suspend fun criticalUseList(): JsonObject = op("critical-secret-use.list")
 
+    /**
+     * An incoming request with its payload, to show it again (§10.13, 0.10.2): the
+     * `critical-secret-use.pending` body. The caller checks SHA-256(payload)
+     * against `payload_sha256` before showing it or offering the approval.
+     */
+    suspend fun criticalUseGet(requestId: String): JsonObject = op("critical-secret-use.get") { put("request_id", requestId) }
+
     // --- audit and feed (§10.9) ---
 
     suspend fun auditList(
@@ -632,7 +662,8 @@ class VaultApi(val device: VaultDevice) {
         const val INVITE_TTL_DEFAULT = 3600
         private const val AWAIT_S = 90L
         val APPROVAL_TYPES = setOf(
-            "connection.request.pending", "grant.pending", "critical-secret-use.pending", "share.pending", "approval.pending",
+            "connection.request.pending", "connection.request.outgoing", "grant.pending", "critical-secret-use.pending",
+            "share.pending", "approval.pending",
             "device.session.pending", "connection.authenticate.pending", "credential.alarm",
         )
 

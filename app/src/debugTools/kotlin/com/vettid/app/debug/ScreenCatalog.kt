@@ -32,6 +32,9 @@ import com.vettid.core.ui.components.ShellChrome
 import com.vettid.core.ui.components.StepState
 import com.vettid.core.ui.components.UrgentBanner
 import com.vettid.core.data.social.Approval
+import com.vettid.core.data.social.ApprovalParser
+import com.vettid.core.data.social.RequestEnd
+import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.social.AuthenticationState
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConnectionState
@@ -192,13 +195,21 @@ object ScreenCatalog {
         remote = false,
     )
     private val request = Approval.ConnectionRequest("p1", invite.inviteId, "042817", false, "Morgan Lee", null, t0, t0.plusSeconds(604_800))
+    private val outgoing = Approval.OutgoingRequest(
+        "c9", "315904", remote = true, name = "Jordan Park", state = RequestState.PENDING, peerApproved = false,
+        introducedBy = null, receivedAt = t0, exp = t0.plusSeconds(691_200),
+    )
+    private val outgoingWaiting = outgoing.copy(connectionId = "c10", sas = null, state = RequestState.WAITING, name = "Riley Chen")
     private val approvals: List<Approval> = listOf(
         request,
         Approval.Authentication("a1", "c1", "Confirm before I send the keys", t0, t0.plusSeconds(600), "Sam Rivera"),
         Approval.GrantRequest("g1", "c2", listOf(GrantEntry("item", "01JITEM", "Passport", true), GrantEntry("category", "insurance", "Your insurance card", false)), 1, 604_800, "Booking the trip", t0, t0.plusSeconds(86_400), "Alex (work)"),
-        Approval.CriticalUse("u1", "c1", "Signing key", "Private key", "sign", "SGVsbG8sIFZldHRJRCE=", "x", "Sign the lease agreement", t0, t0.plusSeconds(86_400), "Sam Rivera"),
+        Approval.CriticalUse("u1", "c1", "Signing key", "Private key", "sign", CRITICAL_PAYLOAD, ApprovalParser.payloadSha256(CRITICAL_PAYLOAD)!!, "Sign the lease agreement", t0, t0.plusSeconds(86_400), "Sam Rivera"),
         Approval.ShareDecision("r1", "c1", null, listOf(ShareItem("i1", "Allergy list", "health", "data")), "tagged", t0, null, "Sam Rivera"),
         Approval.DeviceRequest("device.session.pending", "s1", "Office laptop", "desktop", null, t0, t0.plusSeconds(300)),
+        outgoing,
+        outgoingWaiting,
+        request.copy(pendingId = "p2", name = "Casey Novak", sas = "770312", state = RequestState.APPROVED),
     )
 
     @Composable
@@ -348,12 +359,19 @@ object ScreenCatalog {
         "invite.choose_remote" to { InviteScreen(InviteUiState(ttls = InviteTtl.entries.toList(), ttl = InviteTtl.ONE_DAY), InviteActions()) },
         "invite.show" to { InviteScreen(InviteUiState(step = InviteStep.SHOWING, invite = invite), InviteActions()) },
         "invite.request" to { InviteScreen(InviteUiState(step = InviteStep.REQUEST, invite = invite, request = request), InviteActions()) },
+        "invite.waiting_peer" to {
+            InviteScreen(InviteUiState(step = InviteStep.CONNECTING, invite = invite, request = request.copy(state = RequestState.APPROVED)), InviteActions())
+        },
         "invite.connected" to { InviteScreen(InviteUiState(step = InviteStep.CONNECTED, connectionId = "c4", connectionName = "Morgan Lee"), InviteActions()) },
         "invite.expired" to { InviteScreen(InviteUiState(step = InviteStep.EXPIRED), InviteActions()) },
         "accept" to { AcceptScreen(AcceptUiState(input = invite.link), AcceptActions()) },
         "accept.error" to { AcceptScreen(AcceptUiState(input = "not a link", error = FailureKind.INVITE_INVALID), AcceptActions()) },
-        "accept.waiting" to { AcceptScreen(AcceptUiState(step = AcceptStep.WAITING, connectionId = "c4"), AcceptActions()) },
-        "accept.waiting_sas" to { AcceptScreen(AcceptUiState(step = AcceptStep.WAITING, connectionId = "c4", sas = "042817"), AcceptActions()) },
+        "accept.opened" to { AcceptScreen(AcceptUiState(input = "https://relay.vettid.org/connect#${invite.link}", fromLink = true), AcceptActions()) },
+        "accept.waiting" to { AcceptScreen(AcceptUiState(step = AcceptStep.WAITING, connectionId = "c4", name = "Morgan Lee"), AcceptActions()) },
+        "accept.compare" to { AcceptScreen(AcceptUiState(step = AcceptStep.COMPARE, connectionId = "c4", name = "Morgan Lee", sas = "042817"), AcceptActions()) },
+        "accept.approved" to { AcceptScreen(AcceptUiState(step = AcceptStep.APPROVED, connectionId = "c4", name = "Morgan Lee", sas = "042817"), AcceptActions()) },
+        "accept.exists" to { AcceptScreen(AcceptUiState(step = AcceptStep.EXISTS, connectionId = "c1", connectionName = "Sam Rivera"), AcceptActions()) },
+        "accept.ended" to { AcceptScreen(AcceptUiState(step = AcceptStep.ENDED, connectionId = "c4", end = RequestEnd.FAILED), AcceptActions()) },
         "scan" to {
             ScanScreen(ScanUiState(problem = FailureKind.INVITE_NOT_CONNECTION), {}, {}, {}, {}) { m -> Box(m.background(MaterialTheme.colorScheme.surfaceContainerHigh)) }
         },
@@ -364,8 +382,20 @@ object ScreenCatalog {
         "approvals.grant" to { ApprovalDetailScreen(ApprovalDetailUiState(approvals[2].key, approvals[2]), DecisionActions()) },
         "approvals.critical" to { ApprovalDetailScreen(ApprovalDetailUiState(approvals[3].key, approvals[3]), DecisionActions()) },
         "approvals.share" to { ApprovalDetailScreen(ApprovalDetailUiState(approvals[4].key, approvals[4]), DecisionActions()) },
+        "approvals.critical_mismatch" to {
+            val bad = (approvals[3] as Approval.CriticalUse).copy(payloadSha256 = "AAAA")
+            ApprovalDetailScreen(ApprovalDetailUiState(bad.key, bad, password = "pw"), DecisionActions())
+        },
+        "approvals.outgoing" to { ApprovalDetailScreen(ApprovalDetailUiState(outgoing.key, outgoing), DecisionActions()) },
+        "approvals.outgoing_waiting" to { ApprovalDetailScreen(ApprovalDetailUiState(outgoingWaiting.key, outgoingWaiting), DecisionActions()) },
+        "approvals.connection_waiting_peer" to {
+            val a = request.copy(state = RequestState.APPROVED)
+            ApprovalDetailScreen(ApprovalDetailUiState(a.key, a), DecisionActions())
+        },
         "approvals.device" to { ApprovalDetailScreen(ApprovalDetailUiState(approvals[5].key, approvals[5]), DecisionActions()) },
         "gallery" to { GalleryScreen(themeMode = LocalThemeController.current.mode, onThemeModeChange = {}, onBack = {}) },
         "account_sheet" to { AccountSheet(name = "Sam Rivera", detail = EMAIL, onDismiss = {}, onLockVault = {}, onSignOut = {}) },
     )
 }
+
+private const val CRITICAL_PAYLOAD = "SGVsbG8sIFZldHRJRCE="

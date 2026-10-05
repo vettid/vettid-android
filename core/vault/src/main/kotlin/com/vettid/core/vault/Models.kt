@@ -57,22 +57,55 @@ data class Invite(
     val remote: Boolean = false,
 )
 
-/** `connection.invite.accept` response (§10.4); [sas] only if the vault sends it (not in 0.10.1). */
+/**
+ * `connection.invite.accept` response (§10.4, 0.10.3): an outgoing request in
+ * state `waiting`; its SAS follows in `connection.request.outgoing` once the
+ * handshake has run. [name] is the bundle's `hint.name`.
+ */
 @Serializable
 data class AcceptedInvite(
     @SerialName("connection_id") val connectionId: String,
-    val state: String = "pending",
-    val sas: String? = null,
+    val state: String = "waiting",
+    val remote: Boolean = false,
+    val exp: String? = null,
+    val name: String? = null,
 )
 
-/** `connection.request.pending` (§10.4): approve after comparing [sas]. */
+/**
+ * An incoming connection request (§10.4): `connection.request.pending`, or an
+ * entry of `connection.request.list`'s `incoming` ([peerApproved],
+ * [createdAt] only there). [state] is `pending` or `approved`.
+ */
 @Serializable
-data class ConnectionRequest(
+data class IncomingRequest(
     @SerialName("pending_id") val pendingId: String,
     @SerialName("invite_id") val inviteId: String? = null,
     val sas: String,
     val remote: Boolean = false,
+    val state: String = "pending",
+    @SerialName("peer_approved") val peerApproved: Boolean = false,
+    @SerialName("created_at") val createdAt: String? = null,
+    val exp: String? = null,
     val profile: JsonObject? = null,
+    @SerialName("introduced_by") val introducedBy: String? = null,
+)
+
+/**
+ * An outgoing connection request (§10.4): `connection.request.outgoing`, or an
+ * entry of `connection.request.list`'s `outgoing`. [state] is `waiting` (no
+ * SAS yet), `pending` or `approved`.
+ */
+@Serializable
+data class OutgoingRequest(
+    @SerialName("connection_id") val connectionId: String,
+    val sas: String? = null,
+    val remote: Boolean = false,
+    val state: String = "pending",
+    @SerialName("peer_approved") val peerApproved: Boolean = false,
+    @SerialName("created_at") val createdAt: String? = null,
+    val exp: String? = null,
+    val name: String? = null,
+    @SerialName("introduced_by") val introducedBy: String? = null,
 )
 
 /** `connection.event` (§10.4). */

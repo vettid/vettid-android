@@ -40,6 +40,23 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="https" android:host="account.vettid.org" android:pathPrefix="/auth/" />
             </intent-filter>
+            <!-- Invitation links (VAULT-MESSAGING §6.4, 0.10.2): <relay>/connect#<link> on the invitation's
+                 own relay. Verified as an App Link for the relays VettID runs once the relay serves
+                 /.well-known/assetlinks.json (a vettid-relay follow-up); the payload inside decides the
+                 relay, never the host. Nothing is sent until the member confirms in the app. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="relay.vettid.org" android:path="/connect" />
+            </intent-filter>
+            <!-- The relay page's "Open in VettID" link for any relay, self-hosted ones included: vettid://connect#<link>. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="vettid" android:host="connect" />
+            </intent-filter>
         </activity>
     </application>
 </manifest>

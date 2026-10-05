@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.ApprovalsRepository
+import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -74,6 +75,11 @@ data class ApprovalDetailUiState(
     val canApprove: Boolean get() = when (val a = approval) {
         null, is Approval.DeviceRequest -> false
         is Approval.GrantRequest -> a.grantable.isNotEmpty()
+        // 0.10.3: only once the safety code is known, and only once per member.
+        is Approval.ConnectionRequest -> a.state == RequestState.PENDING
+        is Approval.OutgoingRequest -> a.state == RequestState.PENDING && a.sas != null
+        // §10.13: only a payload that matches its hash, shown to the member, can be approved.
+        is Approval.CriticalUse -> a.payloadVerified && password.isNotEmpty()
         else -> needs == Needs.NOTHING || password.isNotEmpty()
     }
 
@@ -94,6 +100,20 @@ class ApprovalDetailViewModel @Inject constructor(
     private val key: String = checkNotNull(savedState[ApprovalDetailRoute.ARG]) { "no approval" }
     private val local = MutableStateFlow(ApprovalDetailUiState(key, approval = repo.approvals.value.firstOrNull { it.key == key }))
 
+    init {
+        // A critical-item request from the list has only the payload's hash: fetch the payload (§10.13).
+        val a = local.value.approval
+        if (a is Approval.CriticalUse && a.payload.isEmpty()) {
+            viewModelScope.launch {
+                try {
+                    repo.loadCriticalUse(a.requestId)
+                } catch (e: VaultFailure) {
+                    local.update { it.copy(error = e.kind) }
+                }
+            }
+        }
+    }
+
     val uiState: StateFlow<ApprovalDetailUiState> = combine(local, repo.approvals) { s, list ->
         val a = list.firstOrNull { it.key == key }
         s.copy(approval = a ?: s.approval, gone = a == null && s.approval != null && !s.done && !s.busy)
@@ -111,6 +131,7 @@ class ApprovalDetailViewModel @Inject constructor(
         decide {
             when (a) {
                 is Approval.ConnectionRequest -> repo.approveConnection(a.pendingId)
+                is Approval.OutgoingRequest -> repo.approveOutgoing(a.connectionId)
                 is Approval.Authentication -> repo.approveAuthentication(a.requestId, pw)
                 is Approval.GrantRequest -> repo.decideGrant(a.requestId, approve = true)
                 is Approval.CriticalUse -> repo.approveCriticalUse(a.requestId, pw)
@@ -125,6 +146,7 @@ class ApprovalDetailViewModel @Inject constructor(
         decide {
             when (a) {
                 is Approval.ConnectionRequest -> repo.declineConnection(a.pendingId)
+                is Approval.OutgoingRequest -> repo.declineOutgoing(a.connectionId)
                 is Approval.Authentication -> repo.denyAuthentication(a.requestId)
                 is Approval.GrantRequest -> repo.decideGrant(a.requestId, approve = false)
                 is Approval.CriticalUse -> repo.denyCriticalUse(a.requestId)

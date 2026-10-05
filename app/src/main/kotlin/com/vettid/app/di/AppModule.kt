@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import com.vettid.app.env.currentEnvironment
 import com.vettid.core.data.account.SignInLinkInbox
+import com.vettid.core.data.social.InviteLinkInbox
 import com.vettid.core.data.env.AppEnvironment
 import com.vettid.core.data.lock.AppLock
 import com.vettid.core.data.lock.FileWrappedKeyFile
@@ -94,4 +95,8 @@ object AppModule {
     @Provides
     @Singleton
     fun signInLinkInbox(): SignInLinkInbox = SignInLinkInbox()
+
+    @Provides
+    @Singleton
+    fun inviteLinkInbox(): InviteLinkInbox = InviteLinkInbox()
 }

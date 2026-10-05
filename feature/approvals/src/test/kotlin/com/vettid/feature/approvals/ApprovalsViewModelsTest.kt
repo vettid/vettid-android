@@ -5,6 +5,8 @@ package com.vettid.feature.approvals
 
 import androidx.lifecycle.SavedStateHandle
 import com.vettid.core.data.social.Approval
+import com.vettid.core.data.social.ApprovalParser
+import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.social.GrantEntry
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
@@ -28,7 +30,12 @@ class ApprovalsViewModelsTest {
     private val request = Approval.ConnectionRequest("p1", "i1", "042817", false, "Morgan", null, now, null)
     private val auth = Approval.Authentication("a1", "c1", null, now, null, "Sam")
     private val grant = Approval.GrantRequest("g1", "c1", listOf(GrantEntry("category", "insurance", null, false)), 1, null, null, now, null)
-    private val critical = Approval.CriticalUse("u1", "c1", "Key", "Seed", "sign", "", "x", null, now, null)
+    private val payload = "SGVsbG8sIFZldHRJRCE="
+    private val critical = Approval.CriticalUse("u1", "c1", "Key", "Seed", "sign", "", ApprovalParser.payloadSha256(payload)!!, null, now, null)
+    private val outgoing = Approval.OutgoingRequest(
+        "c9", "315904", remote = false, name = "Jordan", state = RequestState.PENDING, peerApproved = false,
+        introducedBy = null, receivedAt = now, exp = null,
+    )
     private val device = Approval.DeviceRequest("approval.pending", "d1", "Laptop", "desktop", "item.reveal", now, null)
     private val social = FakeSocial().apply { approvals.value = listOf(request, auth, grant, critical, device) }
 
@@ -88,9 +95,15 @@ class ApprovalsViewModelsTest {
 
     @Test
     fun criticalUseAndDeviceRequests() = runTest {
+        // A listed request has only the hash: the payload is fetched (critical-secret-use.get) and checked first.
+        social.criticalPayloads["u1"] = payload
         val c = detail(critical)
         advanceUntilIdle()
+        assertTrue("loadCriticalUse" in social.calls)
+        assertTrue((c.uiState.value.approval as Approval.CriticalUse).payloadVerified)
         c.setPassword("pw")
+        advanceUntilIdle()
+        assertTrue(c.uiState.value.canApprove)
         c.approve()
         advanceUntilIdle()
         assertTrue("approveCriticalUse" in social.calls)
@@ -101,6 +114,39 @@ class ApprovalsViewModelsTest {
         d.deny()
         advanceUntilIdle()
         assertTrue("declineDeviceRequest" in social.calls)
+    }
+
+    @Test
+    fun aPayloadThatDoesNotMatchItsHashCannotBeApproved() = runTest {
+        val bad = critical.copy(requestId = "u2", payload = "QmFk")
+        social.approvals.value = listOf(bad)
+        val c = detail(bad)
+        advanceUntilIdle()
+        c.setPassword("pw")
+        advanceUntilIdle()
+        assertFalse(c.uiState.value.canApprove)
+        c.approve()
+        advanceUntilIdle()
+        assertFalse("approveCriticalUse" in social.calls)
+    }
+
+    @Test
+    fun anOutgoingRequestIsApprovedOnceItsCodeIsKnown() = runTest {
+        social.approvals.value = listOf(outgoing.copy(sas = null, state = RequestState.WAITING), request.copy(state = RequestState.APPROVED))
+        val waiting = detail(outgoing)
+        advanceUntilIdle()
+        assertFalse(waiting.uiState.value.canApprove)
+        assertFalse(detail(request).uiState.value.canApprove)
+        social.approvals.value = listOf(outgoing)
+        advanceUntilIdle()
+        assertTrue(waiting.uiState.value.canApprove)
+        waiting.approve()
+        advanceUntilIdle()
+        assertTrue("approveOutgoing" in social.calls)
+        val d = detail(outgoing)
+        d.deny()
+        advanceUntilIdle()
+        assertTrue("declineOutgoing" in social.calls)
     }
 
     @Test

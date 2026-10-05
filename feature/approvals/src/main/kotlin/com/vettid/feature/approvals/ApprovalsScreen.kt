@@ -37,6 +37,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import com.vettid.core.data.social.Approval
+import com.vettid.core.data.social.RequestState
+import com.vettid.core.data.social.needsDecision
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.EmptyState
@@ -128,7 +130,7 @@ fun ApprovalsScreen(
                         supporting = listOfNotNull(who, summaryOf(a)).joinToString(" · "),
                         meta = Times.short(a.receivedAt),
                         tileName = who ?: "?",
-                        emphasized = true,
+                        emphasized = a.needsDecision,
                         onClick = { onOpen(a.key) },
                         modifier = Modifier.testTag("approval_${a.key}"),
                     )
@@ -143,6 +145,7 @@ fun ApprovalsScreen(
 fun titleOf(a: Approval): String = stringResource(
     when (a) {
         is Approval.ConnectionRequest -> if (a.remote) R.string.approvals_type_connection_remote else R.string.approvals_type_connection
+        is Approval.OutgoingRequest -> R.string.approvals_type_outgoing
         is Approval.Authentication -> R.string.approvals_type_authentication
         is Approval.GrantRequest -> R.string.approvals_type_grant
         is Approval.CriticalUse -> R.string.approvals_type_critical
@@ -155,6 +158,7 @@ fun titleOf(a: Approval): String = stringResource(
 @Composable
 private fun whoOf(a: Approval): String? = when (a) {
     is Approval.ConnectionRequest -> a.name ?: stringResource(R.string.approvals_no_name)
+    is Approval.OutgoingRequest -> a.name ?: stringResource(R.string.approvals_no_name)
     is Approval.DeviceRequest -> a.deviceName
     is Approval.ShareDecision -> a.connectionName ?: a.subjectAgentId?.let { stringResource(R.string.approvals_an_agent) }
     else -> a.connectionName ?: stringResource(R.string.approvals_a_connection)
@@ -162,7 +166,18 @@ private fun whoOf(a: Approval): String? = when (a) {
 
 @Composable
 private fun summaryOf(a: Approval): String? = when (a) {
-    is Approval.ConnectionRequest -> stringResource(R.string.approvals_summary_sas, a.sas)
+    is Approval.ConnectionRequest -> stringResource(
+        if (a.state == RequestState.APPROVED) R.string.approvals_summary_waiting_peer else R.string.approvals_summary_sas,
+        a.sas,
+    )
+    is Approval.OutgoingRequest -> {
+        val sas = a.sas
+        when {
+            sas == null -> stringResource(R.string.approvals_summary_handshake)
+            a.state == RequestState.APPROVED -> stringResource(R.string.approvals_summary_waiting_peer, sas)
+            else -> stringResource(R.string.approvals_summary_sas, sas)
+        }
+    }
     is Approval.Authentication -> a.context
     is Approval.GrantRequest -> pluralStringResource(R.plurals.approvals_summary_items, a.entries.size, a.entries.size)
     is Approval.CriticalUse -> "${a.itemName} · ${a.fieldLabel}"
@@ -246,9 +261,23 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
 }
 
 @Composable
+private fun outgoingBody(a: Approval.OutgoingRequest): String = if (a.sas == null) {
+    stringResource(R.string.approvals_outgoing_waiting)
+} else {
+    stringResource(
+        if (a.remote) R.string.approvals_outgoing_body_remote else R.string.approvals_outgoing_body,
+        a.name ?: stringResource(R.string.approvals_them),
+    )
+}
+
+@Composable
+@Suppress("CyclomaticComplexMethod")
 private fun bodyOf(a: Approval): String = when (a) {
-    is Approval.ConnectionRequest ->
-        stringResource(if (a.remote) R.string.approvals_connection_body_remote else R.string.approvals_connection_body)
+    is Approval.ConnectionRequest -> stringResource(
+        if (a.remote) R.string.approvals_connection_body_remote else R.string.approvals_connection_body,
+        a.name ?: stringResource(R.string.approvals_someone),
+    )
+    is Approval.OutgoingRequest -> outgoingBody(a)
     is Approval.Authentication -> stringResource(
         R.string.approvals_auth_body,
         a.connectionName ?: stringResource(R.string.approvals_a_connection),
@@ -272,7 +301,10 @@ private fun bodyOf(a: Approval): String = when (a) {
 
 @Composable
 private fun approveLabel(a: Approval): String? = when (a) {
-    is Approval.ConnectionRequest -> stringResource(R.string.approvals_connection_approve)
+    is Approval.ConnectionRequest ->
+        if (a.state == RequestState.PENDING) stringResource(R.string.approvals_connection_approve) else null
+    is Approval.OutgoingRequest ->
+        if (a.state == RequestState.PENDING && a.sas != null) stringResource(R.string.approvals_outgoing_approve) else null
     is Approval.Authentication -> stringResource(R.string.approvals_auth_approve)
     is Approval.GrantRequest -> stringResource(R.string.approvals_grant_approve)
     is Approval.CriticalUse -> stringResource(R.string.approvals_critical_approve)
@@ -327,6 +359,44 @@ private fun Facts(a: Approval) {
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            if (a.state == RequestState.APPROVED) {
+                Spacer(Modifier.height(Spacing.m))
+                Text(
+                    stringResource(R.string.approvals_waiting_peer, a.name ?: stringResource(R.string.approvals_them)),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.testTag("waiting_peer"),
+                )
+            }
+            a.exp?.let { Text(stringResource(R.string.approvals_expires, Times.full(it)), style = MaterialTheme.typography.bodySmall) }
+        }
+        is Approval.OutgoingRequest -> {
+            Label(stringResource(R.string.approvals_outgoing_name))
+            Text(
+                a.name ?: stringResource(R.string.approvals_no_name),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+            )
+            a.sas?.let { sas ->
+                Spacer(Modifier.height(Spacing.l))
+                Label(stringResource(R.string.approvals_safety_code))
+                Spacer(Modifier.height(Spacing.s))
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, MaterialTheme.colorScheme.outline, VettIdShape.card)
+                        .padding(vertical = Spacing.l)
+                        .testTag("sas"),
+                    contentAlignment = Alignment.Center,
+                ) { SafetyCode(sas) }
+            }
+            if (a.state == RequestState.APPROVED) {
+                Spacer(Modifier.height(Spacing.m))
+                Text(
+                    stringResource(R.string.approvals_waiting_peer, a.name ?: stringResource(R.string.approvals_them)),
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.testTag("waiting_peer"),
+                )
+            }
             a.exp?.let { Text(stringResource(R.string.approvals_expires, Times.full(it)), style = MaterialTheme.typography.bodySmall) }
         }
         is Approval.Authentication -> {
@@ -380,13 +450,33 @@ private fun Facts(a: Approval) {
                 Label(stringResource(R.string.approvals_context))
                 Value(it)
             }
-            Label(stringResource(if (a.payload.isNotEmpty()) R.string.approvals_payload else R.string.approvals_payload_hash))
-            Surface(shape = VettIdShape.card, color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    a.payload.ifEmpty { a.payloadSha256 },
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(Spacing.m),
+            // §10.13: the payload is shown only once SHA-256(payload) matches payload_sha256.
+            when {
+                a.payloadVerified -> {
+                    Label(stringResource(R.string.approvals_payload))
+                    Surface(
+                        shape = VettIdShape.card,
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            a.payload,
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(Spacing.m).testTag("critical_payload"),
+                        )
+                    }
+                }
+                a.payload.isEmpty() -> Text(
+                    stringResource(R.string.approvals_payload_loading),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                else -> NoticeCard(
+                    kind = NoticeKind.WARNING,
+                    title = stringResource(R.string.approvals_payload_mismatch_title),
+                    body = stringResource(R.string.approvals_payload_mismatch_body),
+                    modifier = Modifier.testTag("payload_mismatch"),
                 )
             }
             a.exp?.let { Text(stringResource(R.string.approvals_expires, Times.full(it)), style = MaterialTheme.typography.bodySmall) }

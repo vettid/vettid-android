@@ -17,6 +17,7 @@ import com.vettid.core.crypto.json.StrictJson
 import com.vettid.core.crypto.kdf.Hkdf
 import com.vettid.core.crypto.session.HsFin
 import com.vettid.core.crypto.session.HsInit
+import com.vettid.core.crypto.session.HsResp
 import com.vettid.core.crypto.session.Initiator
 import com.vettid.core.crypto.session.InitiatorConfig
 import com.vettid.core.crypto.session.KeyLookup
@@ -226,8 +227,14 @@ class VectorsTest {
         assertBytes("kid_r2i", d.hex("kid_r2i_hex"), sc.kidR2I.bytes())
         assertBytes("rk", d.hex("rk_hex"), sc.rk)
         assertBytes("epoch_id", d.hex("epoch_id_hex"), sc.epochId)
-        assertEquals(d.str("sas"), Schedule.sas(ks, th1))
-        assertEquals(d.str("sas"), p.sas)
+        // 0.10.3: the commitment in hs.init, n_R in hs.resp, n_I revealed in hs.fin; the SAS over th and both nonces.
+        val nI = inp.hex("n_I_hex")
+        val nR = inp.hex("n_R_hex")
+        assertBytes("sas_commit", d.hex("sas_commit_hex"), Schedule.sasCommit(nI))
+        assertBytes("sas_commit in hs.init", d.hex("sas_commit_hex"), p.body.sasCommit()!!)
+        assertTrue(Schedule.checkSasCommit(p.body.sasCommit()!!, nI))
+        assertEquals(d.str("sas"), Schedule.sas(sc.prk, th, nI, nR))
+        assertBytes("n_R in hs.resp", nR, HsResp.parse(rin.body, Purpose.CONNECTION).sasNonce()!!)
 
         val sigR = d.b64("sig_R_b64")
         assertTrue(Schedule.verifyResp(vault.ik.publicKey, th, sigR))
@@ -246,7 +253,9 @@ class VectorsTest {
         assertEquals("hs.fin", fin.type)
         assertEquals(1L, fin.seq)
         assertEquals(inp.str("fin_id"), fin.id)
-        assertBytes("hs.fin sig", sigI, HsFin.parse(fin.body))
+        val hf = HsFin.parse(fin.body, Purpose.CONNECTION)
+        assertBytes("hs.fin sig", sigI, hf.sig())
+        assertBytes("n_I in hs.fin", nI, hf.sasNonce()!!)
     }
 
     /** The whole handshake run through Initiator / PendingInit / Responder, byte for byte. */
@@ -258,7 +267,8 @@ class VectorsTest {
         val respBody = StrictJson.parseObject(d.str("hs_resp_inner")).obj("body")
         val now = Timestamps.parseMillis(inp.str("ts"))
 
-        val initiator = deterministic(inp.hex("initiator_eph_seed_hex"), inp.hex("init_encapsulation_randomness_hex")) {
+        // The scripted randomness (§16): the ephemeral key seed, n_I, then the hs.init encapsulation.
+        val initiator = deterministic(inp.hex("initiator_eph_seed_hex"), inp.hex("n_I_hex"), inp.hex("init_encapsulation_randomness_hex")) {
             Initiator.create(
                 InitiatorConfig(
                     purpose = Purpose.CONNECTION,
@@ -279,16 +289,14 @@ class VectorsTest {
             )
         }
         assertBytes("hs.init envelope", d.b64("hs_init_envelope_b64"), initiator.envelope())
-        assertEquals(d.str("sas"), initiator.sas)
 
         val pending = PendingInit.open(initiator.envelope(), KeyLookup { if (it == vault.kem.publicKey.kid) vault.kem else null }, now)
-        assertEquals(initiator.sas, pending.sas)
-        val (responder, resp) = deterministic(inp.hex("resp_encapsulation_randomness_hex")) {
+        // n_R, then the hs.resp encapsulation.
+        val (responder, resp) = deterministic(inp.hex("n_R_hex"), inp.hex("resp_encapsulation_randomness_hex")) {
             pending.respond(
                 ResponderConfig(
                     identity = vault.ik,
                     token = respBody.string("token"),
-                    reconnectToken = respBody.string("reconnect_token"),
                     policy = Policy.VAULT_TO_VAULT,
                     collectSender = ini.relay!!.publicKey,
                     id = inp.str("resp_id"),
@@ -301,9 +309,12 @@ class VectorsTest {
         val result = deterministic(inp.hex("fin_nonce_hex")) { initiator.handleResp(resp, vault.relay!!.publicKey, now) }
         assertBytes("hs.fin envelope", d.b64("hs_fin_envelope_b64"), result.fin)
         assertBytes("epoch_id", d.hex("epoch_id_hex"), result.epoch.id)
+        assertEquals(d.str("sas"), result.sas)
 
-        val (epochR, finInner) = responder.handleFin(result.fin, ini.relay!!.publicKey, now)
-        assertEquals("hs.fin", finInner.type)
+        val fr = responder.handleFin(result.fin, ini.relay!!.publicKey, now)
+        val epochR = fr.epoch
+        assertEquals("hs.fin", fr.inner.type)
+        assertEquals(d.str("sas"), fr.sas)
         assertBytes("epoch ids", result.epoch.id, epochR.id)
 
         // The new epoch carries traffic both ways.
