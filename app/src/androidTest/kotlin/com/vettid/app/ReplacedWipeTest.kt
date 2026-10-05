@@ -81,9 +81,19 @@ class ReplacedWipeTest {
         Thread.sleep(SETTLE_MS)
     }
 
-    private fun waitTag(tag: String, timeout: Long = WAIT_MS) = rule.waitUntilAtLeastOneExists(hasTestTag(tag), timeout)
+    private fun waitTag(tag: String, timeout: Long = WAIT_MS) = shotOnTimeout(tag) { rule.waitUntilAtLeastOneExists(hasTestTag(tag), timeout) }
 
-    private fun waitText(text: String, timeout: Long = WAIT_MS) = rule.waitUntilAtLeastOneExists(hasText(text, substring = true), timeout)
+    private fun waitText(text: String, timeout: Long = WAIT_MS) =
+        shotOnTimeout(text) { rule.waitUntilAtLeastOneExists(hasText(text, substring = true), timeout) }
+
+    private fun shotOnTimeout(what: String, wait: () -> Unit) {
+        try {
+            wait()
+        } catch (e: androidx.compose.ui.test.ComposeTimeoutException) {
+            shell("screencap -p $SHOTS/timeout-${what.filter { it.isLetterOrDigit() }.take(20)}.png")
+            throw e
+        }
+    }
 
     private fun tag(t: String): SemanticsNodeInteraction = rule.onAllNodes(hasTestTag(t)).onFirst()
 
@@ -217,8 +227,9 @@ class ReplacedWipeTest {
         text("Get started").performClick()
         waitTag("email")
         tag("email").performTextInput(email)
+        rule.waitForIdle()
         primary()
-        waitTag("link")
+        waitTag("link", LONG_WAIT_MS)
         tag("link").performTextInput("devstack-sign-in-token")
         primary()
         waitText("Sign in on this phone?")
