@@ -137,6 +137,7 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
                 onConfirmCancel = vm::confirmCancel,
                 onRetry = vm::refresh,
                 onDismissError = vm::dismissError,
+                onDismissPeerDecline = vm::dismissPeerDecline,
             ),
         )
     }
@@ -226,6 +227,7 @@ data class ConnectionsActions(
     val onConfirmCancel: () -> Unit = {},
     val onRetry: () -> Unit = {},
     val onDismissError: () -> Unit = {},
+    val onDismissPeerDecline: (String) -> Unit = {},
 )
 
 /**
@@ -257,7 +259,7 @@ fun ConnectionsScreen(state: ConnectionsUiState, chrome: ShellChrome, actions: C
             state.loading && state.connections.isEmpty() -> Centered {
                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             }
-            error != null && state.connections.isEmpty() && state.invites.isEmpty() -> Centered {
+            error != null && state.connections.isEmpty() && state.invites.isEmpty() && state.peerDeclines.isEmpty() -> Centered {
                 NoticeCard(
                     kind = NoticeKind.WARNING,
                     title = stringResource(R.string.connections_error_title),
@@ -266,7 +268,7 @@ fun ConnectionsScreen(state: ConnectionsUiState, chrome: ShellChrome, actions: C
                     actions = { TextButton(onClick = actions.onRetry) { Text(stringResource(R.string.connections_retry)) } },
                 )
             }
-            state.connections.isEmpty() && state.invites.isEmpty() -> EmptyState(
+            state.connections.isEmpty() && state.invites.isEmpty() && state.peerDeclines.isEmpty() -> EmptyState(
                 icon = Icons.Outlined.People,
                 title = stringResource(R.string.connections_empty_title),
                 body = stringResource(R.string.connections_empty_body),
@@ -306,6 +308,13 @@ private fun ConnectionList(state: ConnectionsUiState, actions: ConnectionsAction
                     actions = { TextButton(onClick = actions.onDismissError) { Text(stringResource(R.string.connections_ok)) } },
                 )
             }
+        }
+        items(state.peerDeclines, key = { "declined-${it.requestId}" }) { d ->
+            PeerDeclineNotice(
+                d,
+                onDismiss = { actions.onDismissPeerDecline(d.requestId) },
+                modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s),
+            )
         }
         if (state.invites.isNotEmpty()) {
             item { SectionHeader(stringResource(R.string.connections_invites_header)) }

@@ -13,6 +13,7 @@ import com.vettid.core.data.social.InviteInfo
 import com.vettid.core.data.social.InviteLinks
 import com.vettid.core.data.social.InviteTtl
 import com.vettid.core.data.social.OutstandingInvite
+import com.vettid.core.data.social.PeerDecline
 import com.vettid.core.data.social.RequestEnd
 import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.social.SafetyCodeRecord
@@ -39,6 +40,8 @@ data class ConnectionsUiState(
     val addSheet: Boolean = false,
     /** The invitation the member asked to cancel (confirmed first). */
     val cancelling: OutstandingInvite? = null,
+    /** Requests the other member declined (0.10.5), until dismissed here or in Approvals. */
+    val peerDeclines: List<PeerDecline> = emptyList(),
     val error: FailureKind? = null,
 )
 
@@ -48,11 +51,17 @@ data class ConnectionsUiState(
  * invitations on top, each cancellable; add = invite, scan or paste.
  */
 @HiltViewModel
-class ConnectionsViewModel @Inject constructor(private val repo: ConnectionsRepository) : ViewModel() {
+class ConnectionsViewModel @Inject constructor(
+    private val repo: ConnectionsRepository,
+    private val approvals: ApprovalsRepository,
+) : ViewModel() {
     private val local = MutableStateFlow(ConnectionsUiState())
 
-    val uiState: StateFlow<ConnectionsUiState> = combine(local, repo.connections) { s, cs ->
-        s.copy(connections = cs.sortedWith(compareByDescending<ConnectionInfo> { it.favorite }.thenBy { it.displayName.lowercase() }))
+    val uiState: StateFlow<ConnectionsUiState> = combine(local, repo.connections, approvals.peerDeclines) { s, cs, declines ->
+        s.copy(
+            connections = cs.sortedWith(compareByDescending<ConnectionInfo> { it.favorite }.thenBy { it.displayName.lowercase() }),
+            peerDeclines = declines,
+        )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectionsUiState())
 
     init {
@@ -89,6 +98,9 @@ class ConnectionsViewModel @Inject constructor(private val repo: ConnectionsRepo
 
     fun dismissError() = local.update { it.copy(error = null) }
 
+    /** The member saw that the other member declined [requestId] (0.10.5): not shown again. */
+    fun dismissPeerDecline(requestId: String) = act { approvals.dismissPeerDecline(requestId) }
+
     private fun act(block: suspend () -> Unit) {
         viewModelScope.launch {
             try {
@@ -100,8 +112,8 @@ class ConnectionsViewModel @Inject constructor(private val repo: ConnectionsRepo
     }
 }
 
-/** The steps of inviting someone (§6.4). */
-enum class InviteStep { CHOOSE, SHOWING, REQUEST, CONNECTING, CONNECTED, EXPIRED }
+/** The steps of inviting someone (§6.4); [DECLINED]: the other member declined (0.10.5). */
+enum class InviteStep { CHOOSE, SHOWING, REQUEST, CONNECTING, CONNECTED, EXPIRED, DECLINED }
 
 /** Immutable UI state of the invite screen. */
 data class InviteUiState(
@@ -112,6 +124,8 @@ data class InviteUiState(
     val request: Approval.ConnectionRequest? = null,
     val connectionId: String? = null,
     val connectionName: String? = null,
+    /** [InviteStep.DECLINED]: the name the request showed. */
+    val declinedName: String? = null,
     val busy: Boolean = false,
     val confirmBlock: Boolean = false,
     /** The request arrived already approved by in-person auto-approval (§6.4), not by this member here. */
@@ -161,6 +175,17 @@ class InviteViewModel @Inject constructor(
                     req != null && (s.step == InviteStep.REQUEST || s.step == InviteStep.CONNECTING) ->
                         state.update { it.copy(request = req) }
                 }
+            }
+        }
+        viewModelScope.launch {
+            // The other member declined (0.10.5): told here, once (the notice is dismissed).
+            approvals.peerDeclines.collect { list ->
+                val s = state.value
+                if (s.step != InviteStep.REQUEST && s.step != InviteStep.CONNECTING) return@collect
+                val req = s.request ?: return@collect
+                val d = list.firstOrNull { !it.outgoing && it.requestId == req.pendingId } ?: return@collect
+                state.update { it.copy(step = InviteStep.DECLINED, declinedName = d.name ?: req.name, busy = false) }
+                runCatching { approvals.dismissPeerDecline(d.requestId) }
             }
         }
         viewModelScope.launch {
@@ -318,6 +343,12 @@ class AcceptViewModel @Inject constructor(
                 val active = cs.firstOrNull { it.id == id && it.state == ConnectionState.ACTIVE }
                 val req = list.filterIsInstance<Approval.OutgoingRequest>().firstOrNull { it.connectionId == id }
                 val end = ends[id]
+                if (end == RequestEnd.PEER_DECLINED && req == null && active == null) {
+                    // The inviter declined (0.10.5): told here, once (the notice is dismissed).
+                    state.update { it.copy(step = AcceptStep.ENDED, end = end) }
+                    runCatching { approvals.dismissPeerDecline(id) }
+                    return@collect
+                }
                 state.update {
                     when {
                         active != null -> it.copy(step = AcceptStep.CONNECTED, connectionName = active.displayName)
@@ -378,7 +409,7 @@ class AcceptViewModel @Inject constructor(
         }
     }
 
-    /** Declines (the codes differ, or the member changed their mind); the inviter is not told (§6.4). */
+    /** Declines (the codes differ, or the member changed their mind); the vault tells the inviter's vault (§6.4, 0.10.5). */
     fun decline() {
         val id = state.value.connectionId ?: return
         state.update { it.copy(busy = true, error = null) }

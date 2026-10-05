@@ -44,6 +44,7 @@ import com.vettid.core.data.social.InviteInfo
 import com.vettid.core.data.social.InviteTtl
 import com.vettid.core.data.social.MessageInfo
 import com.vettid.core.data.social.OutstandingInvite
+import com.vettid.core.data.social.PeerDecline
 import com.vettid.core.data.social.SafetyCodeRecord
 import com.vettid.core.data.social.ShareItem
 import com.vettid.feature.approvals.ApprovalDetailScreen
@@ -371,11 +372,24 @@ object ScreenCatalog {
         "accept.compare" to { AcceptScreen(AcceptUiState(step = AcceptStep.COMPARE, connectionId = "c4", name = "Morgan Lee", sas = "042817"), AcceptActions()) },
         "accept.approved" to { AcceptScreen(AcceptUiState(step = AcceptStep.APPROVED, connectionId = "c4", name = "Morgan Lee", sas = "042817"), AcceptActions()) },
         "accept.exists" to { AcceptScreen(AcceptUiState(step = AcceptStep.EXISTS, connectionId = "c1", connectionName = "Sam Rivera"), AcceptActions()) },
+        "accept.peer_declined" to {
+            AcceptScreen(AcceptUiState(step = AcceptStep.ENDED, connectionId = "c4", name = "Morgan Lee", end = RequestEnd.PEER_DECLINED), AcceptActions())
+        },
+        "invite.peer_declined" to { InviteScreen(InviteUiState(step = InviteStep.DECLINED, request = request, declinedName = "Morgan Lee"), InviteActions()) },
         "accept.ended" to { AcceptScreen(AcceptUiState(step = AcceptStep.ENDED, connectionId = "c4", end = RequestEnd.FAILED), AcceptActions()) },
         "scan" to {
             ScanScreen(ScanUiState(problem = FailureKind.INVITE_NOT_CONNECTION), {}, {}, {}, {}) { m -> Box(m.background(MaterialTheme.colorScheme.surfaceContainerHigh)) }
         },
         "approvals" to { ApprovalsScreen(ApprovalsUiState(loading = false, approvals = approvals), chrome) },
+        "approvals.peer_declined" to {
+            ApprovalsScreen(
+                ApprovalsUiState(
+                    loading = false,
+                    peerDeclines = listOf(PeerDecline("c4", "Morgan Lee", outgoing = true, at = t0), PeerDecline("p2", "Alex", outgoing = false, at = t0)),
+                ),
+                chrome,
+            )
+        },
         "approvals.empty" to { ApprovalsScreen(ApprovalsUiState(loading = false), chrome) },
         "approvals.connection" to { ApprovalDetailScreen(ApprovalDetailUiState(request.key, request), DecisionActions()) },
         "approvals.authentication" to { ApprovalDetailScreen(ApprovalDetailUiState(approvals[1].key, approvals[1], password = "pw"), DecisionActions()) },

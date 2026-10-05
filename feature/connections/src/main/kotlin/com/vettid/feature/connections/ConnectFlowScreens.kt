@@ -54,6 +54,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.vettid.core.data.social.InviteTtl
+import com.vettid.core.data.social.RequestEnd
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
@@ -105,6 +106,15 @@ fun InviteScreen(state: InviteUiState, actions: InviteActions, modifier: Modifie
             onPrimary = actions.onAgain,
             onBack = actions.onBack,
             modifier = modifier,
+        ) {}
+        // The other member declined (0.10.5, §6.4).
+        InviteStep.DECLINED -> FormScaffold(
+            title = peerDeclineText(outgoing = false, name = state.declinedName ?: state.request?.name),
+            body = stringResource(R.string.connections_peer_declined_body),
+            primaryLabel = stringResource(R.string.connections_done),
+            onPrimary = actions.onBack,
+            onBack = actions.onBack,
+            modifier = modifier.testTag("invite_peer_declined"),
         ) {}
     }
     if (state.confirmBlock) {
@@ -526,20 +536,25 @@ fun AcceptScreen(state: AcceptUiState, actions: AcceptActions, modifier: Modifie
             onSecondary = actions.onBack,
             modifier = modifier.testTag("accept_exists"),
         ) {}
-        AcceptStep.ENDED -> FormScaffold(
-            title = stringResource(R.string.connections_ended_title),
-            body = stringResource(
-                when (state.end) {
-                    com.vettid.core.data.social.RequestEnd.DECLINED -> R.string.connections_ended_declined
-                    com.vettid.core.data.social.RequestEnd.EXPIRED -> R.string.connections_ended_expired
-                    else -> R.string.connections_ended_failed
-                },
-            ),
-            primaryLabel = stringResource(R.string.connections_done),
-            onPrimary = actions.onBack,
-            onBack = actions.onBack,
-            modifier = modifier.testTag("accept_ended"),
-        ) {}
+        AcceptStep.ENDED -> {
+            // The inviter declined (0.10.5, §6.4): "<name> declined your connection request".
+            val peer = state.end == RequestEnd.PEER_DECLINED
+            FormScaffold(
+                title = if (peer) peerDeclineText(outgoing = true, name = state.name) else stringResource(R.string.connections_ended_title),
+                body = stringResource(
+                    when (state.end) {
+                        RequestEnd.PEER_DECLINED -> R.string.connections_peer_declined_body
+                        RequestEnd.DECLINED -> R.string.connections_ended_declined
+                        RequestEnd.EXPIRED -> R.string.connections_ended_expired
+                        else -> R.string.connections_ended_failed
+                    },
+                ),
+                primaryLabel = stringResource(R.string.connections_done),
+                onPrimary = actions.onBack,
+                onBack = actions.onBack,
+                modifier = modifier.testTag(if (peer) "accept_peer_declined" else "accept_ended"),
+            ) {}
+        }
     }
 }
 

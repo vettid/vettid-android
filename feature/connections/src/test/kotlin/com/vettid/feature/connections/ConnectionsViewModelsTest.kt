@@ -39,7 +39,7 @@ class ConnectionsViewModelsTest {
     fun listsFavouritesFirstTogglesAFavouriteAndCancelsAnInvite() = runTest {
         social.seed(listOf(FakeSocial.connection("c1", "Zed"), FakeSocial.connection("c2", "amy"), FakeSocial.connection("c3", "Bo", favorite = true)))
         social.outstanding = listOf(OutstandingInvite("i1", null, remote = true))
-        val vm = ConnectionsViewModel(social)
+        val vm = ConnectionsViewModel(social, social)
         advanceUntilIdle()
         assertEquals(listOf("c3", "c2", "c1"), vm.uiState.value.connections.map { it.id })
         assertEquals(1, vm.uiState.value.invites.size)
@@ -177,7 +177,8 @@ class ConnectionsViewModelsTest {
         assertEquals(AcceptStep.EXISTS, vm.uiState.value.step)
         assertEquals("Sam", vm.uiState.value.connectionName)
 
-        // Declining the outgoing request (codes differ): the inviter is not told; the screen says it ended.
+        // Declining the outgoing request (codes differ): the screen says it ended, as before 0.10.5 (the vault
+        // now tells the inviter's vault; nothing changes here, and it is not a peer's decline).
         social.acceptResult = AcceptedConnection("c7", "Inviter")
         val d = AcceptViewModel(SavedStateHandle(), social, social)
         d.setInput(link())
@@ -189,6 +190,8 @@ class ConnectionsViewModelsTest {
         assertTrue("declineOutgoing" in social.calls)
         assertEquals(AcceptStep.ENDED, d.uiState.value.step)
         assertEquals(RequestEnd.DECLINED, d.uiState.value.end)
+        assertTrue(social.peerDeclines.value.isEmpty())
+        assertTrue("dismissPeerDecline" !in social.calls)
 
         // An outgoing request that failed (expiry, refused hs.init) ends too.
         social.acceptResult = AcceptedConnection("c8", "Inviter")
@@ -202,6 +205,78 @@ class ConnectionsViewModelsTest {
         advanceUntilIdle()
         assertEquals(AcceptStep.ENDED, f.uiState.value.step)
         assertEquals(RequestEnd.FAILED, f.uiState.value.end)
+    }
+
+    /** 0.10.5: the inviter declined; the accept screen says so with the inviter's name, once. */
+    @Test
+    fun acceptSaysTheInviterDeclinedOnce() = runTest {
+        social.acceptResult = AcceptedConnection("c9", "Morgan Lee")
+        val vm = AcceptViewModel(SavedStateHandle(), social, social)
+        vm.setInput(link())
+        vm.accept()
+        social.approvals.value = listOf(outgoing("c9", "654321", RequestState.PENDING))
+        advanceUntilIdle()
+        vm.approve()
+        advanceUntilIdle()
+        assertEquals(AcceptStep.APPROVED, vm.uiState.value.step)
+        social.peerDeclined("c9", "Morgan Lee", outgoing = true)
+        advanceUntilIdle()
+        assertEquals(AcceptStep.ENDED, vm.uiState.value.step)
+        assertEquals(RequestEnd.PEER_DECLINED, vm.uiState.value.end)
+        assertEquals("Morgan Lee", vm.uiState.value.name)
+        // Shown here: not again in Connections or Approvals.
+        assertEquals(1, social.calls.count { it == "dismissPeerDecline" })
+        assertTrue(social.peerDeclines.value.isEmpty())
+    }
+
+    /** 0.10.5: the accepter declined; the invite screen says so with the requester's name, once. */
+    @Test
+    fun inviteSaysTheAccepterDeclinedOnce() = runTest {
+        val vm = InviteViewModel(social, social)
+        advanceUntilIdle()
+        vm.create()
+        advanceUntilIdle()
+        val id = vm.uiState.value.invite!!.inviteId
+        social.approvals.value = listOf(Approval.ConnectionRequest("p2", id, "042817", false, "Alex", null, Instant.now(), null))
+        advanceUntilIdle()
+        vm.approve()
+        advanceUntilIdle()
+        assertEquals(InviteStep.CONNECTING, vm.uiState.value.step)
+        // Another request's decline is not this one's.
+        social.peerDeclined("p-other", "Sam", outgoing = false)
+        advanceUntilIdle()
+        assertEquals(InviteStep.CONNECTING, vm.uiState.value.step)
+        social.peerDeclined("p2", "Alex", outgoing = false)
+        advanceUntilIdle()
+        assertEquals(InviteStep.DECLINED, vm.uiState.value.step)
+        assertEquals("Alex", vm.uiState.value.declinedName)
+        assertEquals(listOf("p-other"), social.peerDeclines.value.map { it.requestId })
+    }
+
+    /** 0.10.5: Connections lists the other members' declines until the member dismisses them. */
+    @Test
+    fun connectionsShowAPeerDeclineUntilDismissed() = runTest {
+        val vm = ConnectionsViewModel(social, social)
+        advanceUntilIdle()
+        social.peerDeclined("c3", "Morgan Lee", outgoing = true)
+        advanceUntilIdle()
+        val d = vm.uiState.value.peerDeclines.single()
+        assertEquals("Morgan Lee", d.name)
+        assertTrue(d.outgoing)
+        vm.dismissPeerDecline("c3")
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.peerDeclines.isEmpty())
+    }
+
+    /** The copy of §15 item 18 (0.10.5), word for word, for each side. */
+    @Test
+    fun peerDeclineCopy() {
+        assertEquals(R.string.connections_peer_declined_outgoing, peerDeclineRes(outgoing = true))
+        assertEquals(R.string.connections_peer_declined_incoming, peerDeclineRes(outgoing = false))
+        val xml = java.io.File("src/main/res/values/strings.xml").readText()
+        fun string(name: String) = Regex("""<string name="$name">([^<]*)</string>""").find(xml)!!.groupValues[1]
+        assertEquals("%1\$s declined your connection request", string("connections_peer_declined_outgoing"))
+        assertEquals("%1\$s declined the connection", string("connections_peer_declined_incoming"))
     }
 
     @Test

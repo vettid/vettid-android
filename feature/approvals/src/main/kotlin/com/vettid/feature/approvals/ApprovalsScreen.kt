@@ -72,7 +72,13 @@ fun NavGraphBuilder.approvalsDestination(chrome: ShellChrome, navigate: (Any) ->
     composable<ApprovalsRoute> {
         val vm: ApprovalsViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
-        ApprovalsScreen(state, chrome, onOpen = { navigate(ApprovalDetailRoute(it)) }, onRetry = vm::refresh)
+        ApprovalsScreen(
+            state,
+            chrome,
+            onOpen = { navigate(ApprovalDetailRoute(it)) },
+            onRetry = vm::refresh,
+            onDismissPeerDecline = vm::dismissPeerDecline,
+        )
     }
     composable<ApprovalDetailRoute> {
         val vm: ApprovalDetailViewModel = hiltViewModel()
@@ -99,14 +105,16 @@ fun ApprovalsScreen(
     modifier: Modifier = Modifier,
     onOpen: (String) -> Unit = {},
     onRetry: () -> Unit = {},
+    onDismissPeerDecline: (String) -> Unit = {},
 ) {
     TopLevelScaffold(title = stringResource(R.string.approvals_title), chrome = chrome, modifier = modifier) {
         val error = state.error
+        val nothing = state.approvals.isEmpty() && state.peerDeclines.isEmpty()
         when {
-            state.loading && state.approvals.isEmpty() -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            state.loading && nothing -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             }
-            state.approvals.isEmpty() && error != null -> Column(
+            nothing && error != null -> Column(
                 Modifier.fillMaxSize().padding(Spacing.xl),
                 verticalArrangement = Arrangement.Center,
             ) {
@@ -117,12 +125,20 @@ fun ApprovalsScreen(
                     actions = { TextButton(onClick = onRetry) { Text(stringResource(R.string.approvals_retry)) } },
                 )
             }
-            state.approvals.isEmpty() -> EmptyState(
+            nothing -> EmptyState(
                 icon = Icons.Outlined.TaskAlt,
                 title = stringResource(R.string.approvals_empty_title),
                 body = stringResource(R.string.approvals_empty_body),
             )
             else -> LazyColumn(Modifier.fillMaxSize().testTag("approvals"), contentPadding = PaddingValues(bottom = Spacing.xxl)) {
+                // The other member declined a request (0.10.5): it has left the list; told once.
+                items(state.peerDeclines, key = { "declined-${it.requestId}" }) { d ->
+                    PeerDeclineNotice(
+                        d,
+                        onDismiss = { onDismissPeerDecline(d.requestId) },
+                        modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s),
+                    )
+                }
                 items(state.approvals, key = { it.key }) { a ->
                     val who = whoOf(a)
                     VettIdListRow(

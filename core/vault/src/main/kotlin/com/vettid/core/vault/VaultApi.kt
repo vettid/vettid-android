@@ -408,7 +408,7 @@ class VaultApi(val device: VaultDevice) {
         op("connection.approve") { put("pending_id", pendingId) }
     }
 
-    /** Declines an incoming request (any state; not sent to the peer, §6.4). */
+    /** Declines an incoming request (any state; since 0.10.5 the vault tells the peer when it can, §6.4). */
     suspend fun connectionDecline(pendingId: String) {
         op("connection.decline") { put("pending_id", pendingId) }
     }

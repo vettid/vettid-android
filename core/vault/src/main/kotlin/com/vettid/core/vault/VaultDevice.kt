@@ -142,6 +142,14 @@ class VaultOpException(val type: String, val code: String, message: String = "",
 class VaultStateException(message: String) : IOException("vault client: $message")
 
 /**
+ * The owner rejected this device's pairing or transfer on their phone after its
+ * `hs.fin` (`device.pair.rejected`, VAULT-MESSAGING §6.7, §6.7.1, 0.10.5). The
+ * device has dropped the handshake's epoch and the request token; pairing again
+ * needs a new code from the owner. An app or desktop says "Rejected on your phone".
+ */
+class PairingRejectedException : IOException("vault client: pairing rejected on the owner's phone")
+
+/**
  * One owner device of a vault (VAULT-MESSAGING §6.7, §9.1, §11.3), the
  * Kotlin counterpart of vettid-vault's reference `client.Device`.
  *
@@ -395,8 +403,14 @@ class VaultDevice private constructor(
         awaitPaired(timeout)
     }
 
+    /**
+     * Waits for `device.paired`, or (0.10.5) `device.pair.rejected`, which ends the
+     * wait with [PairingRejectedException] (§6.7: the owner rejected the pairing or
+     * transfer after this device's `hs.fin`; [process] has already dropped its state).
+     */
     private suspend fun awaitPaired(timeout: Duration) {
-        val ev = awaitEvent("device.paired", timeout)
+        val ev = awaitEventOf(setOf("device.paired", TYPE_PAIR_REJECTED), timeout)
+        if (ev.type == TYPE_PAIR_REJECTED) throw PairingRejectedException()
         lock.withLock {
             val o = ev.body
             st.deviceId = VaultJson.str(o, "device_id")
@@ -519,13 +533,19 @@ class VaultDevice private constructor(
         type: String,
         timeout: Duration = Duration.ofSeconds(AWAIT_DEFAULT_S),
         match: (JsonObject) -> Boolean = { true },
+    ): VaultMessage = awaitEventOf(setOf(type), timeout, match)
+
+    private suspend fun awaitEventOf(
+        types: Set<String>,
+        timeout: Duration,
+        match: (JsonObject) -> Boolean = { true },
     ): VaultMessage =
         withTimeout(timeout.toMillis()) {
             var found: VaultMessage? = null
             while (found == null) {
                 val v = inboxVersion.value
                 found = synchronized(inbox) {
-                    val i = inbox.indexOfFirst { it.type == type && match(it.body) }
+                    val i = inbox.indexOfFirst { it.type in types && match(it.body) }
                     if (i >= 0) inbox.removeAt(i) else null
                 }
                 if (found == null) inboxVersion.first { it != v }
@@ -599,6 +619,8 @@ class VaultDevice private constructor(
             // §10.3 (0.10.3, 0.10.4): every device.paired carries the device's standing token (after enrollment
             // or recovery a fresh one); it replaces the token of hs.resp before maintain() looks at it.
             "device.paired" -> storeVaultToken(VaultJson.parseObject(inner.body))
+            // §6.7 (0.10.5): only a device still waiting for device.paired acts on it; a paired one drops it.
+            TYPE_PAIR_REJECTED -> if (pairedState.value) return else dropPairing()
             "relay.token.issued" -> storeVaultToken(VaultJson.parseObject(inner.body))
             "relay.token.refresh" -> if (inner.re == null) {
                 val tok = mintForVault()
@@ -615,6 +637,24 @@ class VaultDevice private constructor(
             publish(VaultMessage(inner))
         }
         maintain(t)
+    }
+
+    /**
+     * `device.pair.rejected` (§6.7, 0.10.5): stop waiting, drop the handshake's epoch
+     * and the request token of its `hs.resp`. Nothing is sent back (the vault has
+     * denylisted that token); a redelivery finds no epoch to open it and is dropped.
+     */
+    private fun dropPairing() {
+        ini?.abort()
+        ini = null
+        awaiting.forEach { it.abort() }
+        awaiting.clear()
+        keyring.destroy()
+        keyring = Keyring()
+        st.vault?.let {
+            it.token = ""
+            it.tokenExpMs = 0
+        }
     }
 
     private fun prune(m: MutableMap<String, Long>, t: Instant) {
@@ -828,6 +868,7 @@ class VaultDevice private constructor(
 
     companion object {
         private const val TYPE_HS_INIT = "hs.init"
+        private const val TYPE_PAIR_REJECTED = "device.pair.rejected"
         private const val EVENT_BUFFER = 256
         private const val INBOX_MAX = 500
         private const val PCR_HEX = 96

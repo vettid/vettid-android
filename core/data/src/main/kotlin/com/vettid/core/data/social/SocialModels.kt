@@ -115,7 +115,26 @@ enum class RequestState {
 }
 
 /** How a connection request ended without a connection (§6.4). */
-enum class RequestEnd { DECLINED, EXPIRED, FAILED }
+enum class RequestEnd {
+    /** This member declined (on this or another of their devices). */
+    DECLINED,
+    EXPIRED,
+
+    /** The handshake was aborted, or an older vault let the request run out. */
+    FAILED,
+
+    /** The other member declined (`connection.declined`, 0.10.5). */
+    PEER_DECLINED,
+}
+
+/**
+ * The other member declined a connection request of this member's (0.10.5,
+ * §6.4): shown once, until the member dismisses it. [outgoing]: this member
+ * accepted an invitation ("<name> declined your connection request"); else this
+ * member invited ("<name> declined the connection"). [name] is the one the
+ * request showed (self-asserted), kept from the request since it has left the list.
+ */
+data class PeerDecline(val requestId: String, val name: String?, val outgoing: Boolean, val at: Instant)
 
 /** The safety code shown when a connection was made (recorded by this app). */
 data class SafetyCodeRecord(val sas: String, val at: Instant)
