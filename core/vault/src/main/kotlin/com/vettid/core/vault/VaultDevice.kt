@@ -203,6 +203,20 @@ class VaultDevice private constructor(
         MutableSharedFlow<VaultMessage>(extraBufferCapacity = EVENT_BUFFER, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     private val pairedState = MutableStateFlow(st.deviceId != null)
     private val sasState = MutableStateFlow<String?>(null)
+    private val refusalCount = MutableStateFlow(0)
+
+    /**
+     * Deposits to the vault's mailbox under the vault's current token that the relay refused with
+     * `token_revoked` since the vault last spoke to this device (a message opened under the session, §5). A vault
+     * that removed this device denylists its relay key (§7.4), so every deposit is refused; a token the vault
+     * revoked by itself is replaced by a new one. Not authenticated (the relay says so): never proof of anything.
+     */
+    val vaultRefusals: StateFlow<Int> = refusalCount.asStateFlow()
+
+    /** Starts [vaultRefusals] again (after a sealed unlock result: the enclave knows this device). */
+    fun clearVaultRefusals() {
+        refusalCount.value = 0
+    }
     private var collector: Job? = null
 
     /** Every event from the vault (no responses), as it arrives. */
@@ -215,6 +229,12 @@ class VaultDevice private constructor(
 
     /** True while this app recovers a vault (§11.11): registered, until `credential.recover` or `credential.reset`. */
     val recovering: Boolean get() = st.recovery != null
+
+    /**
+     * While recovering: the vault's `credential_backup` from this app's unlock result (0.10.6, §11.11.5 step 1);
+     * null before that unlock, or when the vault did not say (an older vault).
+     */
+    val recoveryCredentialBackup: Boolean? get() = st.recovery?.credentialBackup
 
     /**
      * The SAS of the pairing handshake in progress (§6.3, 0.10.3): set once the
@@ -368,6 +388,9 @@ class VaultDevice private constructor(
             if (r.ok) {
                 val bundle = r.vaultBundle
                 if (bundle != null && st.vault == null && st.recovery != null) adoptBundle(bundle)
+                // §11.11.5 step 1 (0.10.6): whether the password can recover the credential; kept across a restart.
+                val rec = st.recovery
+                if (rec != null && r.credentialBackup != null) st.recovery = rec.copy(credentialBackup = r.credentialBackup)
                 r.token?.let { t ->
                     val exp = heldFromVault(t)
                     val v = st.vault
@@ -575,6 +598,10 @@ class VaultDevice private constructor(
                 save()
                 throw x
             }
+            val v = st.vault
+            if (x.code == RelayException.TOKEN_REVOKED && v != null && e.mailbox == v.mailbox && e.token == v.token) {
+                refusalCount.value++
+            }
             st.outbox.remove(e)
             save()
             throw x
@@ -707,6 +734,7 @@ class VaultDevice private constructor(
             return
         }
         val (inner, ep) = opened
+        refusalCount.value = 0 // the vault spoke to this device under its session
         if (inner.type == TYPE_HS_INIT) {
             handleRekey(raw, ep, sender, t)
             return

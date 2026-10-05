@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
@@ -42,6 +43,12 @@ enum class TransferInStep {
 
     /** 10 minutes without approval. */
     TIMED_OUT,
+
+    /**
+     * No `hs.resp` within 60 seconds (§6.7.1 step 2, 0.10.6): the code may have been used already, or this phone
+     * could not be verified (a dropped `hs.init` is never answered). A new code is offered.
+     */
+    NOT_ANSWERED,
 }
 
 /** Immutable UI state of the transfer on the new phone. */
@@ -78,6 +85,8 @@ interface TransferInActions {
  * The new phone's side of a direct transfer (VAULT-MESSAGING §6.7.1), as
  * vettid-vault's `vaultctl pair`: scan the old phone's QR (or paste its link),
  * send the attested `hs.init`, show the SAS once the handshake checked out,
+ * (or, without the vault's `hs.resp` within 60 seconds, say that the code may have
+ * been used or this phone could not be verified, and offer a new code, §6.7.1 step 2)
  * and wait for the old phone's approval, which completes the transfer
  * (`device.paired{transfer: true}`), or its rejection (`device.pair.rejected`).
  * Then the credential the vault kept is fetched and confirmed.
@@ -140,16 +149,15 @@ class TransferInViewModel @Inject constructor(
         waiter = viewModelScope.launch {
             val deadline = Instant.now(clock).plus(WINDOW)
             val sas = try {
-                move.transferIn(text)
+                withTimeoutOrNull(MoveRepository.HS_RESP_WAIT_MS) { move.transferIn(text) }
             } catch (e: VaultFailure) {
-                val bad = e.kind == FailureKind.INVITE_INVALID || e.kind == FailureKind.INVITE_EXPIRED
-                state.update {
-                    if (bad) {
-                        it.copy(step = from, busy = false, inputProblem = e.kind)
-                    } else {
-                        it.copy(step = from, busy = false, error = e.kind, errorCode = e.code)
-                    }
-                }
+                connectFailed(from, e)
+                return@launch
+            }
+            if (sas == null) {
+                // §6.7.1 step 2: stop waiting for hs.resp after 60 s; the handshake state is dropped.
+                state.update { it.copy(step = TransferInStep.NOT_ANSWERED, busy = false) }
+                abandon()
                 return@launch
             }
             state.update { it.copy(step = TransferInStep.COMPARE, busy = false, sas = sas, deadline = deadline) }
@@ -171,6 +179,18 @@ class TransferInViewModel @Inject constructor(
         }
     }
 
+    /** The transfer could not start: a bad code, no `hs.resp` within 60 s (§6.7.1 step 2), or another failure. */
+    private fun connectFailed(from: TransferInStep, e: VaultFailure) {
+        val bad = e.kind == FailureKind.INVITE_INVALID || e.kind == FailureKind.INVITE_EXPIRED
+        state.update {
+            when {
+                bad -> it.copy(step = from, busy = false, inputProblem = e.kind)
+                e.code == MoveRepository.CODE_HS_UNANSWERED -> it.copy(step = TransferInStep.NOT_ANSWERED, busy = false)
+                else -> it.copy(step = from, busy = false, error = e.kind, errorCode = e.code)
+            }
+        }
+    }
+
     private fun startTicker(deadline: Instant) {
         ticker?.cancel()
         ticker = viewModelScope.launch {
@@ -188,12 +208,14 @@ class TransferInViewModel @Inject constructor(
         waiter?.cancel()
         ticker?.cancel()
         state.update { it.copy(step = TransferInStep.INTRO, busy = false, sas = null, deadline = null) }
-        viewModelScope.launch {
-            try {
-                move.abandonTransferIn()
-            } catch (_: VaultFailure) {
-                // nothing to drop
-            }
+        viewModelScope.launch { abandon() }
+    }
+
+    private suspend fun abandon() {
+        try {
+            move.abandonTransferIn()
+        } catch (_: VaultFailure) {
+            // nothing to drop
         }
     }
 

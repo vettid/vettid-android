@@ -237,6 +237,67 @@ class RecoverViewModelTest {
         assertTrue(vm.uiState.value.reset)
     }
 
+    /** Registered, at the PIN: unlocks with [backup] as the result's `credential_backup` (0.10.6). */
+    private fun kotlinx.coroutines.test.TestScope.unlockedWith(backup: Boolean?): RecoverViewModel {
+        vault.recoveryStageValue = RecoveryStage.PIN
+        vault.recoveryCredentialBackupValue = backup
+        val vm = RecoverViewModel(vault, vault)
+        advanceUntilIdle()
+        assertEquals(RecoverStep.PIN, vm.uiState.value.step)
+        vm.setPin("975310")
+        vm.submitPin()
+        advanceUntilIdle()
+        return vm
+    }
+
+    @Test
+    fun credentialBackupTrueAsksForThePassword() = runTest {
+        val vm = unlockedWith(true)
+        assertEquals(RecoverStep.PASSWORD, vm.uiState.value.step)
+        vm.setPassword("correct horse battery")
+        vm.submitPassword()
+        advanceUntilIdle()
+        assertEquals(RecoverStep.DONE, vm.uiState.value.step)
+    }
+
+    @Test
+    fun credentialBackupFalseGoesStraightToTheBackupOffChoiceWithoutAPassword() = runTest {
+        val vm = unlockedWith(false)
+        assertEquals(RecoverStep.LOST, vm.uiState.value.step)
+        assertEquals("", vm.uiState.value.password)
+        assertFalse("recoverCredential" in vault.calls)
+        vm.chooseNewCredential()
+        assertEquals(RecoverStep.NEW_PASSWORD, vm.uiState.value.step)
+        assertTrue(vm.back())
+        assertEquals(RecoverStep.LOST, vm.uiState.value.step)
+        vm.chooseDelete()
+        assertEquals(RecoverStep.DELETE, vm.uiState.value.step)
+        assertFalse("recoverCredential" in vault.calls)
+    }
+
+    @Test
+    fun credentialBackupAbsentAsksForThePasswordAsBefore() = runTest {
+        // An older vault (before 0.10.6) does not say; the password's credential_lost answer leads to the choice.
+        vault.recoverOutcome = RecoverOutcome.CREDENTIAL_LOST
+        val vm = unlockedWith(null)
+        assertEquals(RecoverStep.PASSWORD, vm.uiState.value.step)
+        vm.setPassword("whatever")
+        vm.submitPassword()
+        advanceUntilIdle()
+        assertTrue("recoverCredential" in vault.calls)
+        assertEquals(RecoverStep.LOST, vm.uiState.value.step)
+    }
+
+    @Test
+    fun credentialBackupFalseAlsoAppliesWhenTheFlowResumes() = runTest {
+        vault.recoveryStageValue = RecoveryStage.PASSWORD
+        vault.recoveryCredentialBackupValue = false
+        val vm = RecoverViewModel(vault, vault)
+        advanceUntilIdle()
+        assertEquals(RecoverStep.LOST, vm.uiState.value.step)
+        assertFalse("recoverCredential" in vault.calls)
+    }
+
     @Test
     fun backupOffDeleteNeedsThePinAndAConfirmation() = runTest {
         vault.recoveryStageValue = RecoveryStage.PASSWORD

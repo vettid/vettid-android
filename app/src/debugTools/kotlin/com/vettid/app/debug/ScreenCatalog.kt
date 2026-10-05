@@ -391,6 +391,7 @@ object ScreenCatalog {
         "transfer_in.done" to { TIn(TransferInUiState(step = TransferInStep.DONE)) },
         "transfer_in.rejected" to { TIn(TransferInUiState(step = TransferInStep.REJECTED)) },
         "transfer_in.timed_out" to { TIn(TransferInUiState(step = TransferInStep.TIMED_OUT)) },
+        "transfer_in.no_answer" to { TIn(TransferInUiState(step = TransferInStep.NOT_ANSWERED)) },
         "unlock" to { UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), pin = "1234"), NoUnlock) },
         "unlock.updated" to {
             UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(4, "deprecated"), 3, true, false, release(5))), NoUnlock)
@@ -404,6 +405,9 @@ object ScreenCatalog {
         },
         "unlock.recovery" to {
             UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), recoveryPending = true), NoUnlock)
+        },
+        "unlock.refused" to {
+            UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), refused = true), NoUnlock)
         },
         "unlock.not_recognised" to {
             UnlockContent(

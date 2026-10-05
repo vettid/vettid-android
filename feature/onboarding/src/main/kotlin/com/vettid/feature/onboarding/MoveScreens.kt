@@ -582,6 +582,15 @@ fun TransferInContent(
             onSecondary = onLeave,
             modifier = Modifier.testTag("transfer_timed_out"),
         ) {}
+        TransferInStep.NOT_ANSWERED -> FormScaffold(
+            title = stringResource(R.string.transfer_in_no_answer_title),
+            body = stringResource(R.string.transfer_in_no_answer),
+            primaryLabel = stringResource(R.string.transfer_in_scan_new),
+            onPrimary = actions::again,
+            secondaryLabel = stringResource(R.string.move_back),
+            onSecondary = onLeave,
+            modifier = Modifier.testTag("transfer_not_answered"),
+        ) {}
     }
 }
 

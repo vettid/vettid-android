@@ -159,7 +159,7 @@ class RecoverViewModel @Inject constructor(
             when (stage) {
                 RecoveryStage.CODE -> reload()
                 RecoveryStage.PIN -> toPin()
-                RecoveryStage.PASSWORD -> state.update { it.copy(step = RecoverStep.PASSWORD) }
+                RecoveryStage.PASSWORD -> afterUnlock()
             }
         }
     }
@@ -317,7 +317,10 @@ class RecoverViewModel @Inject constructor(
         viewModelScope.launch {
             val offer = if (s.approveOffer) s.preflight?.offer else null
             when (val r = move.recoveryUnlock(s.pin, offer)) {
-                UnlockAttempt.Success -> state.update { it.copy(step = RecoverStep.PASSWORD, busy = false, pin = "") }
+                UnlockAttempt.Success -> {
+                    state.update { it.copy(busy = false, pin = "") }
+                    afterUnlock()
+                }
                 is UnlockAttempt.BadPin -> {
                     state.update { it.copy(busy = false, pin = "", pinWrong = true) }
                     startBackoff(r.retryAfterSeconds)
@@ -349,6 +352,20 @@ class RecoverViewModel @Inject constructor(
                 state.update { it.copy(waitSeconds = (it.waitSeconds - 1).coerceAtLeast(0)) }
             }
         }
+    }
+
+    /**
+     * After the unlock (§11.11.5 step 1, 0.10.6): the password only when the vault keeps a copy of the credential
+     * (`credential_backup` true) or did not say (an older vault, which answers `credential_lost` to the password);
+     * with the backup off, straight to the choice of step 4 without asking for a password that cannot succeed.
+     */
+    private suspend fun afterUnlock() {
+        val backup = try {
+            move.recoveryCredentialBackup()
+        } catch (_: VaultFailure) {
+            null
+        }
+        state.update { it.copy(step = if (backup == false) RecoverStep.LOST else RecoverStep.PASSWORD) }
     }
 
     // --- the password (step 3) ---

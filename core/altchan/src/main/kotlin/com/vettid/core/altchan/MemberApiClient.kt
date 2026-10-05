@@ -27,7 +27,11 @@ class EnclaveInfo(val instanceId: String, val release: String, descriptor: ByteA
     fun attestation(): ByteArray = attestation.copyOf()
 }
 
-/** A response slot (§11.5): `queued`, `done` or `expired`; [envelope] only when done; [code] a host code (`etk_unknown`). */
+/**
+ * A response slot (§11.5): `queued`, `done` or `expired`; [envelope] only when done; [code] a host code. Only
+ * `etk_unknown` means something to the app (re-seal, §11.9); any other code beside an envelope, such as
+ * `recovery_registered` (0.10.6, §11.11.3: for the member API), is ignored and the sealed result decides.
+ */
 class Slot(val status: String, envelope: ByteArray?, val code: String?) {
     private val envelope = envelope?.copyOf()
 
@@ -38,6 +42,9 @@ class Slot(val status: String, envelope: ByteArray?, val code: String?) {
         const val DONE = "done"
         const val EXPIRED = "expired"
         const val ETK_UNKNOWN = "etk_unknown"
+
+        /** The host's clear marker on a successful `recovery_register` (0.10.6); the app ignores it. */
+        const val RECOVERY_REGISTERED = "recovery_registered"
     }
 }
 

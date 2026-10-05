@@ -29,6 +29,7 @@ import com.vettid.core.crypto.session.Responder
 import com.vettid.core.crypto.session.ResponderConfig
 import com.vettid.core.relay.DepositTokens
 import com.vettid.core.relay.RelayAuth
+import com.vettid.core.relay.RelayException
 import com.vettid.core.relay.RelayMessage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -65,6 +66,10 @@ class VaultDeviceTest {
     private lateinit var relay: MockWebServer
     private val deposits = LinkedBlockingQueue<Pair<String, ByteArray>>() // mailbox, payload
     private val claims = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
+
+    /** When set, the relay refuses every deposit with this code (403). */
+    @Volatile
+    private var refuseDeposits: String? = null
 
     /** The fake vault's keys and session with the device. */
     private inner class FakeVault {
@@ -134,6 +139,8 @@ class VaultDeviceTest {
                         """{"mailbox_id":"x","limits":{"max_payload_bytes":262144,"message_ttl_seconds":1,"visibility_timeout_seconds":60,""" +
                             """"max_token_lifetime_seconds":1,"open_token_max_lifetime_seconds":1,"max_claim_bytes":1,"claim_ttl_seconds":1}}""",
                     ).build()
+                    path.startsWith("/v1/mailbox/") && request.method == "POST" && refuseDeposits != null ->
+                        MockResponse.Builder().code(403).body("""{"code":"$refuseDeposits","message":""}""").build()
                     path.startsWith("/v1/mailbox/") && request.method == "POST" -> {
                         val o = StrictJson.parseObject(request.body!!.toByteArray())
                         deposits.add(path.removePrefix("/v1/mailbox/") to o.base64("payload"))
@@ -315,6 +322,38 @@ class VaultDeviceTest {
             assertEquals(res.epoch.recvKid, Envelope.parse(raw).recipientKid)
             d.handle(v.seal("vault.status", """{"vault_id":"x"}""", re = req.id, status = Inner.STATUS_OK))
             assertEquals("x", VaultJson.str(status.await(), "vault_id"))
+        }
+    }
+
+    /**
+     * A replaced phone (its relay key on the vault's denylist, §7.4) has every deposit to the vault refused with
+     * `token_revoked`. The device counts them until the vault speaks to it again; other refusals do not count.
+     */
+    @Test
+    fun refusedDepositsToTheVaultAreCountedUntilTheVaultSpeaks() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            assertEquals(0, d.vaultRefusals.value)
+            refuseDeposits = RelayException.TOKEN_REVOKED
+            repeat(3) {
+                val e = runCatching { api.status() }.exceptionOrNull()
+                assertTrue(e is RelayException && e.code == RelayException.TOKEN_REVOKED)
+            }
+            assertEquals(3, d.vaultRefusals.value)
+            refuseDeposits = RelayException.TOKEN_EXPIRED
+            runCatching { api.status() }
+            assertEquals(3, d.vaultRefusals.value)
+            refuseDeposits = null
+            // Any message the vault seals to this device under the session shows that it still knows it.
+            d.handle(v.seal("message.new", """{"connection_id":"c1","message_id":"m1","direction":"in","text":"hi","sent_at":"x"}"""))
+            assertEquals(0, d.vaultRefusals.value)
+            refuseDeposits = RelayException.TOKEN_REVOKED
+            runCatching { api.status() }
+            assertEquals(1, d.vaultRefusals.value)
+            d.clearVaultRefusals()
+            assertEquals(0, d.vaultRefusals.value)
+            refuseDeposits = null
         }
     }
 

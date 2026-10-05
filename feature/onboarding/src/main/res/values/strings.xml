@@ -141,6 +141,8 @@
     <string name="unlock_not_recognised_title">Your vault did not recognise this phone</string>
     <string name="unlock_not_recognised_body">This phone may have been replaced by a recovery or a transfer while it was offline. If your vault now works on another phone, you can erase VettID from this one.</string>
     <string name="unlock_erase">Erase VettID from this phone</string>
+    <string name="unlock_refused_title">Your vault is refusing this phone</string>
+    <string name="unlock_refused_body">Messages from this phone to your vault keep being refused. If you moved VettID to another phone, this one may have been replaced. Enter your PIN to check with your vault.</string>
     <string name="unlock_erase_confirm_title">Erase VettID from this phone?</string>
     <string name="unlock_erase_confirm_body">This erases VettID\'s data on this phone only: its keys, your account details and the app\'s settings. Nothing else on the phone is touched, and it works without a connection.\n\nIt cannot be undone. If this phone still holds your vault, you will need a recovery on another phone to use it again.</string>
     <string name="unlock_erase_confirm">Erase</string>
@@ -260,6 +262,8 @@
     <string name="transfer_in_timeout_body">It was not approved within 10 minutes. Nothing changed. Show a new code on your old phone to try again.</string>
     <string name="transfer_in_no_answer">Your vault did not answer. The code may have been used already, or this phone could not be verified. Show a new code on your old phone.</string>
     <string name="transfer_in_again">Try again</string>
+    <string name="transfer_in_no_answer_title">No answer from your vault</string>
+    <string name="transfer_in_scan_new">Scan a new code</string>
     <string name="move_back">Back</string>
     <string name="move_cd_qr_scanner">Camera view for scanning the code</string>
 </resources>

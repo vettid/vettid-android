@@ -73,6 +73,11 @@ data class UnlockResult(
     val update: Update? = null,
     val recoveryCancelled: Boolean = false,
     val vaultBundle: ByteArray? = null,
+    /**
+     * `credential_backup` (0.10.6, §11.11.5 step 1): in a recovery-registered app's result, whether the vault
+     * keeps a copy of the credential, so whether the password can recover it. Null when absent (an older vault).
+     */
+    val credentialBackup: Boolean? = null,
 ) {
     /** The `update` member: `moved`, `abandoned` or `refused` (with a code). */
     data class Update(val to: String, val result: String, val code: String?)
@@ -104,6 +109,7 @@ data class UnlockResult(
                 update = o.optObj("update")?.let { Update(it.string("to"), it.string("result"), it.optString("code")) },
                 recoveryCancelled = if (o.has("recovery_cancelled")) o.bool("recovery_cancelled") else false,
                 vaultBundle = bundle,
+                credentialBackup = if (o.has("credential_backup")) o.bool("credential_backup") else null,
             )
         }
     }

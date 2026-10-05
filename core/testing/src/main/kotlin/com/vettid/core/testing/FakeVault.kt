@@ -68,7 +68,13 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, Vau
     var lastRegistered: Triple<String, String, String>? = null
     val recoveryUnlockResults = ArrayDeque<UnlockAttempt>()
     var recoverOutcome = RecoverOutcome.RECOVERED
+
+    /** The recovery unlock's `credential_backup` (null: an older vault that does not send it). */
+    var recoveryCredentialBackupValue: Boolean? = null
     var transferSas = "042817"
+
+    /** When set, the new phone's wait for the vault's `hs.resp` (and so the SAS) lasts until it completes. */
+    var transferHsResp: CompletableDeferred<String>? = null
     var lastTransferCode: String? = null
 
     /** Completes (or fails) the new phone's wait for the old phone's approval. */
@@ -85,6 +91,9 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, Vau
     override val pendingEmail = MutableStateFlow<String?>(null)
     override val alarm = MutableStateFlow<CredentialAlarm?>(null)
     override val unlockWindow = MutableStateFlow<Instant?>(null)
+
+    /** Set by a test: the open app was sent to the unlock screen after repeated relay refusals. */
+    override val refusedByVault = MutableStateFlow(false)
     override val devHint: String? = null
     override val signInHosts: Set<String> = setOf(SignInLink.HOST)
 
@@ -158,6 +167,7 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, Vau
         lastApproved = approve
         lastCancelRecovery = cancelRecovery
         val r = unlockResults.removeFirstOrNull() ?: UnlockAttempt.Success
+        if (r !is UnlockAttempt.Failed) refusedByVault.value = false // a sealed answer, as VaultManager
         if (r == UnlockAttempt.Success) phase.value = AppPhase.Unlocked
         return r
     }
@@ -267,6 +277,11 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, Vau
         return preflightInfo
     }
 
+    override suspend fun recoveryCredentialBackup(): Boolean? {
+        call("recoveryCredentialBackup")
+        return recoveryCredentialBackupValue
+    }
+
     override suspend fun recoveryUnlock(pin: String, approve: ReleaseView?): UnlockAttempt {
         call("recoveryUnlock")
         lastPin = pin
@@ -296,7 +311,7 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, Vau
     override suspend fun transferIn(code: String): String {
         call("transferIn")
         lastTransferCode = code
-        return transferSas
+        return transferHsResp?.await() ?: transferSas
     }
 
     override suspend fun awaitTransferIn() {

@@ -50,7 +50,8 @@ says so (attestation, crypto helpers, WebRTC, QR scanner), with its tests.
   (screenshots in `/data/local/tmp/a4-exit/`). `ReplacedWipeTest` (same way): a direct transfer to a
   test-process "new phone" (TEST attester), after which the app erases itself (owner decision 2026-10-05;
   `LocalWipe`, `HolderWatch`: only an authenticated `device.unlinked{transferred|replaced}` or a sealed
-  `unknown_device` wipes). The A2 exit test:
+  `unknown_device` wipes; repeated relay `token_revoked` only sends the open app to the unlock screen, `RefusalWatch`).
+The A2 exit test:
   `ANDROID_SERIAL=<serial> ./gradlew :core:data:connectedDebugAndroidTest`; the JVM
   variant is `:core:vault:testDebugUnitTest --tests '*DevStackJvmTest*'`. All skip
   without the stack. Never modify the vettid-vault checkout.
@@ -79,7 +80,8 @@ Every A3 and A4 screen with sample state, no vault needed: `--es vettid.start sc
 `credential.alarm`, `settings.delete_confirm`, `messages.conversation`, `invite.request`,
 `connections.detail`, `approvals.critical`; recovery and transfer: `recover.pin`, `recover.lost`,
 `transfer_in.compare`, `settings.transfer_compare`, `settings.transfer_moved`; the member's erase of a phone the vault
-did not recognise: `unlock.not_recognised`, `unlock.erase_confirm`, `unlock.erasing`). Debug builds expose Compose test tags as resource
+did not recognise: `unlock.not_recognised`, `unlock.erase_confirm`, `unlock.erasing`; the open app sent back after
+repeated relay refusals, `unlock.refused`; the transfer's 60 s wait for `hs.resp`, `transfer_in.no_answer`). Debug builds expose Compose test tags as resource
 ids, so `uiautomator dump` / `adb shell input` can drive two phones at once (`adb -s <serial>`).
 Screenshots and the Proton reference images stay out of git (`local/`, or the
 vettid.org repo's `local/android-ui/`).
