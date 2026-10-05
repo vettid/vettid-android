@@ -242,7 +242,13 @@ fun ChangePinContent(
 /** Recovery info (stateless). */
 @Suppress("CyclomaticComplexMethod")
 @Composable
-fun RecoveryContent(state: RecoveryUiState, onCancel: () -> Unit, onOpenAccountSite: () -> Unit, onBack: () -> Unit) {
+fun RecoveryContent(
+    state: RecoveryUiState,
+    onCancel: () -> Unit,
+    onOpenAccountSite: () -> Unit,
+    onBack: () -> Unit,
+    onTransfer: () -> Unit = {},
+) {
     var confirm by rememberSaveable { mutableStateOf(false) }
     val r = state.recovery
     val active = r != null && (r.state == "pending" || r.state == "available")
@@ -254,6 +260,8 @@ fun RecoveryContent(state: RecoveryUiState, onCancel: () -> Unit, onOpenAccountS
         destructive = active,
         busy = state.busy || state.loading,
         onBack = onBack,
+        secondaryLabel = if (active) null else stringResource(R.string.settings_recovery_transfer),
+        onSecondary = onTransfer,
     ) {
         if (state.backupOff) {
             NoticeCard(

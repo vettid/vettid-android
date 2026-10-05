@@ -26,7 +26,7 @@ devstack/devstack.sh down    # stop everything and remove the adb reverse rules
 `up` runs
 
 ```bash
-go run -tags devenclave github.com/vettid/vettid-vault/cmd/devstack@19c0315 \
+go run -tags devenclave github.com/vettid/vettid-vault/cmd/devstack@ca10a72 \
   -dev-device-policy devstack/device-policy.json
 ```
 

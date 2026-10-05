@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <!-- The QR scanner (invitations, VAULT-MESSAGING §6.4). Pasting a link works without it. -->
+    <!-- QrScanner (invitations §6.4, the transfer code §6.7.1, the recovery code §11.11.2). Pasting or typing works without it. -->
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 </manifest>

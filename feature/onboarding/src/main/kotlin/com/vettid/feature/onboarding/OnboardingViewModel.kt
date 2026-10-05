@@ -12,6 +12,8 @@ import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.EnrollStep
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.MoveRepository
+import com.vettid.core.data.vault.ReplacedReason
 import com.vettid.core.data.vault.SetupStage
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultRepository
@@ -39,7 +41,19 @@ enum class OnboardingStep {
     BACKUP,
     PROGRESS,
     DONE,
+
+    /** Recovering the vault on this phone (§11.11): [RecoverViewModel] runs the steps. */
+    RECOVER,
+
+    /** Moving VettID here from the old phone (§6.7.1): [TransferInViewModel] runs the steps. */
+    TRANSFER_IN,
+
+    /** This phone no longer holds the vault (a transfer or a recovery replaced it). */
+    REPLACED,
 }
+
+/** What the member came to do on the welcome screen; decides where onboarding goes after sign-in. */
+enum class OnboardingGoal { NEW_VAULT, RECOVER, TRANSFER }
 
 /** Immutable UI state of the onboarding flow. Secrets live here only while the flow needs them. */
 data class OnboardingUiState(
@@ -69,6 +83,8 @@ data class OnboardingUiState(
     val error: FailureKind? = null,
     val errorCode: String? = null,
     val devHint: String? = null,
+    val goal: OnboardingGoal = OnboardingGoal.NEW_VAULT,
+    val replacedReason: ReplacedReason = ReplacedReason.UNKNOWN,
 ) {
     val canContinueBackup: Boolean get() = backup || backupOffAcknowledged
     val progressFailed: Boolean get() = progress.any { it.second == StepState.FAILED }
@@ -88,6 +104,7 @@ data class OnboardingUiState(
 class OnboardingViewModel @Inject constructor(
     private val account: AccountRepository,
     private val vault: VaultRepository,
+    private val move: MoveRepository,
     private val inbox: SignInLinkInbox,
 ) : ViewModel(), OnboardingActions {
     private val state = MutableStateFlow(OnboardingUiState(devHint = account.devHint, email = account.pendingEmail.value ?: ""))
@@ -115,19 +132,39 @@ class OnboardingViewModel @Inject constructor(
             OnboardingStep.BACKUP,
             OnboardingStep.PROGRESS,
         )
+        val moving = s.step == OnboardingStep.RECOVER || s.step == OnboardingStep.TRANSFER_IN
         when (phase) {
             AppPhase.SignedOut -> if (s.step !in signInSteps) {
                 go(if (account.pendingEmail.value != null) OnboardingStep.CHECK_EMAIL else OnboardingStep.WELCOME)
             }
             is AppPhase.TermsRequired -> state.update { it.copy(step = OnboardingStep.TERMS, termsUpdated = phase.updated, busy = false) }
             is AppPhase.Setup -> when (phase.stage) {
-                SetupStage.NEW_VAULT -> if (s.step !in vaultSteps) go(OnboardingStep.PIN_CREATE)
-                SetupStage.VAULT_ELSEWHERE -> if (s.step != OnboardingStep.PROGRESS) go(OnboardingStep.VAULT_ELSEWHERE)
+                // After a recovery that deleted the vault, the recovery screen says so first.
+                SetupStage.NEW_VAULT -> if (s.step !in vaultSteps && s.step != OnboardingStep.RECOVER) go(OnboardingStep.PIN_CREATE)
+                SetupStage.VAULT_ELSEWHERE -> if (s.step != OnboardingStep.PROGRESS && !moving) {
+                    go(
+                        when (s.goal) {
+                            OnboardingGoal.RECOVER -> OnboardingStep.RECOVER
+                            OnboardingGoal.TRANSFER -> OnboardingStep.TRANSFER_IN
+                            OnboardingGoal.NEW_VAULT -> OnboardingStep.VAULT_ELSEWHERE
+                        },
+                    )
+                }
+                SetupStage.RECOVERING -> if (s.step != OnboardingStep.RECOVER) {
+                    state.update { it.copy(step = OnboardingStep.RECOVER, goal = OnboardingGoal.RECOVER, busy = false, error = null) }
+                }
                 SetupStage.NEEDS_CREDENTIAL -> if (s.step != OnboardingStep.PROGRESS && s.step != OnboardingStep.BACKUP) {
                     enrolled = true
                     state.update { it.copy(step = OnboardingStep.PASSWORD, credentialOnly = true, busy = false) }
                 }
-                SetupStage.FINISHING -> go(OnboardingStep.DONE)
+                // A recovery or a transfer shows its own "your vault is on this phone now".
+                SetupStage.FINISHING -> if (!moving) go(OnboardingStep.DONE)
+            }
+            is AppPhase.Replaced -> state.update {
+                it.copy(
+                    step = OnboardingStep.REPLACED, replacedReason = phase.reason, goal = OnboardingGoal.NEW_VAULT,
+                    busy = false, error = null,
+                )
             }
             else -> Unit
         }
@@ -172,7 +209,56 @@ class OnboardingViewModel @Inject constructor(
 
     // --- sign-in ---
 
-    override fun start() = go(OnboardingStep.EMAIL)
+    override fun start() {
+        state.update { it.copy(goal = OnboardingGoal.NEW_VAULT) }
+        go(OnboardingStep.EMAIL)
+    }
+
+    /** Welcome: "I lost my phone": sign in, then the recovery (§11.11). */
+    override fun startRecovery() {
+        state.update { it.copy(goal = OnboardingGoal.RECOVER) }
+        go(OnboardingStep.EMAIL)
+    }
+
+    /** Welcome: "Move from my old phone": sign in, then the direct transfer (§6.7.1). */
+    override fun startTransfer() {
+        state.update { it.copy(goal = OnboardingGoal.TRANSFER) }
+        go(OnboardingStep.EMAIL)
+    }
+
+    /** Vault elsewhere: recover it on this phone. */
+    override fun recover() {
+        state.update { it.copy(goal = OnboardingGoal.RECOVER) }
+        go(OnboardingStep.RECOVER)
+    }
+
+    /** Vault elsewhere: move it here from the old phone. */
+    override fun transfer() {
+        state.update { it.copy(goal = OnboardingGoal.TRANSFER) }
+        go(OnboardingStep.TRANSFER_IN)
+    }
+
+    /** Leaves the recovery or the transfer for the choice of what to do with this phone. */
+    override fun leaveMove() {
+        state.update { it.copy(goal = OnboardingGoal.NEW_VAULT) }
+        go(OnboardingStep.VAULT_ELSEWHERE)
+        viewModelScope.launch { account.refresh() }
+    }
+
+    /** After a recovery deleted the vault: set up a new one. */
+    override fun newVaultAfterMove() {
+        state.update { it.copy(goal = OnboardingGoal.NEW_VAULT) }
+        go(OnboardingStep.PIN_CREATE)
+    }
+
+    /** Replaced: the member read it; this phone can be set up again (§6.7.1, §11.11.5). */
+    override fun acknowledgeReplaced() {
+        viewModelScope.launch {
+            state.update { it.copy(busy = true) }
+            move.acknowledgeReplaced()
+            state.update { it.copy(busy = false) }
+        }
+    }
 
     override fun setEmail(v: String) = state.update { it.copy(email = v.take(MAX_EMAIL), emailInvalid = false) }
 

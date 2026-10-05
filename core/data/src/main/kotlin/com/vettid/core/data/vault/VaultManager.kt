@@ -6,6 +6,7 @@ import com.vettid.core.altchan.AltTrust
 import com.vettid.core.altchan.Approval
 import com.vettid.core.altchan.MemberApiClient
 import com.vettid.core.altchan.MemberApiException
+import com.vettid.core.altchan.RecoveryCode
 import com.vettid.core.altchan.SignInStatus
 import com.vettid.core.altchan.UnlockOptions
 import com.vettid.core.altchan.UnlockOutcome
@@ -16,6 +17,7 @@ import com.vettid.core.attestation.manifest.Release
 import com.vettid.core.crypto.Bytes
 import com.vettid.core.data.KeystoreFileStore
 import com.vettid.core.data.account.AccountGateway
+import com.vettid.core.data.social.InviteLinks
 import com.vettid.core.data.social.SocialManager
 import com.vettid.core.data.account.SignInLink
 import com.vettid.core.data.env.AppEnvironment
@@ -32,10 +34,14 @@ import com.vettid.core.vault.VaultApi
 import com.vettid.core.vault.VaultDevice
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
+import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,6 +49,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -52,6 +59,7 @@ import kotlinx.serialization.json.intOrNull
 import okhttp3.OkHttpClient
 import java.io.File
 import java.io.IOException
+import java.time.Duration
 import java.time.Instant
 import java.time.format.DateTimeParseException
 
@@ -71,7 +79,7 @@ class VaultManager(
     baseHttp: OkHttpClient,
     private val scope: CoroutineScope,
     private val deviceName: String,
-) : AccountRepository, VaultRepository, CredentialRepository {
+) : AccountRepository, VaultRepository, CredentialRepository, MoveRepository {
     private val app = context.applicationContext
     private val http = env.http(baseHttp)
     private val gateway: AccountGateway = env.accountGateway(app, http)
@@ -127,6 +135,8 @@ class VaultManager(
         val lastName: String = "",
         val pendingEmail: String? = null,
         val setupComplete: Boolean = false,
+        /** Set when this phone stopped holding the vault ([ReplacedReason] name), until the member moves on. */
+        val replaced: String? = null,
     ) {
         fun toInfo(): AccountInfo? = if (userGuid.isEmpty()) null else AccountInfo(email, firstName, lastName)
     }
@@ -232,9 +242,14 @@ class VaultManager(
                 }
             }
             "device.unlinked" -> {
-                // Replaced by a recovery or moved by a transfer: this app no longer holds the vault.
-                dropSession(forget = true)
-                phaseFlow.value = AppPhase.Setup(SetupStage.VAULT_ELSEWHERE)
+                // Replaced by a recovery or moved by a transfer: this app no longer holds the vault (§10.3). Not in this
+                // coroutine: dropping the session cancels the observer that runs it.
+                val reason = when (VaultJson.str(m.body, "reason")) {
+                    "transferred" -> ReplacedReason.TRANSFERRED
+                    "replaced" -> ReplacedReason.RECOVERED
+                    else -> ReplacedReason.UNKNOWN
+                }
+                scope.launch { markReplaced(reason) }
             }
         }
     }
@@ -270,10 +285,12 @@ class VaultManager(
         saveLocal(
             local.copy(email = me.email, userGuid = me.userGuid, firstName = me.firstName, lastName = me.lastName, pendingEmail = null),
         )
+        local.replaced?.let { return@guard AppPhase.Replaced(replacedReason(it)) }
         if (me.state != STATE_MEMBER || me.termsNeedAcceptance) return@guard AppPhase.TermsRequired(updated = me.state == STATE_MEMBER)
         val s = session()
         val d = s.device
         if (d.deviceId == null) {
+            if (d.recovering) return@guard AppPhase.Setup(SetupStage.RECOVERING) // registered with a recovery code (§11.11.3)
             if (d.vaultId != null) return@guard AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL) // enrolled, handshake not finished
             val st = s.member.vaultStatus()
             return@guard AppPhase.Setup(if (st != null && st.state != "enrolling") SetupStage.VAULT_ELSEWHERE else SetupStage.NEW_VAULT)
@@ -284,10 +301,13 @@ class VaultManager(
             dropSession(forget = true)
             return@guard AppPhase.Setup(SetupStage.NEW_VAULT)
         }
+        if (d.recovering) return@guard AppPhase.Setup(SetupStage.RECOVERING) // paired, the credential not recovered yet
         if (st.state != "unlocked") AppPhase.Locked else afterUnlocked(s)
     }
 
+    @Suppress("ReturnCount")
     private suspend fun afterUnlocked(s: Session): AppPhase {
+        if (s.device.recovering) return AppPhase.Setup(SetupStage.RECOVERING)
         if (s.device.credentialVersion == null) return AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)
         scope.launch { runCatching { refreshAlarm(s) } }
         return if (local.setupComplete) AppPhase.Unlocked else AppPhase.Setup(SetupStage.FINISHING)
@@ -325,6 +345,7 @@ class VaultManager(
             // the local session is cleared either way
         }
         dropSession(forget = false)
+        if (local.replaced != null) saveLocal(local.copy(replaced = null))
         windowFlow.value = null
         phaseFlow.value = AppPhase.SignedOut
     }
@@ -368,8 +389,15 @@ class VaultManager(
         PreflightInfo(view(p.routed), p.lastNumber, p.softwareUpdated, p.rollback, p.offer?.let { view(it) })
     }
 
-    @Suppress("ReturnCount", "CyclomaticComplexMethod") // one answer per §11.4 result code
     override suspend fun unlock(pin: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt {
+        val r = unlockOnce(pin, approve, cancelRecovery)
+        // §11.11.5, §6.7.1: the vault no longer knows this app: a recovery or a transfer replaced it.
+        if (r is UnlockAttempt.Failed && r.code == CODE_UNKNOWN_DEVICE) markReplaced(ReplacedReason.UNKNOWN)
+        return r
+    }
+
+    @Suppress("ReturnCount", "CyclomaticComplexMethod") // one answer per §11.4 result code
+    private suspend fun unlockOnce(pin: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt {
         val outcome = try {
             guard {
                 val s = session()
@@ -575,6 +603,211 @@ class VaultManager(
         s.api.settingsSet(current.version, mapOf(key to value))
     }
 
+    // --- MoveRepository: recovery on this (new) phone (§11.11) ---
+
+    /** A device that holds nothing yet but carries a stale pairing, enrollment or refused registration starts afresh. */
+    private suspend fun freshDeviceIfUnpaired() {
+        val d = session().device
+        if (d.deviceId == null && (d.hasVault || d.vaultId != null)) dropSession(forget = true)
+    }
+
+    override suspend fun recoveryStage(): RecoveryStage = guard {
+        val s = session()
+        val d = s.device
+        when {
+            !d.recovering -> RecoveryStage.CODE
+            d.deviceId == null -> RecoveryStage.PIN
+            s.member.vaultStatus()?.state == "unlocked" -> RecoveryStage.PASSWORD
+            else -> RecoveryStage.PIN
+        }
+    }
+
+    override suspend fun recoveryTarget(): RecoveryTarget = guard {
+        val s = session()
+        val vid = s.member.vaultStatus()?.vaultId
+        val r = s.member.recoveryStatus()?.let { RecoveryView(it.recoveryId, it.state, it.availableAt, it.expiresAt) }
+        RecoveryTarget(vid, r)
+    }
+
+    override suspend fun registerRecovery(vaultId: String, recoveryId: String, code: String): RecoveryRegistration = guard {
+        if (!session().device.recovering) freshDeviceIfUnpaired()
+        val s = session()
+        val rc = RecoveryCode(vaultId, recoveryId, code)
+        val r = try {
+            s.alt.recoveryRegister(
+                vaultId,
+                build = { e -> s.device.prepareRecoveryRegister(local.userGuid, rc, e, env.attester()) },
+                open = { raw, rid -> s.device.openRecoveryResult(raw, rid) },
+            )
+        } catch (e: MemberApiException) {
+            if (e.code != MemberApiException.RECOVERY_NOT_AVAILABLE) throw e
+            null
+        }
+        when {
+            r == null -> {
+                s.device.dropRecoveryRegistration()
+                RecoveryRegistration.Refused(CODE_NOT_AVAILABLE)
+            }
+            r.ok -> {
+                phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
+                RecoveryRegistration.Registered
+            }
+            else -> {
+                s.device.dropRecoveryRegistration()
+                RecoveryRegistration.Refused(r.code ?: "retry")
+            }
+        }
+    }
+
+    override suspend fun recoveryPreflight(): PreflightInfo = preflight()
+
+    override suspend fun recoveryUnlock(pin: String, approve: ReleaseView?): UnlockAttempt {
+        val r = unlockOnce(pin, approve, cancelRecovery = false)
+        if (r != UnlockAttempt.Success) return r
+        return try {
+            // §11.11.5 step 2: the first handshake (purpose app, ctx = recovery id), accepted without approval.
+            guard {
+                val d = session().device
+                if (d.deviceId == null) d.completeEnrollment()
+            }
+            phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
+            UnlockAttempt.Success
+        } catch (e: VaultFailure) {
+            UnlockAttempt.Failed(e.kind, e.code)
+        }
+    }
+
+    override suspend fun recoverCredential(password: String): RecoverOutcome = guard {
+        val s = session()
+        val outcome = try {
+            s.api.credentialRecover(password)
+            RecoverOutcome.RECOVERED
+        } catch (e: VaultOpException) {
+            when (e.code) {
+                "credential_lost" -> RecoverOutcome.CREDENTIAL_LOST
+                "credential_required" -> RecoverOutcome.CREDENTIAL_REQUIRED
+                else -> throw e
+            }
+        }
+        if (outcome == RecoverOutcome.RECOVERED) phaseFlow.value = AppPhase.Setup(SetupStage.FINISHING)
+        outcome
+    }
+
+    override suspend fun resetCredential(password: String) = guard {
+        session().api.credentialReset(password)
+        phaseFlow.value = AppPhase.Setup(SetupStage.FINISHING)
+    }
+
+    override suspend fun deleteRecoveredVault(pin: String) {
+        guard { session().api.deleteVault(pin, null) }
+        dropSession(forget = true)
+        phaseFlow.value = AppPhase.Setup(SetupStage.NEW_VAULT)
+    }
+
+    // --- MoveRepository: direct transfer (§6.7.1) ---
+
+    /** When this phone sent its transfer hs.init: it waits for the approval until 10 minutes after it. */
+    @Volatile
+    private var transferStartedAt: Instant? = null
+
+    /** The transfer this (old) phone opened last, to cancel it when a new one is asked for. */
+    @Volatile
+    private var openTransferId: String? = null
+
+    override suspend fun transferIn(code: String): String = guard {
+        val link = when (val p = InviteLinks.parseTransfer(code)) {
+            is InviteLinks.TransferParsed.Ok -> p.link
+            InviteLinks.TransferParsed.Expired -> throw VaultFailure(FailureKind.INVITE_EXPIRED, CODE_NOT_TRANSFER)
+            InviteLinks.TransferParsed.NotATransfer, InviteLinks.TransferParsed.Invalid ->
+                throw VaultFailure(FailureKind.INVITE_INVALID, CODE_NOT_TRANSFER)
+        }
+        freshDeviceIfUnpaired()
+        val d = session().device
+        if (d.deviceId != null) throw VaultFailure(FailureKind.VAULT_EXISTS)
+        d.startTransfer(link, env.attester())
+        transferStartedAt = Instant.now()
+        try {
+            withTimeout(SAS_WAIT_MS) { d.pairingSas.filterNotNull().first() }
+        } catch (e: TimeoutCancellationException) {
+            d.abandonTransfer()
+            throw e
+        }
+    }
+
+    override suspend fun awaitTransferIn() = guard {
+        val s = session()
+        val started = transferStartedAt ?: Instant.now()
+        val left = Duration.between(Instant.now(), started.plus(PAIRING_WINDOW)).coerceAtLeast(Duration.ofSeconds(1))
+        try {
+            s.device.awaitTransfer(left)
+        } catch (e: TimeoutCancellationException) {
+            s.device.abandonTransfer()
+            throw e
+        }
+        transferStartedAt = null
+        // §6.7.1 step 5: the blob the vault kept, confirmed, and a UTK pool.
+        s.api.credentialTakeOver()
+        phaseFlow.value = AppPhase.Setup(SetupStage.FINISHING)
+    }
+
+    override suspend fun abandonTransferIn() = guard {
+        transferStartedAt = null
+        session().device.abandonTransfer()
+    }
+
+    override suspend fun transferCreate(): TransferOfferView = guard {
+        val api = session().api
+        val offer = try {
+            api.transferCreate()
+        } catch (e: VaultOpException) {
+            // One transfer at a time (`exists`): a code this phone showed before and left behind is cancelled first.
+            val prev = openTransferId
+            if (e.code != CODE_EXISTS || prev == null) throw e
+            runCatching { api.transferReject(prev) }
+            api.transferCreate()
+        }
+        openTransferId = offer.transferId
+        val exp = offer.exp?.let { runCatching { Instant.parse(it) }.getOrNull() } ?: InviteLinks.expiry(offer.link)
+        TransferOfferView(offer.transferId, InviteLinks.qrPayload(offer.link), offer.link, exp)
+    }
+
+    override suspend fun awaitTransferPending(transferId: String, until: Instant): TransferPendingView? = guard {
+        val left = Duration.between(Instant.now(), until)
+        if (left.isNegative || left.isZero) return@guard null
+        try {
+            val p = session().api.awaitTransferPending(transferId, left)
+            TransferPendingView(p.transferId, p.name, p.sas)
+        } catch (_: TimeoutCancellationException) {
+            null
+        }
+    }
+
+    override suspend fun transferApprove(transferId: String, pin: String, password: String) {
+        guard { session().api.transferApprove(transferId, pin, password) }
+        openTransferId = null
+        markReplaced(ReplacedReason.TRANSFERRED)
+    }
+
+    override suspend fun transferReject(transferId: String) = guard {
+        session().api.transferReject(transferId)
+        if (openTransferId == transferId) openTransferId = null
+    }
+
+    // --- MoveRepository: after a move ---
+
+    /** This phone no longer holds the vault: forget it (fresh device keys) and say so until the member moves on. */
+    private suspend fun markReplaced(reason: ReplacedReason) {
+        if (phaseFlow.value is AppPhase.Replaced) return
+        dropSession(forget = true)
+        io { saveLocal(local.copy(replaced = reason.name, setupComplete = false)) }
+        phaseFlow.value = AppPhase.Replaced(reason)
+    }
+
+    override suspend fun acknowledgeReplaced() {
+        io { saveLocal(local.copy(replaced = null)) }
+        refresh()
+    }
+
     // --- helpers ---
 
     private fun view(r: Release) = ReleaseView(r.number, r.pcr0, r.status.wire, r.endsAt, r.notes)
@@ -599,6 +832,18 @@ class VaultManager(
         private const val LIST_PAGE = 500
         private const val MAX_PAGES = 4
         private const val FINGERPRINT_HEX = 16
+        private const val CODE_UNKNOWN_DEVICE = "unknown_device"
+        private const val CODE_NOT_AVAILABLE = "not_available"
+        private const val CODE_NOT_TRANSFER = "not_transfer"
+        private const val CODE_EXISTS = "exists"
+
+        /** How long the new phone waits for the vault's `hs.resp` (it answers at once, §6.7). */
+        private const val SAS_WAIT_MS = 60_000L
+
+        /** The pairing window: 10 minutes after `hs.init` (§6.7, 0.10.4). */
+        private val PAIRING_WINDOW: Duration = Duration.ofMinutes(10)
+
+        private fun replacedReason(name: String) = ReplacedReason.entries.firstOrNull { it.name == name } ?: ReplacedReason.UNKNOWN
         private const val KEY_FINGERPRINT_CHARS = 12
         private const val GROUP = 4
         private val json = Json { ignoreUnknownKeys = true }

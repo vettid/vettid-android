@@ -61,6 +61,13 @@ import com.vettid.core.ui.theme.VettIdShape
 @Suppress("TooManyFunctions")
 interface OnboardingActions {
     fun start()
+    fun startRecovery()
+    fun startTransfer()
+    fun recover()
+    fun transfer()
+    fun leaveMove()
+    fun newVaultAfterMove()
+    fun acknowledgeReplaced()
     fun setEmail(v: String)
     fun submitEmail()
     fun resendLink()
@@ -103,12 +110,19 @@ private val BACKABLE = setOf(
 /** One onboarding step for [state] (stateless). */
 @Suppress("CyclomaticComplexMethod")
 @Composable
-fun OnboardingContent(state: OnboardingUiState, actions: OnboardingActions, onOpenAccountSite: () -> Unit) {
+fun OnboardingContent(
+    state: OnboardingUiState,
+    actions: OnboardingActions,
+    onOpenAccountSite: () -> Unit,
+    recover: @Composable (onLeave: () -> Unit, onNewVault: () -> Unit, onOpenAccountSite: () -> Unit) -> Unit =
+        { l, n, o -> RecoverFlow(l, n, o) },
+    transferIn: @Composable (onLeave: () -> Unit) -> Unit = { l -> TransferInFlow(l) },
+) {
     val canBack = state.step in BACKABLE || (state.step == OnboardingStep.PASSWORD && !state.credentialOnly)
     BackHandler(enabled = canBack) { actions.back() }
     val back: (() -> Unit)? = if (canBack) ({ actions.back(); Unit }) else null
     when (state.step) {
-        OnboardingStep.WELCOME -> WelcomeScreen(actions::start)
+        OnboardingStep.WELCOME -> WelcomeScreen(actions::start, actions::startTransfer, actions::startRecovery)
         OnboardingStep.EMAIL -> EmailScreen(state, actions, back)
         OnboardingStep.CHECK_EMAIL -> CheckEmailScreen(state, actions, back)
         OnboardingStep.CONFIRM_SIGN_IN -> ConfirmSignInScreen(state, actions, back)
@@ -121,6 +135,10 @@ fun OnboardingContent(state: OnboardingUiState, actions: OnboardingActions, onOp
         OnboardingStep.BACKUP -> BackupScreen(state, actions, back)
         OnboardingStep.PROGRESS -> ProgressScreen(state, actions)
         OnboardingStep.DONE -> DoneScreen(actions)
+        OnboardingStep.RECOVER -> recover(actions::leaveMove, actions::newVaultAfterMove, onOpenAccountSite)
+        OnboardingStep.TRANSFER_IN -> transferIn(actions::leaveMove)
+        OnboardingStep.REPLACED ->
+            ReplacedScreen(state.replacedReason, actions::acknowledgeReplaced, actions::useAnotherAccount, state.busy)
     }
 }
 
@@ -140,12 +158,14 @@ private fun DevHint(state: OnboardingUiState) {
 }
 
 @Composable
-fun WelcomeScreen(onStart: () -> Unit) {
+fun WelcomeScreen(onStart: () -> Unit, onTransfer: () -> Unit, onRecover: () -> Unit) {
     FormScaffold(
         title = stringResource(R.string.onboarding_welcome_title),
         body = stringResource(R.string.onboarding_welcome_body),
         primaryLabel = stringResource(R.string.onboarding_welcome_start),
         onPrimary = onStart,
+        secondaryLabel = stringResource(R.string.onboarding_welcome_transfer),
+        onSecondary = onTransfer,
         header = {
             Spacer(Modifier.height(Spacing.xxl))
             RookLogo(height = 88.dp)
@@ -155,6 +175,8 @@ fun WelcomeScreen(onStart: () -> Unit) {
         Point(Icons.Outlined.Key, stringResource(R.string.onboarding_welcome_point_keys))
         Spacer(Modifier.height(Spacing.l))
         Point(Icons.Outlined.VerifiedUser, stringResource(R.string.onboarding_welcome_point_member))
+        Spacer(Modifier.height(Spacing.l))
+        MoveLink(stringResource(R.string.onboarding_welcome_recover), onRecover, "welcome_recover")
     }
 }
 
@@ -293,24 +315,32 @@ fun VaultElsewhereScreen(state: OnboardingUiState, actions: OnboardingActions, o
     FormScaffold(
         title = stringResource(R.string.onboarding_elsewhere_title),
         body = stringResource(R.string.onboarding_elsewhere_body),
-        primaryLabel = stringResource(R.string.onboarding_elsewhere_open),
-        onPrimary = onOpenAccountSite,
-        secondaryLabel = stringResource(R.string.onboarding_elsewhere_anyway),
-        onSecondary = actions::enrollAnyway,
+        primaryLabel = stringResource(R.string.onboarding_elsewhere_transfer),
+        onPrimary = actions::transfer,
+        secondaryLabel = stringResource(R.string.onboarding_elsewhere_recover),
+        onSecondary = actions::recover,
         busy = state.busy,
     ) {
         NoticeCard(
             NoticeKind.INFO,
             stringResource(R.string.onboarding_elsewhere_transfer_title),
             stringResource(R.string.onboarding_elsewhere_transfer_body),
+            modifier = Modifier.testTag("elsewhere_transfer"),
         )
         Spacer(Modifier.height(Spacing.m))
         NoticeCard(
             NoticeKind.WARNING,
             stringResource(R.string.onboarding_elsewhere_recovery_title),
             stringResource(R.string.onboarding_elsewhere_recovery_body),
+            modifier = Modifier.testTag("elsewhere_recovery"),
+            actions = {
+                androidx.compose.material3.TextButton(onClick = onOpenAccountSite) {
+                    Text(stringResource(R.string.onboarding_elsewhere_open))
+                }
+            },
         )
         Spacer(Modifier.height(Spacing.l))
+        TextLink(stringResource(R.string.onboarding_elsewhere_anyway), actions::enrollAnyway)
         TextLink(stringResource(R.string.onboarding_other_account), actions::useAnotherAccount)
     }
 }

@@ -6,6 +6,8 @@
     <string name="onboarding_welcome_point_keys">Your keys stay on this phone and in your vault\'s sealed enclave.</string>
     <string name="onboarding_welcome_point_member">You need a VettID membership (account.vettid.org).</string>
     <string name="onboarding_welcome_start">Get started</string>
+    <string name="onboarding_welcome_transfer">Move from my old phone</string>
+    <string name="onboarding_welcome_recover">I lost my phone: recover my vault</string>
 
     <!-- Email -->
     <string name="onboarding_email_title">Sign in to your account</string>
@@ -45,11 +47,13 @@
 
     <!-- Vault elsewhere -->
     <string name="onboarding_elsewhere_title">Your account already has a vault</string>
-    <string name="onboarding_elsewhere_body">A vault has exactly one app, which holds its credential. Another phone is that app.</string>
+    <string name="onboarding_elsewhere_body">A vault has exactly one app, which holds its credential. Another phone is that app. Move VettID to this phone from there, or recover the vault if that phone is lost.</string>
     <string name="onboarding_elsewhere_transfer_title">Still have the other phone?</string>
-    <string name="onboarding_elsewhere_transfer_body">Move VettID with a direct transfer from that phone. It needs your PIN and credential password, and no waiting.</string>
+    <string name="onboarding_elsewhere_transfer_body">Move VettID with a direct transfer: the other phone shows a code, this phone scans it, and you approve there with your PIN and credential password. No waiting.</string>
+    <string name="onboarding_elsewhere_transfer">Move from my old phone</string>
     <string name="onboarding_elsewhere_recovery_title">Lost it?</string>
-    <string name="onboarding_elsewhere_recovery_body">Start a recovery on the account site. After 24 hours this phone can take over with your PIN and password, and the old app is removed.</string>
+    <string name="onboarding_elsewhere_recovery_body">Start a recovery on the account site. After 24 hours it shows a code that this phone scans; then your PIN and credential password move the vault here, and the old phone is signed out of it.</string>
+    <string name="onboarding_elsewhere_recover">Recover my vault</string>
     <string name="onboarding_elsewhere_open">Open the account site</string>
     <string name="onboarding_elsewhere_anyway">Set up a new vault anyway</string>
 
@@ -142,4 +146,123 @@
     <string name="app_lock_unlock">Unlock</string>
     <string name="app_lock_prompt_title">Unlock VettID</string>
     <string name="app_lock_prompt_subtitle">Confirm it is you</string>
+
+    <!-- This phone was replaced (VAULT-MESSAGING §6.7.1, §11.11.5) -->
+    <string name="onboarding_replaced_title">This phone no longer holds your vault</string>
+    <string name="onboarding_replaced_transferred">You moved VettID to your new phone. Your vault, your credential and your connections are there now, and this phone has been signed out of the vault. Nothing is left of it here.</string>
+    <string name="onboarding_replaced_recovered">Your vault was recovered on another phone, which now holds it. This phone has been signed out of the vault and its copy of your credential no longer works.</string>
+    <string name="onboarding_replaced_unknown">Your vault no longer knows this phone. It was probably moved to another phone by a transfer or a recovery.</string>
+    <string name="onboarding_replaced_not_you_title">Was this not you?</string>
+    <string name="onboarding_replaced_not_you_body">If you did not move or recover your vault, sign in on the account site now, change your account password, and contact VettID support.</string>
+    <string name="onboarding_replaced_continue">Set up this phone again</string>
+    <string name="onboarding_replaced_sign_out">Sign out</string>
+
+    <!-- Done, after a move -->
+    <string name="onboarding_moved_title">Your vault is on this phone now</string>
+    <string name="onboarding_moved_recovered_body">Your old phone has been signed out of it, and the credential copy it held no longer works. Your desktops and agents stay paired.</string>
+    <string name="onboarding_moved_reset_body">Your vault has a new credential. The old credential and your critical items were destroyed. Your old phone has been signed out of the vault.</string>
+    <string name="onboarding_moved_transferred_body">Your old phone has been signed out of it. Unlock with the same PIN and credential password as before.</string>
+    <string name="onboarding_moved_go">Go to VettID</string>
+
+    <!-- Recovery on this phone (§11.11) -->
+    <string name="recover_title">Recover your vault</string>
+    <string name="recover_body">Your account site shows a recovery code 24 hours after you start a recovery. Open it there (Vault, then Recovery, then Show the code) and scan it with this phone.</string>
+    <string name="recover_need_title">You will need</string>
+    <string name="recover_need_body">The recovery code from the account site, your vault PIN and your credential password. This phone then replaces your old one: the old phone is signed out of the vault.</string>
+    <string name="recover_scan">Scan the code</string>
+    <string name="recover_type">Type the code instead</string>
+    <string name="recover_check_again">Check again</string>
+    <string name="recover_open_site">Open the account site</string>
+    <string name="recover_none_title">No recovery in progress</string>
+    <string name="recover_none_body">Start a recovery on the account site (Vault, then Recovery). Your vault locks at once; after 24 hours the site shows the code for this phone.</string>
+    <string name="recover_pending_title">Your code is not available yet</string>
+    <string name="recover_pending_body">The account site shows the code from %1$s. Until then nobody can use it, and anyone holding your old phone can still cancel the recovery.</string>
+    <string name="recover_available_title">Your code is ready</string>
+    <string name="recover_available_body">Use it before %1$s. It works once.</string>
+    <string name="recover_cancelled_title">The recovery was cancelled</string>
+    <string name="recover_cancelled_body">It was cancelled on the account site, by the link in the email, or from your old phone. If that was not you, your old phone may still be in someone else\'s hands. Start a new recovery on the account site.</string>
+    <string name="recover_expired_title">The recovery expired</string>
+    <string name="recover_expired_body">Its code was valid for 24 hours and was not used. Start a new recovery on the account site.</string>
+    <string name="recover_scan_title">Scan the recovery code</string>
+    <string name="recover_scan_body">Point the camera at the code on the account site.</string>
+    <string name="recover_scan_allow">Allow the camera</string>
+    <string name="recover_scan_permission_title">Camera access</string>
+    <string name="recover_scan_permission_body">VettID uses the camera only to read the code; nothing is recorded. You can type the code instead.</string>
+    <string name="recover_scan_not_code">That is not a VettID recovery code.</string>
+    <string name="recover_scan_other_vault">That code is for a vault of another account. Sign in with the account you started the recovery from.</string>
+    <string name="recover_type_title">Type the recovery code</string>
+    <string name="recover_type_body">Type the 32 characters the account site shows, in groups of four. Spaces do not matter.</string>
+    <string name="recover_type_label">Recovery code</string>
+    <string name="recover_type_invalid">A recovery code has 32 letters and digits (no U).</string>
+    <string name="recover_type_submit">Continue</string>
+    <string name="recover_registering">Checking the code with your vault</string>
+    <string name="recover_bad_code">That code is not right. After 5 wrong codes the recovery is cancelled. Wrong codes from this phone: %1$d of 5.</string>
+    <string name="recover_voided">That was the fifth wrong code, so the recovery was cancelled. Start a new recovery on the account site.</string>
+    <string name="recover_code_expired">This code has expired. Start a new recovery on the account site.</string>
+    <string name="recover_code_early">This code is not valid yet. Try again from %1$s.</string>
+    <string name="recover_code_early_unknown">This code is not valid yet. Try again later.</string>
+    <string name="recover_code_gone">This recovery is no longer active: it was cancelled, already used, or voided after wrong codes. Start a new recovery on the account site.</string>
+    <string name="recover_code_attestation">Your vault could not verify this phone (device attestation). The code is still valid; this phone may not be supported.</string>
+    <string name="recover_code_retry">Your vault could not answer just now. Try again.</string>
+    <string name="recover_pin_title">Enter your vault PIN</string>
+    <string name="recover_pin_body">The code was accepted. Unlock your vault with your PIN. Wrong PINs are slowed down, as on your old phone.</string>
+    <string name="recover_pin_submit">Unlock</string>
+    <string name="recover_pin_cancelled">The recovery was cancelled before this phone finished it. Start a new recovery on the account site.</string>
+    <string name="recover_password_title">Enter your credential password</string>
+    <string name="recover_password_body">Your vault checks it against its copy of your credential and hands the credential to this phone. Your old phone\'s copy stops working.</string>
+    <string name="recover_password_label">Credential password</string>
+    <string name="recover_password_submit">Recover my vault</string>
+    <string name="recover_password_wrong">That password is not correct.</string>
+    <string name="recover_password_wait">Too many wrong passwords. Try again in %1$s.</string>
+    <string name="recover_lost_title">Your credential cannot be recovered</string>
+    <string name="recover_lost_body">Your credential backup was off, so your vault kept no copy of your credential. It and every critical item were lost with your old phone, and nothing can bring them back. Your vault itself, your connections and your other items are still there.</string>
+    <string name="recover_lost_choice">You can now create a new credential, or delete the vault.</string>
+    <string name="recover_lost_new">Create a new credential</string>
+    <string name="recover_lost_delete">Delete my vault</string>
+    <string name="recover_required">Your vault has no credential, so it cannot be recovered. Contact VettID support.</string>
+    <string name="recover_new_title">Choose a new credential password</string>
+    <string name="recover_new_body">Your vault destroys the old credential and every critical item, then creates a new credential that this phone holds.</string>
+    <string name="recover_new_submit">Create the new credential</string>
+    <string name="recover_new_confirm_title">Create a new credential?</string>
+    <string name="recover_new_confirm_body">Your old credential and every critical item are destroyed for good. Your old phone is signed out of the vault.</string>
+    <string name="recover_new_confirm">Destroy and create</string>
+    <string name="recover_delete_title">Delete your vault</string>
+    <string name="recover_delete_body">Everything in it is erased: items, connections, messages. Your connections are told it is gone. Enter your vault PIN to confirm.</string>
+    <string name="recover_delete_pin">Vault PIN</string>
+    <string name="recover_delete_submit">Delete my vault</string>
+    <string name="recover_delete_confirm_title">Delete your vault?</string>
+    <string name="recover_delete_confirm_body">This cannot be undone. Your vault and everything in it are erased.</string>
+    <string name="recover_delete_confirm">Delete</string>
+    <string name="recover_deleted_title">Your vault was deleted</string>
+    <string name="recover_deleted_body">You can set up a new vault on this phone.</string>
+    <string name="recover_deleted_new">Set up a new vault</string>
+    <string name="recover_failed_title">Something went wrong</string>
+
+    <!-- Direct transfer, the new phone (§6.7.1) -->
+    <string name="transfer_in_title">Move from your old phone</string>
+    <string name="transfer_in_body">On your old phone, open VettID, then Settings, then Move to a new phone. It shows a code: scan it with this phone.</string>
+    <string name="transfer_in_need_body">You will approve the move on the old phone with your vault PIN and credential password. The old phone is then signed out of your vault.</string>
+    <string name="transfer_in_scan">Scan the code</string>
+    <string name="transfer_in_paste">Paste the code instead</string>
+    <string name="transfer_in_scan_title">Scan your old phone\'s code</string>
+    <string name="transfer_in_scan_body">Point the camera at the code your old phone shows.</string>
+    <string name="transfer_in_paste_title">Paste the code</string>
+    <string name="transfer_in_paste_body">On the old phone, copy the code under the QR code and paste it here.</string>
+    <string name="transfer_in_paste_label">Transfer code</string>
+    <string name="transfer_in_paste_submit">Continue</string>
+    <string name="transfer_in_not_transfer">That is not a transfer code. On your old phone, open Settings, then Move to a new phone.</string>
+    <string name="transfer_in_expired_code">That code has expired. Show a new one on your old phone.</string>
+    <string name="transfer_in_connecting">Connecting to your vault</string>
+    <string name="transfer_in_compare_title">Compare the code</string>
+    <string name="transfer_in_compare_body">Your old phone shows a code too. If they are the same, approve the move there with your PIN and credential password.</string>
+    <string name="transfer_in_waiting">Waiting for your old phone (%1$s left)</string>
+    <string name="transfer_in_cancel">Cancel</string>
+    <string name="transfer_in_rejected_title">Rejected on your phone</string>
+    <string name="transfer_in_rejected_body">The move was rejected on your old phone. Nothing changed: your vault stays there. To try again, show a new code on the old phone.</string>
+    <string name="transfer_in_timeout_title">The transfer timed out</string>
+    <string name="transfer_in_timeout_body">It was not approved within 10 minutes. Nothing changed. Show a new code on your old phone to try again.</string>
+    <string name="transfer_in_no_answer">Your vault did not answer. The code may have been used already, or this phone could not be verified. Show a new code on your old phone.</string>
+    <string name="transfer_in_again">Try again</string>
+    <string name="move_back">Back</string>
+    <string name="move_cd_qr_scanner">Camera view for scanning the code</string>
 </resources>

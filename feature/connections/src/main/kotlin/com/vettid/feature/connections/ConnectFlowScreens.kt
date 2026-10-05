@@ -1,5 +1,7 @@
 package com.vettid.feature.connections
 
+import com.vettid.core.ui.components.QrScanner
+import com.vettid.core.ui.components.rememberCameraPermission
 import android.content.ClipData
 import android.content.Intent
 import androidx.compose.foundation.border

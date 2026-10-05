@@ -72,6 +72,31 @@ object InviteLinks {
     /** The invitation's expiry, from a link. */
     fun expiry(link: String): Instant = Instant.ofEpochSecond(InviteQr.parseLink(link).exp)
 
+    /** What a scanned or pasted text holds, for a direct transfer to this phone (§6.7.1). */
+    sealed interface TransferParsed {
+        /** The old phone's transfer code: [link] is the pairing link (kind `p`). */
+        data class Ok(val link: String, val exp: Instant) : TransferParsed
+
+        /** A valid VettID code of another kind (a connection invitation, a desktop or agent pairing). */
+        data object NotATransfer : TransferParsed
+
+        data object Expired : TransferParsed
+
+        data object Invalid : TransferParsed
+    }
+
+    /** Parses the old phone's transfer QR (the compact JSON) or its pasted link (§6.7.1: pairing kind `p`). */
+    fun parseTransfer(text: String, now: Instant = Instant.now()): TransferParsed {
+        val t = text.trim()
+        val q = if (t.isEmpty()) null else candidates(t).firstNotNullOfOrNull { decode(it) }
+        return when {
+            q == null -> TransferParsed.Invalid
+            q.kind != InviteKind.APP -> TransferParsed.NotATransfer
+            !Instant.ofEpochSecond(q.exp).isAfter(now) -> TransferParsed.Expired
+            else -> TransferParsed.Ok(q.link(), Instant.ofEpochSecond(q.exp))
+        }
+    }
+
     fun parse(text: String, now: Instant = Instant.now()): Parsed {
         val t = text.trim()
         val q = if (t.isEmpty()) null else candidates(t).firstNotNullOfOrNull { decode(it) }

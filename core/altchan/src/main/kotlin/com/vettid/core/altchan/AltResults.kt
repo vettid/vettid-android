@@ -121,20 +121,72 @@ data class RecoveryResult(val ok: Boolean, val code: String?) {
 
 /**
  * The recovery QR the portal shows and the new app scans (§11.11.2):
- * `{"v":1,"t":"r","vault_id","recovery_id","code"}`.
+ * `{"v":1,"t":"r","vault_id","recovery_id","code"}`, parsed as strictly as
+ * vettid-vault's `ParseRecoveryQR` (and the code's alphabet checked too).
  */
 data class RecoveryCode(val vaultId: String, val recoveryId: String, val code: String) {
-    companion object {
-        private const val CODE_LEN = 32
+    override fun toString(): String = "RecoveryCode($vaultId, $recoveryId)"
 
+    companion object {
         fun parseQr(b: ByteArray): RecoveryCode = wrap {
             val o = AltResults.obj(b)
             if (o.uint("v", 1, 1) != 1L || o.string("t") != "r") throw AltResultException("recovery QR")
             val c = RecoveryCode(o.string("vault_id"), o.string("recovery_id"), o.string("code"))
-            if (c.code.length != CODE_LEN || !Ulid.isValid(c.recoveryId)) throw AltResultException("recovery QR")
+            if (!RecoveryCodes.isValid(c.code) || !Ulid.isValid(c.recoveryId) || !validVaultId(c.vaultId)) {
+                throw AltResultException("recovery QR")
+            }
             c
         }
+
+        /** A scanned QR's text (the compact JSON), or null when it is not a recovery QR. */
+        fun parseScanned(text: String): RecoveryCode? = try {
+            parseQr(text.trim().toByteArray(Charsets.UTF_8))
+        } catch (_: AltResultException) {
+            null
+        }
+
+        /** As the enclave's `validVaultID`: 1–128 printable ASCII characters. */
+        private fun validVaultId(s: String) = s.length in 1..MAX_VAULT_ID && s.all { it.code in PRINTABLE_MIN..PRINTABLE_MAX }
+
+        private const val MAX_VAULT_ID = 128
+        private const val PRINTABLE_MIN = 0x21
+        private const val PRINTABLE_MAX = 0x7e
     }
+}
+
+/**
+ * The recovery code's form (§11.11.2): 20 random bytes as 32 Crockford base32
+ * characters (`0-9A-HJKMNP-TV-Z`, upper case, no padding). The portal also shows
+ * it as text in groups of four, for typing.
+ */
+object RecoveryCodes {
+    const val LENGTH = 32
+    const val ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+    private const val GROUP = 4
+
+    fun isValid(code: String): Boolean = code.length == LENGTH && code.all { it in ALPHABET }
+
+    /**
+     * A typed code in its canonical form, or null when it is not one: spaces and
+     * hyphens are dropped, letters upper-cased, and the Crockford look-alikes read
+     * as digits (I and L as 1, O as 0), which the canonical form never contains.
+     */
+    fun normalize(typed: String): String? {
+        val sb = StringBuilder(LENGTH)
+        for (ch in typed) {
+            when (val c = ch.uppercaseChar()) {
+                ' ', '-', '\t', '\n', '\r', '\u00a0' -> Unit
+                'I', 'L' -> sb.append('1')
+                'O' -> sb.append('0')
+                else -> if (c in ALPHABET) sb.append(c) else return null
+            }
+            if (sb.length > LENGTH) return null
+        }
+        return sb.toString().takeIf { it.length == LENGTH }
+    }
+
+    /** The characters typed so far, in groups of four (`ABCD EFGH …`). */
+    fun grouped(code: String): String = code.chunked(GROUP).joinToString(" ")
 }
 
 private inline fun <T> wrap(f: () -> T): T = try {

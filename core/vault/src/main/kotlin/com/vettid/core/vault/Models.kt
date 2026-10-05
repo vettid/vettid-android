@@ -242,3 +242,9 @@ data class AuditPage(
 
 /** `sync.event` (§10.1): [kind] and its members; devices fetch what changed. */
 data class SyncEvent(val kind: String, val body: JsonObject)
+
+/** `device.transfer.create`'s answer (§10.3): [link] is the pairing link the new phone scans (QR `t: "p"`). */
+data class TransferOffer(val transferId: String, val link: String, val exp: String?)
+
+/** `device.transfer.pending` (§10.3): the new app's self-asserted [name] and the SAS to compare. */
+data class TransferPending(val transferId: String, val name: String, val sas: String)

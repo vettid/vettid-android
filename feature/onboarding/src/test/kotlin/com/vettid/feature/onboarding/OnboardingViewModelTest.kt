@@ -5,6 +5,7 @@ import com.vettid.core.data.account.SignInLinkInbox
 import com.vettid.core.data.policy.PinPolicy
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.ReplacedReason
 import com.vettid.core.data.vault.SetupStage
 import com.vettid.core.testing.FakeVault
 import com.vettid.core.ui.components.StepState
@@ -26,7 +27,7 @@ class OnboardingViewModelTest {
     private val token = "test-sign-in-token-0000"
     private val vault = FakeVault()
     private val inbox = SignInLinkInbox()
-    private fun vm() = OnboardingViewModel(vault, vault, inbox)
+    private fun vm() = OnboardingViewModel(vault, vault, vault, inbox)
 
     @Test
     fun signInByPastedLinkThenEnrollAndCreateTheCredential() = runTest {
@@ -179,5 +180,63 @@ class OnboardingViewModelTest {
         assertEquals(OnboardingStep.PASSWORD, vm.uiState.value.step)
         assertTrue(vm.uiState.value.credentialOnly)
         assertFalse(vm.back())
+    }
+
+    @Test
+    fun recoverFromTheWelcomeScreenSignsInThenRecovers() = runTest {
+        vault.phaseAfterSignIn = AppPhase.Setup(SetupStage.VAULT_ELSEWHERE)
+        val vm = vm()
+        advanceUntilIdle()
+        vm.startRecovery()
+        assertEquals(OnboardingStep.EMAIL, vm.uiState.value.step)
+        assertEquals(OnboardingGoal.RECOVER, vm.uiState.value.goal)
+        vault.phase.value = AppPhase.Setup(SetupStage.VAULT_ELSEWHERE)
+        advanceUntilIdle()
+        assertEquals(OnboardingStep.RECOVER, vm.uiState.value.step)
+        // Registered: the phase follows, the flow stays; finishing does not jump to the generic done screen.
+        vault.phase.value = AppPhase.Setup(SetupStage.RECOVERING)
+        advanceUntilIdle()
+        assertEquals(OnboardingStep.RECOVER, vm.uiState.value.step)
+        vault.phase.value = AppPhase.Setup(SetupStage.FINISHING)
+        advanceUntilIdle()
+        assertEquals(OnboardingStep.RECOVER, vm.uiState.value.step)
+    }
+
+    @Test
+    fun transferFromTheWelcomeScreenSignsInThenScans() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        vm.startTransfer()
+        assertEquals(OnboardingGoal.TRANSFER, vm.uiState.value.goal)
+        vault.phase.value = AppPhase.Setup(SetupStage.VAULT_ELSEWHERE)
+        advanceUntilIdle()
+        assertEquals(OnboardingStep.TRANSFER_IN, vm.uiState.value.step)
+        vm.leaveMove()
+        advanceUntilIdle()
+        assertEquals(OnboardingStep.VAULT_ELSEWHERE, vm.uiState.value.step)
+        vm.recover()
+        assertEquals(OnboardingStep.RECOVER, vm.uiState.value.step)
+    }
+
+    @Test
+    fun aRecoveryInProgressResumesAfterARestart() = runTest {
+        vault.phase.value = AppPhase.Setup(SetupStage.RECOVERING)
+        val vm = vm()
+        advanceUntilIdle()
+        assertEquals(OnboardingStep.RECOVER, vm.uiState.value.step)
+    }
+
+    @Test
+    fun aReplacedPhoneSaysSoAndCanBeSetUpAgain() = runTest {
+        vault.phase.value = AppPhase.Replaced(ReplacedReason.TRANSFERRED)
+        val vm = vm()
+        advanceUntilIdle()
+        assertEquals(OnboardingStep.REPLACED, vm.uiState.value.step)
+        assertEquals(ReplacedReason.TRANSFERRED, vm.uiState.value.replacedReason)
+        assertNull(vm.uiState.value.error)
+        vm.acknowledgeReplaced()
+        advanceUntilIdle()
+        assertTrue("acknowledgeReplaced" in vault.calls)
+        assertEquals(OnboardingStep.VAULT_ELSEWHERE, vm.uiState.value.step)
     }
 }

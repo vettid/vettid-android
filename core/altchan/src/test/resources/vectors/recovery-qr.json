@@ -1,0 +1,68 @@
+{
+  "invalid": [
+    {
+      "name": "wrong_type",
+      "qr": "{\"v\":1,\"t\":\"p\",\"vault_id\":\"v\",\"recovery_id\":\"01JA0RECVERY0000000000001X\",\"code\":\"SK01TG8WK2FYJ1Y5MEHJ5R5J7QZKWHX0\"}"
+    },
+    {
+      "name": "wrong_version",
+      "qr": "{\"v\":2,\"t\":\"r\",\"vault_id\":\"v\",\"recovery_id\":\"01JA0RECVERY0000000000001X\",\"code\":\"SK01TG8WK2FYJ1Y5MEHJ5R5J7QZKWHX0\"}"
+    },
+    {
+      "name": "short_code",
+      "qr": "{\"v\":1,\"t\":\"r\",\"vault_id\":\"v\",\"recovery_id\":\"01JA0RECVERY0000000000001X\",\"code\":\"SK01TG8WK2FYJ1Y5MEHJ5R5J7QZKWHX\"}"
+    },
+    {
+      "name": "bad_ulid",
+      "qr": "{\"v\":1,\"t\":\"r\",\"vault_id\":\"v\",\"recovery_id\":\"not-a-ulid\",\"code\":\"SK01TG8WK2FYJ1Y5MEHJ5R5J7QZKWHX0\"}"
+    },
+    {
+      "name": "empty_vault_id",
+      "qr": "{\"v\":1,\"t\":\"r\",\"vault_id\":\"\",\"recovery_id\":\"01JA0RECVERY0000000000001X\",\"code\":\"SK01TG8WK2FYJ1Y5MEHJ5R5J7QZKWHX0\"}"
+    },
+    {
+      "name": "missing_code",
+      "qr": "{\"v\":1,\"t\":\"r\",\"vault_id\":\"v\",\"recovery_id\":\"01JA0RECVERY0000000000001X\"}"
+    },
+    {
+      "name": "duplicate_member",
+      "qr": "{\"v\":1,\"t\":\"r\",\"t\":\"r\",\"vault_id\":\"v\",\"recovery_id\":\"01JA0RECVERY0000000000001X\",\"code\":\"SK01TG8WK2FYJ1Y5MEHJ5R5J7QZKWHX0\"}"
+    },
+    {
+      "name": "not_json",
+      "qr": "SK01TG8WK2FYJ1Y5MEHJ5R5J7QZKWHX0"
+    }
+  ],
+  "source": "vettid-vault ca10a72 vms/altchan RecoveryQR/ParseRecoveryQR, vms/invite QR (scratch generator, not in vettid-vault)",
+  "transfer": {
+    "exp": 1791100000,
+    "link": "eyJ2IjoyLCJ0IjoicCIsInIiOiJodHRwczovL3JlbGF5LnZldHRpZC50ZXN0IiwiYyI6ImFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6IiwiaCI6Ii1peU14UEtCZHJ2dTFMYzIzMWFhTk1lYzAzSS1uc1F2bG5TMDFHckd1TGciLCJrIjoiOV9YN2x5OHE1RldIVi1MbWJ6YmlQRkJuWmRkS2FYeTY3eFEwdHVOZndKMCIsImUiOjE3OTExMDAwMDB9",
+    "qr": "{\"v\":2,\"t\":\"p\",\"r\":\"https://relay.vettid.test\",\"c\":\"abcdefghijklmnopqrstuvwxyz\",\"h\":\"-iyMxPKBdrvu1Lc231aaNMec03I-nsQvlnS01GrGuLg\",\"k\":\"9_X7ly8q5FWHV-LmbzbiPFBnZddKaXy67xQ0tuNfwJ0\",\"e\":1791100000}"
+  },
+  "valid": [
+    {
+      "name": "hex_vault_id",
+      "qr": "{\"v\":1,\"t\":\"r\",\"vault_id\":\"0123456789abcdef0123456789abcdef\",\"recovery_id\":\"01JA0RECVERY0000000000001X\",\"code\":\"SK01TG8WK2FYJ1Y5MEHJ5R5J7QZKWHX0\"}",
+      "vault_id": "0123456789abcdef0123456789abcdef",
+      "recovery_id": "01JA0RECVERY0000000000001X",
+      "code": "SK01TG8WK2FYJ1Y5MEHJ5R5J7QZKWHX0",
+      "grouped": "SK01 TG8W K2FY J1Y5 MEHJ 5R5J 7QZK WHX0"
+    },
+    {
+      "name": "dev_vault_id",
+      "qr": "{\"v\":1,\"t\":\"r\",\"vault_id\":\"vault-01JABCDEFGHJKMNPQRSTVWXYZ\",\"recovery_id\":\"01K6ZZZZZZZZZZZZZZZZZZZZZZ\",\"code\":\"8Q6SM7Z112TYSPQ1PB2T15N57S65T2KH\"}",
+      "vault_id": "vault-01JABCDEFGHJKMNPQRSTVWXYZ",
+      "recovery_id": "01K6ZZZZZZZZZZZZZZZZZZZZZZ",
+      "code": "8Q6SM7Z112TYSPQ1PB2T15N57S65T2KH",
+      "grouped": "8Q6S M7Z1 12TY SPQ1 PB2T 15N5 7S65 T2KH"
+    },
+    {
+      "name": "all_zero_code",
+      "qr": "{\"v\":1,\"t\":\"r\",\"vault_id\":\"v\",\"recovery_id\":\"00000000000000000000000000\",\"code\":\"00000000000000000000000000000000\"}",
+      "vault_id": "v",
+      "recovery_id": "00000000000000000000000000",
+      "code": "00000000000000000000000000000000",
+      "grouped": "0000 0000 0000 0000 0000 0000 0000 0000"
+    }
+  ]
+}

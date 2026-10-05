@@ -19,6 +19,15 @@ import com.vettid.core.data.vault.UnlockAttempt
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultOverview
 import com.vettid.core.data.vault.VaultRepository
+import com.vettid.core.data.vault.MoveRepository
+import com.vettid.core.data.vault.RecoverOutcome
+import com.vettid.core.data.vault.RecoveryRegistration
+import com.vettid.core.data.vault.RecoveryStage
+import com.vettid.core.data.vault.RecoveryTarget
+import com.vettid.core.data.vault.ReplacedReason
+import com.vettid.core.data.vault.TransferOfferView
+import com.vettid.core.data.vault.TransferPendingView
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.MutableStateFlow
 import java.time.Instant
 
@@ -28,7 +37,7 @@ import java.time.Instant
  * throw; the unlock outcomes are scripted in [unlockResults].
  */
 @Suppress("TooManyFunctions")
-class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, VaultRepository, CredentialRepository {
+class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, VaultRepository, CredentialRepository, MoveRepository {
     val calls = mutableListOf<String>()
     val fail = mutableMapOf<String, VaultFailure>()
     val unlockResults = ArrayDeque<UnlockAttempt>()
@@ -52,6 +61,25 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, Vau
     var lastBackup: Boolean? = null
     var lastApproved: ReleaseView? = null
     var lastCancelRecovery = false
+
+    // --- recovery and transfer (MoveRepository) ---
+    var recoveryStageValue = RecoveryStage.CODE
+    var recoveryTargetValue = RecoveryTarget("0123456789abcdef0123456789abcdef", null)
+    val registrations = ArrayDeque<RecoveryRegistration>()
+    var lastRegistered: Triple<String, String, String>? = null
+    val recoveryUnlockResults = ArrayDeque<UnlockAttempt>()
+    var recoverOutcome = RecoverOutcome.RECOVERED
+    var transferSas = "042817"
+    var lastTransferCode: String? = null
+
+    /** Completes (or fails) the new phone's wait for the old phone's approval. */
+    var transferApproval = CompletableDeferred<Unit>()
+    var offer = TransferOfferView("01JTRANSFER000000000000000", "{\"v\":2,\"t\":\"p\"}", "eyJ2Ijoy", Instant.parse("2026-10-05T12:10:00Z"))
+
+    /** Completes the old phone's wait for `device.transfer.pending` (null: the code expired). */
+    var pendingTransfer = CompletableDeferred<TransferPendingView?>()
+    var lastTransferApproved: String? = null
+    var lastTransferRejected: String? = null
 
     override val phase = MutableStateFlow(initial)
     override val account = MutableStateFlow<AccountInfo?>(null)
@@ -207,6 +235,99 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, Vau
     override suspend fun confirmAlarm(mine: Boolean) {
         call("confirmAlarm")
         alarm.value = alarm.value?.copy(state = CredentialAlarm.STATE_ROTATION_REQUIRED)
+    }
+
+    // --- MoveRepository ---
+
+    override suspend fun recoveryStage(): RecoveryStage {
+        call("recoveryStage")
+        return recoveryStageValue
+    }
+
+    override suspend fun recoveryTarget(): RecoveryTarget {
+        call("recoveryTarget")
+        return recoveryTargetValue
+    }
+
+    override suspend fun registerRecovery(vaultId: String, recoveryId: String, code: String): RecoveryRegistration {
+        call("registerRecovery")
+        lastRegistered = Triple(vaultId, recoveryId, code)
+        val r = registrations.removeFirstOrNull() ?: RecoveryRegistration.Registered
+        if (r == RecoveryRegistration.Registered) phase.value = AppPhase.Setup(SetupStage.RECOVERING)
+        return r
+    }
+
+    override suspend fun recoveryPreflight(): PreflightInfo {
+        call("recoveryPreflight")
+        return preflightInfo
+    }
+
+    override suspend fun recoveryUnlock(pin: String, approve: ReleaseView?): UnlockAttempt {
+        call("recoveryUnlock")
+        lastPin = pin
+        lastApproved = approve
+        return recoveryUnlockResults.removeFirstOrNull() ?: UnlockAttempt.Success
+    }
+
+    override suspend fun recoverCredential(password: String): RecoverOutcome {
+        call("recoverCredential")
+        lastPassword = password
+        if (recoverOutcome == RecoverOutcome.RECOVERED) phase.value = AppPhase.Setup(SetupStage.FINISHING)
+        return recoverOutcome
+    }
+
+    override suspend fun resetCredential(password: String) {
+        call("resetCredential")
+        lastPassword = password
+        phase.value = AppPhase.Setup(SetupStage.FINISHING)
+    }
+
+    override suspend fun deleteRecoveredVault(pin: String) {
+        call("deleteRecoveredVault")
+        lastPin = pin
+        phase.value = AppPhase.Setup(SetupStage.NEW_VAULT)
+    }
+
+    override suspend fun transferIn(code: String): String {
+        call("transferIn")
+        lastTransferCode = code
+        return transferSas
+    }
+
+    override suspend fun awaitTransferIn() {
+        call("awaitTransferIn")
+        transferApproval.await()
+        phase.value = AppPhase.Setup(SetupStage.FINISHING)
+    }
+
+    override suspend fun abandonTransferIn() = call("abandonTransferIn")
+
+    override suspend fun transferCreate(): TransferOfferView {
+        call("transferCreate")
+        return offer
+    }
+
+    override suspend fun awaitTransferPending(transferId: String, until: Instant): TransferPendingView? {
+        call("awaitTransferPending")
+        return pendingTransfer.await()
+    }
+
+    override suspend fun transferApprove(transferId: String, pin: String, password: String) {
+        call("transferApprove")
+        lastTransferApproved = transferId
+        lastPin = pin
+        lastPassword = password
+        phase.value = AppPhase.Replaced(ReplacedReason.TRANSFERRED)
+    }
+
+    override suspend fun transferReject(transferId: String) {
+        call("transferReject")
+        lastTransferRejected = transferId
+    }
+
+    override suspend fun acknowledgeReplaced() {
+        call("acknowledgeReplaced")
+        phase.value = AppPhase.Setup(SetupStage.VAULT_ELSEWHERE)
     }
 
     companion object {
