@@ -36,7 +36,7 @@ data class SignInLink(val token: String, val email: String?) {
                 return null
             }
             // https only; plain http just for the local dev stack on loopback.
-            if (uri.scheme != "https" && !(uri.scheme == "http" && uri.host in LOOPBACK)) return null
+            if (uri.scheme != "https" && !(uri.scheme == "http" && isLoopbackLiteral(uri.host))) return null
             if (uri.host !in allowedHosts || uri.path != PATH) return null
             val params = fragmentParams(uri.rawFragment ?: return null)
             val token = params["t"]?.takeIf { TOKEN_RE.matches(it) } ?: return null
@@ -45,7 +45,11 @@ data class SignInLink(val token: String, val email: String?) {
         }
 
         private const val MAX_EMAIL = 254
-        private val LOOPBACK = setOf("127.0.0.1", "localhost", "[::1]")
+        private val IPV4_RE = Regex("""(\d{1,3})\.\d{1,3}\.\d{1,3}\.\d{1,3}""")
+
+        /** A loopback IP literal (127/8 or [::1]); no name lookups. */
+        private fun isLoopbackLiteral(host: String?): Boolean =
+            host == "[::1]" || IPV4_RE.matchEntire(host ?: "")?.groupValues?.get(1) == "127"
 
         private fun fragmentParams(fragment: String): Map<String, String> =
             fragment.split('&').mapNotNull { part ->
