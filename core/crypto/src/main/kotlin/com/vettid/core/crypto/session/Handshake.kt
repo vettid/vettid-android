@@ -6,6 +6,7 @@ import com.vettid.core.crypto.Ed25519
 import com.vettid.core.crypto.Ed25519PrivateKey
 import com.vettid.core.crypto.Kid
 import com.vettid.core.crypto.Labels
+import com.vettid.core.crypto.Randomness
 import com.vettid.core.crypto.Suite
 import com.vettid.core.crypto.altchan.DeviceAttest
 import com.vettid.core.crypto.envelope.Envelope
@@ -60,12 +61,19 @@ class InitiatorResult(
     /** The KEM key the last rotation announced, if any. */
     val responderKem: KemPublicKey?,
     val inner: Inner,
+    /**
+     * The short authentication string for a purpose with a SAS (§6.3, 0.10.3),
+     * null otherwise. It exists only now, after sig_R verified; hs.fin reveals n_I.
+     */
+    val sas: String?,
 )
 
 /**
  * The initiator side of one handshake. [create] builds and seals hs.init with a
- * fresh ephemeral KEM key; [handleResp] verifies hs.resp (sig_R before any
- * epoch key is used) and returns the new epoch and hs.fin.
+ * fresh ephemeral KEM key and, for a purpose with a SAS, commits to the nonce
+ * n_I (0.10.3); [handleResp] verifies hs.resp (sig_R before any epoch key is
+ * used) and returns the new epoch, the SAS and hs.fin, which reveals n_I. One
+ * hs.resp per hs.init (§6.3): after it the state is gone.
  */
 class Initiator private constructor(
     private val cfg: InitiatorConfig,
@@ -73,11 +81,9 @@ class Initiator private constructor(
     private var eph: KemPrivateKey?,
     private val env: ByteArray,
     private var ks: ByteArray?,
+    private var nI: ByteArray?,
 ) {
     val th1: ByteArray = Schedule.th1(env)
-
-    /** The short authentication string; depends only on hs.init (§6.3). */
-    val sas: String = Schedule.sas(ks!!, th1)
 
     private var done = false
 
@@ -92,8 +98,9 @@ class Initiator private constructor(
         done = true
         eph?.destroy()
         eph = null
-        Bytes.wipe(ks)
+        Bytes.wipe(ks, nI)
         ks = null
+        nI = null
     }
 
     /**
@@ -136,16 +143,18 @@ class Initiator private constructor(
             try {
                 // §6.3: I MUST verify sig_R before using any epoch key.
                 if (!Schedule.verifyResp(verifyIk, th, resp.sig())) throw CryptoException.Signature("sig_R")
+                val n = nI
+                val sas = if (cfg.purpose.hasSas) Schedule.sas(sched.prk, th, n!!, resp.sasNonce()!!) else null
                 val epoch = Epoch.from(sched, Role.INITIATOR, resp.suite, cfg.policy, now)
                 val fin = epoch.seal(
                     Inner(
                         id = cfg.finId ?: Ulid.new(now),
                         type = HsTypes.FIN,
                         ts = now,
-                        body = HsFin.marshal(Schedule.signFin(cfg.identity, th)),
+                        body = HsFin(Schedule.signFin(cfg.identity, th), n).marshal(cfg.purpose),
                     ),
                 )
-                return InitiatorResult(epoch, fin, resp, verifyIk.copyOf(), newKem, inner)
+                return InitiatorResult(epoch, fin, resp, verifyIk.copyOf(), newKem, inner, sas)
             } finally {
                 sched.destroy()
             }
@@ -155,7 +164,7 @@ class Initiator private constructor(
     }
 
     companion object {
-        @Suppress("NestedBlockDepth")
+        @Suppress("NestedBlockDepth", "CyclomaticComplexMethod")
         fun create(cfg: InitiatorConfig): Initiator {
             if (cfg.responderIk.size != Suite.ED25519_PUBLIC_SIZE || cfg.responderRelayKey.size != Suite.ED25519_PUBLIC_SIZE) {
                 throw CryptoException.Protocol("config")
@@ -171,6 +180,8 @@ class Initiator private constructor(
             val now = cfg.now ?: Instant.now()
             val id = cfg.id ?: Ulid.new(now)
             val eph = KemPrivateKey.generate()
+            // n_I is fixed before hs.init is built (§6.2), after the ephemeral key (§16's order of draws).
+            val nI = if (cfg.purpose.hasSas) Randomness.bytes(HsLimits.SAS_NONCE_SIZE) else null
             try {
                 val body = HsInit(
                     purpose = cfg.purpose,
@@ -183,6 +194,7 @@ class Initiator private constructor(
                     profile = cfg.profile,
                     rotations = cfg.rotations,
                     deviceAttest = cfg.deviceAttest,
+                    sasCommit = nI?.let { Schedule.sasCommit(it) },
                 )
                 val inner = Inner(id = id, type = HsTypes.INIT, ts = now, body = body.marshal())
                 return if (rekey) {
@@ -190,20 +202,21 @@ class Initiator private constructor(
                     // current epoch, and K_s is that epoch's rk.
                     val cur = cfg.current!!
                     val ks = cur.rkCopy()
-                    Initiator(cfg, body, eph, cur.seal(inner), ks)
+                    Initiator(cfg, body, eph, cur.seal(inner), ks, nI)
                 } else {
                     val padded = Inner.encode(inner, Mode.SEALED)
                     try {
                         val senderKid = if (cfg.anonymousSender) Kid.ANONYMOUS else cfg.staticKem.kid
                         val sealer = Sealer(cfg.responderEk!!, senderKid)
                         val env = sealer.seal(padded)
-                        Initiator(cfg, body, eph, env, sealer.export(Labels.HS_KS, Suite.KEY_SIZE))
+                        Initiator(cfg, body, eph, env, sealer.export(Labels.HS_KS, Suite.KEY_SIZE), nI)
                     } finally {
                         Bytes.wipe(padded)
                     }
                 }
             } catch (e: CryptoException) {
                 eph.destroy()
+                Bytes.wipe(nI)
                 throw e
             }
         }
@@ -215,7 +228,11 @@ fun interface KeyLookup {
     fun find(kid: Kid): KemPrivateKey?
 }
 
-/** Configuration of hs.resp. Calling [PendingInit.respond] is the approval (§6.4, §6.7). */
+/**
+ * Configuration of hs.resp. Since 0.10.3 [PendingInit.respond] is not the
+ * approval: where approval is needed hs.resp carries only a request token
+ * (§6.4, §6.7, §7.1), and the epoch is activated at approval.
+ */
 class ResponderConfig(
     val identity: Ed25519PrivateKey,
     val token: String? = null,
@@ -243,7 +260,6 @@ class PendingInit private constructor(
     private var ks: ByteArray?,
 ) {
     val th1: ByteArray = Schedule.th1(env)
-    val sas: String = Schedule.sas(ks!!, th1)
     private var used = false
 
     @Synchronized
@@ -259,6 +275,8 @@ class PendingInit private constructor(
         if (used) throw CryptoException.Used("handshake")
         val verifyIk = checkInitiator(cfg)
         val chosen = Suite.negotiate(body.suites, cfg.pinnedSuite)
+        // n_R is chosen only now, after hs.init has been opened (§6.2), before the hs.resp encapsulation (§16).
+        val nR = if (body.purpose.hasSas) Randomness.bytes(HsLimits.SAS_NONCE_SIZE) else null
         val now = cfg.now ?: Instant.now()
         val sealer = Sealer(body.eph, Kid.ANONYMOUS)
         val ke = sealer.export(Labels.HS_KE, Suite.KEY_SIZE)
@@ -269,7 +287,7 @@ class PendingInit private constructor(
             Bytes.wipe(ke)
         }
         try {
-            val resp = HsResp(cfg.token, cfg.reconnectToken, chosen, cfg.rotations, Schedule.signResp(cfg.identity, th))
+            val resp = HsResp(cfg.token, cfg.reconnectToken, chosen, cfg.rotations, Schedule.signResp(cfg.identity, th), nR)
             val inner = Inner(id = cfg.id ?: Ulid.new(now), type = HsTypes.RESP, ts = now, body = resp.marshal(body.purpose))
             val padded = Inner.encode(inner, Mode.SEALED)
             val out = try {
@@ -278,7 +296,7 @@ class PendingInit private constructor(
                 Bytes.wipe(padded)
             }
             discard()
-            return Responder(sched, verifyIk, body.from.relay.pk(), chosen, cfg.policy) to out
+            return Responder(sched, verifyIk, body.from.relay.pk(), chosen, cfg.policy, body.purpose, body.sasCommit(), nR) to out
         } catch (e: CryptoException) {
             sched.destroy()
             throw e
@@ -346,13 +364,29 @@ class PendingInit private constructor(
     }
 }
 
+/** The outcome of a valid hs.fin on the responder side (§6.3). */
+class FinResult(
+    /**
+     * The established epoch. It is active at once for rekeys, reconnects and
+     * handshakes answered without approval; otherwise the owner activates it at approval.
+     */
+    val epoch: Epoch,
+    val inner: Inner,
+    /** The short authentication string for a purpose with a SAS (0.10.3), null otherwise. */
+    val sas: String?,
+)
+
 /** The responder after hs.resp, awaiting hs.fin. */
+@Suppress("LongParameterList")
 class Responder internal constructor(
     private val sched: Schedule,
     private val verifyIk: ByteArray,
     private val sender: ByteArray,
     private val suite: Int,
     private val policy: Policy,
+    private val purpose: Purpose,
+    private val commit: ByteArray?,
+    private val nR: ByteArray?,
 ) {
     private var done = false
 
@@ -363,15 +397,20 @@ class Responder internal constructor(
     fun abort() {
         done = true
         sched.destroy()
+        Bytes.wipe(nR)
     }
 
     /**
-     * Opens hs.fin with the pending epoch's i2r key, verifies sig_I and only
-     * then activates the epoch (§6.3). On failure the pending state is kept, so
-     * a forged message cannot cancel a genuine handshake.
+     * Opens hs.fin with the pending epoch's i2r key, verifies sig_I and, for a
+     * purpose with a SAS, the commitment to n_I; only then is the epoch
+     * established (§6.3). A message that does not decrypt, is malformed or
+     * whose sig_I does not verify leaves the pending state as it is, so a forged
+     * message cannot cancel a genuine handshake. An hs.fin whose sig_I verifies
+     * but whose n_I does not open sas_commit can only come from the initiator:
+     * the handshake is aborted ([CryptoException.Protocol] "sas_commit").
      */
     @Synchronized
-    fun handleFin(raw: ByteArray, collectSender: ByteArray, now: Instant): Pair<Epoch, Inner> {
+    fun handleFin(raw: ByteArray, collectSender: ByteArray, now: Instant): FinResult {
         if (done) throw CryptoException.Used("handshake")
         if (!Ed25519.equalPublic(collectSender, sender)) throw CryptoException.Protocol("relay sender")
         val e = Envelope.parse(raw)
@@ -381,11 +420,21 @@ class Responder internal constructor(
             val inner = pending.open(e)
             if (inner.type != HsTypes.FIN) throw CryptoException.Protocol("type")
             inner.checkTime(now, true)
-            val sig = HsFin.parse(inner.body)
-            if (!Schedule.verifyFin(verifyIk, sched.th, sig)) throw CryptoException.Signature("sig_I")
+            val fin = HsFin.parse(inner.body, purpose)
+            if (!Schedule.verifyFin(verifyIk, sched.th, fin.sig())) throw CryptoException.Signature("sig_I")
+            var sas: String? = null
+            if (purpose.hasSas) {
+                val nI = fin.sasNonce()!!
+                if (!Schedule.checkSasCommit(commit!!, nI)) {
+                    // Signed by the initiator: abort and destroy the state (§6.3).
+                    abort()
+                    throw CryptoException.Protocol("sas_commit")
+                }
+                sas = Schedule.sas(sched.prk, sched.th, nI, nR!!)
+            }
             done = true
             sched.destroy()
-            return pending to inner
+            return FinResult(pending, inner, sas)
         } catch (ex: CryptoException) {
             pending.destroy()
             throw ex

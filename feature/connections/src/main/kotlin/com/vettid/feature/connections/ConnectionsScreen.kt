@@ -85,11 +85,15 @@ data object InviteRoute
 @Serializable
 data object ScanRoute
 
-/** Accept an invitation: paste a link, or [link] from the scanner. */
+/**
+ * Accept an invitation: paste a link, or [link] from the scanner (accepted at
+ * once) or from an opened link ([opened]: the member confirms first).
+ */
 @Serializable
-data class AcceptRoute(val link: String? = null) {
+data class AcceptRoute(val link: String? = null, val opened: Boolean = false) {
     companion object {
         const val ARG = "link"
+        const val ARG_OPENED = "opened"
     }
 }
 
@@ -201,6 +205,9 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
                 onAccept = vm::accept,
                 onScan = { host.replace(ScanRoute) },
                 onMessage = { id -> host.onOpenConversation(id) },
+                onApprove = vm::approve,
+                onDecline = vm::decline,
+                onOpenConnection = { id -> host.replace(ConnectionDetailRoute(id)) },
             ),
         )
     }

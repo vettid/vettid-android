@@ -8,6 +8,8 @@ import com.vettid.core.crypto.invite.InviteKind
 import com.vettid.core.crypto.invite.InviteQr
 import com.vettid.core.data.social.AcceptedConnection
 import com.vettid.core.data.social.Approval
+import com.vettid.core.data.social.RequestEnd
+import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.social.ConnectionState
 import com.vettid.core.data.social.InviteTtl
 import com.vettid.core.data.social.OutstandingInvite
@@ -76,6 +78,8 @@ class ConnectionsViewModelsTest {
         advanceUntilIdle()
         assertTrue("approveConnection" in social.calls)
         assertEquals(InviteStep.CONNECTING, vm.uiState.value.step)
+        // Approved here by the member, not automatically.
+        assertEquals(false, vm.uiState.value.autoApproved)
         social.seed(listOf(FakeSocial.connection("c9", "Morgan")))
         advanceUntilIdle()
         assertEquals(InviteStep.CONNECTED, vm.uiState.value.step)
@@ -104,21 +108,41 @@ class ConnectionsViewModelsTest {
         assertEquals(InviteStep.CHOOSE, vm.uiState.value.step)
     }
 
+    private fun outgoing(id: String, sas: String?, state: RequestState) = Approval.OutgoingRequest(
+        id, sas, remote = false, name = "Inviter", state = state, peerApproved = false, introducedBy = null,
+        receivedAt = Instant.now(), exp = null,
+    )
+
     @Test
-    fun acceptWaitsForTheApprovalAndReportsBadLinks() = runTest {
-        val vm = AcceptViewModel(SavedStateHandle(), social)
+    fun acceptShowsTheCodeThenBothApproveAndReportsBadLinks() = runTest {
+        val vm = AcceptViewModel(SavedStateHandle(), social, social)
         vm.setInput("not a link")
         vm.accept()
         advanceUntilIdle()
         assertEquals(FailureKind.INVITE_INVALID, vm.uiState.value.error)
         assertEquals(AcceptStep.INPUT, vm.uiState.value.step)
 
-        social.acceptResult = AcceptedConnection("c5", null)
+        social.acceptResult = AcceptedConnection("c5", "Inviter")
         vm.setInput(link())
         vm.accept()
         advanceUntilIdle()
+        // 0.10.3: the accept answers "waiting"; the code follows once the handshake has run.
         assertEquals(AcceptStep.WAITING, vm.uiState.value.step)
+        assertEquals("Inviter", vm.uiState.value.name)
         assertNull(vm.uiState.value.sas)
+        social.approvals.value = listOf(outgoing("c5", null, RequestState.WAITING))
+        advanceUntilIdle()
+        assertEquals(AcceptStep.WAITING, vm.uiState.value.step)
+        social.approvals.value = listOf(outgoing("c5", "123456", RequestState.PENDING))
+        advanceUntilIdle()
+        assertEquals(AcceptStep.COMPARE, vm.uiState.value.step)
+        assertEquals("123456", vm.uiState.value.sas)
+
+        vm.approve()
+        advanceUntilIdle()
+        assertTrue("approveOutgoing" in social.calls)
+        assertEquals(AcceptStep.APPROVED, vm.uiState.value.step)
+        // Active once the inviter approved too.
         social.seed(listOf(FakeSocial.connection("c5", "Inviter", state = ConnectionState.ACTIVE)))
         advanceUntilIdle()
         assertEquals(AcceptStep.CONNECTED, vm.uiState.value.step)
@@ -126,12 +150,58 @@ class ConnectionsViewModelsTest {
     }
 
     @Test
-    fun aScannedLinkIsAcceptedAtOnce() = runTest {
-        social.acceptResult = AcceptedConnection("c6", "123456")
-        val vm = AcceptViewModel(SavedStateHandle(mapOf(AcceptRoute.ARG to link())), social)
+    fun aScannedLinkIsAcceptedAtOnceAndAnOpenedOneWaitsForTheMember() = runTest {
+        social.acceptResult = AcceptedConnection("c6", "Inviter")
+        val vm = AcceptViewModel(SavedStateHandle(mapOf(AcceptRoute.ARG to link())), social, social)
         advanceUntilIdle()
         assertEquals(AcceptStep.WAITING, vm.uiState.value.step)
-        assertEquals("123456", vm.uiState.value.sas)
+
+        val opened = AcceptViewModel(SavedStateHandle(mapOf(AcceptRoute.ARG to "vettid://connect#${link()}", AcceptRoute.ARG_OPENED to true)), social, social)
+        advanceUntilIdle()
+        assertEquals(AcceptStep.INPUT, opened.uiState.value.step)
+        assertTrue(opened.uiState.value.fromLink)
+        assertEquals(1, social.calls.count { it == "acceptInvite" })
+        opened.accept()
+        advanceUntilIdle()
+        assertEquals(AcceptStep.WAITING, opened.uiState.value.step)
+    }
+
+    @Test
+    fun acceptSaysWhenAlreadyConnectedAndWhenTheRequestEnds() = runTest {
+        social.seed(listOf(FakeSocial.connection("c1", "Sam")))
+        social.acceptResult = AcceptedConnection("c1", exists = true)
+        val vm = AcceptViewModel(SavedStateHandle(), social, social)
+        vm.setInput(link())
+        vm.accept()
+        advanceUntilIdle()
+        assertEquals(AcceptStep.EXISTS, vm.uiState.value.step)
+        assertEquals("Sam", vm.uiState.value.connectionName)
+
+        // Declining the outgoing request (codes differ): the inviter is not told; the screen says it ended.
+        social.acceptResult = AcceptedConnection("c7", "Inviter")
+        val d = AcceptViewModel(SavedStateHandle(), social, social)
+        d.setInput(link())
+        d.accept()
+        social.approvals.value = listOf(outgoing("c7", "654321", RequestState.PENDING))
+        advanceUntilIdle()
+        d.decline()
+        advanceUntilIdle()
+        assertTrue("declineOutgoing" in social.calls)
+        assertEquals(AcceptStep.ENDED, d.uiState.value.step)
+        assertEquals(RequestEnd.DECLINED, d.uiState.value.end)
+
+        // An outgoing request that failed (expiry, refused hs.init) ends too.
+        social.acceptResult = AcceptedConnection("c8", "Inviter")
+        val f = AcceptViewModel(SavedStateHandle(), social, social)
+        f.setInput(link())
+        f.accept()
+        social.approvals.value = listOf(outgoing("c8", null, RequestState.WAITING))
+        advanceUntilIdle()
+        social.approvals.value = emptyList()
+        social.requestEnds.value = mapOf("c8" to RequestEnd.FAILED)
+        advanceUntilIdle()
+        assertEquals(AcceptStep.ENDED, f.uiState.value.step)
+        assertEquals(RequestEnd.FAILED, f.uiState.value.end)
     }
 
     @Test

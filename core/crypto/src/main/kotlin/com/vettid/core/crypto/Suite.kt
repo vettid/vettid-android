@@ -97,6 +97,7 @@ object Labels {
     const val SIG_RESP = "vettid/vms/2/sig-resp"
     const val SIG_FIN = "vettid/vms/2/sig-fin"
     const val SAS = "vettid/vms/2/sas"
+    const val SAS_COMMIT = "vettid/vms/2/sas-commit"
     const val BUNDLE = "vettid/vms/2/bundle"
     const val ETK = "vettid/vms/2/etk"
     const val VAULT = "vettid/vms/2/vault"

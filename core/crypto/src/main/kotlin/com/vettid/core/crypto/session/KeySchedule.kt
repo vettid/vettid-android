@@ -17,7 +17,8 @@ import com.vettid.core.crypto.kdf.Hkdf
  * th       = SHA-256("vettid/vms/2/th"  || env_init || resp_header)
  * prk      = HKDF-Extract(salt = "vettid/vms/2/session", ikm = K_e || K_s)
  * k_i2r    = HKDF-Expand(prk, "vettid/vms/2/i2r" || th, 32)      … and r2i, kids, rk, epoch_id
- * sas      = uint32be(HKDF(ikm = K_s, salt = "vettid/vms/2/sas", info = th1, 4)) mod 1e6
+ * sas_commit = SHA-256("vettid/vms/2/sas-commit" || n_I)       # in hs.init
+ * sas      = uint32be(HKDF-Expand(prk, "vettid/vms/2/sas" || th || n_I || n_R, 4)) mod 1e6   # 0.10.3
  * ```
  *
  * Secret; [destroy] wipes it.
@@ -66,10 +67,22 @@ class Schedule private constructor(
         /** [respHeader] is hs.resp bytes[0:1140]. */
         fun th(envInit: ByteArray, respHeader: ByteArray): ByteArray = Bytes.labeledHash(Labels.TH, envInit, respHeader)
 
-        /** The short authentication string: 6 zero-padded digits (§6.3). */
-        fun sas(ks: ByteArray, th1: ByteArray): String {
-            if (ks.size != Suite.KEY_SIZE) throw CryptoException.Key("sas key size")
-            val b = Hkdf.derive(ks, Labels.SAS.toByteArray(), th1, 4)
+        /** The commitment to the initiator's SAS nonce (§6.3, 0.10.3): SHA-256("vettid/vms/2/sas-commit" || n_I). */
+        fun sasCommit(nI: ByteArray): ByteArray = Bytes.labeledHash(Labels.SAS_COMMIT, nI)
+
+        /** Whether [nI] opens [commit], in constant time. */
+        fun checkSasCommit(commit: ByteArray, nI: ByteArray): Boolean =
+            nI.size == HsLimits.SAS_NONCE_SIZE && Bytes.constantTimeEquals(sasCommit(nI), commit)
+
+        /**
+         * The short authentication string (§6.3, 0.10.3): uint32be(HKDF-Expand(prk,
+         * "vettid/vms/2/sas" || th || n_I || n_R, 4)) mod 1,000,000, as 6 zero-padded
+         * digits. It exists only once both nonces are fixed.
+         */
+        fun sas(prk: ByteArray, th: ByteArray, nI: ByteArray, nR: ByteArray): String {
+            if (prk.size != Suite.KEY_SIZE) throw CryptoException.Key("sas key size")
+            if (nI.size != HsLimits.SAS_NONCE_SIZE || nR.size != HsLimits.SAS_NONCE_SIZE) throw CryptoException.Format("sas nonce")
+            val b = Hkdf.expand(prk, Bytes.concat(Labels.SAS.toByteArray(), th, nI, nR), 4)
             val v = Bytes.readUintBE(b, 0, 4) % 1_000_000L
             return v.toString().padStart(6, '0')
         }

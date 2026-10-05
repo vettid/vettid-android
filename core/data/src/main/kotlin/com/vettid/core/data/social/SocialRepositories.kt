@@ -28,7 +28,11 @@ interface ConnectionsRepository {
 
     suspend fun cancelInvite(inviteId: String)
 
-    /** Accepts a pasted link or a scanned QR code (both forms of §6.4); see [InviteLinks]. */
+    /**
+     * Accepts a pasted or opened link or a scanned QR code (every form of §6.4; see
+     * [InviteLinks]): an outgoing request, or [AcceptedConnection.exists] when this
+     * vault is already connected to (or requesting) the inviter.
+     */
     suspend fun acceptInvite(text: String): AcceptedConnection
 
     suspend fun setFavorite(id: String, favorite: Boolean)
@@ -83,12 +87,34 @@ interface ApprovalsRepository {
     /** Everything waiting for a decision, newest first. */
     val approvals: StateFlow<List<Approval>>
 
-    /** Re-reads what the vault lists (grant and critical-item requests) and drops expired requests. */
+    /**
+     * Connection requests that ended without a connection, by request id
+     * (`pending_id` incoming, `connection_id` outgoing), as this app learned it.
+     */
+    val requestEnds: StateFlow<Map<String, RequestEnd>>
+
+    /** Re-reads what the vault lists (connection, grant and critical-item requests) and drops expired requests. */
     suspend fun refreshApprovals()
 
+    /** Re-reads the connection requests (`connection.request.list`, §10.4). */
+    suspend fun refreshRequests()
+
+    /** Approves an incoming request (the inviter's side) after comparing the safety code. */
     suspend fun approveConnection(pendingId: String)
 
     suspend fun declineConnection(pendingId: String)
+
+    /** Approves this vault's outgoing request (the accepter's side) after comparing the safety code. */
+    suspend fun approveOutgoing(connectionId: String)
+
+    /** Declines this vault's outgoing request; nothing is sent to the inviter (§6.4). */
+    suspend fun declineOutgoing(connectionId: String)
+
+    /**
+     * Fetches a critical-item request's payload (`critical-secret-use.get`, §10.13)
+     * when the app has only its hash; it is shown only if it matches the hash.
+     */
+    suspend fun loadCriticalUse(requestId: String)
 
     /** Declines the request and blocks the requester's identity. */
     suspend fun blockConnectionRequest(pendingId: String)

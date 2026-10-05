@@ -81,6 +81,46 @@ class DevStack(
         return o["body"]?.jsonObject ?: JsonObject(emptyMap())
     }
 
+    /**
+     * Waits until the peer has an active connection that [known] does not hold, and returns its id.
+     * Used after the peer's own `connection.approve`: the peer's `connection.event{added}` then arrives
+     * while that `vaultctl request` runs and is not kept for [peerEvent] (a vaultctl harness limit).
+     */
+    suspend fun peerAwaitNewConnection(known: Set<String>, timeoutSeconds: Int = 120): String {
+        val until = System.currentTimeMillis() + timeoutSeconds * 1000L
+        while (System.currentTimeMillis() < until) {
+            val ids = peerActiveConnections()
+            ids.firstOrNull { it !in known }?.let { return it }
+            kotlinx.coroutines.delay(POLL_MS)
+        }
+        error("peer: no new active connection")
+    }
+
+    /**
+     * Waits for a connection request of the peer with a known safety code (`connection.request.list`,
+     * 0.10.2): [dir] `incoming` or `outgoing`, matching [id] (`connection_id`) when given. Polled, since
+     * events that reach the peer while another vaultctl request runs are not kept.
+     */
+    suspend fun peerRequestWithSas(dir: String, id: String? = null, timeoutSeconds: Int = 120): JsonObject {
+        val until = System.currentTimeMillis() + timeoutSeconds * 1000L
+        while (System.currentTimeMillis() < until) {
+            val list = (peerRequest("connection.request.list")[dir] as? kotlinx.serialization.json.JsonArray).orEmpty()
+            list.mapNotNull { it as? JsonObject }.firstOrNull { r ->
+                (id == null || (r["connection_id"] as? JsonPrimitive)?.content == id) && r["sas"] != null
+            }?.let { return it }
+            kotlinx.coroutines.delay(POLL_MS)
+        }
+        error("peer: no $dir request with a safety code")
+    }
+
+    /** The peer's active connection ids. */
+    suspend fun peerActiveConnections(): Set<String> =
+        (peerRequest("connection.list")["connections"] as? kotlinx.serialization.json.JsonArray).orEmpty()
+            .mapNotNull { it as? JsonObject }
+            .filter { (it["state"] as? JsonPrimitive)?.content == "active" }
+            .mapNotNull { (it["id"] as? JsonPrimitive)?.content }
+            .toSet()
+
     /** Waits for an event of [type] at the peer whose body has the [match] members; returns its body. */
     suspend fun peerEvent(type: String, match: Map<String, String> = emptyMap(), timeoutSeconds: Int = 120): JsonObject {
         val (code, o) = call(
@@ -93,5 +133,9 @@ class DevStack(
         )
         check(code == 200) { "peer event $type: $code" }
         return o["body"]?.jsonObject ?: JsonObject(emptyMap())
+    }
+
+    private companion object {
+        const val POLL_MS = 1_000L
     }
 }

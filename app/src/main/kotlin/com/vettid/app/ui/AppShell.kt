@@ -44,6 +44,7 @@ import com.vettid.feature.approvals.approvalsDestination
 import com.vettid.feature.connections.connectionsDestination
 import com.vettid.feature.credential.credentialDestination
 import com.vettid.feature.items.itemsDestination
+import com.vettid.feature.connections.AcceptRoute
 import com.vettid.feature.connections.ConnectionDetailRoute
 import com.vettid.feature.connections.ConnectionsHost
 import com.vettid.feature.connections.InviteRoute
@@ -178,6 +179,14 @@ fun AppShell(
 
     LaunchedEffect(launchRoute) {
         if (launchRoute != null) navController.navigateTopLevel(launchRoute)
+    }
+
+    // An invitation link the app was opened with (§6.4): the accept screen, where the member confirms.
+    val inviteLink by shell.inviteLink.collectAsStateWithLifecycle()
+    LaunchedEffect(inviteLink) {
+        val link = inviteLink ?: return@LaunchedEffect
+        shell.inviteLinkTaken()
+        navController.navigate(AcceptRoute(link, opened = true)) { launchSingleTop = true }
     }
 
     if (showAccount) {

@@ -191,7 +191,7 @@ private fun ShowInvite(state: InviteUiState, actions: InviteActions, modifier: M
     val scope = rememberCoroutineScope()
     var copied by remember { mutableStateOf(false) }
     val shareTitle = stringResource(R.string.connections_share_title)
-    val shareText = stringResource(R.string.connections_share_text, invite.link)
+    val shareText = stringResource(R.string.connections_share_text, invite.url)
     FormScaffold(
         title = stringResource(if (invite.remote) R.string.connections_show_remote_title else R.string.connections_show_title),
         body = stringResource(if (invite.remote) R.string.connections_show_remote_body else R.string.connections_show_body),
@@ -224,7 +224,7 @@ private fun ShowInvite(state: InviteUiState, actions: InviteActions, modifier: M
         Surface(shape = VettIdShape.card, color = MaterialTheme.colorScheme.surfaceContainer, modifier = Modifier.fillMaxWidth()) {
             SelectionContainer {
                 Text(
-                    invite.link,
+                    invite.url,
                     fontFamily = FontFamily.Monospace,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = LINK_LINES,
@@ -236,7 +236,7 @@ private fun ShowInvite(state: InviteUiState, actions: InviteActions, modifier: M
         Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
             OutlinedButton(
                 onClick = {
-                    scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(shareTitle, invite.link))) }
+                    scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(shareTitle, invite.url))) }
                     copied = true
                 },
                 shape = VettIdShape.pill,
@@ -279,7 +279,9 @@ private fun Request(state: InviteUiState, actions: InviteActions, modifier: Modi
         name = req.name,
         sas = req.sas,
         remote = req.remote,
-        busy = state.busy || state.step == InviteStep.CONNECTING,
+        approved = state.step == InviteStep.CONNECTING,
+        autoApproved = state.autoApproved,
+        busy = state.busy,
         error = state.error,
         onApprove = actions.onApprove,
         onDecline = actions.onDecline,
@@ -289,12 +291,39 @@ private fun Request(state: InviteUiState, actions: InviteActions, modifier: Modi
     )
 }
 
+/** The safety code, large, in a bordered box (§6.3); `sas` test tag. */
+@Composable
+internal fun SasBox(sas: String, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .fillMaxWidth()
+            .border(1.dp, MaterialTheme.colorScheme.outline, VettIdShape.card)
+            .padding(vertical = Spacing.l)
+            .testTag("sas"),
+        contentAlignment = Alignment.Center,
+    ) { SafetyCode(sas) }
+}
+
+@Composable
+private fun WaitingRow(text: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }.testTag("waiting_peer"),
+    ) {
+        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.size(Spacing.m))
+        Text(text, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
 /**
- * A connection request (§6.4): the name the requester gave (self-asserted,
- * labelled so), the safety code to compare, and approve / decline / block.
- * Shared by the invite screen and Approvals' detail (through the gallery).
+ * A connection request at the inviter (§6.4, 0.10.3): the name the requester
+ * gave (self-asserted, labelled so), the safety code to compare with them, and
+ * approve / decline / block. After this member's approval ([approved]) the code
+ * stays on screen while the other member approves on their phone.
  */
 @Composable
+@Suppress("LongParameterList")
 fun ConnectionRequestContent(
     name: String?,
     sas: String,
@@ -306,11 +335,17 @@ fun ConnectionRequestContent(
     onBlock: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    approved: Boolean = false,
+    autoApproved: Boolean = false,
 ) {
+    val who = name ?: stringResource(R.string.connections_request_them)
     FormScaffold(
         title = stringResource(R.string.connections_request_title),
-        body = stringResource(if (remote) R.string.connections_request_body_remote else R.string.connections_request_body),
-        primaryLabel = stringResource(R.string.connections_request_approve),
+        body = stringResource(
+            if (remote) R.string.connections_request_body_remote else R.string.connections_request_body,
+            name ?: stringResource(R.string.connections_request_someone),
+        ),
+        primaryLabel = if (approved) null else stringResource(R.string.connections_request_approve),
         onPrimary = onApprove,
         onBack = onBack,
         busy = busy,
@@ -332,20 +367,25 @@ fun ConnectionRequestContent(
         Spacer(Modifier.height(Spacing.xl))
         Text(stringResource(R.string.connections_safety_code), style = MaterialTheme.typography.labelLarge)
         Spacer(Modifier.height(Spacing.s))
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .border(1.dp, MaterialTheme.colorScheme.outline, VettIdShape.card)
-                .padding(vertical = Spacing.l)
-                .testTag("sas"),
-            contentAlignment = Alignment.Center,
-        ) { SafetyCode(sas) }
+        SasBox(sas)
         Spacer(Modifier.height(Spacing.s))
         Text(
             stringResource(if (remote) R.string.connections_sas_hint_remote else R.string.connections_sas_hint),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        if (autoApproved) {
+            Spacer(Modifier.height(Spacing.m))
+            NoticeCard(
+                kind = NoticeKind.INFO,
+                title = stringResource(R.string.connections_auto_approved_title),
+                body = stringResource(R.string.connections_auto_approved, who),
+            )
+        }
+        if (approved) {
+            Spacer(Modifier.height(Spacing.l))
+            WaitingRow(stringResource(R.string.connections_waiting_peer, who))
+        }
         Spacer(Modifier.height(Spacing.l))
         androidx.compose.material3.TextButton(
             onClick = onBlock,
@@ -385,15 +425,24 @@ data class AcceptActions(
     val onAccept: () -> Unit = {},
     val onScan: () -> Unit = {},
     val onMessage: (String) -> Unit = {},
+    val onApprove: () -> Unit = {},
+    val onDecline: () -> Unit = {},
+    val onOpenConnection: (String) -> Unit = {},
 )
 
-/** Accept an invitation (§6.4): paste a link, then wait for the inviter's approval. */
+/**
+ * Accept an invitation (§6.4, 0.10.3): paste (or confirm an opened link), wait
+ * for the handshake, compare the safety code with the inviter and approve,
+ * then wait for the inviter's approval.
+ */
 @Composable
+@Suppress("LongMethod", "CyclomaticComplexMethod")
 fun AcceptScreen(state: AcceptUiState, actions: AcceptActions, modifier: Modifier = Modifier) {
+    val who = state.name ?: state.connectionName ?: stringResource(R.string.connections_request_them)
     when (state.step) {
         AcceptStep.INPUT, AcceptStep.ACCEPTING -> FormScaffold(
-            title = stringResource(R.string.connections_accept_title),
-            body = stringResource(R.string.connections_accept_body),
+            title = stringResource(if (state.fromLink) R.string.connections_open_link_title else R.string.connections_accept_title),
+            body = stringResource(if (state.fromLink) R.string.connections_open_link_body else R.string.connections_accept_body),
             primaryLabel = stringResource(R.string.connections_accept_connect),
             onPrimary = actions.onAccept,
             primaryEnabled = state.input.isNotBlank(),
@@ -415,38 +464,50 @@ fun AcceptScreen(state: AcceptUiState, actions: AcceptActions, modifier: Modifie
             FailureText(state.error, Modifier.padding(top = Spacing.s))
         }
         AcceptStep.WAITING -> FormScaffold(
-            title = stringResource(R.string.connections_waiting_title),
+            title = state.name?.let { stringResource(R.string.connections_waiting_title, it) }
+                ?: stringResource(R.string.connections_waiting_title_unnamed),
             body = stringResource(R.string.connections_waiting_body),
             primaryLabel = stringResource(R.string.connections_done),
             onPrimary = actions.onBack,
             onBack = actions.onBack,
+            secondaryLabel = stringResource(R.string.connections_request_decline),
+            onSecondary = actions.onDecline,
+            busy = state.busy,
             modifier = modifier.testTag("accept_waiting"),
         ) {
-            val sas = state.sas
-            if (sas != null) {
-                Text(stringResource(R.string.connections_safety_code), style = MaterialTheme.typography.labelLarge)
-                Spacer(Modifier.height(Spacing.s))
-                Box(
-                    Modifier.fillMaxWidth().border(1.dp, MaterialTheme.colorScheme.outline, VettIdShape.card).padding(vertical = Spacing.l),
-                    contentAlignment = Alignment.Center,
-                ) { SafetyCode(sas) }
-                Spacer(Modifier.height(Spacing.s))
-                Text(stringResource(R.string.connections_sas_hint_invitee), style = MaterialTheme.typography.bodyMedium)
-            } else {
-                NoticeCard(
-                    kind = NoticeKind.INFO,
-                    title = stringResource(R.string.connections_no_sas_title),
-                    body = stringResource(R.string.connections_no_sas_body),
-                )
-            }
-            Spacer(Modifier.height(Spacing.xl))
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+            WaitingRow(stringResource(R.string.connections_waiting_handshake))
+            FailureText(state.error, Modifier.padding(top = Spacing.s))
+        }
+        AcceptStep.COMPARE, AcceptStep.APPROVED -> {
+            val approved = state.step == AcceptStep.APPROVED
+            FormScaffold(
+                title = stringResource(if (approved) R.string.connections_approved_title else R.string.connections_compare_title),
+                body = if (approved) {
+                    stringResource(R.string.connections_approved_body, who)
+                } else {
+                    stringResource(
+                        if (state.remote) R.string.connections_sas_hint_invitee_remote else R.string.connections_sas_hint_invitee,
+                        who,
+                    )
+                },
+                primaryLabel = stringResource(if (approved) R.string.connections_done else R.string.connections_compare_approve),
+                onPrimary = if (approved) actions.onBack else actions.onApprove,
+                onBack = actions.onBack,
+                busy = state.busy,
+                secondaryLabel = stringResource(R.string.connections_request_decline),
+                onSecondary = actions.onDecline,
+                modifier = modifier.testTag(if (approved) "accept_approved" else "accept_compare"),
             ) {
-                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.size(Spacing.m))
-                Text(stringResource(R.string.connections_waiting_approval), style = MaterialTheme.typography.bodyMedium)
+                state.sas?.let {
+                    Text(stringResource(R.string.connections_safety_code), style = MaterialTheme.typography.labelLarge)
+                    Spacer(Modifier.height(Spacing.s))
+                    SasBox(it)
+                }
+                if (approved) {
+                    Spacer(Modifier.height(Spacing.xl))
+                    WaitingRow(stringResource(R.string.connections_waiting_peer, who))
+                }
+                FailureText(state.error, Modifier.padding(top = Spacing.s))
             }
         }
         AcceptStep.CONNECTED -> Connected(
@@ -455,6 +516,30 @@ fun AcceptScreen(state: AcceptUiState, actions: AcceptActions, modifier: Modifie
             onDone = actions.onBack,
             modifier = modifier,
         )
+        AcceptStep.EXISTS -> FormScaffold(
+            title = stringResource(R.string.connections_exists_title),
+            body = stringResource(R.string.connections_exists_body, who),
+            primaryLabel = stringResource(R.string.connections_exists_open),
+            onPrimary = { state.connectionId?.let(actions.onOpenConnection) },
+            onBack = actions.onBack,
+            secondaryLabel = stringResource(R.string.connections_done),
+            onSecondary = actions.onBack,
+            modifier = modifier.testTag("accept_exists"),
+        ) {}
+        AcceptStep.ENDED -> FormScaffold(
+            title = stringResource(R.string.connections_ended_title),
+            body = stringResource(
+                when (state.end) {
+                    com.vettid.core.data.social.RequestEnd.DECLINED -> R.string.connections_ended_declined
+                    com.vettid.core.data.social.RequestEnd.EXPIRED -> R.string.connections_ended_expired
+                    else -> R.string.connections_ended_failed
+                },
+            ),
+            primaryLabel = stringResource(R.string.connections_done),
+            onPrimary = actions.onBack,
+            onBack = actions.onBack,
+            modifier = modifier.testTag("accept_ended"),
+        ) {}
     }
 }
 

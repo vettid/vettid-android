@@ -105,8 +105,10 @@ class VaultDeviceTest {
         }
 
         fun fin(raw: ByteArray, d: VaultDevice) {
-            val (e, _) = responder!!.handleFin(raw, d.relayAddr.pk(), Instant.now())
-            keyring.activate(e, Instant.now())
+            val fr = responder!!.handleFin(raw, d.relayAddr.pk(), Instant.now())
+            // The enrollment handshake carries the commitment (0.10.3); no code is shown, but both sides have it.
+            assertEquals(6, fr.sas!!.length)
+            keyring.activate(fr.epoch, Instant.now())
         }
 
         fun seal(type: String, body: String, re: String? = null, status: String? = null, id: String = Ulid.new()): RelayMessage =

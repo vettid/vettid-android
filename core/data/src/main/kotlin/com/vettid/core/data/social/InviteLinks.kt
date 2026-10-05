@@ -6,10 +6,15 @@ import com.vettid.core.crypto.invite.InviteQr
 import java.time.Instant
 
 /**
- * Invitation links and QR codes (VAULT-MESSAGING §6.4). The QR code holds the
- * compact JSON payload; a link is its unpadded base64url. The app accepts
- * either, also inside a longer text (a URL whose fragment, query value or last
- * path segment is the link, or a message with the link on a line of its own).
+ * Invitation links and QR codes (VAULT-MESSAGING §6.4, 0.10.2). The QR code
+ * holds the compact JSON payload; the bare link is its unpadded base64url; a
+ * connection invitation is shared as the URL `<r>/connect#<link>` on the
+ * invitation's own relay (`r` in the payload), and the relay's page offers
+ * `vettid://connect#<link>`. The app accepts every form, also inside a longer
+ * text (a URL whose fragment, query value or last path segment is the link, or
+ * a message with the link on a line of its own). The host of a URL is never
+ * trusted: the payload's `r` decides the relay, and only the bare payload is
+ * passed to the vault.
  */
 object InviteLinks {
     /** What a pasted or scanned text holds. */
@@ -23,6 +28,42 @@ object InviteLinks {
         data object Expired : Parsed
 
         data object Invalid : Parsed
+    }
+
+    /** The custom scheme of the relay page's "Open in VettID" link (§6.4). */
+    const val SCHEME = "vettid"
+
+    /** The path every relay serves its `/connect` page on (§6.4). */
+    const val CONNECT_PATH = "/connect"
+
+    /**
+     * The invitation URL `<r>/connect#<link>` (§6.4) for a connection link, built from
+     * the payload's own relay `r`; null for a link that does not parse or is not a connection.
+     */
+    fun url(link: String): String? = try {
+        val q = InviteQr.parseLink(link)
+        if (q.kind != InviteKind.CONNECTION) null else q.relay.trimEnd('/') + CONNECT_PATH + "#" + q.link()
+    } catch (_: CryptoException) {
+        null
+    } catch (_: IllegalArgumentException) {
+        null
+    }
+
+    /**
+     * Whether an opened URI is meant for the connect flow: `vettid://connect#…`, or an
+     * `https` URL whose path is `/connect` (any host: the payload inside decides, §6.4).
+     */
+    fun isConnectUri(uri: String): Boolean {
+        val u = try {
+            java.net.URI(uri.trim())
+        } catch (_: java.net.URISyntaxException) {
+            null
+        }
+        return when (u?.scheme?.lowercase()) {
+            SCHEME -> (u.host ?: u.rawSchemeSpecificPart?.trimStart('/')?.substringBefore('/'))?.lowercase() == "connect"
+            "https", "http" -> u.rawPath?.trimEnd('/') == CONNECT_PATH
+            else -> false
+        }
     }
 
     /** The QR content for a link: the compact JSON payload (§6.4). */

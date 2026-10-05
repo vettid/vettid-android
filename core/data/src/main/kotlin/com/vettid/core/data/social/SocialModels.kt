@@ -62,20 +62,60 @@ enum class InviteTtl(val seconds: Int) {
     val remote: Boolean get() = this != TEN_MINUTES
 }
 
-/** A new invitation: [link] to share or paste, [qr] (compact JSON, §6.4) to show as a QR code. */
+/**
+ * A new invitation: [link] the bare payload, [url] the invitation URL to share
+ * (`<r>/connect#<link>` on the invitation's relay, §6.4), [qr] (compact JSON) to
+ * show as a QR code.
+ */
 data class InviteInfo(
     val inviteId: String,
     val link: String,
     val qr: String,
     val exp: Instant,
     val remote: Boolean,
-)
+) {
+    val url: String get() = InviteLinks.url(link) ?: link
+}
 
 /** An outstanding invitation (`connection.invite.list`). */
 data class OutstandingInvite(val inviteId: String, val exp: Instant?, val remote: Boolean)
 
-/** `connection.invite.accept`: the new (pending) connection and, if the vault sent it, the safety code. */
-data class AcceptedConnection(val connectionId: String, val sas: String?)
+/**
+ * `connection.invite.accept` (§6.4): the outgoing request [connectionId] (its
+ * safety code follows once the handshake has run, 0.10.3) and the inviter's
+ * [name] from the invitation; or, with [exists], the connection (or request)
+ * this vault already has with the inviter (0.10.2).
+ */
+data class AcceptedConnection(
+    val connectionId: String,
+    val name: String? = null,
+    val exists: Boolean = false,
+    val exp: Instant? = null,
+)
+
+/** Where a connection request stands (§10.4, 0.10.3). */
+enum class RequestState {
+    /** Outgoing only: the handshake has not run yet, no safety code. */
+    WAITING,
+
+    /** The safety code is known; this member has not decided. */
+    PENDING,
+
+    /** This member approved; the other member's approval is awaited. */
+    APPROVED,
+    ;
+
+    companion object {
+        fun of(wire: String?): RequestState = when (wire) {
+            "waiting" -> WAITING
+            "approved" -> APPROVED
+            else -> PENDING
+        }
+    }
+}
+
+/** How a connection request ended without a connection (§6.4). */
+enum class RequestEnd { DECLINED, EXPIRED, FAILED }
 
 /** The safety code shown when a connection was made (recorded by this app). */
 data class SafetyCodeRecord(val sas: String, val at: Instant)
@@ -139,8 +179,33 @@ sealed interface Approval {
         override val receivedAt: Instant,
         override val exp: Instant?,
         override val connectionName: String? = null,
+        /** [RequestState.PENDING], or [RequestState.APPROVED] (by this member, or by in-person auto-approval). */
+        val state: RequestState = RequestState.PENDING,
+        /** The other member approved too (their vault's `connection.approved` arrived). */
+        val peerApproved: Boolean = false,
     ) : Approval {
         override val key: String get() = "connection:$pendingId"
+    }
+
+    /**
+     * This vault's outgoing request (§6.4, 0.10.2/0.10.3): an invitation this
+     * member accepted. Once the handshake has run its [sas] is known and the
+     * member approves or declines after comparing it with the inviter's screen.
+     */
+    data class OutgoingRequest(
+        val connectionId: String,
+        val sas: String?,
+        val remote: Boolean,
+        /** The inviter's name from the invitation (`hint.name`). */
+        val name: String?,
+        val state: RequestState,
+        val peerApproved: Boolean,
+        val introducedBy: String?,
+        override val receivedAt: Instant,
+        override val exp: Instant?,
+        override val connectionName: String? = null,
+    ) : Approval {
+        override val key: String get() = "outgoing:$connectionId"
     }
 
     /** `connection.authenticate.pending` (§10.4): sign a connection's challenge with the credential key. */
@@ -188,6 +253,15 @@ sealed interface Approval {
         override val connectionName: String? = null,
     ) : Approval {
         override val key: String get() = "critical:$requestId"
+
+        /**
+         * The payload is here and SHA-256(payload) equals [payloadSha256] (§10.13): only then is
+         * it shown and the approval offered. A list entry has no payload until `critical-secret-use.get`.
+         */
+        val payloadVerified: Boolean
+            get() = payload.isNotEmpty() && ApprovalParser.payloadSha256(payload)?.let {
+                com.vettid.core.crypto.Bytes.constantTimeEquals(it.toByteArray(), payloadSha256.toByteArray())
+            } == true
     }
 
     /** `share.pending` (§10.12): items a share rule asks about. */
@@ -222,5 +296,17 @@ sealed interface Approval {
     }
 }
 
-/** How long an unanswered connection request is kept (§6.4: 7 days). */
+/**
+ * Whether the member has something to decide: a connection request whose safety code is
+ * known and that this member has not approved yet; every other kind until it is decided.
+ * Requests waiting for the handshake or for the other member are shown but not counted.
+ */
+val Approval.needsDecision: Boolean
+    get() = when (this) {
+        is Approval.ConnectionRequest -> state == RequestState.PENDING
+        is Approval.OutgoingRequest -> state == RequestState.PENDING
+        else -> true
+    }
+
+/** How long an unanswered incoming connection request is kept (§6.4: 7 days). */
 val CONNECTION_REQUEST_TTL: Duration = Duration.ofDays(7)

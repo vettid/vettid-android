@@ -130,8 +130,12 @@ class VaultMessage(val inner: Inner) {
     override fun toString(): String = "VaultMessage($type)"
 }
 
-/** A request answered with `status: error` (§10.1): [code] is the spec's code. */
-class VaultOpException(val type: String, val code: String, message: String = "") :
+/**
+ * A request answered with `status: error` (§10.1): [code] is the spec's code;
+ * [body] is the error response's body, when the code carries one (`exists`
+ * with `{connection_id}` for `connection.invite.accept`, 0.10.2).
+ */
+class VaultOpException(val type: String, val code: String, message: String = "", val body: JsonObject? = null) :
     IOException("vault: $type: $code${if (message.isEmpty()) "" else " ($message)"}")
 
 /** The device is not (yet) paired with a vault, or the vault sent something it should not have. */
@@ -375,7 +379,11 @@ class VaultDevice private constructor(
         awaitEvent("vault.enrolled", timeout)
     }
 
-    /** Runs the first app's handshake (purpose app, ctx = vault id) and waits for device.paired. */
+    /**
+     * Runs the first app's handshake (purpose app, ctx = vault id; since 0.10.3 it
+     * carries the SAS commitment, but the vault answers it without approval, so no
+     * code is shown) and waits for device.paired.
+     */
     suspend fun completeEnrollment(timeout: Duration = Duration.ofSeconds(AWAIT_DEFAULT_S)) {
         lock.withLock {
             val v = requireVault()
@@ -496,7 +504,7 @@ class VaultDevice private constructor(
     suspend fun op(type: String, body: JsonObject = EMPTY, timeout: Duration = cfg.requestTimeout): JsonObject {
         val r = request(type, body, timeout)
         if (r.inner.status != Inner.STATUS_OK) {
-            throw VaultOpException(type, r.inner.error?.code ?: "error", r.inner.error?.message ?: "")
+            throw VaultOpException(type, r.inner.error?.code ?: "error", r.inner.error?.message ?: "", r.body.takeIf { it.isNotEmpty() })
         }
         return r.body
     }
@@ -573,8 +581,8 @@ class VaultDevice private constructor(
         }
         if (opened == null) {
             val r = awaiting.firstOrNull { it.kids.first == env.recipientKid && it.kids.second == env.senderKid } ?: return
-            val (epoch, _) = r.handleFin(raw, sender, t)
-            keyring.activate(epoch, t)
+            val fr = r.handleFin(raw, sender, t)
+            keyring.activate(fr.epoch, t)
             awaiting.remove(r)
             return
         }
@@ -588,6 +596,9 @@ class VaultDevice private constructor(
         st.seenInner[inner.id] = t.toEpochMilli()
         prune(st.seenInner, t)
         when (inner.type) {
+            // §10.3 (0.10.3, 0.10.4): every device.paired carries the device's standing token (after enrollment
+            // or recovery a fresh one); it replaces the token of hs.resp before maintain() looks at it.
+            "device.paired" -> storeVaultToken(VaultJson.parseObject(inner.body))
             "relay.token.issued" -> storeVaultToken(VaultJson.parseObject(inner.body))
             "relay.token.refresh" -> if (inner.re == null) {
                 val tok = mintForVault()

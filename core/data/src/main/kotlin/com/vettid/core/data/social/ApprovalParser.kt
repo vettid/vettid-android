@@ -25,7 +25,7 @@ import java.time.format.DateTimeParseException
 object ApprovalParser {
     /** The event types the Approvals screen shows. */
     val TYPES = setOf(
-        "connection.request.pending", "connection.authenticate.pending", "grant.pending", "critical-secret-use.pending",
+        "connection.authenticate.pending", "grant.pending", "critical-secret-use.pending",
         "share.pending", "approval.pending", "device.session.pending",
     )
 
@@ -50,24 +50,8 @@ object ApprovalParser {
     /** One approval from an event of [type] received at [at]. */
     @Suppress("CyclomaticComplexMethod")
     fun parse(type: String, body: JsonObject, at: Instant): Approval? = when (type) {
-        "connection.request.pending" -> {
-            val id = body.s("pending_id")
-            val sas = body.s("sas")
-            if (id == null || sas == null) {
-                null
-            } else {
-                Approval.ConnectionRequest(
-                    pendingId = id,
-                    inviteId = body.s("invite_id"),
-                    sas = sas,
-                    remote = body.b("remote") ?: false,
-                    name = body.o("profile")?.s("name")?.takeIf { it.isNotBlank() },
-                    introducedBy = body.s("introduced_by"),
-                    receivedAt = at,
-                    exp = at.plus(CONNECTION_REQUEST_TTL),
-                )
-            }
-        }
+        "connection.request.pending" -> incoming(body, at)
+        "connection.request.outgoing" -> outgoing(body, at)
         "connection.authenticate.pending" -> {
             val id = body.s("request_id")
             val conn = body.s("connection_id")
@@ -100,6 +84,49 @@ object ApprovalParser {
             Approval.DeviceRequest(type, it, body.s("name"), body.s("role"), null, at, instant(body.s("exp")))
         }
         else -> null
+    }
+
+    /**
+     * `connection.request.pending`, or an entry of `connection.request.list`'s
+     * `incoming` (§10.4): approve after comparing the safety code.
+     */
+    @Suppress("ReturnCount")
+    fun incoming(body: JsonObject, at: Instant): Approval.ConnectionRequest? {
+        val id = body.s("pending_id") ?: return null
+        val sas = body.s("sas")?.takeIf { SAS.matches(it) } ?: return null
+        return Approval.ConnectionRequest(
+            pendingId = id,
+            inviteId = body.s("invite_id"),
+            sas = sas,
+            remote = body.b("remote") ?: false,
+            name = body.o("profile")?.s("name")?.takeIf { it.isNotBlank() },
+            introducedBy = body.s("introduced_by"),
+            receivedAt = instant(body.s("created_at")) ?: at,
+            exp = instant(body.s("exp")) ?: at.plus(CONNECTION_REQUEST_TTL),
+            state = RequestState.of(body.s("state")),
+            peerApproved = body.b("peer_approved") ?: false,
+        )
+    }
+
+    /**
+     * `connection.request.outgoing` (state `pending`: the SAS is known), or an
+     * entry of `connection.request.list`'s `outgoing` (§10.4, 0.10.3).
+     */
+    fun outgoing(body: JsonObject, at: Instant): Approval.OutgoingRequest? {
+        val id = body.s("connection_id") ?: return null
+        val sas = body.s("sas")?.takeIf { SAS.matches(it) }
+        val state = if (sas == null) RequestState.WAITING else RequestState.of(body.s("state")).takeIf { it != RequestState.WAITING }
+        return Approval.OutgoingRequest(
+            connectionId = id,
+            sas = sas,
+            remote = body.b("remote") ?: false,
+            name = body.s("name")?.takeIf { it.isNotBlank() },
+            state = state ?: RequestState.PENDING,
+            peerApproved = body.b("peer_approved") ?: false,
+            introducedBy = body.s("introduced_by"),
+            receivedAt = instant(body.s("created_at")) ?: at,
+            exp = instant(body.s("exp")),
+        )
     }
 
     /** `grant.pending`, or an entry of `grant.list`'s `pending`. */
@@ -211,6 +238,7 @@ object ApprovalParser {
         )
     }
 
+    private val SAS = Regex("[0-9]{6}")
     private const val FINGERPRINT_HEX = 16
     private const val GROUP = 4
 }
