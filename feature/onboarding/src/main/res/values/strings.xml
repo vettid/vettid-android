@@ -138,6 +138,13 @@
     <string name="unlock_rollback_state_body">The vault\'s stored state is older than state this phone has already seen. Someone may have restored an old copy. Contact VettID support before you continue.</string>
     <string name="unlock_update_refused">The update was refused (%1$s). Your vault stayed on its current release.</string>
     <string name="unlock_unreadable">Your vault did not recognise this phone. It may have been replaced by a recovery or a transfer.</string>
+    <string name="unlock_not_recognised_title">Your vault did not recognise this phone</string>
+    <string name="unlock_not_recognised_body">This phone may have been replaced by a recovery or a transfer while it was offline. If your vault now works on another phone, you can erase VettID from this one.</string>
+    <string name="unlock_erase">Erase VettID from this phone</string>
+    <string name="unlock_erase_confirm_title">Erase VettID from this phone?</string>
+    <string name="unlock_erase_confirm_body">This erases VettID\'s data on this phone only: its keys, your account details and the app\'s settings. Nothing else on the phone is touched, and it works without a connection.\n\nIt cannot be undone. If this phone still holds your vault, you will need a recovery on another phone to use it again.</string>
+    <string name="unlock_erase_confirm">Erase</string>
+    <string name="unlock_erasing">Erasing VettID from this phone…</string>
     <string name="unlock_sign_out">Sign out</string>
 
     <!-- App lock -->

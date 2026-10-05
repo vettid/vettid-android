@@ -36,7 +36,9 @@ interface WipeTargets {
  * Erases everything this app keeps on the phone, as if it had just been
  * installed (owner decision, 2026-10-05: once the vault has moved to another
  * phone and works there, the old phone shows no sign it was there). Used only
- * after an authenticated signal that this phone was replaced (`vault.HolderWatch`).
+ * after an authenticated signal that this phone was replaced (`vault.HolderWatch`),
+ * or when the member confirms "Erase VettID from this phone" on an unlock the
+ * vault did not recognise (`AccountRepository.eraseThisPhone`).
  *
  * Crash-safe: [begin] writes the [WipeTargets.marker] first; [erase] deletes
  * (idempotent, it goes on past a failure); [finish] removes the marker only
