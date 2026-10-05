@@ -5,13 +5,20 @@ following the [Android plan](https://github.com/vettid/vettid.org/blob/master/do
 and the vault contract in
 [VAULT-MESSAGING](https://github.com/vettid/vettid.org/blob/master/docs/VAULT-MESSAGING.md).
 
-**Status: phase A2** — project skeleton, design system, component gallery and CI
-(A0); the protocol crypto (suite 2 with post-quantum HPKE MLKEM768X25519,
-passing the vettid-vault test vectors byte for byte), Android Keystore keys and
-attestation checks (A1); the relay client, the member API's alternate channel
-and the typed vault client, tested on a phone against a local dev stack (A2,
-[devstack/README.md](devstack/README.md)). No screens use them yet (A3). The v1 app is preserved at the tag
-`legacy-v1-final` and the branch `legacy/v1`.
+**Status: A0–A4 done; A5 (items) and A6 (hardening) to come.** Project skeleton,
+design system, component gallery and CI (A0); the protocol crypto (suite 2 with post-quantum
+HPKE MLKEM768X25519, passing the vettid-vault test vectors byte for byte),
+Android Keystore keys and attestation checks (A1); the relay client, the member
+API's alternate channel and the typed vault client (A2,
+[devstack/README.md](devstack/README.md)); onboarding, unlock, the Protean
+Credential, settings and the biometric app lock (A3); connections, messages and
+approvals (A4). Since then: VAULT-MESSAGING 0.10.1–0.10.5 (commit-then-reveal
+SAS, connection requests, invitation URLs, a peer's decline), recovery on a new
+phone and direct transfer, a replaced phone erasing itself, the pinned
+production manifest keys A and B, and the `staging` build type, which enrolls
+against the staging vault service (see *Staging build*). The Items screen is a
+placeholder until A5. The v1 app is preserved at the tag `legacy-v1-final` and
+the branch `legacy/v1`.
 
 ## v1 scope
 
