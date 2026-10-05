@@ -32,6 +32,9 @@ interface AccountGateway {
     /** Ends the member session on this device (the vault stays paired). */
     suspend fun signOut()
 
+    /** Forgets the member session on this device without asking the API (the wipe of a replaced phone). */
+    fun forgetLocal()
+
     /** The member API client for the vault routes. */
     fun member(): MemberApiClient
 
@@ -63,6 +66,8 @@ class SessionAccountGateway(
     override suspend fun me(): Me = client.me()
 
     override suspend fun signOut() = client.signOut()
+
+    override fun forgetLocal() = jar.clear()
 
     override fun member(): MemberApiClient = client
 }

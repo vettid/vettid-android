@@ -33,6 +33,9 @@ object AndroidKeys {
 
     fun delete(alias: String) = keyStore().deleteEntry(alias)
 
+    /** Every alias in this app's Keystore (the Keystore is per app: all of them are the app's). */
+    fun aliases(): List<String> = keyStore().aliases().toList()
+
     /** Whether the device has StrongBox (a secure element) for keys. */
     fun hasStrongBox(pm: PackageManager): Boolean = pm.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE)
 

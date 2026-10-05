@@ -968,6 +968,15 @@ class VaultDevice private constructor(
         cfg.store.clear()
     }
 
+    /**
+     * Stops collecting and deletes the device's own mailbox at its relay with everything in it (RELAY-PROTOCOL
+     * §6.10; idempotent): a replaced app erasing itself (owner decision, 2026-10-05).
+     */
+    suspend fun deleteMailbox() {
+        stop()
+        own.deleteMailbox()
+    }
+
     companion object {
         private const val TYPE_HS_INIT = "hs.init"
         private const val TYPE_PAIR_REJECTED = "device.pair.rejected"

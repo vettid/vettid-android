@@ -200,6 +200,14 @@ class AppLock(
         stateFlow.value = AppLockState.DISABLED
     }
 
+    /** As on a fresh install (the wipe of a replaced phone): off, no key, the default timeout. */
+    suspend fun reset() {
+        disable()
+        timeout = AppLockTimeout.DEFAULT
+        backgroundAt = null
+        authenticating = false
+    }
+
     fun acknowledgeInvalidated() {
         invalidatedFlow.value = false
     }

@@ -50,6 +50,9 @@ interface PreferencesRepository {
     suspend fun setAppLockEnabled(enabled: Boolean)
 
     suspend fun setAppLockTimeout(timeout: AppLockTimeout)
+
+    /** Back to the defaults of a fresh install (the wipe of a replaced phone). */
+    suspend fun clear()
 }
 
 private val Context.vettIdPrefs: DataStore<Preferences> by preferencesDataStore(name = "vettid_preferences")
@@ -78,6 +81,10 @@ class DataStorePreferencesRepository(context: Context) : PreferencesRepository {
         store.edit { it[APP_LOCK_TIMEOUT] = timeout.seconds }
     }
 
+    override suspend fun clear() {
+        store.edit { it.clear() }
+    }
+
     private companion object {
         val THEME = stringPreferencesKey("theme")
         val APP_LOCK = booleanPreferencesKey("app_lock_enabled")
@@ -96,4 +103,8 @@ class InMemoryPreferencesRepository(initial: AppPreferences = AppPreferences()) 
     override suspend fun setAppLockEnabled(enabled: Boolean) = state.update { it.copy(appLockEnabled = enabled) }
 
     override suspend fun setAppLockTimeout(timeout: AppLockTimeout) = state.update { it.copy(appLockTimeout = timeout) }
+
+    override suspend fun clear() {
+        state.value = AppPreferences()
+    }
 }

@@ -24,7 +24,6 @@ import com.vettid.core.data.vault.RecoverOutcome
 import com.vettid.core.data.vault.RecoveryRegistration
 import com.vettid.core.data.vault.RecoveryStage
 import com.vettid.core.data.vault.RecoveryTarget
-import com.vettid.core.data.vault.ReplacedReason
 import com.vettid.core.data.vault.TransferOfferView
 import com.vettid.core.data.vault.TransferPendingView
 import kotlinx.coroutines.CompletableDeferred
@@ -312,22 +311,21 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, Vau
         return pendingTransfer.await()
     }
 
-    override suspend fun transferApprove(transferId: String, pin: String, password: String) {
+    /** Whether the vault's `device.unlinked{transferred}` follows an approval (and wipes this phone). */
+    var transferConfirmed = true
+
+    override suspend fun transferApprove(transferId: String, pin: String, password: String): Boolean {
         call("transferApprove")
         lastTransferApproved = transferId
         lastPin = pin
         lastPassword = password
-        phase.value = AppPhase.Replaced(ReplacedReason.TRANSFERRED)
+        if (transferConfirmed) phase.value = AppPhase.SignedOut // the wipe: as freshly installed
+        return transferConfirmed
     }
 
     override suspend fun transferReject(transferId: String) {
         call("transferReject")
         lastTransferRejected = transferId
-    }
-
-    override suspend fun acknowledgeReplaced() {
-        call("acknowledgeReplaced")
-        phase.value = AppPhase.Setup(SetupStage.VAULT_ELSEWHERE)
     }
 
     companion object {

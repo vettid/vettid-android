@@ -67,7 +67,6 @@ interface OnboardingActions {
     fun transfer()
     fun leaveMove()
     fun newVaultAfterMove()
-    fun acknowledgeReplaced()
     fun setEmail(v: String)
     fun submitEmail()
     fun resendLink()
@@ -137,8 +136,6 @@ fun OnboardingContent(
         OnboardingStep.DONE -> DoneScreen(actions)
         OnboardingStep.RECOVER -> recover(actions::leaveMove, actions::newVaultAfterMove, onOpenAccountSite)
         OnboardingStep.TRANSFER_IN -> transferIn(actions::leaveMove)
-        OnboardingStep.REPLACED ->
-            ReplacedScreen(state.replacedReason, actions::acknowledgeReplaced, actions::useAnotherAccount, state.busy)
     }
 }
 

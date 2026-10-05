@@ -29,24 +29,8 @@ sealed interface AppPhase {
     /** The vault is open and this app is its holder. */
     data object Unlocked : AppPhase
 
-    /**
-     * This phone no longer holds the vault: a direct transfer moved it to a new
-     * phone, or a recovery replaced this app (§6.7.1, §11.11.5). Shown until the
-     * member moves on (survives restarts).
-     */
-    data class Replaced(val reason: ReplacedReason) : AppPhase
-}
-
-/** Why this phone no longer holds the vault (`device.unlinked{reason}`, §10.3). */
-enum class ReplacedReason {
-    /** A direct transfer to a new phone (`transferred`). */
-    TRANSFERRED,
-
-    /** A recovery on another phone (`replaced`). */
-    RECOVERED,
-
-    /** The vault no longer knows this phone (`unknown_device` at unlock, or no reason given). */
-    UNKNOWN,
+    // A phone that a transfer or a recovery replaced has no phase of its own: it erases itself and is
+    // SignedOut, as freshly installed (owner decision, 2026-10-05; VaultManager, HolderWatch).
 }
 
 enum class SetupStage {

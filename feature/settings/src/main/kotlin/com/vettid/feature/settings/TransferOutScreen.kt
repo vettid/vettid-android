@@ -159,6 +159,14 @@ fun TransferOutContent(state: TransferOutUiState, actions: TransferOutActions, o
             onBack = leave,
             modifier = Modifier.testTag("transfer_rejected"),
         ) {}
+        TransferOutStep.MOVED -> FormScaffold(
+            title = stringResource(R.string.settings_transfer_moved_title),
+            body = stringResource(R.string.settings_transfer_moved_body, state.pending?.name ?: ""),
+            primaryLabel = stringResource(R.string.settings_done),
+            onPrimary = leave,
+            onBack = leave,
+            modifier = Modifier.testTag("transfer_moved"),
+        ) {}
     }
     if (state.confirmReject) {
         ConfirmDialog(

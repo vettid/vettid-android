@@ -52,7 +52,7 @@
     <string name="onboarding_elsewhere_transfer_body">Move VettID with a direct transfer: the other phone shows a code, this phone scans it, and you approve there with your PIN and credential password. No waiting.</string>
     <string name="onboarding_elsewhere_transfer">Move from my old phone</string>
     <string name="onboarding_elsewhere_recovery_title">Lost it?</string>
-    <string name="onboarding_elsewhere_recovery_body">Start a recovery on the account site. After 24 hours it shows a code that this phone scans; then your PIN and credential password move the vault here, and the old phone is signed out of it.</string>
+    <string name="onboarding_elsewhere_recovery_body">Start a recovery on the account site. After 24 hours it shows a code that this phone scans; then your PIN and credential password move the vault here, and the old phone erases VettID the next time it reaches your vault.</string>
     <string name="onboarding_elsewhere_recover">Recover my vault</string>
     <string name="onboarding_elsewhere_open">Open the account site</string>
     <string name="onboarding_elsewhere_anyway">Set up a new vault anyway</string>
@@ -147,28 +147,18 @@
     <string name="app_lock_prompt_title">Unlock VettID</string>
     <string name="app_lock_prompt_subtitle">Confirm it is you</string>
 
-    <!-- This phone was replaced (VAULT-MESSAGING §6.7.1, §11.11.5) -->
-    <string name="onboarding_replaced_title">This phone no longer holds your vault</string>
-    <string name="onboarding_replaced_transferred">You moved VettID to your new phone. Your vault, your credential and your connections are there now, and this phone has been signed out of the vault. Nothing is left of it here.</string>
-    <string name="onboarding_replaced_recovered">Your vault was recovered on another phone, which now holds it. This phone has been signed out of the vault and its copy of your credential no longer works.</string>
-    <string name="onboarding_replaced_unknown">Your vault no longer knows this phone. It was probably moved to another phone by a transfer or a recovery.</string>
-    <string name="onboarding_replaced_not_you_title">Was this not you?</string>
-    <string name="onboarding_replaced_not_you_body">If you did not move or recover your vault, sign in on the account site now, change your account password, and contact VettID support.</string>
-    <string name="onboarding_replaced_continue">Set up this phone again</string>
-    <string name="onboarding_replaced_sign_out">Sign out</string>
-
     <!-- Done, after a move -->
     <string name="onboarding_moved_title">Your vault is on this phone now</string>
-    <string name="onboarding_moved_recovered_body">Your old phone has been signed out of it, and the credential copy it held no longer works. Your desktops and agents stay paired.</string>
-    <string name="onboarding_moved_reset_body">Your vault has a new credential. The old credential and your critical items were destroyed. Your old phone has been signed out of the vault.</string>
-    <string name="onboarding_moved_transferred_body">Your old phone has been signed out of it. Unlock with the same PIN and credential password as before.</string>
+    <string name="onboarding_moved_recovered_body">Your old phone no longer holds it, and the credential copy it held no longer works; it erases VettID the next time it reaches your vault. Your desktops and agents stay paired.</string>
+    <string name="onboarding_moved_reset_body">Your vault has a new credential. The old credential and your critical items were destroyed. Your old phone erases VettID the next time it reaches your vault.</string>
+    <string name="onboarding_moved_transferred_body">Your old phone erases VettID as soon as it hears from your vault. Unlock with the same PIN and credential password as before.</string>
     <string name="onboarding_moved_go">Go to VettID</string>
 
     <!-- Recovery on this phone (§11.11) -->
     <string name="recover_title">Recover your vault</string>
     <string name="recover_body">Your account site shows a recovery code 24 hours after you start a recovery. Open it there (Vault, then Recovery, then Show the code) and scan it with this phone.</string>
     <string name="recover_need_title">You will need</string>
-    <string name="recover_need_body">The recovery code from the account site, your vault PIN and your credential password. This phone then replaces your old one: the old phone is signed out of the vault.</string>
+    <string name="recover_need_body">The recovery code from the account site, your vault PIN and your credential password. This phone then replaces your old one, which erases VettID the next time it reaches your vault.</string>
     <string name="recover_scan">Scan the code</string>
     <string name="recover_type">Type the code instead</string>
     <string name="recover_check_again">Check again</string>
@@ -224,7 +214,7 @@
     <string name="recover_new_body">Your vault destroys the old credential and every critical item, then creates a new credential that this phone holds.</string>
     <string name="recover_new_submit">Create the new credential</string>
     <string name="recover_new_confirm_title">Create a new credential?</string>
-    <string name="recover_new_confirm_body">Your old credential and every critical item are destroyed for good. Your old phone is signed out of the vault.</string>
+    <string name="recover_new_confirm_body">Your old credential and every critical item are destroyed for good. Your old phone erases VettID the next time it reaches your vault.</string>
     <string name="recover_new_confirm">Destroy and create</string>
     <string name="recover_delete_title">Delete your vault</string>
     <string name="recover_delete_body">Everything in it is erased: items, connections, messages. Your connections are told it is gone. Enter your vault PIN to confirm.</string>
@@ -241,7 +231,7 @@
     <!-- Direct transfer, the new phone (§6.7.1) -->
     <string name="transfer_in_title">Move from your old phone</string>
     <string name="transfer_in_body">On your old phone, open VettID, then Settings, then Move to a new phone. It shows a code: scan it with this phone.</string>
-    <string name="transfer_in_need_body">You will approve the move on the old phone with your vault PIN and credential password. The old phone is then signed out of your vault.</string>
+    <string name="transfer_in_need_body">You will approve the move on the old phone with your vault PIN and credential password. The old phone then erases VettID.</string>
     <string name="transfer_in_scan">Scan the code</string>
     <string name="transfer_in_paste">Paste the code instead</string>
     <string name="transfer_in_scan_title">Scan your old phone\'s code</string>

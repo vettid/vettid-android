@@ -5,7 +5,6 @@ import com.vettid.core.data.account.SignInLinkInbox
 import com.vettid.core.data.policy.PinPolicy
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.FailureKind
-import com.vettid.core.data.vault.ReplacedReason
 import com.vettid.core.data.vault.SetupStage
 import com.vettid.core.testing.FakeVault
 import com.vettid.core.ui.components.StepState
@@ -27,7 +26,7 @@ class OnboardingViewModelTest {
     private val token = "test-sign-in-token-0000"
     private val vault = FakeVault()
     private val inbox = SignInLinkInbox()
-    private fun vm() = OnboardingViewModel(vault, vault, vault, inbox)
+    private fun vm() = OnboardingViewModel(vault, vault, inbox)
 
     @Test
     fun signInByPastedLinkThenEnrollAndCreateTheCredential() = runTest {
@@ -227,16 +226,20 @@ class OnboardingViewModelTest {
     }
 
     @Test
-    fun aReplacedPhoneSaysSoAndCanBeSetUpAgain() = runTest {
-        vault.phase.value = AppPhase.Replaced(ReplacedReason.TRANSFERRED)
+    fun aPhoneThatErasedItselfShowsAFreshWelcome() = runTest {
+        // Owner decision 2026-10-05: a replaced phone wipes itself and is SignedOut; nothing of before is shown.
+        vault.phase.value = AppPhase.Setup(SetupStage.NEW_VAULT)
         val vm = vm()
         advanceUntilIdle()
-        assertEquals(OnboardingStep.REPLACED, vm.uiState.value.step)
-        assertEquals(ReplacedReason.TRANSFERRED, vm.uiState.value.replacedReason)
-        assertNull(vm.uiState.value.error)
-        vm.acknowledgeReplaced()
+        assertEquals(OnboardingStep.PIN_CREATE, vm.uiState.value.step)
+        vm.setEmail("sam@example.org")
+        vm.setPin("40281795")
+        vault.phase.value = AppPhase.SignedOut
         advanceUntilIdle()
-        assertTrue("acknowledgeReplaced" in vault.calls)
-        assertEquals(OnboardingStep.VAULT_ELSEWHERE, vm.uiState.value.step)
+        assertEquals(OnboardingUiState(devHint = vault.devHint), vm.uiState.value)
+        assertEquals(OnboardingStep.WELCOME, vm.uiState.value.step)
+        assertEquals("", vm.uiState.value.email)
+        assertEquals("", vm.uiState.value.pin)
+        assertNull(vm.uiState.value.error)
     }
 }

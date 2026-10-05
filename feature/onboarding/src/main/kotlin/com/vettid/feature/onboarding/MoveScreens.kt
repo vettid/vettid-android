@@ -41,7 +41,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.altchan.RecoveryCodes
 import com.vettid.core.data.vault.FailureKind
-import com.vettid.core.data.vault.ReplacedReason
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
@@ -609,42 +608,6 @@ private fun SasBox(sas: String) {
             .testTag("sas"),
         contentAlignment = Alignment.Center,
     ) { SafetyCode(sas) }
-}
-
-// --- the old phone after a move ---
-
-/** "This phone no longer holds your vault" (§6.7.1, §11.11.5): a state, not an error. */
-@Composable
-fun ReplacedScreen(reason: ReplacedReason, onContinue: () -> Unit, onSignOut: () -> Unit, busy: Boolean = false) {
-    FormScaffold(
-        title = stringResource(R.string.onboarding_replaced_title),
-        body = stringResource(
-            when (reason) {
-                ReplacedReason.TRANSFERRED -> R.string.onboarding_replaced_transferred
-                ReplacedReason.RECOVERED -> R.string.onboarding_replaced_recovered
-                ReplacedReason.UNKNOWN -> R.string.onboarding_replaced_unknown
-            },
-        ),
-        primaryLabel = stringResource(R.string.onboarding_replaced_continue),
-        onPrimary = onContinue,
-        secondaryLabel = stringResource(R.string.onboarding_replaced_sign_out),
-        onSecondary = onSignOut,
-        busy = busy,
-        modifier = Modifier.testTag("replaced"),
-        header = {
-            Spacer(Modifier.height(Spacing.xl))
-            RookLogo(height = 72.dp)
-            Spacer(Modifier.height(Spacing.l))
-        },
-    ) {
-        if (reason != ReplacedReason.TRANSFERRED) {
-            NoticeCard(
-                NoticeKind.WARNING,
-                stringResource(R.string.onboarding_replaced_not_you_title),
-                stringResource(R.string.onboarding_replaced_not_you_body),
-            )
-        }
-    }
 }
 
 @Composable

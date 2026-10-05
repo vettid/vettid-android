@@ -47,7 +47,10 @@ says so (attestation, crypto helpers, WebRTC, QR scanner), with its tests.
   member authentication and a grant request in Approvals; favourite) is
   `app/src/androidTest/.../A4ExitTest.kt`, run the same way with
   `-Pandroid.testInstrumentationRunnerArguments.class=com.vettid.app.A4ExitTest`
-  (screenshots in `/data/local/tmp/a4-exit/`). The A2 exit test:
+  (screenshots in `/data/local/tmp/a4-exit/`). `ReplacedWipeTest` (same way): a direct transfer to a
+  test-process "new phone" (TEST attester), after which the app erases itself (owner decision 2026-10-05;
+  `LocalWipe`, `HolderWatch`: only an authenticated `device.unlinked{transferred|replaced}` or a sealed
+  `unknown_device` wipes). The A2 exit test:
   `ANDROID_SERIAL=<serial> ./gradlew :core:data:connectedDebugAndroidTest`; the JVM
   variant is `:core:vault:testDebugUnitTest --tests '*DevStackJvmTest*'`. All skip
   without the stack. Never modify the vettid-vault checkout.
@@ -75,7 +78,7 @@ Every A3 and A4 screen with sample state, no vault needed: `--es vettid.start sc
 `app/src/debugTools/.../ScreenCatalog.kt`, e.g. `onboarding.backup_off`, `unlock.updated`,
 `credential.alarm`, `settings.delete_confirm`, `messages.conversation`, `invite.request`,
 `connections.detail`, `approvals.critical`; recovery and transfer: `recover.pin`, `recover.lost`,
-`transfer_in.compare`, `settings.transfer_compare`, `onboarding.replaced`). Debug builds expose Compose test tags as resource
+`transfer_in.compare`, `settings.transfer_compare`, `settings.transfer_moved`). Debug builds expose Compose test tags as resource
 ids, so `uiautomator dump` / `adb shell input` can drive two phones at once (`adb -s <serial>`).
 Screenshots and the Proton reference images stay out of git (`local/`, or the
 vettid.org repo's `local/android-ui/`).
