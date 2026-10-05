@@ -8,6 +8,7 @@ import com.vettid.core.attestation.manifest.ReleaseManifest
 import com.vettid.core.crypto.Base64s
 import com.vettid.core.crypto.Ed25519PrivateKey
 import com.vettid.core.crypto.hpke.KemPrivateKey
+import com.vettid.core.crypto.envelope.Ulid
 import com.vettid.core.crypto.json.StrictJson
 import com.vettid.core.crypto.session.Mailbox
 import com.vettid.core.crypto.session.RelayAddr
@@ -37,6 +38,8 @@ class MemberApiTest {
     private var manifestSerial = 7L
     private var manifestFailFirst = false
     private var instanceMovedFirst = false
+    private var recoveryResult = """{"ok":true}"""
+    private var slotCode: String? = null
     private val kem = KemPrivateKey.generate()
 
     private fun resp(
@@ -95,6 +98,15 @@ class MemberApiTest {
                 }
                 val type = if (enroll) AltResults.TYPE_ENROLL_RESULT else AltResults.TYPE_UNLOCK_RESULT
                 slots[rid] = """{"status":"done","envelope":"${Base64s.encodeStd(TestSupport.sealResult(kem.publicKey, type, rid, result))}"}"""
+                resp(202, """{"vault_id":"0123456789abcdef0123456789abcdef","request_id":"$rid"}""")
+            }
+            path == "/api/vault/recovery/register" -> {
+                // §11.11.3 (0.10.6): a successful register's slot carries the clear marker beside the sealed result.
+                val o = StrictJson.parseObject(r.body!!.toByteArray())
+                val rid = o.string("request_id")
+                assertEquals(rid, e.open(Base64s.decodeStd(o.string("envelope"))).id)
+                val sealed = Base64s.encodeStd(TestSupport.sealResult(kem.publicKey, AltResults.TYPE_RECOVERY_RESULT, rid, recoveryResult))
+                slots[rid] = """{"status":"done","envelope":"$sealed"${slotCode?.let { ",\"code\":\"$it\"" } ?: ""}}"""
                 resp(202, """{"vault_id":"0123456789abcdef0123456789abcdef","request_id":"$rid"}""")
             }
             path == "/api/vault/lock" -> {
@@ -221,6 +233,41 @@ class MemberApiTest {
         assertEquals(Slot.DONE, f.lock(out.vaultId).status)
         assertTrue(log.contains("GET ${MemberApiClient.MANIFEST_PATH}"))
         assertEquals(6, log.count { it.startsWith("GET /api/vault/requests/") }) // each slot: queued, then done
+    }
+
+    private suspend fun register(): RecoveryResult {
+        val code = RecoveryCode("0123456789abcdef0123456789abcdef", Ulid.new(), "SK01TG8WK2FYJ1Y5MEHJ5R5J7QZKWHX0")
+        val app = Party().app
+        return flow().recoveryRegister(
+            code.vaultId,
+            build = { e -> AltRequests.buildRecoveryRegister("guid-1", code, e, TestSupport.SoftAttester(), app, Instant.now()) },
+            open = { raw, rid -> RecoveryResult.parse(AltResults.open(raw, kem, AltResults.TYPE_RECOVERY_RESULT, rid)) },
+        )
+    }
+
+    /**
+     * 0.10.6 (§11.5, §11.11.3): the host copies `recovery_registered` into a successful register's slot, with
+     * the envelope. The marker is for the member API; the app reads its sealed result as before.
+     */
+    @Test
+    fun theRecoveryRegisteredMarkerInTheSlotIsIgnored() = runBlocking<Unit> {
+        slotCode = Slot.RECOVERY_REGISTERED
+        assertEquals(RecoveryResult(true, null), register())
+        assertEquals(1, log.count { it == "POST /api/vault/recovery/register" }) // not retried as an error
+        assertEquals(2, log.count { it.startsWith("GET /api/vault/requests/") })
+    }
+
+    @Test
+    fun theSealedResultDecidesWhateverTheSlotsCode() = runBlocking<Unit> {
+        // A forged marker on a refusal changes nothing: the sealed result says bad_code.
+        slotCode = Slot.RECOVERY_REGISTERED
+        recoveryResult = """{"ok":false,"code":"bad_code"}"""
+        assertEquals(RecoveryResult(false, "bad_code"), register())
+        // An unknown host code beside an envelope is not an error either.
+        slotCode = "some_future_code"
+        recoveryResult = """{"ok":true}"""
+        assertEquals(RecoveryResult(true, null), register())
+        assertEquals(2, log.count { it == "POST /api/vault/recovery/register" })
     }
 
     @Test

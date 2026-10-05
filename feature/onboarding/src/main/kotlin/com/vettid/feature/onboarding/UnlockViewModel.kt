@@ -50,6 +50,13 @@ data class UnlockUiState(
      * this phone (a sealed result); a network failure leaves it as it was.
      */
     val notRecognised: Boolean = false,
+    /**
+     * The open app was sent here because the relay kept refusing this phone's messages to the vault
+     * ([VaultRepository.refusedByVault]): a phone replaced while the vault stayed unlocked on the new one never
+     * sees this screen otherwise. Not proof: the PIN asks the enclave, and an unreadable result then sets
+     * [notRecognised]. Nothing is erased without the member's confirmation.
+     */
+    val refused: Boolean = false,
     /** The erase confirmation dialog is open. */
     val eraseConfirm: Boolean = false,
     /** The erase runs. */
@@ -63,7 +70,8 @@ data class UnlockUiState(
         }
 
     override fun toString(): String =
-        "UnlockUiState(loading=$loading, busy=$busy, message=$message, wait=$waitSeconds, notRecognised=$notRecognised, erasing=$erasing)"
+        "UnlockUiState(loading=$loading, busy=$busy, message=$message, wait=$waitSeconds, refused=$refused, " +
+            "notRecognised=$notRecognised, erasing=$erasing)"
 }
 
 /** What the unlock screen can ask for. */
@@ -93,7 +101,10 @@ interface UnlockActions {
  * recovery-pending refusal (§11.11.4) and the state-rollback warning. An
  * unlock the vault did not recognise (an unreadable result: a phone replaced
  * while it was offline longer than the relay keeps its `device.unlinked`)
- * offers "Erase VettID from this phone" (owner decision, 2026-10-05).
+ * offers "Erase VettID from this phone" (owner decision, 2026-10-05). So does
+ * one after the open app was sent here because the relay kept refusing this
+ * phone's messages to the vault ([UnlockUiState.refused]); the refusals alone
+ * offer nothing and never erase.
  */
 @HiltViewModel
 class UnlockViewModel @Inject constructor(
@@ -106,6 +117,7 @@ class UnlockViewModel @Inject constructor(
 
     init {
         retryPreflight()
+        viewModelScope.launch { vault.refusedByVault.collect { r -> state.update { it.copy(refused = r) } } }
     }
 
     override fun retryPreflight() {

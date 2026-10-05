@@ -54,9 +54,12 @@ internal data class CredentialCopy(val blob: String, val version: Long)
 @Serializable
 internal data class UtkRecord(val id: String, val ek: String, val expiresAtMs: Long)
 
-/** Set while this app recovers a vault (§11.11). */
+/**
+ * Set while this app recovers a vault (§11.11). [credentialBackup]: the registered app's unlock result's
+ * `credential_backup` (0.10.6, §11.11.5 step 1), null until that unlock or from a vault that does not send it.
+ */
 @Serializable
-internal data class RecoveryRecord(val recoveryId: String, val requestId: String = "")
+internal data class RecoveryRecord(val recoveryId: String, val requestId: String = "", val credentialBackup: Boolean? = null)
 
 /** A deposit not yet answered 201 by the relay (§8.3: the entry goes once the relay accepted it). */
 @Serializable

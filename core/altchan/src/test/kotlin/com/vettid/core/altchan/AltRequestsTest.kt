@@ -145,6 +145,12 @@ class AltRequestsTest {
         )
         assertEquals(3, u.stateSeq)
         assertEquals("t", u.token)
+        assertNull(u.credentialBackup) // absent: an older vault (before 0.10.6)
+        val ok = """{"ok":true,"state_seq":3,"header_seq":2,"release":"${TestSupport.pcr0}","release_number":3,"release_status":"active",""" +
+            """"manifest_serial":7,"vault_bundle":"AQ==","credential_backup":"""
+        assertEquals(true, UnlockResult.parse((ok + "true}").toByteArray()).credentialBackup)
+        assertEquals(false, UnlockResult.parse((ok + "false}").toByteArray()).credentialBackup)
+        assertThrows(AltResultException::class.java) { UnlockResult.parse((ok + "1}").toByteArray()) }
         val f = UnlockResult.parse("""{"ok":false,"code":"backoff","header_seq":4,"retry_after":30}""".toByteArray())
         assertEquals("backoff", f.code)
         assertEquals(30, f.retryAfterSeconds)

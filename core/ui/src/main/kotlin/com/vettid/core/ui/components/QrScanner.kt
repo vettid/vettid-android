@@ -24,14 +24,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.google.zxing.BarcodeFormat
-import com.google.zxing.BinaryBitmap
-import com.google.zxing.DecodeHintType
-import com.google.zxing.NotFoundException
-import com.google.zxing.PlanarYUVLuminanceSource
-import com.google.zxing.ReaderException
-import com.google.zxing.common.HybridBinarizer
-import com.google.zxing.qrcode.QRCodeReader
 import java.util.concurrent.Executors
 
 /** Whether the app may use the camera, and a way to ask. */
@@ -59,7 +51,7 @@ fun QrScanner(onText: (String) -> Unit, modifier: Modifier = Modifier) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val callback by rememberUpdatedState(onText)
     val executor = remember { Executors.newSingleThreadExecutor() }
-    val reader = remember { QRCodeReader() }
+    val decoder = remember { QrFrameDecoder() }
     val previewView = remember {
         PreviewView(context).apply {
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
@@ -76,7 +68,7 @@ fun QrScanner(onText: (String) -> Unit, modifier: Modifier = Modifier) {
             val analysis = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build()
-                .also { a -> a.setAnalyzer(executor) { img -> decode(reader, img)?.let { t -> previewView.post { callback(t) } } } }
+                .also { a -> a.setAnalyzer(executor) { img -> decode(decoder, img)?.let { t -> previewView.post { callback(t) } } } }
             provider.unbindAll()
             provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
         }, ContextCompat.getMainExecutor(context))
@@ -90,25 +82,10 @@ fun QrScanner(onText: (String) -> Unit, modifier: Modifier = Modifier) {
     AndroidView(factory = { previewView }, modifier = modifier)
 }
 
-private val HINTS = mapOf(
-    DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE),
-    DecodeHintType.TRY_HARDER to true,
-    DecodeHintType.CHARACTER_SET to "UTF-8",
-)
-
 /** Decodes the luminance plane of a frame; null when it holds no QR code. */
-private fun decode(reader: QRCodeReader, image: ImageProxy): String? = image.use { img ->
+private fun decode(decoder: QrFrameDecoder, image: ImageProxy): String? = image.use { img ->
     val plane = img.planes.firstOrNull() ?: return null
     val buf = plane.buffer
     val data = ByteArray(buf.remaining()).also { buf.get(it) }
-    val source = PlanarYUVLuminanceSource(data, plane.rowStride, img.height, 0, 0, img.width, img.height, false)
-    try {
-        reader.decode(BinaryBitmap(HybridBinarizer(source)), HINTS).text
-    } catch (_: NotFoundException) {
-        null
-    } catch (_: ReaderException) {
-        null
-    } finally {
-        reader.reset()
-    }
+    decoder.decode(data, plane.rowStride, img.width, img.height)
 }

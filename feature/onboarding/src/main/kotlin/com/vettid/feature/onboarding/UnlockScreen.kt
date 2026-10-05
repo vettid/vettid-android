@@ -97,6 +97,14 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
             if (p != null) {
                 PreflightNotices(p, state.updateAcknowledged, actions::acknowledgeUpdate, state.approveOffer, actions::setApproveOffer)
             }
+            if (state.refused && !state.notRecognised) {
+                NoticeCard(
+                    NoticeKind.WARNING,
+                    stringResource(R.string.unlock_refused_title),
+                    stringResource(R.string.unlock_refused_body),
+                    modifier = Modifier.testTag("unlock_refused"),
+                )
+            }
             if (state.stateRollback) {
                 NoticeCard(
                     NoticeKind.URGENT,

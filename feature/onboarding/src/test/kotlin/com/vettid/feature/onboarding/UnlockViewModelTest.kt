@@ -227,4 +227,60 @@ class UnlockViewModelTest {
         vm.askErase()
         assertFalse(vm.uiState.value.eraseConfirm)
     }
+
+    // --- a phone sent here by repeated relay refusals (RefusalWatch) ---
+
+    @Test
+    fun aRefusedPhoneIsOfferedTheEraseAfterAnUnreadableUnlock() = runTest {
+        vault.refusedByVault.value = true
+        val vm = UnlockViewModel(vault, vault)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.refused)
+        assertFalse("the refusals alone offer nothing", vm.uiState.value.notRecognised)
+        vm.askErase()
+        assertFalse(vm.uiState.value.eraseConfirm)
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.OTHER, UnlockViewModel.CODE_UNREADABLE)
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.notRecognised)
+        assertFalse("never erased without the member", "eraseThisPhone" in vault.calls)
+        assertEquals(AppPhase.Locked, vault.phase.value)
+        vm.askErase()
+        vm.confirmErase()
+        advanceUntilIdle()
+        assertEquals(1, vault.calls.count { it == "eraseThisPhone" })
+    }
+
+    @Test
+    fun aRefusedPhoneThatTheVaultKnowsIsNotOfferedTheErase() = runTest {
+        // A working phone whose token errors were passing: its PIN gets a sealed answer.
+        vault.refusedByVault.value = true
+        val vm = UnlockViewModel(vault, vault)
+        advanceUntilIdle()
+        vault.unlockResults += UnlockAttempt.BadPin(retryAfterSeconds = 0)
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.refused)
+        assertFalse(vm.uiState.value.notRecognised)
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals(AppPhase.Unlocked, vault.phase.value)
+        assertFalse("eraseThisPhone" in vault.calls)
+    }
+
+    @Test
+    fun withoutRefusalsTheUnlockScreenSaysNothingOfThem() = runTest {
+        val vm = UnlockViewModel(vault, vault)
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.refused)
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.NETWORK, null)
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.refused)
+        assertFalse(vm.uiState.value.notRecognised)
+    }
 }

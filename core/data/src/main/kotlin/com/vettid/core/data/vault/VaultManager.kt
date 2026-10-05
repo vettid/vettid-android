@@ -116,6 +116,13 @@ class VaultManager(
     override val devHint: String? get() = gateway.devHint
     override val signInHosts: Set<String> = env.signInHosts
 
+    /** Refused deposits to the vault: the open app goes to the unlock screen (never a wipe, [RefusalWatch]). */
+    private val refusals = RefusalWatch {
+        windowFlow.value = null
+        phaseFlow.value = AppPhase.Locked
+    }
+    override val refusedByVault: StateFlow<Boolean> = refusals.suspected
+
     private class Session(val device: VaultDevice, val api: VaultApi, val member: MemberApiClient, val alt: AltChannelFlow)
 
     /** Connections, messages and approvals (A4): the repositories of those features. */
@@ -203,6 +210,7 @@ class VaultManager(
         observer = null
         session?.device?.let { d -> if (forget) d.forget() else d.stop() }
         session = null
+        refusals.clear()
         if (forget) {
             io {
                 val keys = deviceKeys()
@@ -220,6 +228,7 @@ class VaultManager(
     private fun observe(s: Session) {
         observer?.cancel()
         observer = scope.launch {
+            launch { s.device.vaultRefusals.collect { n -> refusals.onRefusals(n, phaseFlow.value) } }
             s.device.events.collect { m ->
                 onEvent(m)
                 try {
@@ -433,6 +442,9 @@ class VaultManager(
                     // §11.10.6: after a move the vault is locked under the new release; unlock again, which reaches it.
                     out = s.alt.unlock(s.device, local.userGuid, pin, env.attester())
                 }
+                // A sealed result: the enclave knows this phone; earlier relay refusals no longer count (RefusalWatch).
+                s.device.clearVaultRefusals()
+                refusals.clear()
                 out
             }
         } catch (e: VaultFailure) {
@@ -707,6 +719,8 @@ class VaultManager(
         }
     }
 
+    override suspend fun recoveryCredentialBackup(): Boolean? = guard { session().device.recoveryCredentialBackup }
+
     override suspend fun recoverCredential(password: String): RecoverOutcome = guard {
         val s = session()
         val outcome = try {
@@ -757,10 +771,11 @@ class VaultManager(
         d.startTransfer(link, env.attester())
         transferStartedAt = Instant.now()
         try {
-            withTimeout(SAS_WAIT_MS) { d.pairingSas.filterNotNull().first() }
+            // §6.7.1 step 2 (0.10.6): a dropped hs.init is never answered; stop after 60 s and say why it may be.
+            withTimeout(MoveRepository.HS_RESP_WAIT_MS) { d.pairingSas.filterNotNull().first() }
         } catch (e: TimeoutCancellationException) {
             d.abandonTransfer()
-            throw e
+            throw VaultFailure(FailureKind.NO_RESPONSE, MoveRepository.CODE_HS_UNANSWERED, cause = e)
         }
     }
 
@@ -896,9 +911,6 @@ class VaultManager(
         private const val CODE_NOT_AVAILABLE = "not_available"
         private const val CODE_NOT_TRANSFER = "not_transfer"
         private const val CODE_EXISTS = "exists"
-
-        /** How long the new phone waits for the vault's `hs.resp` (it answers at once, §6.7). */
-        private const val SAS_WAIT_MS = 60_000L
 
         /** The pairing window: 10 minutes after `hs.init` (§6.7, 0.10.4). */
         private val PAIRING_WINDOW: Duration = Duration.ofMinutes(10)

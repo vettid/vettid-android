@@ -48,6 +48,13 @@ interface AccountRepository {
 /** The vault on this device: enrollment, unlock and lock, status, PIN, deletion, recovery. */
 @Suppress("TooManyFunctions")
 interface VaultRepository {
+    /**
+     * The open app was sent to the unlock screen because the relay kept refusing this phone's messages to the
+     * vault (`token_revoked`, [RefusalWatch]): the vault may no longer know it. Not proof: the PIN asks the
+     * enclave. Cleared by any sealed unlock result or message from the vault.
+     */
+    val refusedByVault: StateFlow<Boolean>
+
     /** Enrolls a vault with [pin] (§11.3) and runs the first handshake. */
     suspend fun enroll(pin: String, onStep: (EnrollStep) -> Unit)
 
@@ -132,6 +139,13 @@ interface MoveRepository {
     /** Unlocks with the PIN (§11.11.5 step 1) and runs the first handshake (step 2). */
     suspend fun recoveryUnlock(pin: String, approve: ReleaseView? = null): UnlockAttempt
 
+    /**
+     * Whether the vault keeps a copy of the credential, from this phone's recovery unlock (`credential_backup`,
+     * 0.10.6, §11.11.5 step 1): true, the password recovers it; false, only a new credential or deleting the vault
+     * remain (step 4), so the password is not asked for; null, the vault did not say (older than 0.10.6): ask.
+     */
+    suspend fun recoveryCredentialBackup(): Boolean?
+
     /** `credential.recover` with the password (§11.11.5 step 3). */
     suspend fun recoverCredential(password: String): RecoverOutcome
 
@@ -145,7 +159,9 @@ interface MoveRepository {
 
     /**
      * Starts the transfer from the old phone's code ([code]: the scanned QR or a
-     * pasted link) and returns the SAS once the handshake checked out.
+     * pasted link) and returns the SAS once the handshake checked out. Without the
+     * vault's `hs.resp` within [HS_RESP_WAIT_MS], drops the transfer and fails with
+     * [FailureKind.NO_RESPONSE] and [CODE_HS_UNANSWERED].
      */
     suspend fun transferIn(code: String): String
 
@@ -175,4 +191,16 @@ interface MoveRepository {
     suspend fun transferApprove(transferId: String, pin: String, password: String): Boolean
 
     suspend fun transferReject(transferId: String)
+
+    companion object {
+        /**
+         * How long the new phone waits for the vault's `hs.resp` after its transfer `hs.init` (§6.7.1 step 2,
+         * 0.10.6, a SHOULD): the vault answers at once, but never a dropped `hs.init` (a spent or expired code,
+         * a failed attestation).
+         */
+        const val HS_RESP_WAIT_MS = 60_000L
+
+        /** [transferIn]'s [FailureKind.NO_RESPONSE] code when no `hs.resp` came within [HS_RESP_WAIT_MS]. */
+        const val CODE_HS_UNANSWERED = "hs_unanswered"
+    }
 }
