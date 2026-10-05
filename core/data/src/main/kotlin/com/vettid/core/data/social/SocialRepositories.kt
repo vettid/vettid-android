@@ -93,6 +93,12 @@ interface ApprovalsRepository {
      */
     val requestEnds: StateFlow<Map<String, RequestEnd>>
 
+    /** Requests the other member declined (0.10.5), oldest first, until [dismissPeerDecline]. */
+    val peerDeclines: StateFlow<List<PeerDecline>>
+
+    /** The member has seen that the other member declined [requestId]: it is not shown again. */
+    suspend fun dismissPeerDecline(requestId: String)
+
     /** Re-reads what the vault lists (connection, grant and critical-item requests) and drops expired requests. */
     suspend fun refreshApprovals()
 
@@ -107,7 +113,7 @@ interface ApprovalsRepository {
     /** Approves this vault's outgoing request (the accepter's side) after comparing the safety code. */
     suspend fun approveOutgoing(connectionId: String)
 
-    /** Declines this vault's outgoing request; nothing is sent to the inviter (§6.4). */
+    /** Declines this vault's outgoing request; the vault tells the inviter's vault (`connection.declined`, 0.10.5). */
     suspend fun declineOutgoing(connectionId: String)
 
     /**

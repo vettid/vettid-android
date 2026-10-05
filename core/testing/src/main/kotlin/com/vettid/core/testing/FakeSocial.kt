@@ -14,6 +14,7 @@ import com.vettid.core.data.social.InviteTtl
 import com.vettid.core.data.social.MessageInfo
 import com.vettid.core.data.social.MessagesRepository
 import com.vettid.core.data.social.OutstandingInvite
+import com.vettid.core.data.social.PeerDecline
 import com.vettid.core.data.social.RequestEnd
 import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.social.SafetyCodeRecord
@@ -48,6 +49,7 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
     val messageMap = MutableStateFlow<Map<String, List<MessageInfo>>>(emptyMap())
     override val approvals = MutableStateFlow<List<Approval>>(emptyList())
     override val requestEnds = MutableStateFlow<Map<String, RequestEnd>>(emptyMap())
+    override val peerDeclines = MutableStateFlow<List<PeerDecline>>(emptyList())
     override val conversations = MutableStateFlow<List<ConversationSummary>>(emptyList())
 
     /** Sets the connections and messages and recomputes [conversations]. */
@@ -197,6 +199,18 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
     override suspend fun approveConnection(pendingId: String) {
         call("approveConnection")
         approved("connection:$pendingId")
+    }
+
+    /** The other member declined request [id] (0.10.5): it ends and the member is told once. */
+    fun peerDeclined(id: String, name: String?, outgoing: Boolean) {
+        drop(if (outgoing) "outgoing:$id" else "connection:$id")
+        requestEnds.update { it + (id to RequestEnd.PEER_DECLINED) }
+        peerDeclines.update { it + PeerDecline(id, name, outgoing, Instant.parse("2026-10-05T12:00:00Z")) }
+    }
+
+    override suspend fun dismissPeerDecline(requestId: String) {
+        call("dismissPeerDecline")
+        peerDeclines.update { l -> l.filterNot { it.requestId == requestId } }
     }
 
     override suspend fun declineConnection(pendingId: String) {

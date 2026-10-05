@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.ApprovalsRepository
+import com.vettid.core.data.social.PeerDecline
 import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
@@ -22,6 +23,8 @@ import javax.inject.Inject
 data class ApprovalsUiState(
     val loading: Boolean = true,
     val approvals: List<Approval> = emptyList(),
+    /** Requests the other member declined (0.10.5): told once, until dismissed. */
+    val peerDeclines: List<PeerDecline> = emptyList(),
     val error: FailureKind? = null,
 )
 
@@ -30,8 +33,9 @@ data class ApprovalsUiState(
 class ApprovalsViewModel @Inject constructor(private val repo: ApprovalsRepository) : ViewModel() {
     private val local = MutableStateFlow(ApprovalsUiState())
 
-    val uiState: StateFlow<ApprovalsUiState> = combine(local, repo.approvals) { s, list -> s.copy(approvals = list) }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, ApprovalsUiState())
+    val uiState: StateFlow<ApprovalsUiState> =
+        combine(local, repo.approvals, repo.peerDeclines) { s, list, declines -> s.copy(approvals = list, peerDeclines = declines) }
+            .stateIn(viewModelScope, SharingStarted.Eagerly, ApprovalsUiState())
 
     init {
         refresh()
@@ -45,6 +49,17 @@ class ApprovalsViewModel @Inject constructor(private val repo: ApprovalsReposito
                 local.update { it.copy(loading = false) }
             } catch (e: VaultFailure) {
                 local.update { it.copy(loading = false, error = e.kind) }
+            }
+        }
+    }
+
+    /** The member saw that the other member declined [requestId] (0.10.5): not shown again. */
+    fun dismissPeerDecline(requestId: String) {
+        viewModelScope.launch {
+            try {
+                repo.dismissPeerDecline(requestId)
+            } catch (e: VaultFailure) {
+                local.update { it.copy(error = e.kind) }
             }
         }
     }

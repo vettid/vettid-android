@@ -49,6 +49,34 @@ class ApprovalsViewModelsTest {
         assertTrue("refreshApprovals" in social.calls)
     }
 
+    /** 0.10.5: the other member declined; the request leaves the list and the member is told once, until dismissed. */
+    @Test
+    fun showsAPeerDeclineOnceUntilDismissed() = runTest {
+        social.approvals.value = listOf(request, outgoing)
+        val vm = ApprovalsViewModel(social)
+        advanceUntilIdle()
+        social.peerDeclined("p1", "Morgan", outgoing = false)
+        social.peerDeclined("c9", "Jordan", outgoing = true)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.approvals.isEmpty())
+        assertEquals(listOf("p1" to false, "c9" to true), vm.uiState.value.peerDeclines.map { it.requestId to it.outgoing })
+        assertEquals(listOf("Morgan", "Jordan"), vm.uiState.value.peerDeclines.map { it.name })
+        vm.dismissPeerDecline("p1")
+        advanceUntilIdle()
+        assertEquals(listOf("c9"), vm.uiState.value.peerDeclines.map { it.requestId })
+    }
+
+    /** The copy of §15 item 18 (0.10.5), word for word, for each side. */
+    @Test
+    fun peerDeclineCopy() {
+        assertEquals(R.string.approvals_peer_declined_outgoing, peerDeclineRes(outgoing = true))
+        assertEquals(R.string.approvals_peer_declined_incoming, peerDeclineRes(outgoing = false))
+        val xml = java.io.File("src/main/res/values/strings.xml").readText()
+        fun string(name: String) = Regex("""<string name="$name">([^<]*)</string>""").find(xml)!!.groupValues[1]
+        assertEquals("%1\$s declined your connection request", string("approvals_peer_declined_outgoing"))
+        assertEquals("%1\$s declined the connection", string("approvals_peer_declined_incoming"))
+    }
+
     @Test
     fun approvesAConnectionRequestAndClosesWithoutCallingItGone() = runTest {
         val vm = detail(request)

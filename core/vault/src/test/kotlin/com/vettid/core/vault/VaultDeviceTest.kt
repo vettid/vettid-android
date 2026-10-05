@@ -227,6 +227,65 @@ class VaultDeviceTest {
         }
     }
 
+    /**
+     * 0.10.5 (§6.7, §6.7.1): the owner rejects after the new device's hs.fin; the vault sends
+     * device.pair.rejected under the handshake's epoch. The device stops waiting, drops the epoch and
+     * the request token of hs.resp, and sends nothing back; a redelivery or a late device.paired is dropped.
+     */
+    @Test
+    fun pairingRejectedEndsTheWaitAndDropsTheHandshake() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val d = VaultDevice.create(config(store), DeviceSecrets.generate())
+            val v = FakeVault()
+            d.handle(v.enrolled(d))
+            d.awaitEnrolled(java.time.Duration.ofSeconds(1))
+            val waiting = async(Dispatchers.IO) { runCatching { d.completeEnrollment(java.time.Duration.ofSeconds(10)) } }
+            val (_, init) = nextDeposit()
+            d.handle(v.respond(init, d))
+            v.fin(nextDeposit().second, d)
+            val rejected = v.seal("device.pair.rejected", "{}")
+            d.handle(rejected)
+            assertTrue(waiting.await().exceptionOrNull() is PairingRejectedException)
+            assertTrue(!d.paired.value)
+            assertNull(d.deviceId)
+            // The request token and the epoch are gone, also from the persisted state.
+            val saved = stateJson.decodeFromString(DeviceState.serializer(), String(store.load()!!))
+            assertEquals("", saved.vault!!.token)
+            assertEquals(0L, saved.vault!!.tokenExpMs)
+            // Nothing was sent back.
+            assertNull(deposits.poll(300, TimeUnit.MILLISECONDS))
+            // A redelivery (new msg_id) or a device.paired after it finds no epoch: dropped.
+            d.handle(v.msg(rejected.payload()))
+            d.handle(v.seal("device.paired", """{"device_id":"dev-1","role":"app","vault_id":"${v.vaultId}"}"""))
+            assertThrows(kotlinx.coroutines.TimeoutCancellationException::class.java) {
+                runBlocking { d.awaitEvent("device.paired", java.time.Duration.ofMillis(200)) }
+            }
+            assertTrue(!d.paired.value)
+            // Pairing again needs a new code: there is no token to start a handshake with.
+            assertThrows(VaultStateException::class.java) { runBlocking { d.completeEnrollment(java.time.Duration.ofMillis(200)) } }
+        }
+    }
+
+    /** A paired device drops a device.pair.rejected (only a device waiting for device.paired acts on it). */
+    @Test
+    fun aPairedDeviceIgnoresAPairingRejection() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            d.handle(v.seal("device.pair.rejected", "{}"))
+            assertTrue(d.paired.value)
+            assertEquals("dev-1", d.deviceId)
+            assertThrows(kotlinx.coroutines.TimeoutCancellationException::class.java) {
+                runBlocking { d.awaitEvent("device.pair.rejected", java.time.Duration.ofMillis(200)) }
+            }
+            // The session still works.
+            val status = async(Dispatchers.IO) { d.op("vault.status") }
+            val req = v.open(nextDeposit().second)
+            d.handle(v.seal("vault.status", """{"vault_id":"x"}""", re = req.id, status = Inner.STATUS_OK))
+            assertEquals("x", VaultJson.str(status.await(), "vault_id"))
+        }
+    }
+
     @Test
     fun answersAVaultInitiatedRekey() = runBlocking<Unit> {
         withTimeout(30_000) {

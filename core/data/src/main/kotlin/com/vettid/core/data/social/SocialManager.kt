@@ -64,6 +64,10 @@ class SocialManager(
     private val listedFlow = MutableStateFlow<List<Approval>>(emptyList())
     private val requestsFlow = MutableStateFlow<List<Approval>>(emptyList())
     private val endsFlow = MutableStateFlow<Map<String, RequestEnd>>(emptyMap())
+    private val declinesFlow = MutableStateFlow(local.declines.map { it.model() })
+
+    /** Peer declines noted in this run, so the `failed` that accompanies one never shows it again (0.10.5). */
+    private val notedDeclines = mutableSetOf<String>()
     private val nowFlow = MutableStateFlow(now())
     private var ttls: List<InviteTtl>? = null
 
@@ -81,6 +85,8 @@ class SocialManager(
 
     override val requestEnds: StateFlow<Map<String, RequestEnd>> = endsFlow.asStateFlow()
 
+    override val peerDeclines: StateFlow<List<PeerDecline>> = declinesFlow.asStateFlow()
+
     private fun now(): Instant = Instant.now(clock)
 
     // --- local state (encrypted file) ---
@@ -91,16 +97,29 @@ class SocialManager(
     @Serializable
     private data class StoredSas(val sas: String, val at: Long)
 
+    /** The name a request showed (0.10.5: kept until a peer's decline can name it). */
+    @Serializable
+    private data class StoredName(val name: String, val at: Long)
+
+    @Serializable
+    private data class StoredDecline(val id: String, val name: String? = null, val outgoing: Boolean, val at: Long) {
+        fun model() = PeerDecline(id, name, outgoing, Instant.ofEpochMilli(at))
+    }
+
     /**
      * [safety]: the safety code of each connection, as this app showed it, by connection id.
      * [requestSas]: the codes of open requests by request id (`pending_id` or the outgoing
      * `connection_id`), until `connection.event{added}` names the request it came from (0.10.2).
+     * [requestNames]: the names open requests showed, by request id; [declines]: the other
+     * member's declines not yet dismissed (0.10.5).
      */
     @Serializable
     private data class Local(
         val events: List<StoredEvent> = emptyList(),
         val safety: Map<String, StoredSas> = emptyMap(),
         val requestSas: Map<String, StoredSas> = emptyMap(),
+        val requestNames: Map<String, StoredName> = emptyMap(),
+        val declines: List<StoredDecline> = emptyList(),
     )
 
     private fun load(): Local = try {
@@ -120,6 +139,7 @@ class SocialManager(
         if (next == local) return@withLock
         local = next
         storedFlow.value = next.events
+        declinesFlow.value = next.declines.map { it.model() }
         try {
             store.save(json.encodeToString(Local.serializer(), next).toByteArray(Charsets.UTF_8))
         } catch (_: KeystoreException) {
@@ -138,6 +158,8 @@ class SocialManager(
         listedFlow.value = emptyList()
         requestsFlow.value = emptyList()
         endsFlow.value = emptyMap()
+        declinesFlow.value = emptyList()
+        notedDeclines.clear()
         ttls = null
     }
 
@@ -232,6 +254,24 @@ class SocialManager(
         }
         endsFlow.update { it - id }
         if (sas != null) rememberSas(id, sas)
+        nameOf(a)?.let { rememberNames(listOf(id to it)) }
+    }
+
+    private fun nameOf(a: Approval): String? = when (a) {
+        is Approval.ConnectionRequest -> a.name
+        is Approval.OutgoingRequest -> a.name
+        else -> null
+    }
+
+    /** Keeps the names requests showed (0.10.5), dropping ones older than any request can live. */
+    private suspend fun rememberNames(names: List<Pair<String, String>>) {
+        val fresh = names.filter { (id, n) -> local.requestNames[id]?.name != n }
+        if (fresh.isEmpty()) return
+        val t = now().toEpochMilli()
+        val cutoff = now().minus(NAME_RETENTION).toEpochMilli()
+        edit { l ->
+            l.copy(requestNames = l.requestNames.filterValues { it.at >= cutoff } + fresh.associate { (id, n) -> id to StoredName(n, t) })
+        }
     }
 
     private suspend fun rememberSas(id: String, sas: String) {
@@ -244,9 +284,36 @@ class SocialManager(
 
     private suspend fun endRequest(id: String, end: RequestEnd?) {
         requestsFlow.update { l -> l.filterNot { requestId(it) == id } }
-        if (end != null) endsFlow.update { it + (id to end) }
-        edit { l -> l.copy(requestSas = l.requestSas - id) }
+        // The other member's decline is what the member is told, whatever end follows it.
+        if (end != null) endsFlow.update { if (it[id] == RequestEnd.PEER_DECLINED) it else it + (id to end) }
+        // A bare `failed` keeps the name: an older ordering may still bring the peer's decline (0.10.5).
+        val keepName = end == RequestEnd.FAILED
+        edit { l -> l.copy(requestSas = l.requestSas - id, requestNames = if (keepName) l.requestNames else l.requestNames - id) }
     }
+
+    /**
+     * The other member declined request [id] (`connection.declined`, 0.10.5, §6.4): it ends
+     * and the member is told once, with the name the request showed. [outgoing]: this member's
+     * own outgoing request (the accepter's side). Comes as `sync.event{peer_declined}` and, on
+     * the accepter's side, also as `connection.event{failed, reason: "declined"}`, in either order.
+     */
+    private suspend fun onPeerDeclined(id: String, outgoing: Boolean) {
+        val name = requestsFlow.value.firstOrNull { requestId(it) == id }?.let(::nameOf) ?: local.requestNames[id]?.name
+        val first = notedDeclines.add(id) && local.declines.none { it.id == id }
+        requestsFlow.update { l -> l.filterNot { requestId(it) == id } }
+        endsFlow.update { it + (id to RequestEnd.PEER_DECLINED) }
+        val at = now().toEpochMilli()
+        edit { l ->
+            l.copy(
+                requestSas = l.requestSas - id,
+                requestNames = l.requestNames - id,
+                declines = if (first) l.declines + StoredDecline(id, name, outgoing, at) else l.declines,
+            )
+        }
+    }
+
+    override suspend fun dismissPeerDecline(requestId: String) =
+        edit { l -> l.copy(declines = l.declines.filterNot { it.id == requestId }) }
 
     private suspend fun refreshRequestsQuietly() {
         try {
@@ -263,6 +330,7 @@ class SocialManager(
         val parsed = entries("incoming").mapNotNull { ApprovalParser.incoming(it, t) } +
             entries("outgoing").mapNotNull { ApprovalParser.outgoing(it, t) }
         requestsFlow.value = parsed
+        rememberNames(parsed.mapNotNull { a -> requestId(a)?.let { id -> nameOf(a)?.let { id to it } } })
         val codes = parsed.mapNotNull { a ->
             when (a) {
                 is Approval.ConnectionRequest -> a.pendingId to a.sas
@@ -281,8 +349,13 @@ class SocialManager(
         runCatching { refresh() }
         when (VaultJson.str(b, "event")) {
             "added" -> onAdded(conn, VaultJson.str(b, "pending_id") ?: conn)
-            // An outgoing request ended without a connection other than by this member's decline (§6.4).
-            "failed" -> endRequest(conn, RequestEnd.FAILED)
+            // An outgoing request ended without a connection other than by this member's decline (§6.4);
+            // `reason: "declined"`: the inviter declined (0.10.5), told once with the sync.event that accompanies it.
+            "failed" -> if (VaultJson.str(b, "reason") == "declined") {
+                onPeerDeclined(conn, outgoing = true)
+            } else {
+                endRequest(conn, RequestEnd.FAILED)
+            }
             "removed" -> {
                 messagesFlow.update { it - conn }
                 authFlow.update { it - conn }
@@ -300,13 +373,24 @@ class SocialManager(
             else -> null
         }
         requestsFlow.update { l -> l.filterNot { requestId(it) == req } }
-        edit { l -> l.copy(safety = if (code != null) l.safety + (conn to code) else l.safety, requestSas = l.requestSas - req) }
+        edit { l ->
+            l.copy(
+                safety = if (code != null) l.safety + (conn to code) else l.safety,
+                requestSas = l.requestSas - req,
+                requestNames = l.requestNames - req,
+            )
+        }
         runCatching { load(conn) }
     }
 
-    /** `sync.event{kind: "connection.request"}`: another device's decision, the peer's approval, or an expiry (§10.1). */
+    /**
+     * `sync.event{kind: "connection.request"}`: another device's decision, the peer's approval
+     * or decline (0.10.5), or an expiry (§10.1). `pending_id` names an incoming request,
+     * `connection_id` an outgoing one.
+     */
     private suspend fun onRequestSync(b: JsonObject) {
-        val id = VaultJson.str(b, "pending_id") ?: VaultJson.str(b, "connection_id") ?: return
+        val pending = VaultJson.str(b, "pending_id")
+        val id = pending ?: VaultJson.str(b, "connection_id") ?: return
         when (VaultJson.str(b, "state")) {
             "approved" -> patchRequest(id) { a ->
                 when (a) {
@@ -323,6 +407,7 @@ class SocialManager(
                 }
             }
             "declined" -> endRequest(id, RequestEnd.DECLINED)
+            "peer_declined" -> onPeerDeclined(id, outgoing = pending == null)
             "expired" -> endRequest(id, RequestEnd.EXPIRED)
         }
     }
@@ -445,6 +530,7 @@ class SocialManager(
             // The outgoing event may already have arrived (it follows hs.resp): keep it then.
             requestsFlow.update { l -> if (l.any { requestId(it) == r.connectionId }) l else l + waiting }
             endsFlow.update { it - r.connectionId }
+            r.name?.let { rememberNames(listOf(r.connectionId to it)) }
         }
         return r
     }
@@ -756,6 +842,9 @@ class SocialManager(
     companion object {
         private const val HISTORY = 200
         private val AUTH_WAIT: Duration = Duration.ofMinutes(10)
+
+        /** Longer than any request lives (§6.4: an approved incoming one, 16 days). */
+        private val NAME_RETENTION: Duration = Duration.ofDays(17)
         private val ORDER = compareBy<MessageInfo>({ it.sentAt }, { it.messageId })
         private val json = Json { ignoreUnknownKeys = true }
     }
