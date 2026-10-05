@@ -34,6 +34,15 @@ interface AccountRepository {
 
     /** Ends the member session on this device; the vault stays paired with it. */
     suspend fun signOut()
+
+    /**
+     * The member's "Erase VettID from this phone" (owner decision, 2026-10-05), offered only where the vault
+     * did not recognise this phone at unlock: the same crash-safe wipe as a replaced phone's (`LocalWipe`),
+     * with the same best-effort, bounded sign-out at the member API and the relay. The erase itself needs no
+     * network. Returns once the phone is as freshly installed ([phase] [AppPhase.SignedOut]); it runs to the
+     * end even if the caller is cancelled.
+     */
+    suspend fun eraseThisPhone()
 }
 
 /** The vault on this device: enrollment, unlock and lock, status, PIN, deletion, recovery. */

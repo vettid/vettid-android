@@ -367,6 +367,14 @@ class VaultManager(
         phaseFlow.value = AppPhase.SignedOut
     }
 
+    /**
+     * The member confirmed "Erase VettID from this phone": [wipeThisPhone] through [holder] (one wipe at a time,
+     * none twice), in [scope] so that leaving the screen does not stop it half-way.
+     */
+    override suspend fun eraseThisPhone() {
+        scope.launch { holder.wipeNow() }.join()
+    }
+
     // --- VaultRepository ---
 
     override suspend fun enroll(pin: String, onStep: (EnrollStep) -> Unit) = guard {
@@ -823,8 +831,10 @@ class VaultManager(
     // --- a replaced phone erases itself (owner decision, 2026-10-05) ---
 
     /**
-     * Runs only from [holder], after an authenticated proof ([HolderPolicy]): the vault already made another
-     * phone its app, so nothing here is the only copy of anything. Everything goes: the session and the device
+     * Runs only from [holder]: after an authenticated proof ([HolderPolicy]), when the vault already made another
+     * phone its app, so nothing here is the only copy of anything; or when the member confirmed
+     * [eraseThisPhone] on an unlock the vault did not recognise (a phone that missed its `device.unlinked`
+     * because it was offline longer than the relay keeps messages). Everything goes: the session and the device
      * state, the relay mailbox, the member session, the social state, the account record, the Keystore keys,
      * the files, the preferences and the notifications ([LocalWipe]); the app then shows the welcome screen.
      */

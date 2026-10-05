@@ -113,6 +113,29 @@ class HolderWatchTest {
         assertEquals(1, wipes)
     }
 
+    // --- the member's "Erase VettID from this phone" (owner decision, 2026-10-05) ---
+
+    @Test
+    fun theMembersEraseWipesOnce() = runTest {
+        val w = watch()
+        w.wipeNow()
+        assertEquals(1, wipes)
+        assertEquals(1, w.count)
+    }
+
+    @Test
+    fun anEraseWhileAProofsWipeRunsWipesOnce() = runTest {
+        var running = 0
+        val w = HolderWatch(this) { running++; delay(1_000); wipes++ }
+        w.onVaultEvent(event("device.unlinked", """{"reason":"replaced"}"""))
+        advanceTimeBy(10) // the proof's wipe runs
+        val erase = async { w.wipeNow() }
+        advanceUntilIdle()
+        erase.await()
+        assertEquals(1, running)
+        assertEquals(1, wipes)
+    }
+
     // --- nothing else does ---
 
     @Test

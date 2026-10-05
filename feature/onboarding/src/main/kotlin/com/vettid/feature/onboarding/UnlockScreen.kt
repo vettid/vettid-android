@@ -32,6 +32,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
@@ -69,7 +70,7 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
         },
         onPrimary = if (state.preflightError != null) actions::retryPreflight else actions::submit,
         primaryEnabled = state.preflightError != null || (state.pinAllowed && state.pin.length >= 4),
-        busy = state.busy || state.loading,
+        busy = state.busy || state.loading || state.erasing,
         secondaryLabel = stringResource(R.string.unlock_sign_out),
         onSecondary = actions::signOut,
         header = {
@@ -136,16 +137,58 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                         stringResource(R.string.unlock_title),
                         stringResource(R.string.unlock_update_refused, m.code),
                     )
-                    is UnlockMessage.Failed -> NoticeCard(
-                        NoticeKind.URGENT,
-                        stringResource(R.string.unlock_title),
-                        if (m.code == "unreadable_result") stringResource(R.string.unlock_unreadable)
-                            else stringResource(m.kind.messageRes()),
-                        modifier = Modifier.testTag("unlock_failed"),
-                    )
+                    // An unreadable result is the "not recognised" notice below, with its erase action.
+                    is UnlockMessage.Failed -> if (m.code != UnlockViewModel.CODE_UNREADABLE || !state.notRecognised) {
+                        NoticeCard(
+                            NoticeKind.URGENT,
+                            stringResource(R.string.unlock_title),
+                            if (m.code == UnlockViewModel.CODE_UNREADABLE) stringResource(R.string.unlock_unreadable)
+                                else stringResource(m.kind.messageRes()),
+                            modifier = Modifier.testTag("unlock_failed"),
+                        )
+                    }
                     else -> Unit
                 }
             }
+            if (state.notRecognised) NotRecognisedNotice(state.erasing, actions::askErase)
+        }
+    }
+    if (state.eraseConfirm) {
+        ConfirmDialog(
+            title = stringResource(R.string.unlock_erase_confirm_title),
+            text = stringResource(R.string.unlock_erase_confirm_body),
+            confirmLabel = stringResource(R.string.unlock_erase_confirm),
+            onConfirm = actions::confirmErase,
+            onDismiss = actions::dismissErase,
+            modifier = Modifier.testTag("erase_confirm"),
+            destructive = true,
+        )
+    }
+}
+
+/**
+ * The vault did not recognise this phone at unlock (an unreadable result): the phone may have been replaced
+ * while it was offline longer than the relay keeps its `device.unlinked`. Offers "Erase VettID from this
+ * phone" (owner decision, 2026-10-05); [erasing] shows the erase running.
+ */
+@Composable
+private fun NotRecognisedNotice(erasing: Boolean, onErase: () -> Unit) {
+    NoticeCard(
+        NoticeKind.URGENT,
+        stringResource(R.string.unlock_not_recognised_title),
+        stringResource(R.string.unlock_not_recognised_body),
+        modifier = Modifier.testTag("unlock_not_recognised"),
+        actions = {
+            TextButton(onClick = onErase, enabled = !erasing, modifier = Modifier.testTag("erase_phone")) {
+                Text(stringResource(R.string.unlock_erase), color = MaterialTheme.colorScheme.error)
+            }
+        },
+    )
+    if (erasing) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.semantics(mergeDescendants = true) {}) {
+            CircularProgressIndicator(Modifier.height(20.dp).width(20.dp), strokeWidth = 2.dp)
+            Spacer(Modifier.width(Spacing.m))
+            Text(stringResource(R.string.unlock_erasing), style = MaterialTheme.typography.bodyMedium)
         }
     }
 }
