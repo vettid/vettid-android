@@ -12,8 +12,6 @@ import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.EnrollStep
 import com.vettid.core.data.vault.FailureKind
-import com.vettid.core.data.vault.MoveRepository
-import com.vettid.core.data.vault.ReplacedReason
 import com.vettid.core.data.vault.SetupStage
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultRepository
@@ -47,9 +45,6 @@ enum class OnboardingStep {
 
     /** Moving VettID here from the old phone (§6.7.1): [TransferInViewModel] runs the steps. */
     TRANSFER_IN,
-
-    /** This phone no longer holds the vault (a transfer or a recovery replaced it). */
-    REPLACED,
 }
 
 /** What the member came to do on the welcome screen; decides where onboarding goes after sign-in. */
@@ -84,7 +79,6 @@ data class OnboardingUiState(
     val errorCode: String? = null,
     val devHint: String? = null,
     val goal: OnboardingGoal = OnboardingGoal.NEW_VAULT,
-    val replacedReason: ReplacedReason = ReplacedReason.UNKNOWN,
 ) {
     val canContinueBackup: Boolean get() = backup || backupOffAcknowledged
     val progressFailed: Boolean get() = progress.any { it.second == StepState.FAILED }
@@ -104,7 +98,6 @@ data class OnboardingUiState(
 class OnboardingViewModel @Inject constructor(
     private val account: AccountRepository,
     private val vault: VaultRepository,
-    private val move: MoveRepository,
     private val inbox: SignInLinkInbox,
 ) : ViewModel(), OnboardingActions {
     private val state = MutableStateFlow(OnboardingUiState(devHint = account.devHint, email = account.pendingEmail.value ?: ""))
@@ -134,8 +127,15 @@ class OnboardingViewModel @Inject constructor(
         )
         val moving = s.step == OnboardingStep.RECOVER || s.step == OnboardingStep.TRANSFER_IN
         when (phase) {
+            // Signed out, or a replaced phone that erased itself: the welcome screen, nothing of before kept.
             AppPhase.SignedOut -> if (s.step !in signInSteps) {
-                go(if (account.pendingEmail.value != null) OnboardingStep.CHECK_EMAIL else OnboardingStep.WELCOME)
+                enrolled = false
+                val pending = account.pendingEmail.value
+                state.value = OnboardingUiState(
+                    step = if (pending != null) OnboardingStep.CHECK_EMAIL else OnboardingStep.WELCOME,
+                    devHint = account.devHint,
+                    email = pending ?: "",
+                )
             }
             is AppPhase.TermsRequired -> state.update { it.copy(step = OnboardingStep.TERMS, termsUpdated = phase.updated, busy = false) }
             is AppPhase.Setup -> when (phase.stage) {
@@ -159,12 +159,6 @@ class OnboardingViewModel @Inject constructor(
                 }
                 // A recovery or a transfer shows its own "your vault is on this phone now".
                 SetupStage.FINISHING -> if (!moving) go(OnboardingStep.DONE)
-            }
-            is AppPhase.Replaced -> state.update {
-                it.copy(
-                    step = OnboardingStep.REPLACED, replacedReason = phase.reason, goal = OnboardingGoal.NEW_VAULT,
-                    busy = false, error = null,
-                )
             }
             else -> Unit
         }
@@ -249,15 +243,6 @@ class OnboardingViewModel @Inject constructor(
     override fun newVaultAfterMove() {
         state.update { it.copy(goal = OnboardingGoal.NEW_VAULT) }
         go(OnboardingStep.PIN_CREATE)
-    }
-
-    /** Replaced: the member read it; this phone can be set up again (§6.7.1, §11.11.5). */
-    override fun acknowledgeReplaced() {
-        viewModelScope.launch {
-            state.update { it.copy(busy = true) }
-            move.acknowledgeReplaced()
-            state.update { it.copy(busy = false) }
-        }
     }
 
     override fun setEmail(v: String) = state.update { it.copy(email = v.take(MAX_EMAIL), emailInvalid = false) }

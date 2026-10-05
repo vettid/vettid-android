@@ -102,7 +102,6 @@ import com.vettid.feature.onboarding.RecoverActions
 import com.vettid.feature.onboarding.RecoverContent
 import com.vettid.feature.onboarding.RecoverStep
 import com.vettid.feature.onboarding.RecoverUiState
-import com.vettid.feature.onboarding.ReplacedScreen
 import com.vettid.feature.onboarding.TransferInActions
 import com.vettid.feature.onboarding.TransferInContent
 import com.vettid.feature.onboarding.TransferInStep
@@ -112,7 +111,6 @@ import com.vettid.feature.settings.TransferOutContent
 import com.vettid.feature.settings.TransferOutStep
 import com.vettid.feature.settings.TransferOutUiState
 import com.vettid.core.data.vault.RecoveryTarget
-import com.vettid.core.data.vault.ReplacedReason
 import com.vettid.core.data.vault.TransferOfferView
 import com.vettid.core.data.vault.TransferPendingView
 import com.vettid.feature.settings.AttestationContent
@@ -139,7 +137,6 @@ private object NoOnboarding : OnboardingActions {
     override fun transfer() = Unit
     override fun leaveMove() = Unit
     override fun newVaultAfterMove() = Unit
-    override fun acknowledgeReplaced() = Unit
     override fun setEmail(v: String) = Unit
     override fun submitEmail() = Unit
     override fun resendLink() = Unit
@@ -353,9 +350,6 @@ object ScreenCatalog {
             )
         },
         "onboarding.done" to { Ob(onboarding.copy(step = OnboardingStep.DONE)) },
-        "onboarding.replaced" to { ReplacedScreen(ReplacedReason.TRANSFERRED, {}, {}) },
-        "onboarding.replaced_recovered" to { ReplacedScreen(ReplacedReason.RECOVERED, {}, {}) },
-        "onboarding.replaced_unknown" to { ReplacedScreen(ReplacedReason.UNKNOWN, {}, {}) },
         "recover" to { Rec(recState) },
         "recover.none" to { Rec(recState.copy(target = RecoveryTarget(VID, null))) },
         "recover.pending" to { Rec(recState.copy(target = RecoveryTarget(VID, rec.copy(state = "pending")))) },
@@ -470,6 +464,7 @@ object ScreenCatalog {
         "settings.transfer_reject_confirm" to { TOut(out.copy(step = TransferOutStep.COMPARE, pending = transferPending, confirmReject = true)) },
         "settings.transfer_expired" to { TOut(TransferOutUiState(step = TransferOutStep.EXPIRED)) },
         "settings.transfer_rejected" to { TOut(TransferOutUiState(step = TransferOutStep.REJECTED)) },
+        "settings.transfer_moved" to { TOut(TransferOutUiState(step = TransferOutStep.MOVED, pending = transferPending)) },
         "settings.transfer_exists" to { TOut(TransferOutUiState(error = FailureKind.OTHER, errorCode = "exists")) },
         "settings.attestation" to {
             AttestationContent(LoadState(false, AttestationInfo("devStack", true, "STRONG_BOX", true, 400, "SelfSigned", true, "4e8e e8f7 1c2d 3e4f", 3, "0303 0303 0303 0303")), {})

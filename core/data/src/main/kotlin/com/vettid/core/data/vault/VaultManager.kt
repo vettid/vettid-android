@@ -21,6 +21,7 @@ import com.vettid.core.data.social.InviteLinks
 import com.vettid.core.data.social.SocialManager
 import com.vettid.core.data.account.SignInLink
 import com.vettid.core.data.env.AppEnvironment
+import com.vettid.core.data.wipe.LocalWipe
 import com.vettid.core.keystore.AndroidKeys
 import com.vettid.core.keystore.DeviceAttestationKey
 import com.vettid.core.keystore.DeviceKeys
@@ -71,6 +72,10 @@ import java.time.format.DateTimeParseException
  *
  * One instance per process (Hilt singleton). Its [scope] runs the mailbox
  * collector and the event observer while the app process lives.
+ *
+ * A phone that a direct transfer (§6.7.1) or a recovery (§11.11.5) replaced
+ * erases itself through [wiper] once an authenticated signal proves it
+ * ([HolderWatch], [HolderPolicy]); the app is then as freshly installed.
  */
 @Suppress("TooManyFunctions", "LargeClass")
 class VaultManager(
@@ -79,6 +84,7 @@ class VaultManager(
     baseHttp: OkHttpClient,
     private val scope: CoroutineScope,
     private val deviceName: String,
+    private val wiper: LocalWipe,
 ) : AccountRepository, VaultRepository, CredentialRepository, MoveRepository {
     private val app = context.applicationContext
     private val http = env.http(baseHttp)
@@ -88,6 +94,13 @@ class VaultManager(
     private var session: Session? = null
     private var observer: Job? = null
     private var local: LocalAccount = loadLocal()
+
+    /** Bumped by every wipe: a phase computed before it is not published after it. */
+    @Volatile
+    private var generation = 0
+
+    /** Proofs that this phone was replaced, and the wipe they start. */
+    val holder = HolderWatch(scope) { wipeThisPhone() }
 
     private val phaseFlow = MutableStateFlow<AppPhase>(AppPhase.Starting)
     private val accountFlow = MutableStateFlow(local.toInfo())
@@ -135,7 +148,10 @@ class VaultManager(
         val lastName: String = "",
         val pendingEmail: String? = null,
         val setupComplete: Boolean = false,
-        /** Set when this phone stopped holding the vault ([ReplacedReason] name), until the member moves on. */
+        /**
+         * Written by the build before the wipe (0af6ba1) when this phone stopped holding the vault; that build had
+         * already forgotten the device keys. Read only to finish such a phone with a wipe.
+         */
         val replaced: String? = null,
     ) {
         fun toInfo(): AccountInfo? = if (userGuid.isEmpty()) null else AccountInfo(email, firstName, lastName)
@@ -163,6 +179,8 @@ class VaultManager(
     }
 
     private suspend fun openSession(): Session = io {
+        // Nothing of a vault without a member session (and nothing re-created after a wipe).
+        if (!gateway.hasSession()) throw VaultFailure(FailureKind.UNAUTHORIZED)
         val trust: AltTrust = env.trust(http)
         val keys = deviceKeys()
         for (slot in KeySlot.entries) if (!keys.has(slot)) keys.generate(slot)
@@ -241,16 +259,10 @@ class VaultManager(
                     else -> alarmFlow.value
                 }
             }
-            "device.unlinked" -> {
-                // Replaced by a recovery or moved by a transfer: this app no longer holds the vault (§10.3). Not in this
-                // coroutine: dropping the session cancels the observer that runs it.
-                val reason = when (VaultJson.str(m.body, "reason")) {
-                    "transferred" -> ReplacedReason.TRANSFERRED
-                    "replaced" -> ReplacedReason.RECOVERED
-                    else -> ReplacedReason.UNKNOWN
-                }
-                scope.launch { markReplaced(reason) }
-            }
+            // §10.3: opened under the session, from the vault's relay key. `transferred` (§6.7.1 step 4) and
+            // `replaced` (§11.11.5 step 3) wipe this phone (in another coroutine: the wipe cancels this observer);
+            // another reason (`vault_deleted`) is re-read like any change of the vault.
+            HolderPolicy.DEVICE_UNLINKED -> if (!holder.onVaultEvent(m)) scope.launch { refresh() }
         }
     }
 
@@ -268,15 +280,17 @@ class VaultManager(
     // --- AccountRepository ---
 
     override suspend fun refresh() {
-        try {
-            phaseFlow.value = evaluate()
+        val gen = generation
+        val p = try {
+            evaluate()
         } catch (e: VaultFailure) {
-            phaseFlow.value = when (e.kind) {
+            when (e.kind) {
                 FailureKind.UNAUTHORIZED -> AppPhase.SignedOut
                 FailureKind.TERMS_REQUIRED -> AppPhase.TermsRequired(updated = false)
                 else -> AppPhase.Unreachable(e.kind)
             }
         }
+        if (gen == generation) phaseFlow.value = p // a wipe meanwhile already said SignedOut
     }
 
     private suspend fun evaluate(): AppPhase = guard {
@@ -285,7 +299,11 @@ class VaultManager(
         saveLocal(
             local.copy(email = me.email, userGuid = me.userGuid, firstName = me.firstName, lastName = me.lastName, pendingEmail = null),
         )
-        local.replaced?.let { return@guard AppPhase.Replaced(replacedReason(it)) }
+        if (local.replaced != null) {
+            // A phone the build before the wipe marked replaced (its device keys already forgotten): erase it now.
+            holder.wipeNow()
+            return@guard AppPhase.SignedOut
+        }
         if (me.state != STATE_MEMBER || me.termsNeedAcceptance) return@guard AppPhase.TermsRequired(updated = me.state == STATE_MEMBER)
         val s = session()
         val d = s.device
@@ -345,7 +363,6 @@ class VaultManager(
             // the local session is cleared either way
         }
         dropSession(forget = false)
-        if (local.replaced != null) saveLocal(local.copy(replaced = null))
         windowFlow.value = null
         phaseFlow.value = AppPhase.SignedOut
     }
@@ -389,15 +406,16 @@ class VaultManager(
         PreflightInfo(view(p.routed), p.lastNumber, p.softwareUpdated, p.rollback, p.offer?.let { view(it) })
     }
 
-    override suspend fun unlock(pin: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt {
-        val r = unlockOnce(pin, approve, cancelRecovery)
-        // §11.11.5, §6.7.1: the vault no longer knows this app: a recovery or a transfer replaced it.
-        if (r is UnlockAttempt.Failed && r.code == CODE_UNKNOWN_DEVICE) markReplaced(ReplacedReason.UNKNOWN)
-        return r
-    }
+    override suspend fun unlock(pin: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt =
+        unlockOnce(pin, approve, cancelRecovery, holderApp = true)
 
+    /**
+     * [holderApp]: this phone unlocks as the vault's app (not a recovering one): an enclave's sealed
+     * `unknown_device` then means a transfer (§6.7.1) or a recovery (§11.11.5) replaced it, and it is wiped.
+     * A failure before the sealed result (network, HTTP status, timeout, unreadable result) never wipes.
+     */
     @Suppress("ReturnCount", "CyclomaticComplexMethod") // one answer per §11.4 result code
-    private suspend fun unlockOnce(pin: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt {
+    private suspend fun unlockOnce(pin: String, approve: ReleaseView?, cancelRecovery: Boolean, holderApp: Boolean = false): UnlockAttempt {
         val outcome = try {
             guard {
                 val s = session()
@@ -410,11 +428,13 @@ class VaultManager(
                 out
             }
         } catch (e: VaultFailure) {
+            holder.onFailure(e) // never proof
             if (e.kind == FailureKind.TERMS_REQUIRED) phaseFlow.value = AppPhase.TermsRequired(updated = true)
             return UnlockAttempt.Failed(e.kind, e.code)
         }
         val r = outcome.result
         if (!r.ok) {
+            if (holderApp && holder.onSealedUnlockResult(r)) return UnlockAttempt.Failed(FailureKind.OTHER, r.code)
             return when (r.code) {
                 "bad_pin" -> UnlockAttempt.BadPin(r.retryAfterSeconds)
                 "backoff" -> UnlockAttempt.Backoff(r.retryAfterSeconds)
@@ -426,9 +446,11 @@ class VaultManager(
             }
         }
         val refused = r.update?.takeIf { it.result == "refused" }
+        val gen = generation
         val s = session()
         scope.launch { runCatching { s.device.flushOutbox() } }
-        phaseFlow.value = afterUnlocked(s)
+        val p = afterUnlocked(s)
+        if (gen == generation) phaseFlow.value = p
         return if (refused != null) UnlockAttempt.UpdateRefused(refused.code ?: "refused") else UnlockAttempt.Success
     }
 
@@ -782,30 +804,59 @@ class VaultManager(
         }
     }
 
-    override suspend fun transferApprove(transferId: String, pin: String, password: String) {
-        guard { session().api.transferApprove(transferId, pin, password) }
-        openTransferId = null
-        markReplaced(ReplacedReason.TRANSFERRED)
-    }
+    /**
+     * §6.7.1 step 3: the approval. Its `{}` is not yet proof that the transfer completed (vettid-vault completes
+     * it right after the response, `afterRespond`, and only then removes this app); the proof is the
+     * `device.unlinked{transferred}` that follows (step 4), which wipes this phone. Waits for it a little.
+     */
+    override suspend fun transferApprove(transferId: String, pin: String, password: String): Boolean =
+        holder.approveTransfer(UNLINK_WAIT_MS) {
+            guard { session().api.transferApprove(transferId, pin, password) }
+            openTransferId = null
+        }
 
     override suspend fun transferReject(transferId: String) = guard {
         session().api.transferReject(transferId)
         if (openTransferId == transferId) openTransferId = null
     }
 
-    // --- MoveRepository: after a move ---
+    // --- a replaced phone erases itself (owner decision, 2026-10-05) ---
 
-    /** This phone no longer holds the vault: forget it (fresh device keys) and say so until the member moves on. */
-    private suspend fun markReplaced(reason: ReplacedReason) {
-        if (phaseFlow.value is AppPhase.Replaced) return
-        dropSession(forget = true)
-        io { saveLocal(local.copy(replaced = reason.name, setupComplete = false)) }
-        phaseFlow.value = AppPhase.Replaced(reason)
-    }
-
-    override suspend fun acknowledgeReplaced() {
-        io { saveLocal(local.copy(replaced = null)) }
-        refresh()
+    /**
+     * Runs only from [holder], after an authenticated proof ([HolderPolicy]): the vault already made another
+     * phone its app, so nothing here is the only copy of anything. Everything goes: the session and the device
+     * state, the relay mailbox, the member session, the social state, the account record, the Keystore keys,
+     * the files, the preferences and the notifications ([LocalWipe]); the app then shows the welcome screen.
+     */
+    private suspend fun wipeThisPhone() {
+        generation++
+        wiper.begin() // crash-safe: a process that dies from here on finishes the wipe at its next start
+        mutex.withLock {
+            observer?.cancel()
+            observer = null
+            val d = session?.device
+            session = null
+            if (d != null) {
+                // Best effort, bounded: the relay forgets the mailbox; the wipe does not depend on it.
+                withTimeoutOrNull(BEST_EFFORT_MS) { runCatching { io { d.deleteMailbox() } } }
+                runCatching { d.forget() }
+            }
+        }
+        // The member session: revoked at the API if it answers in time; forgotten locally whatever happens.
+        withTimeoutOrNull(BEST_EFFORT_MS) { runCatching { io { gateway.signOut() } } }
+        runCatching { gateway.forgetLocal() }
+        social.clear()
+        transferStartedAt = null
+        openTransferId = null
+        alarmFlow.value = null
+        windowFlow.value = null
+        wiper.resetMemory()
+        io { if (wiper.erase()) wiper.finish() }
+        local = LocalAccount()
+        accountFlow.value = null
+        pendingEmailFlow.value = null
+        generation++
+        phaseFlow.value = AppPhase.SignedOut
     }
 
     // --- helpers ---
@@ -832,7 +883,6 @@ class VaultManager(
         private const val LIST_PAGE = 500
         private const val MAX_PAGES = 4
         private const val FINGERPRINT_HEX = 16
-        private const val CODE_UNKNOWN_DEVICE = "unknown_device"
         private const val CODE_NOT_AVAILABLE = "not_available"
         private const val CODE_NOT_TRANSFER = "not_transfer"
         private const val CODE_EXISTS = "exists"
@@ -843,7 +893,11 @@ class VaultManager(
         /** The pairing window: 10 minutes after `hs.init` (§6.7, 0.10.4). */
         private val PAIRING_WINDOW: Duration = Duration.ofMinutes(10)
 
-        private fun replacedReason(name: String) = ReplacedReason.entries.firstOrNull { it.name == name } ?: ReplacedReason.UNKNOWN
+        /** How long the old phone's approval waits for `device.unlinked{transferred}` (§6.7.1 step 4). */
+        private const val UNLINK_WAIT_MS = 30_000L
+
+        /** The bound of the best-effort network calls of a wipe (relay mailbox, member sign-out). */
+        private const val BEST_EFFORT_MS = 5_000L
         private const val KEY_FINGERPRINT_CHARS = 12
         private const val GROUP = 4
         private val json = Json { ignoreUnknownKeys = true }

@@ -2,7 +2,6 @@ package com.vettid.feature.settings
 
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.FailureKind
-import com.vettid.core.data.vault.ReplacedReason
 import com.vettid.core.data.vault.TransferOfferView
 import com.vettid.core.data.vault.TransferPendingView
 import com.vettid.core.testing.FakeVault
@@ -52,10 +51,32 @@ class TransferOutViewModelTest {
         assertEquals(pending.transferId, vault.lastTransferApproved)
         assertEquals("975310", vault.lastPin)
         assertEquals("correct horse battery", vault.lastPassword)
-        assertEquals(AppPhase.Replaced(ReplacedReason.TRANSFERRED), vault.phase.value)
+        // The vault's device.unlinked{transferred} followed: this phone erased itself (welcome screen).
+        assertEquals(AppPhase.SignedOut, vault.phase.value)
         assertEquals("", vm.uiState.value.pin)
         assertEquals("", vm.uiState.value.password)
         vm.leave()
+    }
+
+    @Test
+    fun anApprovalTheVaultHasNotConfirmedYetSaysTheVaultMoved() = runTest {
+        vault.transferConfirmed = false
+        val vm = TransferOutViewModel(vault)
+        vm.create()
+        advanceTimeBy(100)
+        vault.pendingTransfer.complete(pending)
+        advanceTimeBy(100)
+        vm.codesMatch()
+        vm.setPin("975310")
+        vm.setPassword("correct horse battery")
+        vm.approve()
+        advanceTimeBy(100)
+        assertEquals(TransferOutStep.MOVED, vm.uiState.value.step)
+        assertEquals(AppPhase.Unlocked, vault.phase.value) // not wiped on the {} alone
+        assertEquals("", vm.uiState.value.pin)
+        assertEquals("", vm.uiState.value.password)
+        vm.leave()
+        assertFalse("transferReject" in vault.calls) // leaving after the approval rejects nothing
     }
 
     @Test

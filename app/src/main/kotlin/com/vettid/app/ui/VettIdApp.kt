@@ -46,7 +46,7 @@ private data object MainDest
 private fun destinationOf(phase: AppPhase): Any = when (phase) {
     AppPhase.Starting -> StartingDest
     is AppPhase.Unreachable -> UnreachableDest
-    AppPhase.SignedOut, is AppPhase.TermsRequired, is AppPhase.Setup, is AppPhase.Replaced -> OnboardingDest
+    AppPhase.SignedOut, is AppPhase.TermsRequired, is AppPhase.Setup -> OnboardingDest
     AppPhase.Locked -> UnlockDest
     AppPhase.Unlocked -> MainDest
 }

@@ -158,13 +158,12 @@ interface MoveRepository {
     /** Waits until [until] for the new phone's `device.transfer.pending`; null when the code expired first. */
     suspend fun awaitTransferPending(transferId: String, until: Instant): TransferPendingView?
 
-    /** Approves with the PIN and the password; on success this phone no longer holds the vault ([AppPhase.Replaced]). */
-    suspend fun transferApprove(transferId: String, pin: String, password: String)
+    /**
+     * Approves with the PIN and the password (§6.7.1 step 3), then waits a little for the vault's
+     * `device.unlinked{transferred}`, which erases this phone (the app is then SignedOut, as freshly
+     * installed). True when that happened; false when the notice has not arrived yet (it wipes when it does).
+     */
+    suspend fun transferApprove(transferId: String, pin: String, password: String): Boolean
 
     suspend fun transferReject(transferId: String)
-
-    // --- the old phone after a move ---
-
-    /** The member read "This phone no longer holds your vault": set up this phone again. */
-    suspend fun acknowledgeReplaced()
 }

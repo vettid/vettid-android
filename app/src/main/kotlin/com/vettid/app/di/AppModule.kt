@@ -19,6 +19,8 @@ import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.MoveRepository
 import com.vettid.core.data.vault.VaultManager
 import com.vettid.core.data.vault.VaultRepository
+import com.vettid.core.data.wipe.AndroidWipeTargets
+import com.vettid.core.data.wipe.LocalWipe
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -64,7 +66,27 @@ object AppModule {
         env: AppEnvironment,
         http: OkHttpClient,
         @AppScope scope: CoroutineScope,
-    ): VaultManager = VaultManager(context, env, http, scope, deviceName = Build.MODEL ?: "Android")
+        wipe: LocalWipe,
+    ): VaultManager = VaultManager(context, env, http, scope, deviceName = Build.MODEL ?: "Android", wiper = wipe)
+
+    /** The wipe of a replaced phone (owner decision, 2026-10-05): what it erases, and the in-memory state it resets. */
+    @Provides
+    @Singleton
+    fun localWipe(
+        @ApplicationContext context: Context,
+        prefs: PreferencesRepository,
+        appLock: AppLock,
+        signInLinks: SignInLinkInbox,
+        inviteLinks: InviteLinkInbox,
+    ): LocalWipe = LocalWipe(
+        AndroidWipeTargets(context),
+        hooks = listOf(
+            { appLock.reset() },
+            { prefs.clear() },
+            { signInLinks.consume() },
+            { inviteLinks.consume() },
+        ),
+    )
 
     @Provides
     fun accountRepository(m: VaultManager): AccountRepository = m

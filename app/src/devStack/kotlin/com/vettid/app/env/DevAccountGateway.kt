@@ -84,6 +84,11 @@ internal class DevAccountGateway(
         client = null
     }
 
+    override fun forgetLocal() {
+        prefs.edit().clear().commit()
+        client = null
+    }
+
     override fun member(): MemberApiClient {
         val guid = prefs.getString(KEY_GUID, null) ?: ""
         client?.let { (g, c) -> if (g == guid) return c }

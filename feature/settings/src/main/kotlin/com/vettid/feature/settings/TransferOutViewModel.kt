@@ -35,6 +35,12 @@ enum class TransferOutStep {
     APPROVE,
     EXPIRED,
     REJECTED,
+
+    /**
+     * Approved, and the vault's `device.unlinked{transferred}` has not arrived yet (§6.7.1 step 4): this phone
+     * erases itself when it does. (When it arrives in time the app is already on the welcome screen.)
+     */
+    MOVED,
 }
 
 /** Immutable UI state of the transfer on the old phone. The PIN and password live here only until the approval. */
@@ -82,8 +88,9 @@ interface TransferOutActions {
  * new phone scans; `device.transfer.pending` brings the SAS once the new
  * phone's handshake checked out; the member compares it and approves with the
  * PIN and the credential password (`device.transfer.approve`), which
- * completes the transfer: this phone is then removed from the vault, and the
- * app shows "This phone no longer holds your vault". A mismatch rejects it.
+ * completes the transfer: the vault then removes this phone and tells it
+ * (`device.unlinked{transferred}`), and the app erases itself (owner decision,
+ * 2026-10-05). A mismatch rejects it.
  */
 @HiltViewModel
 class TransferOutViewModel @Inject constructor(private val move: MoveRepository) : ViewModel(), TransferOutActions {
@@ -176,7 +183,10 @@ class TransferOutViewModel @Inject constructor(private val move: MoveRepository)
 
     override fun askApprove(show: Boolean) = state.update { it.copy(confirmApprove = show && it.canApprove) }
 
-    /** Critical (§6.7.1): the PIN and the password, after the confirmation. Success leaves this screen (the phase changes). */
+    /**
+     * Critical (§6.7.1): the PIN and the password, after the confirmation. Once the vault confirms, the app erases
+     * itself and leaves this screen (the phase changes); until then [TransferOutStep.MOVED].
+     */
     override fun approve() {
         val s = state.value
         val id = s.offer?.transferId ?: return
@@ -184,9 +194,11 @@ class TransferOutViewModel @Inject constructor(private val move: MoveRepository)
         state.update { it.copy(busy = true, confirmApprove = false, error = null) }
         viewModelScope.launch {
             try {
-                move.transferApprove(id, s.pin, s.password)
+                val wiped = move.transferApprove(id, s.pin, s.password)
                 ticker?.cancel()
-                state.update { it.copy(busy = false, pin = "", password = "") }
+                state.update {
+                    it.copy(step = if (wiped) it.step else TransferOutStep.MOVED, busy = false, pin = "", password = "", offer = null)
+                }
             } catch (e: VaultFailure) {
                 state.update { it.copy(busy = false, pin = "", password = "", error = e.kind, errorCode = e.code) }
                 if (e.retryAfterSeconds > 0) startBackoff(e.retryAfterSeconds)

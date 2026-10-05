@@ -86,7 +86,7 @@
 
     <!-- Recovery -->
     <string name="settings_recovery_title">Recovery</string>
-    <string name="settings_recovery_body">If you lose this phone, start a recovery on the account site. Your vault locks at once; after 24 hours the site shows a code that a new phone scans, and with your PIN and credential password the new phone takes over. This phone is then signed out of the vault. While you still have this phone, use Move to a new phone instead: no waiting.</string>
+    <string name="settings_recovery_body">If you lose this phone, start a recovery on the account site. Your vault locks at once; after 24 hours the site shows a code that a new phone scans, and with your PIN and credential password the new phone takes over. This phone then erases VettID the next time it reaches your vault. While you still have this phone, use Move to a new phone instead: no waiting.</string>
     <string name="settings_recovery_transfer">Move to a new phone</string>
     <string name="settings_recovery_backup_off">Your credential backup is off: a recovery cannot bring back your credential or critical items.</string>
     <string name="settings_recovery_none">No recovery is in progress.</string>
@@ -139,7 +139,7 @@
 
     <!-- Direct transfer, the old phone (VAULT-MESSAGING §6.7.1) -->
     <string name="settings_transfer_title">Move to a new phone</string>
-    <string name="settings_transfer_body">Move your vault, your credential and your connections to a new phone. This phone is then signed out of the vault and keeps nothing of it.</string>
+    <string name="settings_transfer_body">Move your vault, your credential and your connections to a new phone. This phone then erases VettID and keeps nothing of it.</string>
     <string name="settings_transfer_steps_title">How it works</string>
     <string name="settings_transfer_steps_body">1. On the new phone, install VettID, choose Move from my old phone and sign in to your account.
 2. Show the code here and scan it with the new phone.
@@ -162,12 +162,12 @@
     <string name="settings_transfer_reject_title">Reject the transfer?</string>
     <string name="settings_transfer_reject_body">Nothing changes: your vault stays on this phone. The new phone is told it was rejected.</string>
     <string name="settings_transfer_approve_title">Approve the move</string>
-    <string name="settings_transfer_approve_body">Your vault checks your PIN and your credential password, then hands the vault to %1$s. This phone is signed out of the vault at once.</string>
+    <string name="settings_transfer_approve_body">Your vault checks your PIN and your credential password, then hands the vault to %1$s. This phone then erases VettID and returns to the welcome screen, as if freshly installed.</string>
     <string name="settings_transfer_pin">Vault PIN</string>
     <string name="settings_transfer_password">Credential password</string>
     <string name="settings_transfer_approve">Move my vault</string>
     <string name="settings_transfer_approve_confirm_title">Move your vault to %1$s?</string>
-    <string name="settings_transfer_approve_confirm_body">This phone will no longer hold your vault or your credential. You cannot undo this from here.</string>
+    <string name="settings_transfer_approve_confirm_body">This phone will no longer hold your vault or your credential, and VettID erases everything it kept here. You cannot undo this from here.</string>
     <string name="settings_transfer_approve_confirm">Move</string>
     <string name="settings_transfer_window">%1$s left to approve</string>
     <string name="settings_transfer_bad_pin">That PIN is not correct.</string>
@@ -178,6 +178,8 @@
     <string name="settings_transfer_again">Show a new code</string>
     <string name="settings_transfer_rejected_title">Transfer rejected</string>
     <string name="settings_transfer_rejected_body">Nothing changed: your vault stays on this phone.</string>
+    <string name="settings_transfer_moved_title">Your vault has moved</string>
+    <string name="settings_transfer_moved_body">Your vault is on %1$s now. This phone erases VettID as soon as your vault confirms the move; keep it online for a moment.</string>
     <string name="settings_transfer_exists">Another transfer is already open. It ends within 10 minutes; try again then.</string>
     <string name="settings_transfer_alarm">Your credential has an open clone alarm. Resolve it in Credential before moving to a new phone.</string>
 </resources>
