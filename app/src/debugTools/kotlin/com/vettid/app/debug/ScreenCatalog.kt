@@ -97,6 +97,7 @@ import com.vettid.feature.onboarding.UnlockActions
 import com.vettid.feature.onboarding.UnlockContent
 import com.vettid.feature.onboarding.UnlockMessage
 import com.vettid.feature.onboarding.UnlockUiState
+import com.vettid.feature.onboarding.UnlockViewModel
 import com.vettid.feature.onboarding.CodeRefusal
 import com.vettid.feature.onboarding.RecoverActions
 import com.vettid.feature.onboarding.RecoverContent
@@ -220,6 +221,9 @@ private object NoUnlock : UnlockActions {
     override fun submit() = Unit
     override fun cancelRecoveryAndUnlock() = Unit
     override fun signOut() = Unit
+    override fun askErase() = Unit
+    override fun dismissErase() = Unit
+    override fun confirmErase() = Unit
 }
 
 /**
@@ -400,6 +404,28 @@ object ScreenCatalog {
         },
         "unlock.recovery" to {
             UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), recoveryPending = true), NoUnlock)
+        },
+        "unlock.not_recognised" to {
+            UnlockContent(
+                UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null),
+                    message = UnlockMessage.Failed(FailureKind.OTHER, UnlockViewModel.CODE_UNREADABLE), notRecognised = true),
+                NoUnlock,
+            )
+        },
+        "unlock.erase_confirm" to {
+            UnlockContent(
+                UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null),
+                    message = UnlockMessage.Failed(FailureKind.OTHER, UnlockViewModel.CODE_UNREADABLE), notRecognised = true,
+                    eraseConfirm = true),
+                NoUnlock,
+            )
+        },
+        "unlock.erasing" to {
+            UnlockContent(
+                UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null),
+                    notRecognised = true, erasing = true),
+                NoUnlock,
+            )
         },
         "unlock.ended" to { UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflightError = FailureKind.RELEASE_ENDED), NoUnlock) },
         "app_lock" to { AppLockScreen(onUnlock = {}) },

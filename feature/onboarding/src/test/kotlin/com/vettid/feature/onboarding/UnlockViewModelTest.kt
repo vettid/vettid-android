@@ -6,6 +6,7 @@ import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.UnlockAttempt
 import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -126,5 +127,104 @@ class UnlockViewModelTest {
         advanceUntilIdle()
         assertEquals(FailureKind.RELEASE_ENDED, ended.uiState.value.preflightError)
         assertFalse(ended.uiState.value.pinAllowed)
+    }
+
+    // --- "Erase VettID from this phone" (owner decision, 2026-10-05) ---
+
+    private suspend fun TestScope.unrecognised(): UnlockViewModel {
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.OTHER, UnlockViewModel.CODE_UNREADABLE)
+        val vm = UnlockViewModel(vault, vault)
+        advanceUntilIdle()
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        return vm
+    }
+
+    @Test
+    fun anUnreadableResultOffersTheErase() = runTest {
+        val vm = unrecognised()
+        assertTrue(vm.uiState.value.notRecognised)
+        assertFalse(vm.uiState.value.eraseConfirm)
+        // Typing a PIN again keeps the offer; the vault has not answered anything new.
+        vm.setPin("1")
+        assertTrue(vm.uiState.value.notRecognised)
+        assertFalse("eraseThisPhone" in vault.calls)
+    }
+
+    @Test
+    fun confirmErasesOnceThenTheWelcomeScreen() = runTest {
+        val vm = unrecognised()
+        vm.askErase()
+        assertTrue(vm.uiState.value.eraseConfirm)
+        assertFalse("nothing before the confirmation", "eraseThisPhone" in vault.calls)
+        vm.confirmErase()
+        vm.confirmErase() // a double tap
+        advanceUntilIdle()
+        assertEquals(1, vault.calls.count { it == "eraseThisPhone" })
+        assertTrue(vm.uiState.value.erasing)
+        assertFalse(vm.uiState.value.eraseConfirm)
+        assertEquals(AppPhase.SignedOut, vault.phase.value)
+        assertNull(vault.account.value)
+        assertFalse("the erase is not a sign-out", "signOut" in vault.calls)
+    }
+
+    @Test
+    fun cancelErasesNothing() = runTest {
+        val vm = unrecognised()
+        vm.askErase()
+        vm.dismissErase()
+        assertFalse(vm.uiState.value.eraseConfirm)
+        vm.confirmErase() // a stale confirm after the dialog closed
+        advanceUntilIdle()
+        assertFalse("eraseThisPhone" in vault.calls)
+        assertEquals(AppPhase.Locked, vault.phase.value)
+        assertTrue(vm.uiState.value.notRecognised)
+    }
+
+    @Test
+    fun noEraseWhereTheVaultKnowsThisPhone() = runTest {
+        // Before any unlock, after a wrong PIN, after a network failure, after a rollback refusal: no offer.
+        val outcomes = listOf(
+            UnlockAttempt.BadPin(retryAfterSeconds = 0),
+            UnlockAttempt.Failed(FailureKind.NETWORK, null),
+            UnlockAttempt.Failed(FailureKind.OTHER, "unknown_device"),
+            UnlockAttempt.StateRollback,
+            UnlockAttempt.RecoveryPending,
+        )
+        for (o in outcomes) {
+            vault.unlockResults += o
+            val vm = UnlockViewModel(vault, vault)
+            advanceUntilIdle()
+            assertFalse(vm.uiState.value.notRecognised)
+            vm.setPin("40281795")
+            vm.submit()
+            advanceUntilIdle()
+            assertFalse("$o", vm.uiState.value.notRecognised)
+            vm.askErase()
+            vm.confirmErase()
+            advanceUntilIdle()
+            assertFalse("$o", vm.uiState.value.eraseConfirm)
+        }
+        assertFalse("eraseThisPhone" in vault.calls)
+    }
+
+    @Test
+    fun aRecognisedAnswerWithdrawsTheOffer() = runTest {
+        val vm = unrecognised()
+        // A network failure says nothing either way: the offer stays.
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.NETWORK, null)
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.notRecognised)
+        // A sealed bad_pin: the vault knows this phone after all.
+        vault.unlockResults += UnlockAttempt.BadPin(retryAfterSeconds = 0)
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.notRecognised)
+        vm.askErase()
+        assertFalse(vm.uiState.value.eraseConfirm)
     }
 }

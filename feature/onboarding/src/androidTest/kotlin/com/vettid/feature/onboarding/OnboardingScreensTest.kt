@@ -7,6 +7,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -15,6 +16,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.ReleaseView
 import com.vettid.core.ui.theme.VettIdTheme
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -36,6 +38,9 @@ private object NoUnlockActions : UnlockActions {
     override fun submit() = Unit
     override fun cancelRecoveryAndUnlock() = Unit
     override fun signOut() = Unit
+    override fun askErase() = Unit
+    override fun dismissErase() = Unit
+    override fun confirmErase() = Unit
 }
 
 @RunWith(AndroidJUnit4::class)
@@ -82,6 +87,36 @@ class OnboardingScreensTest {
         }
         rule.onNodeWithTag("software_updated").assertExists()
         rule.onNodeWithTag("unlock_pin").assertIsNotEnabled()
+    }
+
+    @Test
+    fun eraseIsOfferedOnlyWhenTheVaultDidNotRecogniseThisPhone() {
+        val calls = mutableListOf<String>()
+        val actions = object : UnlockActions by NoUnlockActions {
+            override fun askErase() { calls += "ask" }
+            override fun dismissErase() { calls += "dismiss" }
+            override fun confirmErase() { calls += "confirm" }
+        }
+        val preflight = PreflightInfo(release(3), 3, false, false, null)
+        var state by mutableStateOf(UnlockUiState(loading = false, preflight = preflight))
+        rule.setContent { VettIdTheme { UnlockContent(state, actions) } }
+        rule.onNodeWithTag("erase_phone").assertDoesNotExist()
+
+        state = state.copy(message = UnlockMessage.Failed(com.vettid.core.data.vault.FailureKind.OTHER, UnlockViewModel.CODE_UNREADABLE),
+            notRecognised = true)
+        rule.onNodeWithTag("unlock_not_recognised").assertExists()
+        rule.onNodeWithTag("unlock_failed").assertDoesNotExist()
+        rule.onNodeWithText("Erase VettID from this phone").performClick()
+        assertEquals(listOf("ask"), calls)
+
+        state = state.copy(eraseConfirm = true)
+        rule.onNodeWithText("Erase VettID from this phone?").assertExists()
+        rule.onNodeWithText("Cancel").performClick()
+        rule.onNodeWithTag("confirm_button").assertTextEquals("Erase").performClick()
+        assertEquals(listOf("ask", "dismiss", "confirm"), calls)
+
+        state = state.copy(eraseConfirm = false, erasing = true)
+        rule.onNodeWithTag("erase_phone").assertIsNotEnabled()
     }
 }
 

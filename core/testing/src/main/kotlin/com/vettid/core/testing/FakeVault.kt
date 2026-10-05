@@ -122,6 +122,12 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, Vau
         phase.value = AppPhase.SignedOut
     }
 
+    override suspend fun eraseThisPhone() {
+        call("eraseThisPhone")
+        account.value = null
+        phase.value = AppPhase.SignedOut
+    }
+
     override suspend fun enroll(pin: String, onStep: (EnrollStep) -> Unit) {
         call("enroll")
         lastPin = pin

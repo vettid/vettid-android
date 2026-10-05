@@ -44,6 +44,16 @@ data class UnlockUiState(
     val waitSeconds: Long = 0,
     val recoveryPending: Boolean = false,
     val stateRollback: Boolean = false,
+    /**
+     * The last unlock's result was unreadable, as a phone the vault no longer knows sees it (§11.4: random
+     * bytes): "Erase VettID from this phone" is offered. Cleared by any answer that shows the vault knows
+     * this phone (a sealed result); a network failure leaves it as it was.
+     */
+    val notRecognised: Boolean = false,
+    /** The erase confirmation dialog is open. */
+    val eraseConfirm: Boolean = false,
+    /** The erase runs. */
+    val erasing: Boolean = false,
 ) {
     /** Whether the PIN may be entered and sent now. */
     val pinAllowed: Boolean
@@ -52,7 +62,8 @@ data class UnlockUiState(
             return !p.rollback && (!p.softwareUpdated || updateAcknowledged) && waitSeconds == 0L && !busy
         }
 
-    override fun toString(): String = "UnlockUiState(loading=$loading, busy=$busy, message=$message, wait=$waitSeconds)"
+    override fun toString(): String =
+        "UnlockUiState(loading=$loading, busy=$busy, message=$message, wait=$waitSeconds, notRecognised=$notRecognised, erasing=$erasing)"
 }
 
 /** What the unlock screen can ask for. */
@@ -64,13 +75,25 @@ interface UnlockActions {
     fun submit()
     fun cancelRecoveryAndUnlock()
     fun signOut()
+
+    /** Opens the "Erase VettID from this phone" confirmation (only when [UnlockUiState.notRecognised]). */
+    fun askErase()
+
+    /** Closes it; nothing is erased. */
+    fun dismissErase()
+
+    /** The member confirmed: erases this phone ([AccountRepository.eraseThisPhone]), then the welcome screen. */
+    fun confirmErase()
 }
 
 /**
  * The vault unlock (§11.4): first the release check (§11.10.6: refuse an
  * older release, announce a newer one before the PIN, offer the newest
  * active release), then the PIN, the enclave's answer and its backoff, the
- * recovery-pending refusal (§11.11.4) and the state-rollback warning.
+ * recovery-pending refusal (§11.11.4) and the state-rollback warning. An
+ * unlock the vault did not recognise (an unreadable result: a phone replaced
+ * while it was offline longer than the relay keeps its `device.unlinked`)
+ * offers "Erase VettID from this phone" (owner decision, 2026-10-05).
  */
 @HiltViewModel
 class UnlockViewModel @Inject constructor(
@@ -111,13 +134,27 @@ class UnlockViewModel @Inject constructor(
         viewModelScope.launch { account.signOut() }
     }
 
+    override fun askErase() = state.update { if (it.notRecognised && !it.erasing) it.copy(eraseConfirm = true) else it }
+
+    override fun dismissErase() = state.update { it.copy(eraseConfirm = false) }
+
+    override fun confirmErase() {
+        val s = state.value
+        if (!s.eraseConfirm || !s.notRecognised || s.erasing) return
+        state.update { it.copy(eraseConfirm = false, erasing = true, pin = "") }
+        // The phase becomes SignedOut at the end: the root shows the welcome screen and drops this screen.
+        viewModelScope.launch { account.eraseThisPhone() }
+    }
+
     private fun attempt(cancelRecovery: Boolean) {
         val s = state.value
-        if (!s.pinAllowed || s.pin.length < MIN_PIN) return
+        if (!s.pinAllowed || s.pin.length < MIN_PIN || s.erasing) return
         state.update { it.copy(busy = true, message = null) }
         viewModelScope.launch {
             val offer = if (s.approveOffer) s.preflight?.offer else null
-            when (val r = vault.unlock(s.pin, offer, cancelRecovery)) {
+            val r = vault.unlock(s.pin, offer, cancelRecovery)
+            state.update { it.copy(notRecognised = notRecognisedAfter(r, it.notRecognised)) }
+            when (r) {
                 UnlockAttempt.Success -> state.update { it.copy(busy = false, pin = "", recoveryPending = false) }
                 is UnlockAttempt.BadPin -> {
                     state.update { it.copy(busy = false, pin = "", message = UnlockMessage.BadPin) }
@@ -137,6 +174,13 @@ class UnlockViewModel @Inject constructor(
         }
     }
 
+    /**
+     * An unreadable answer: the vault may not know this phone. A wrong PIN, a backoff, a success and the other
+     * sealed answers show that it does; other failures (network, refusals) say nothing either way.
+     */
+    private fun notRecognisedAfter(r: UnlockAttempt, before: Boolean): Boolean =
+        if (r is UnlockAttempt.Failed) r.code == CODE_UNREADABLE || before else false
+
     private fun startBackoff(seconds: Long) {
         if (seconds <= 0) return
         ticker?.cancel()
@@ -149,9 +193,12 @@ class UnlockViewModel @Inject constructor(
         }
     }
 
-    private companion object {
-        const val MIN_PIN = 4
-        const val MAX_PIN = 32
-        const val TICK_MS = 1000L
+    companion object {
+        /** The unlock result this phone could not read ([com.vettid.core.data.vault.VaultFailure] code). */
+        const val CODE_UNREADABLE = "unreadable_result"
+
+        private const val MIN_PIN = 4
+        private const val MAX_PIN = 32
+        private const val TICK_MS = 1000L
     }
 }

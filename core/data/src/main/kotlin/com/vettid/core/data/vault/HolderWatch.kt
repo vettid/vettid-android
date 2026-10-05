@@ -112,7 +112,10 @@ class HolderWatch(private val scope: CoroutineScope, private val wipe: suspend (
         return withTimeoutOrNull(waitMs) { wipes.first { it > before } } != null
     }
 
-    /** Wipes now (or waits for the wipe that already runs). */
+    /**
+     * Wipes now (or waits for the wipe that already runs): after a proof, or on the member's confirmed
+     * "Erase VettID from this phone" (`AccountRepository.eraseThisPhone`), which needs no proof.
+     */
     suspend fun wipeNow() = wipeOnce(wipes.value)
 
     /** One wipe per proof received before it: a proof that arrived while a wipe ran waits for it and does nothing more. */
