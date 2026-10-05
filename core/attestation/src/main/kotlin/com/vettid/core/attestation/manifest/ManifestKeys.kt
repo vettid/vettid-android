@@ -12,6 +12,11 @@ package com.vettid.core.attestation.manifest
  *    the standby if key A is ever lost.
  * Changing either is an app release; ManifestKeysTest pins their key ids.
  *
+ * [STAGING] is the staging channel's key A (vettid-vault
+ * enclave/releasecfg/staging.json `manifest_keys`), pinned only by the
+ * `staging` build type of the app. Release builds never reference it (R8
+ * drops it; the release-dex check in app/build.gradle.kts guards that).
+ *
  * Never pin the §16 test key (private scalar 32 x 0x21 is public) in a
  * release build. Tests and the local dev stack pass their keys explicitly.
  */
@@ -26,4 +31,11 @@ object ManifestKeys {
 
     /** The pinned keys of production builds. */
     val PRODUCTION: List<ManifestKey> by lazy { listOf(KEY_A_SPKI_B64, KEY_B_SPKI_B64).map { ManifestKey.fromBase64(it) } }
+
+    /** Staging key A (SPKI DER, base64); key_id e9b3a403423120ac. Staging builds only. */
+    const val STAGING_KEY_A_SPKI_B64: String =
+        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEok8gqeC5VcGx4KL+B5fL7UgENBXf+59RigkR0TZ0NqjiWM2VK6V1+paNoqRTBx7nXXN3L/2ehjsTb31GGVkEAw=="
+
+    /** The pinned keys of the `staging` build type (the staging images' channel). */
+    val STAGING: List<ManifestKey> by lazy { listOf(ManifestKey.fromBase64(STAGING_KEY_A_SPKI_B64)) }
 }

@@ -41,3 +41,6 @@ Thumbs.db
 
 # Local working files (screenshots, notes): never committed
 local/
+
+# Staging signing (app/build.gradle.kts reads it from ~/.vettid/, outside the repo)
+staging-signing.properties

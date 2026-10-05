@@ -93,7 +93,7 @@ class VaultManager(
     override val alarm: StateFlow<CredentialAlarm?> = alarmFlow.asStateFlow()
     override val unlockWindow: StateFlow<Instant?> = windowFlow.asStateFlow()
     override val devHint: String? get() = gateway.devHint
-    override val signInHosts: Set<String> = setOf(SignInLink.HOST) + listOfNotNull(hostOf(env.endpoints.apiBase))
+    override val signInHosts: Set<String> = env.signInHosts
 
     private class Session(val device: VaultDevice, val api: VaultApi, val member: MemberApiClient, val alt: AltChannelFlow)
 
@@ -602,8 +602,6 @@ class VaultManager(
         private const val KEY_FINGERPRINT_CHARS = 12
         private const val GROUP = 4
         private val json = Json { ignoreUnknownKeys = true }
-
-        private fun hostOf(url: String): String? = runCatching { java.net.URI(url).host }.getOrNull()
 
         private fun bootState(v: Int) = when (v) {
             RootOfTrust.VERIFIED -> "Verified"

@@ -22,7 +22,7 @@ says so (attestation, crypto helpers, WebRTC, QR scanner), with its tests.
 - Shared machine: memory and workers are capped in `gradle.properties`. Run
   builds with `--max-workers=2`, check `free -g` first (wait if < 8 GB
   available), and `./gradlew --stop` when done. No emulator.
-- `./gradlew :app:assembleDebug :app:assembleDevStack testDebugUnitTest :core:crypto:test :core:relay:test detekt :app:lintDebug :app:assembleRelease`
+- `./gradlew :app:assembleDebug :app:assembleDevStack testDebugUnitTest :core:crypto:test :core:relay:test detekt :app:lintDebug :app:assembleRelease :app:assembleStaging :app:checkReleaseApk :app:checkStagingApk`
   is what CI runs (`.github/workflows/ci.yml`, plus gitleaks over full history, with
   `.gitleaks.toml` allowlisting the public §16 test-vector values).
 - `:core:crypto` is a pure Kotlin/JVM module (`vettid.jvm.library`); its tests include the
@@ -55,6 +55,13 @@ says so (attestation, crypto helpers, WebRTC, QR scanner), with its tests.
 - Compose UI tests on the locked phone host their screens in an activity that draws over
   the keyguard (`feature/onboarding/src/androidTest`); Espresso is pinned to 3.7 (older
   versions break on API 37).
+
+- The `staging` build type (README "Staging build"): release-like, application id
+  `com.vettid.app`, talks to the staging vault service (`src/staging`, `Endpoints.STAGING`,
+  `ManifestKeys.STAGING`). Signed only from the owner's properties file outside the repo
+  (`~/.vettid/staging-signing.properties`); never create, read or ask for it or the
+  keystore. Without it the APK is unsigned. `checkReleaseApk` / `checkStagingApk` fail if
+  an APK carries another environment's endpoints or pins, or dev-stack/debug-tools code.
 
 ## Device testing
 

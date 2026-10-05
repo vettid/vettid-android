@@ -14,8 +14,8 @@ concurrency:
 
 jobs:
   android:
-    # Build (debug + R8 release), unit tests, Android lint and detekt. Touches no
-    # signing secrets: the release APK is built unsigned.
+    # Build (debug + R8 release and staging), unit tests, Android lint and detekt. Touches no
+    # signing secrets: the release and staging APKs are built unsigned.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -37,8 +37,11 @@ jobs:
         run: ./gradlew testDebugUnitTest :core:crypto:test :core:relay:test
       - name: Android lint
         run: ./gradlew :app:lintDebug
-      - name: build (debug, devStack, release)
-        run: ./gradlew :app:assembleDebug :app:assembleDevStack :app:assembleRelease
+      - name: build (debug, devStack, release, staging)
+        # The staging APK is built unsigned here (its signing file is outside the repo).
+        run: ./gradlew :app:assembleDebug :app:assembleDevStack :app:assembleRelease :app:assembleStaging
+      - name: APK contents (release has no staging or dev code, staging no production pins or dev code)
+        run: ./gradlew :app:checkReleaseApk :app:checkStagingApk
       - name: reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

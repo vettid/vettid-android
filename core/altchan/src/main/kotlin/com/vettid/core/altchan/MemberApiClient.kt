@@ -332,6 +332,10 @@ class MemberApiClient(
         const val DEFAULT_POLL_MS = 600L
         const val PRODUCTION_API = "https://account.vettid.org"
         const val PRODUCTION_MANIFEST = "https://vettid.org/.well-known/vettid/pcr-manifest.json"
+
+        /** The staging account site (it proxies the `/api/` routes) and manifest: the `staging` build type only. */
+        const val STAGING_API = "https://account.staging.vettid.org"
+        const val STAGING_MANIFEST = "https://staging.vettid.org/.well-known/vettid/pcr-manifest.json"
         const val MANIFEST_PATH = "/.well-known/vettid/pcr-manifest.json"
         private const val REFRESH = "/api/auth/refresh"
         private const val HTTP_OK = 200
