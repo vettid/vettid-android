@@ -16,7 +16,7 @@ jobs:
   android:
     # Build (debug + R8 release and staging), unit tests, Android lint and detekt. Touches no
     # signing secrets: the release and staging APKs are built unsigned.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -57,7 +57,7 @@ jobs:
     # Pinned binary over the FULL history (the gitleaks-action fails on a
     # branch's first push, where there is no "before" commit). Reviewed findings
     # in the v1 history are listed in .gitleaksignore.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
