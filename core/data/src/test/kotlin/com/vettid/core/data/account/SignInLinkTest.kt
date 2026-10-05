@@ -26,6 +26,9 @@ class SignInLinkTest {
         assertNull(SignInLink.parse("https://evil.example/auth/#t=$token"))
         assertNull(SignInLink.parse("https://account.vettid.org/other/#t=$token"))
         assertNull(SignInLink.parse("http://account.vettid.org/auth/#t=$token"))
+        // plain http is refused for every non-loopback host, staging included
+        assertNull(SignInLink.parse("http://account.staging.vettid.org/auth/#t=$token", setOf("account.staging.vettid.org")))
+        assertTrue(SignInLink.parse("https://account.staging.vettid.org/auth/#t=$token", setOf("account.staging.vettid.org")) != null)
         assertNull(SignInLink.parse("https://account.vettid.org/auth/?t=$token"))
         assertNull(SignInLink.parse("https://account.vettid.org/auth/#t=short"))
         assertNull(SignInLink.parse("not a link"))

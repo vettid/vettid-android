@@ -35,7 +35,8 @@ data class SignInLink(val token: String, val email: String?) {
             } catch (_: java.net.URISyntaxException) {
                 return null
             }
-            if (uri.scheme != "https" && !(uri.scheme == "http" && uri.host in allowedHosts && uri.host != HOST)) return null
+            // https only; plain http just for the local dev stack on loopback.
+            if (uri.scheme != "https" && !(uri.scheme == "http" && uri.host in LOOPBACK)) return null
             if (uri.host !in allowedHosts || uri.path != PATH) return null
             val params = fragmentParams(uri.rawFragment ?: return null)
             val token = params["t"]?.takeIf { TOKEN_RE.matches(it) } ?: return null
@@ -44,6 +45,7 @@ data class SignInLink(val token: String, val email: String?) {
         }
 
         private const val MAX_EMAIL = 254
+        private val LOOPBACK = setOf("127.0.0.1", "localhost", "[::1]")
 
         private fun fragmentParams(fragment: String): Map<String, String> =
             fragment.split('&').mapNotNull { part ->
