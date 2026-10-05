@@ -7,7 +7,7 @@ import androidx.navigation.NavGraphBuilder
 import com.vettid.core.ui.components.DrawerItem
 import com.vettid.core.ui.theme.ThemeMode
 
-/** Release builds have no debug screens and ignore launch extras. */
+/** Release and staging builds have no debug screens and ignore launch extras. */
 internal val debugTools: DebugTools = object : DebugTools {
     @Composable
     override fun drawerItems(): List<DrawerItem> = emptyList()

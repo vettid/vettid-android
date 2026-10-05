@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The `staging` build type: the staging vault service (account.staging.vettid.org). -->
+<resources>
+    <string name="app_name">VettID Staging</string>
+    <string name="account_portal_url" translatable="false">https://account.staging.vettid.org</string>
+    <string name="onboarding_welcome_point_member">STAGING build: you need a membership on account.staging.vettid.org.</string>
+</resources>

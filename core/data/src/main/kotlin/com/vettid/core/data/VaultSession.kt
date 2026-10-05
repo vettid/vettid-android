@@ -16,10 +16,17 @@ import com.vettid.core.vault.VaultDevice
 import okhttp3.OkHttpClient
 import java.io.File
 
-/** Where the app talks to: production, or the local dev stack (debug `devStack` builds only). */
+/**
+ * Where the app talks to: production, staging (the `staging` build type only), or the
+ * local dev stack (debug `devStack` builds only).
+ */
 data class Endpoints(val apiBase: String, val manifestUrl: String, val relayUrl: String) {
     companion object {
-        val PRODUCTION = Endpoints(MemberApiClient.PRODUCTION_API, MemberApiClient.PRODUCTION_MANIFEST, "https://relay.vettid.org")
+        const val PRODUCTION_RELAY = "https://relay.vettid.org"
+        val PRODUCTION = Endpoints(MemberApiClient.PRODUCTION_API, MemberApiClient.PRODUCTION_MANIFEST, PRODUCTION_RELAY)
+
+        /** Staging images pin the production relay (vettid-vault releasecfg/staging.json `relay_url`). */
+        val STAGING = Endpoints(MemberApiClient.STAGING_API, MemberApiClient.STAGING_MANIFEST, PRODUCTION_RELAY)
     }
 }
 

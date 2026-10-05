@@ -17,13 +17,17 @@ import java.time.Instant
 
 /**
  * What the app pins for the alternate channel (§11.2, §11.10.1): the AWS
- * Nitro root and the manifest keys. [production] is the release build's;
+ * Nitro root and the manifest keys. [production] is the release build's,
+ * [staging] the `staging` build type's;
  * the local dev stack's TEST-ONLY anchors are passed by development code
  * and instrumented tests, never compiled into a release.
  */
 class AltTrust(val nitroRoots: List<X509Certificate>, val manifestKeys: List<ManifestKey>) {
     companion object {
         fun production() = AltTrust(listOf(NitroRoot.certificate), ManifestKeys.PRODUCTION)
+
+        /** The `staging` build type's: the real AWS Nitro root and the staging manifest key. */
+        fun staging() = AltTrust(listOf(NitroRoot.certificate), ManifestKeys.STAGING)
     }
 }
 
