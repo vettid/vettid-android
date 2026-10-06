@@ -13,6 +13,8 @@ import com.vettid.core.data.prefs.ThemePreference
 import com.vettid.core.data.vault.AccountInfo
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.AttestationInfo
+import com.vettid.core.data.vault.CanaryManifestRepository
+import com.vettid.core.data.vault.CanaryManifestView
 import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.RecoveryView
@@ -114,11 +116,25 @@ class VaultStatusViewModel @Inject constructor(private val vault: VaultRepositor
     }
 }
 
-/** Attestation details (this phone's key, the enclave release last verified). */
+/**
+ * Attestation details (this phone's key, the enclave release last verified), and the canary manifest when one
+ * is installed (VAULT-RELEASES §10.1 step 9: only on VettID's test phones).
+ */
 @HiltViewModel
-class AttestationViewModel @Inject constructor(private val vault: VaultRepository) : ViewModel() {
+class AttestationViewModel @Inject constructor(
+    private val vault: VaultRepository,
+    private val canaryManifests: CanaryManifestRepository,
+) : ViewModel() {
     private val state = MutableStateFlow(LoadState<AttestationInfo>())
     val uiState: StateFlow<LoadState<AttestationInfo>> = state.asStateFlow()
+
+    /** The installed canary manifest, or null (then nothing about it is shown). */
+    val canary: StateFlow<CanaryManifestView?> = canaryManifests.canaryManifest
+
+    /** Stops using the canary manifest: the published one is used again. */
+    fun removeCanary() {
+        viewModelScope.launch { canaryManifests.removeCanaryManifest() }
+    }
 
     init {
         viewModelScope.launch {

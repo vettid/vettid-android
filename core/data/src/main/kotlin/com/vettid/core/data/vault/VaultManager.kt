@@ -13,7 +13,9 @@ import com.vettid.core.altchan.UnlockOutcome
 import com.vettid.core.attestation.AttestationException
 import com.vettid.core.attestation.android.KeyDescription
 import com.vettid.core.attestation.android.RootOfTrust
+import com.vettid.core.attestation.manifest.ManifestVerifier
 import com.vettid.core.attestation.manifest.Release
+import com.vettid.core.attestation.manifest.ReleaseManifest
 import com.vettid.core.crypto.Bytes
 import com.vettid.core.data.KeystoreFileStore
 import com.vettid.core.data.account.AccountGateway
@@ -58,6 +60,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.intOrNull
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.io.File
 import java.io.IOException
 import java.time.Duration
@@ -127,6 +130,17 @@ class VaultManager(
 
     private class Session(val device: VaultDevice, val api: VaultApi, val member: MemberApiClient, val alt: AltChannelFlow)
 
+    /**
+     * A canary manifest loaded out of band (VAULT-RELEASES §10.1 step 9, W10-READINESS P31/B5): verified under
+     * this build's pinned manifest keys and used instead of the published manifest only while it is newer.
+     */
+    val canary = CanaryManifestStore(
+        KeystoreFileStore(File(app.noBackupFilesDir, CANARY_FILE), "canary-manifest"),
+        verifier = { ManifestVerifier(env.trust(http).manifestKeys) },
+        seen = { session?.device?.altState?.manifestSerial ?: 0 },
+        published = { fetchPublishedManifest() },
+    )
+
     /** Connections, messages and approvals (A4): the repositories of those features. */
     val social = SocialManager(
         scope,
@@ -136,6 +150,7 @@ class VaultManager(
     )
 
     init {
+        scope.launch { runCatching { canary.load() } }
         scope.launch {
             // Lists are re-read whenever the vault opens (unlock, end of onboarding, app start while unlocked).
             phaseFlow.collect {
@@ -198,7 +213,7 @@ class VaultManager(
         val cfg = DeviceConfig(name = deviceName, relayUrl = env.endpoints.relayUrl, http = http, store = store, trust = trust)
         val device = VaultDevice.load(cfg, secrets) ?: VaultDevice.create(cfg, secrets)
         val member = gateway.member()
-        val s = Session(device, VaultApi(device), member, AltChannelFlow(member, trust))
+        val s = Session(device, VaultApi(device), member, AltChannelFlow(member, trust, canary = canary))
         device.start(scope)
         observe(s)
         s
@@ -873,6 +888,7 @@ class VaultManager(
         withTimeoutOrNull(BEST_EFFORT_MS) { runCatching { io { gateway.signOut() } } }
         runCatching { gateway.forgetLocal() }
         social.clear()
+        canary.removeCanaryManifest()
         transferStartedAt = null
         openTransferId = null
         alarmFlow.value = null
@@ -887,6 +903,17 @@ class VaultManager(
     }
 
     // --- helpers ---
+
+    /** The published manifest's served document (for the canary's installation check), or null. */
+    private suspend fun fetchPublishedManifest(): ByteArray? = io {
+        http.newCall(Request.Builder().url(env.endpoints.manifestUrl).get().build()).execute().use { r ->
+            if (r.code != HTTP_OK) return@use null
+            r.body.source().use { src ->
+                src.request(ReleaseManifest.MAX_SERVED.toLong() + 1)
+                src.buffer.readByteArray(minOf(src.buffer.size, ReleaseManifest.MAX_SERVED.toLong() + 1))
+            }
+        }
+    }
 
     private fun view(r: Release) = ReleaseView(r.number, r.pcr0, r.status.wire, r.endsAt, r.notes)
 
@@ -911,6 +938,8 @@ class VaultManager(
     companion object {
         private const val DEVICE_FILE = "vault-device.bin"
         private const val SOCIAL_FILE = "social.bin"
+        private const val CANARY_FILE = "canary-manifest.bin"
+        private const val HTTP_OK = 200
         private const val PROFILE_NAME_MAX = 64
         private const val STATE_MEMBER = "member"
         private const val UPDATE_MOVED = "moved"

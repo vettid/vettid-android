@@ -182,4 +182,12 @@
     <string name="settings_transfer_moved_body">Your vault is on %1$s now. This phone erases VettID as soon as your vault confirms the move; keep it online for a moment.</string>
     <string name="settings_transfer_exists">Another transfer is already open. It ends within 10 minutes; try again then.</string>
     <string name="settings_transfer_alarm">Your credential has an open clone alarm. Resolve it in Credential before moving to a new phone.</string>
+    <string name="settings_canary_title">Test release manifest</string>
+    <string name="settings_canary_serial">Serial and signing key</string>
+    <string name="settings_canary_serial_value">Serial %1$d · key %2$s</string>
+    <string name="settings_canary_releases">Releases it lists</string>
+    <string name="settings_canary_release">release %1$d (%2$s)</string>
+    <string name="settings_canary_remove">Stop using the test manifest</string>
+    <string name="settings_canary_remove_title">Stop using the test manifest?</string>
+    <string name="settings_canary_remove_body">VettID\'s published release list is used again. A vault on a release that is not published yet cannot be unlocked from this phone until VettID publishes it.</string>
 </resources>

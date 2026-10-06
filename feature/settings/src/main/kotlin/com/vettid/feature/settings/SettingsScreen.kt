@@ -151,7 +151,8 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
     composable<AttestationRoute> {
         val vm: AttestationViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
-        AttestationContent(state, host.onBack)
+        val canary by vm.canary.collectAsStateWithLifecycle()
+        AttestationContent(state, host.onBack, canary, vm::removeCanary)
     }
     composable<DeleteVaultRoute> {
         val vm: DeleteVaultViewModel = hiltViewModel()

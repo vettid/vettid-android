@@ -76,6 +76,8 @@ fun VettIdApp(
     val alarm by viewModel.alarm.collectAsStateWithLifecycle()
     val account by viewModel.account.collectAsStateWithLifecycle()
     val paused by viewModel.servicePaused.collectAsStateWithLifecycle()
+    val canaryVm: CanaryManifestViewModel = hiltViewModel()
+    val canaryPrompt by canaryVm.prompt.collectAsStateWithLifecycle()
     val uri = LocalUriHandler.current
     val portal = stringResource(R.string.account_portal_url)
     val nav = rememberNavController()
@@ -130,6 +132,10 @@ fun VettIdApp(
             }
         }
         if (lock == AppLockState.PENDING) FullScreenProgress(stringResource(R.string.root_starting))
+        // A canary manifest shared to the app (VAULT-RELEASES §10.1 step 9): asked about only while the app is open.
+        if (!locked && lock != AppLockState.PENDING) {
+            canaryPrompt?.let { CanaryManifestDialog(it, canaryVm::confirm, canaryVm::dismiss) }
+        }
         if (locked) {
             AppLockScreen(onUnlock = onUnlockApp)
             LaunchedEffect(Unit) { onUnlockApp() }
