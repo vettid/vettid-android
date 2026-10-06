@@ -78,7 +78,7 @@ Debug builds use application id `com.vettid.app.dev` (`devStack`:
 `adb shell am start -S -n com.vettid.app.dev/com.vettid.app.MainActivity --es vettid.theme dark|light --es vettid.start gallery|messages|connections|approvals|items|credential|settings|help --ez vettid.screenshot true`
 (`vettid.screenshot` lets the debug app draw over the keyguard of a locked test phone; the phone stays locked).
 Every A3 and A4 screen with sample state, no vault needed: `--es vettid.start screen:<name>` (names in
-`app/src/debugTools/.../ScreenCatalog.kt`, e.g. `onboarding.backup_off`, `unlock.updated`,
+`app/src/debugTools/.../ScreenCatalog.kt`, e.g. `onboarding.backup_off`, `onboarding.setup_scan`, `onboarding.setup_type`, `onboarding.confirm_account`, `account_sheet`, `unlock.updated`,
 `credential.alarm`, `settings.delete_confirm`, `messages.conversation`, `invite.request`,
 `connections.detail`, `approvals.critical`; recovery and transfer: `recover.pin`, `recover.lost`,
 `transfer_in.compare`, `settings.transfer_compare`, `settings.transfer_moved`; the member's erase of a phone the vault
@@ -102,8 +102,11 @@ vettid.org repo's `local/android-ui/`).
   `VaultManager` and its `SocialManager` (Hilt bindings in `app/.../di/AppModule.kt`); failures are `VaultFailure(kind)` with
   member-facing text from `FailureKind.messageRes()`. The root of the UI follows
   `AppPhase` (one nav destination per phase, so leaving a phase drops its secrets).
-- Preferences in DataStore (`PreferencesRepository`); device state, the account record and
-  the member session in Keystore-encrypted files (`KeystoreFileStore`, no-backup dir).
+- Preferences in DataStore (`PreferencesRepository`); device state and the account record
+  (`user_guid`, `vault_id`, the masked email and the vault's account snapshot) in Keystore-encrypted
+  files (`KeystoreFileStore`, no-backup dir). The app never signs in (VAULT-MESSAGING 0.15.0 §11.12):
+  onboarding redeems the portal's setup code with the Keystore app key (`AppApiKey`), which signs every
+  member API request (`X-VettID-App`, `AppRequestSigning`); membership is shown from the vault (`account.get`).
 - Every user-visible string in `res/values/strings.xml` (prefixed with the module
   name, e.g. `messages_…`, `core_ui_…`); every icon-only control has a content
   description; touch targets ≥ 48dp.

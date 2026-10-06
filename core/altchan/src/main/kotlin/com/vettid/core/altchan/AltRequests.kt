@@ -31,10 +31,14 @@ class AltRefusedException(val reason: Reason) : IOException("alternate channel: 
 }
 
 /** What the app shares about itself in an enrollment or recovery: identity and KEM keys, relay address, name. */
-class AppIdentity(ik: ByteArray, val kem: KemPublicKey, val relay: RelayAddr, val name: String) {
+class AppIdentity(ik: ByteArray, val kem: KemPublicKey, val relay: RelayAddr, val name: String, apiKey: ByteArray? = null) {
     private val ik = ik.copyOf()
+    private val apiKey = apiKey?.copyOf()
 
     fun ik(): ByteArray = ik.copyOf()
+
+    /** The app key's SPKI DER (§11.12.2, 0.15.0): `app.api_key` in an enrollment or a recovery's register. */
+    fun apiKey(): ByteArray? = apiKey?.copyOf()
 }
 
 /** An enrollment built and the state the app keeps until vault.enrolled (§11.3 "App state"). */
@@ -87,6 +91,7 @@ object AltRequests {
         val nonce = Randomness.bytes(NONCE_SIZE)
         val body = EnrollRequest(
             userGuid, rid, nonce, pin, app.ik(), app.kem, app.relay, openToken, app.name, attest, manifest.sha256Hex, manifest.serial,
+            app.apiKey(),
         ).marshal()
         val env = AltChannel.sealRequest(enclave.descriptor.etk, AltChannel.TYPE_ENROLL, rid, t, body)
         val next = state.copy(enrollNonce = nonce, enrollPcrs = enclave.measurements.joined(), enrollNumber = enclave.release.number)
@@ -208,7 +213,9 @@ object AltRequests {
         val attest = attester.attest(AltChannel.devattChallenge(rid, code.vaultId, Timestamps.formatMillis(t)))
         val appObj = JsonBuilder().base64("ik", app.ik()).base64("kem", app.kem.bytes())
             .raw("relay", relayJson(app.relay))
-            .string("name", app.name).raw("device_attest", attest.marshal()).build()
+            .string("name", app.name).raw("device_attest", attest.marshal())
+            .also { b -> app.apiKey()?.let { b.base64("api_key", it) } }
+            .build()
         val body = JsonBuilder().string("user_guid", userGuid).string("vault_id", code.vaultId).string("request_id", rid)
             .string("recovery_id", code.recoveryId).string("code", code.code).raw("app", appObj).bytes()
         val env = AltChannel.sealRequest(enclave.descriptor.etk, TYPE_RECOVERY_REGISTER, rid, t, body)

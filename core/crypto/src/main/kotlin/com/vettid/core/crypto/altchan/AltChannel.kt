@@ -150,9 +150,12 @@ class EnrollRequest(
     val attest: DeviceAttest,
     val manifestSha256: String,
     val manifestSerial: Long,
+    /** The app key (§11.3, §11.12, 0.15.0): SPKI DER of a P-256 key; REQUIRED since 0.15.0, null only for older vectors. */
+    apiKey: ByteArray? = null,
 ) {
     private val nonce = nonce.copyOf()
     private val ik = ik.copyOf()
+    private val apiKey = apiKey?.copyOf()
 
     fun marshal(): ByteArray {
         if (nonce.size != 32 || !AltChannel.isValidPin(pin) || !Bytes.isLowerHex(manifestSha256, 64) || manifestSerial < 1) {
@@ -165,6 +168,7 @@ class EnrollRequest(
             .string("open_token", openToken)
             .string("name", name)
             .raw("device_attest", attest.marshal())
+            .also { b -> apiKey?.let { b.base64("api_key", it) } }
             .build()
         return JsonBuilder()
             .string("user_guid", userGuid)

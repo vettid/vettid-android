@@ -25,7 +25,7 @@ class MemberApiException(
 
     companion object {
         const val UNAUTHORIZED = "unauthorized"
-        const val CSRF = "csrf"
+        const val INVALID_CODE = "invalid_code"
         const val TERMS_REQUIRED = "terms_required"
         const val NOT_FOUND = "not_found"
         const val INSTANCE_MOVED = "instance_moved"

@@ -26,6 +26,7 @@ object AndroidKeys {
     const val ALIAS_DEVICE_ATTESTATION = "vettid.device_attestation.v1"
     const val ALIAS_SEED_WRAP = "vettid.seed_wrap.v1"
     const val ALIAS_APP_DATA = "vettid.app_data.v1"
+    const val ALIAS_APP_API = "vettid.app_api.v1"
 
     internal fun keyStore(): KeyStore = KeyStore.getInstance(PROVIDER).apply { load(null) }
 
@@ -128,6 +129,59 @@ class DeviceAttestationKey(private val alias: String = AndroidKeys.ALIAS_DEVICE_
     companion object {
         const val CHALLENGE_SIZE = 32
     }
+}
+
+/**
+ * The app key (VAULT-MESSAGING §11.12.2, 0.15.0): a non-exportable EC P-256 signing key, in StrongBox when the
+ * device has it and in the TEE otherwise, that signs every app request to the member API (`X-VettID-App`). It is
+ * made per vault (a new setup, recovery or transfer on this phone makes a new one, [regenerate]) and is distinct
+ * from the device attestation key, whose chain stays inside the enclave. No user authentication and no
+ * unlocked-device binding, so that a lock and the result polling work in the background.
+ */
+class AppApiKey(private val alias: String = AndroidKeys.ALIAS_APP_API) {
+    /** The key, made on first use. */
+    @Synchronized
+    fun getOrCreate(preferStrongBox: Boolean = true): java.security.PublicKey {
+        AndroidKeys.keyStore().getCertificate(alias)?.let { return it.publicKey }
+        return generate(preferStrongBox)
+    }
+
+    /** A fresh key under the alias (an existing one is replaced). */
+    @Synchronized
+    fun regenerate(preferStrongBox: Boolean = true): java.security.PublicKey {
+        AndroidKeys.delete(alias)
+        return generate(preferStrongBox)
+    }
+
+    private fun generate(preferStrongBox: Boolean): java.security.PublicKey {
+        val (kp, _) = AndroidKeys.generateStrongBoxFirst(preferStrongBox) { sb ->
+            val spec = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN)
+                .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
+                .setDigests(KeyProperties.DIGEST_SHA256)
+                .setIsStrongBoxBacked(sb)
+                .build()
+            KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, AndroidKeys.PROVIDER).apply { initialize(spec) }.generateKeyPair()
+        }
+        return kp.public
+    }
+
+    fun exists(): Boolean = AndroidKeys.exists(alias)
+
+    /** The public key's SubjectPublicKeyInfo DER (the form the member API and the vault record). */
+    fun spki(): ByteArray = getOrCreate().encoded
+
+    /** Signs [message] with SHA256withECDSA (DER). */
+    fun sign(message: ByteArray): ByteArray {
+        getOrCreate()
+        val key = AndroidKeys.keyStore().getKey(alias, null) as? PrivateKey ?: throw KeystoreException("no app key")
+        return Signature.getInstance("SHA256withECDSA").run {
+            initSign(key)
+            update(message)
+            sign()
+        }
+    }
+
+    fun delete() = AndroidKeys.delete(alias)
 }
 
 /** A freshly attested key: its chain (leaf first) and where it lives. */

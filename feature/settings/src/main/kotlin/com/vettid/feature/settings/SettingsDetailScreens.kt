@@ -247,20 +247,17 @@ fun ChangePinContent(
 @Composable
 fun RecoveryContent(
     state: RecoveryUiState,
-    onCancel: () -> Unit,
     onOpenAccountSite: () -> Unit,
     onBack: () -> Unit,
     onTransfer: () -> Unit = {},
 ) {
-    var confirm by rememberSaveable { mutableStateOf(false) }
     val r = state.recovery
-    val active = r != null && (r.state == "pending" || r.state == "available")
+    val active = r != null && r.state in setOf("pending", "available", "registered")
     FormScaffold(
         title = stringResource(R.string.settings_recovery_title),
         body = stringResource(R.string.settings_recovery_body),
-        primaryLabel = if (active) stringResource(R.string.settings_recovery_cancel) else stringResource(R.string.settings_recovery_open),
-        onPrimary = if (active) ({ confirm = true }) else onOpenAccountSite,
-        destructive = active,
+        primaryLabel = stringResource(R.string.settings_recovery_open),
+        onPrimary = onOpenAccountSite,
         busy = state.busy || state.loading,
         onBack = onBack,
         secondaryLabel = if (active) null else stringResource(R.string.settings_recovery_transfer),
@@ -275,20 +272,10 @@ fun RecoveryContent(
             Spacer(Modifier.height(Spacing.m))
         }
         when {
-            state.cancelled -> NoticeCard(
-                NoticeKind.SUCCESS,
-                stringResource(R.string.settings_recovery_title),
-                stringResource(R.string.settings_recovery_cancelled),
-            )
             active && r != null -> NoticeCard(
                 NoticeKind.URGENT,
                 stringResource(R.string.settings_recovery_active_title),
-                stringResource(
-                    R.string.settings_recovery_active_body,
-                    r.state,
-                    formatDate(r.availableAt) ?: "-",
-                    formatDate(r.expiresAt) ?: "-",
-                ),
+                stringResource(R.string.settings_recovery_active_body, r.state, formatDate(r.availableAt) ?: "-"),
                 Modifier.testTag("recovery_active"),
             )
             !state.loading && state.error == null -> NoticeCard(
@@ -301,16 +288,6 @@ fun RecoveryContent(
             Spacer(Modifier.height(Spacing.m))
             NoticeCard(NoticeKind.WARNING, stringResource(R.string.settings_recovery_title), stringResource(it.messageRes()))
         }
-    }
-    if (confirm) {
-        ConfirmDialog(
-            title = stringResource(R.string.settings_recovery_cancel_title),
-            text = stringResource(R.string.settings_recovery_cancel_body),
-            confirmLabel = stringResource(R.string.settings_recovery_cancel),
-            destructive = true,
-            onConfirm = { confirm = false; onCancel() },
-            onDismiss = { confirm = false },
-        )
     }
 }
 

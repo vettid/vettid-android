@@ -56,7 +56,8 @@ class ExitScenario(
         val flow = AltChannelFlow(member, trust)
         try {
             // --- enroll (§11.3): PIN, then the first handshake and the credential password ---
-            val enrolled = flow.enroll(device, guid, PIN, attester)
+            // The dev stack's stand-in assigns the vault id itself (no setup code, MEMBER-API 2.0.0 not simulated).
+            val enrolled = flow.enroll(device, "", guid, PIN, attester)
             check(enrolled.ok) { "enroll refused: ${enrolled.code}" }
             log("enrolled vault ${enrolled.vaultId} on ${enrolled.instanceId}")
             device.awaitEnrolled()

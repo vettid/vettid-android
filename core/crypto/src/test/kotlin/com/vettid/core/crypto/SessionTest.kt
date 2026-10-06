@@ -109,6 +109,31 @@ class SessionTest {
     }
 
     @Test
+    fun aTransfersAppKeyTravelsInHsInitOnlyForPurposeApp() {
+        // §6.2 (0.15.0): `api_key`, the new app's P-256 SPKI DER, after `device_attest` and before `sas_commit`.
+        val spki = ByteArray(91) { it.toByte() }
+        val i = Initiator.create(
+            InitiatorConfig(
+                purpose = Purpose.APP, ctx = "vault-0001", identity = app.ik, staticKem = app.kem.publicKey, relay = app.relay,
+                token = token, apiKey = spki, responderIk = vault.ik.publicKey, responderEk = vault.kem.publicKey,
+                responderRelayKey = vault.relayKey.publicKey, policy = Policy.VAULT_TO_DEVICE, now = now,
+            ),
+        )
+        val json = String(i.body.marshal())
+        assertTrue(json.contains("\"api_key\":\"${Base64s.encodeStd(spki)}\""))
+        assertTrue(json.indexOf("\"api_key\"") < json.indexOf("\"sas_commit\""))
+        assertTrue(HsInit.parse(i.body.marshal()).apiKey()!!.contentEquals(spki))
+        // The vault still answers it like any app pairing.
+        val p = PendingInit.open(i.envelope(), vault.lookup, now)
+        assertTrue(p.body.apiKey()!!.contentEquals(spki))
+        // Absent for every other purpose.
+        val b = appInit().body
+        assertEquals(null, b.apiKey())
+        val conn = HsInit(Purpose.CONNECTION, b.ctx, b.from, b.eph, b.token, suites = b.suites, apiKey = spki, sasCommit = b.sasCommit())
+        assertThrows(CryptoException.Format::class.java) { conn.marshal() }
+    }
+
+    @Test
     fun sasFieldsPresentExactlyForSasPurposes() {
         val i = appInit()
         val body = i.body

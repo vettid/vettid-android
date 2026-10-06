@@ -91,7 +91,6 @@ interface UnlockActions {
     fun setPin(v: String)
     fun submit()
     fun cancelRecoveryAndUnlock()
-    fun signOut()
 
     /** Opens the "Erase VettID from this phone" confirmation (only when [UnlockUiState.notRecognised]). */
     fun askErase()
@@ -120,7 +119,7 @@ class UnlockViewModel @Inject constructor(
     private val vault: VaultRepository,
     private val account: AccountRepository,
 ) : ViewModel(), UnlockActions {
-    private val state = MutableStateFlow(UnlockUiState(email = account.account.value?.email))
+    private val state = MutableStateFlow(UnlockUiState(email = account.account.value?.emailHint?.takeIf { it.isNotEmpty() }))
     val uiState: StateFlow<UnlockUiState> = state.asStateFlow()
     private var ticker: Job? = null
     private var serviceTicker: Job? = null
@@ -153,10 +152,6 @@ class UnlockViewModel @Inject constructor(
     override fun submit() = attempt(cancelRecovery = false)
 
     override fun cancelRecoveryAndUnlock() = attempt(cancelRecovery = true)
-
-    override fun signOut() {
-        viewModelScope.launch { account.signOut() }
-    }
 
     override fun askErase() = state.update { if (it.notRecognised && !it.erasing) it.copy(eraseConfirm = true) else it }
 
@@ -204,10 +199,12 @@ class UnlockViewModel @Inject constructor(
 
     /**
      * An unreadable answer: the vault may not know this phone. A wrong PIN, a backoff, a success and the other
-     * sealed answers show that it does; other failures (network, refusals) say nothing either way.
+     * sealed answers show that it does; other failures (network, refusals) say nothing either way. The member API
+     * refusing this phone's app key (`401`, MEMBER-API 2.0.0: another phone's key replaced it at a transfer or a
+     * recovery) is no proof either, but the member may then erase VettID here too.
      */
     private fun notRecognisedAfter(r: UnlockAttempt, before: Boolean): Boolean =
-        if (r is UnlockAttempt.Failed) r.code == CODE_UNREADABLE || before else false
+        if (r is UnlockAttempt.Failed) r.code == CODE_UNREADABLE || r.kind == FailureKind.UNAUTHORIZED || before else false
 
     private fun startBackoff(seconds: Long) {
         if (seconds <= 0) return

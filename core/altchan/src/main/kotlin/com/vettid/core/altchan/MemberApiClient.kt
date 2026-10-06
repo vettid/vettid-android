@@ -9,6 +9,7 @@ import com.vettid.core.crypto.json.JsonObject
 import com.vettid.core.crypto.json.JsonString
 import com.vettid.core.crypto.json.StrictJson
 import kotlinx.coroutines.delay
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -89,22 +90,11 @@ data class ReleaseInfo(
  */
 data class VaultStatusAnswer(val vault: VaultStatus?, val servicePaused: Boolean)
 
-/** `POST /api/auth/verify` / `pin` outcome. */
-enum class SignInStatus { SIGNED_IN, PIN_REQUIRED }
+/** `POST /api/vault/enroll/redeem`'s answer (§11.12.1): the member's vault, the member, and a masked email to show. */
+data class Redeemed(val vaultId: String, val userGuid: String, val emailHint: String)
 
-/** The parts of `Me` the app uses (MEMBER-API "Account"). */
-data class Me(
-    val userGuid: String,
-    val email: String,
-    val firstName: String,
-    val lastName: String,
-    val state: String,
-    val termsNeedAcceptance: Boolean,
-    val pinEnabled: Boolean,
-)
-
-/** `GET /api/vault/recovery` (MEMBER-API "Vault recovery"). */
-data class RecoveryInfo(val recoveryId: String, val state: String, val availableAt: String, val expiresAt: String)
+/** `POST /api/vault/recovery/claim`'s answer (§11.11.7): the member (for the sealed register and unlock) and a masked email. */
+data class Claimed(val userGuid: String, val emailHint: String)
 
 /** A sealed request ready to post (§11.3, §11.4, §11.11.3). */
 class SealedRequest(val requestId: String, val etkKid: String, envelope: ByteArray, val manifestSha256: String?) {
@@ -114,9 +104,10 @@ class SealedRequest(val requestId: String, val etkKid: String, envelope: ByteArr
 }
 
 /**
- * The member API (MEMBER-API v1) as the app uses it: sign-in (magic link +
- * PIN), `Me`, the vault routes of the alternate channel and recovery. It
- * only ever sees opaque envelopes. [apiBase] is the account origin
+ * The member API (MEMBER-API 2.0.0) as the app uses it: the setup-code redeem,
+ * the vault routes of the alternate channel and the recovery claim and register,
+ * every request signed by the app key ([MemberAuth.AppKey]; the app never signs
+ * in, VAULT-MESSAGING §11.12). It only ever sees opaque envelopes. [apiBase] is the account origin
  * (`https://account.vettid.org`); [manifestUrl] is where the release
  * manifest is served (`https://vettid.org/.well-known/vettid/pcr-manifest.json`).
  */
@@ -129,28 +120,21 @@ class MemberApiClient(
     private val sleep: suspend (Long) -> Unit = { delay(it) },
 ) {
     private val base = apiBase.trimEnd('/')
-    private val http: OkHttpClient = if (auth is MemberAuth.Session) http.newBuilder().cookieJar(auth.cookies).build() else http
+    private val http: OkHttpClient = http
 
-    private suspend fun call(method: String, path: String, body: String? = null, retryAuth: Boolean = true): JsonObject? {
-        val rb = Request.Builder().url(base + path)
-        auth.apply(rb, method)
-        rb.method(method, body?.toRequestBody(JSON) ?: if (method == "POST") ByteArray(0).toRequestBody(null) else null)
-        val (code, bytes, retryAfter) = execute(rb.build())
-        val mayRefresh = auth is MemberAuth.Session && !path.startsWith("/api/auth/")
-        if (code == HTTP_UNAUTHORIZED && retryAuth && mayRefresh) {
-            // MEMBER-API: a 401 that survived the server-side renewal may try /api/auth/refresh once.
-            val refreshed = try {
-                call("POST", REFRESH, retryAuth = false)
-                true
-            } catch (_: MemberApiException) {
-                false
-            }
-            if (refreshed) return call(method, path, body, retryAuth = false)
-        }
-        if (code / 100 != 2) throw errorOf(code, bytes, retryAfter)
-        if (bytes.isEmpty()) return null
+    /** One signed request; [vault] names the vault in the signature header instead of the client's (a redeem: ""). */
+    private suspend fun call(method: String, path: String, body: String? = null, vault: String? = null): JsonObject? {
+        val url = (base + path).toHttpUrl()
+        val bytes = body?.toByteArray(Charsets.UTF_8) ?: ByteArray(0)
+        val rb = Request.Builder().url(url)
+        auth.apply(rb, method, url, bytes, vault)
+        rb.method(method, if (body != null) bytes.toRequestBody(JSON) else if (method == "POST") bytes.toRequestBody(null) else null)
+        val (code, resp, retryAfter) = execute(rb.build())
+        if (code / 100 != 2) throw errorOf(code, resp, retryAfter)
+        val bytesIn = resp
+        if (bytesIn.isEmpty()) return null
         return try {
-            StrictJson.parseObject(bytes)
+            StrictJson.parseObject(bytesIn)
         } catch (_: CryptoException) {
             throw IOException("member API: malformed response")
         }
@@ -189,48 +173,23 @@ class MemberApiClient(
         return MemberApiException(code, c, s("message") ?: "", s("release"), minOf(retry, MAX_RETRY_AFTER_S), s("service"))
     }
 
-    // --- sign-in (MEMBER-API "Auth") ---
+    // --- setup codes (MEMBER-API 2.0.0 "Setup codes", VAULT-MESSAGING §11.12.1) ---
 
-    /** Asks for a sign-in link by email (always `{ok: true}`). */
-    suspend fun authStart(email: String) {
-        call("POST", "/api/auth/start", JsonBuilder().string("email", email).build())
-    }
+    /**
+     * Redeems a scanned setup QR's secret ([secret], 22 characters base64url) with this app's key ([appKey], SPKI
+     * DER), signed by that key with an empty `vault`. Any failure of the code itself is `404 invalid_code`.
+     */
+    suspend fun redeemSecret(secret: String, appKey: ByteArray): Redeemed =
+        redeemed(call("POST", REDEEM, JsonBuilder().string("secret", secret).base64("app_key", appKey).build(), vault = ""))
 
-    /** Exchanges the link's token (from the URL fragment) for a session, or a PIN step. */
-    suspend fun authVerify(email: String, token: String): SignInStatus =
-        signIn(call("POST", "/api/auth/verify", JsonBuilder().string("email", email).string("token", token).build()))
+    /** Redeems a typed setup code with the member's email ([code] normalised: 8 symbols, no hyphen). */
+    suspend fun redeemTyped(email: String, code: String, appKey: ByteArray): Redeemed = redeemed(
+        call("POST", REDEEM, JsonBuilder().string("email", email).string("code", code).base64("app_key", appKey).build(), vault = ""),
+    )
 
-    /** The account PIN step (not the vault PIN). */
-    suspend fun authPin(pin: String): SignInStatus = signIn(call("POST", "/api/auth/pin", JsonBuilder().string("pin", pin).build()))
-
-    private fun signIn(o: JsonObject?): SignInStatus = when (o?.optString("status")) {
-        "signed_in" -> SignInStatus.SIGNED_IN
-        "pin_required" -> SignInStatus.PIN_REQUIRED
-        else -> throw IOException("member API: unexpected sign-in status")
-    }
-
-    suspend fun authRefresh() {
-        call("POST", REFRESH, retryAuth = false)
-    }
-
-    /** Revokes the refresh token and clears the cookies. */
-    suspend fun signOut() {
-        try {
-            call("POST", "/api/auth/signout", retryAuth = false)
-        } finally {
-            (auth as? MemberAuth.Session)?.cookies?.clear()
-        }
-    }
-
-    suspend fun me(): Me {
-        val o = call("GET", "/api/account/me") ?: throw IOException("member API: empty")
-        val terms = o.optObj("terms")
-        return Me(
-            userGuid = o.string("user_guid"), email = o.optString("email") ?: "", firstName = o.optString("first_name") ?: "",
-            lastName = o.optString("last_name") ?: "", state = o.optString("state") ?: "",
-            termsNeedAcceptance = (terms?.get("needs_acceptance") as? JsonBool)?.value ?: false,
-            pinEnabled = (o["pin_enabled"] as? JsonBool)?.value ?: false,
-        )
+    private fun redeemed(o: JsonObject?): Redeemed {
+        val r = o ?: throw IOException("member API: empty")
+        return Redeemed(r.string("vault_id"), r.string("user_guid"), r.optString("email_hint") ?: "")
     }
 
     // --- vault (alternate channel) ---
@@ -304,9 +263,10 @@ class MemberApiClient(
             .build()
     }
 
-    /** Posts a sealed vault.enroll; returns the vault id the API assigned. */
-    suspend fun enroll(instanceId: String, r: SealedRequest): String {
-        val body = JsonBuilder().string("request_id", r.requestId).string("instance_id", instanceId).string("etk_kid", r.etkKid)
+    /** Posts a sealed vault.enroll for [vaultId] (the redeem's, MEMBER-API 2.0.0); returns the vault id. */
+    suspend fun enroll(vaultId: String, instanceId: String, r: SealedRequest): String {
+        val body = JsonBuilder().string("vault_id", vaultId).string("request_id", r.requestId).string("instance_id", instanceId)
+            .string("etk_kid", r.etkKid)
             .string("envelope", Base64s.encodeStd(r.envelope())).string("manifest_sha256", r.manifestSha256 ?: "").build()
         return (call("POST", "/api/vault/enroll", body) ?: throw IOException("member API: empty")).string("vault_id")
     }
@@ -356,18 +316,19 @@ class MemberApiClient(
 
     // --- recovery (MEMBER-API "Vault recovery", VAULT-MESSAGING §11.11) ---
 
-    suspend fun recoveryStatus(): RecoveryInfo? {
-        val r = call("GET", "/api/vault/recovery")?.get("recovery") as? JsonObject ?: return null
-        return RecoveryInfo(r.string("recovery_id"), r.string("state"), r.optString("available_at") ?: "", r.optString("expires_at") ?: "")
-    }
-
-    suspend fun recoveryCancel(recoveryId: String) {
-        call("POST", "/api/vault/recovery/cancel", JsonBuilder().string("recovery_id", recoveryId).build())
+    /**
+     * Claims the recovery of the scanned QR with this app's key (§11.11.7, 0.15.0), signed by that key with the QR's
+     * `vault`. `409 recovery_not_available` unless the recovery is `available`; `404` for an unknown pair.
+     */
+    suspend fun recoveryClaim(vaultId: String, recoveryId: String, appKey: ByteArray): Claimed {
+        val body = JsonBuilder().string("vault_id", vaultId).string("recovery_id", recoveryId).base64("app_key", appKey).build()
+        val o = call("POST", "/api/vault/recovery/claim", body, vault = vaultId) ?: throw IOException("member API: empty")
+        return Claimed(o.string("user_guid"), o.optString("email_hint") ?: "")
     }
 
     /** Posts a sealed vault.recovery.register (no manifest_sha256). */
     suspend fun recoveryRegister(vaultId: String, instanceId: String, r: SealedRequest) {
-        call("POST", "/api/vault/recovery/register", posted(r, "vault_id" to vaultId, "instance_id" to instanceId))
+        call("POST", "/api/vault/recovery/register", posted(r, "vault_id" to vaultId, "instance_id" to instanceId), vault = vaultId)
     }
 
     companion object {
@@ -379,9 +340,8 @@ class MemberApiClient(
         const val STAGING_API = "https://account.staging.vettid.org"
         const val STAGING_MANIFEST = "https://staging.vettid.org/.well-known/vettid/pcr-manifest.json"
         const val MANIFEST_PATH = "/.well-known/vettid/pcr-manifest.json"
-        private const val REFRESH = "/api/auth/refresh"
+        private const val REDEEM = "/api/vault/enroll/redeem"
         private const val HTTP_OK = 200
-        private const val HTTP_UNAUTHORIZED = 401
         private const val MAX_BODY = 1 shl 20
         private const val MS_PER_S = 1000L
         private const val MAX_START_WAIT_MS = 2000L

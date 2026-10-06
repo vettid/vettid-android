@@ -9,6 +9,7 @@ import com.vettid.core.data.R
 fun FailureKind.messageRes(): Int = when (this) {
     FailureKind.NETWORK -> R.string.data_failure_network
     FailureKind.UNAUTHORIZED -> R.string.data_failure_unauthorized
+    FailureKind.SETUP_CODE_INVALID -> R.string.data_failure_setup_code
     FailureKind.TERMS_REQUIRED -> R.string.data_failure_terms
     FailureKind.RATE_LIMITED -> R.string.data_failure_rate_limited
     FailureKind.VAULT_UNAVAILABLE -> R.string.data_failure_vault_unavailable

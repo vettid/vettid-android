@@ -215,12 +215,20 @@ class HsInit(
     val profile: ByteArray? = null,
     val rotations: List<Rotation> = emptyList(),
     val deviceAttest: DeviceAttest? = null,
+    /**
+     * The new app's app key (§6.2, §11.12, 0.15.0): the SPKI DER of a P-256 key, sent as standard base64, only in
+     * a transfer's `hs.init` (purpose app); absent otherwise.
+     */
+    apiKey: ByteArray? = null,
     /** SHA-256("vettid/vms/2/sas-commit" || n_I), exactly for purposes with a SAS (§6.2, §6.3, 0.10.3). */
     sasCommit: ByteArray? = null,
 ) {
     private val sasCommit = sasCommit?.copyOf()
+    private val apiKey = apiKey?.copyOf()
 
     fun sasCommit(): ByteArray? = sasCommit?.copyOf()
+
+    fun apiKey(): ByteArray? = apiKey?.copyOf()
 
     @Suppress("CyclomaticComplexMethod")
     internal fun validate() {
@@ -235,6 +243,9 @@ class HsInit(
         if (rotations.isNotEmpty() && purpose != Purpose.RECONNECT) throw CryptoException.Format("rotations")
         if (rotations.size > HsLimits.MAX_ROTATIONS) throw CryptoException.Format("rotations")
         if (deviceAttest != null && purpose != Purpose.APP) throw CryptoException.Format("device_attest")
+        if (apiKey != null && (purpose != Purpose.APP || apiKey.isEmpty() || apiKey.size > MAX_API_KEY)) {
+            throw CryptoException.Format("api_key")
+        }
         checkSasField(purpose, sasCommit, "sas_commit")
     }
 
@@ -255,11 +266,15 @@ class HsInit(
         }
         if (rotations.isNotEmpty()) b.raw("rotations", marshalRotations(rotations))
         deviceAttest?.let { b.raw("device_attest", it.marshal()) }
+        apiKey?.let { b.base64("api_key", it) }
         sasCommit?.let { b.base64("sas_commit", it) }
         return b.bytes()
     }
 
     companion object {
+        /** An SPKI DER of a P-256 key is 91 bytes; anything far larger is not one. */
+        private const val MAX_API_KEY = 512
+
         fun parse(body: ByteArray): HsInit {
             val o = StrictJson.parseObject(body)
             val purpose = Purpose.of(o.string("purpose"))
@@ -283,6 +298,7 @@ class HsInit(
                 profile = profile,
                 rotations = rotations.orEmpty(),
                 deviceAttest = o.optObj("device_attest")?.let { DeviceAttest.parse(it) },
+                apiKey = if (o.has("api_key")) o.base64("api_key") else null,
                 sasCommit = optSasField(o, "sas_commit"),
             )
             init.validate()

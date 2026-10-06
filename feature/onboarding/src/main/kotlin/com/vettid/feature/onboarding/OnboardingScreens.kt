@@ -35,7 +35,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -68,17 +70,14 @@ interface OnboardingActions {
     fun transfer()
     fun leaveMove()
     fun newVaultAfterMove()
+    fun typeCode()
+    fun scanned(text: String)
     fun setEmail(v: String)
-    fun submitEmail()
-    fun resendLink()
-    fun setLinkInput(v: String)
-    fun submitLink()
-    fun confirmSignIn()
+    fun setCode(v: String)
+    fun submitCode()
+    fun confirmAccount()
     fun back(): Boolean
-    fun setAccountPin(v: String)
-    fun submitAccountPin()
-    fun checkAgain()
-    fun useAnotherAccount()
+    fun useAnotherCode()
     fun enrollAnyway()
     fun setPin(v: String)
     fun submitPin()
@@ -95,17 +94,14 @@ interface OnboardingActions {
     fun finish()
 }
 
-/** The onboarding flow, driven by [OnboardingViewModel]. [onOpenAccountSite] opens account.vettid.org. */
+/** The onboarding flow, driven by [OnboardingViewModel]. [onOpenAccountSite] opens the account portal. */
 @Composable
 fun OnboardingFlow(onOpenAccountSite: () -> Unit, viewModel: OnboardingViewModel = hiltViewModel()) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     OnboardingContent(state, viewModel, onOpenAccountSite)
 }
 
-private val BACKABLE = setOf(
-    OnboardingStep.EMAIL, OnboardingStep.CHECK_EMAIL, OnboardingStep.CONFIRM_SIGN_IN, OnboardingStep.ACCOUNT_PIN,
-    OnboardingStep.PIN_CONFIRM, OnboardingStep.BACKUP,
-)
+private val BACKABLE = setOf(OnboardingStep.SETUP_SCAN, OnboardingStep.SETUP_TYPE, OnboardingStep.PIN_CONFIRM, OnboardingStep.BACKUP)
 
 /** One onboarding step for [state] (stateless). */
 @Suppress("CyclomaticComplexMethod")
@@ -117,17 +113,16 @@ fun OnboardingContent(
     recover: @Composable (onLeave: () -> Unit, onNewVault: () -> Unit, onOpenAccountSite: () -> Unit) -> Unit =
         { l, n, o -> RecoverFlow(l, n, o) },
     transferIn: @Composable (onLeave: () -> Unit) -> Unit = { l -> TransferInFlow(l) },
+    camera: (@Composable (Modifier) -> Unit)? = null,
 ) {
     val canBack = state.step in BACKABLE || (state.step == OnboardingStep.PASSWORD && !state.credentialOnly)
     BackHandler(enabled = canBack) { actions.back() }
     val back: (() -> Unit)? = if (canBack) ({ actions.back(); Unit }) else null
     when (state.step) {
         OnboardingStep.WELCOME -> WelcomeScreen(actions::start, actions::startTransfer, actions::startRecovery)
-        OnboardingStep.EMAIL -> EmailScreen(state, actions, back)
-        OnboardingStep.CHECK_EMAIL -> CheckEmailScreen(state, actions, back)
-        OnboardingStep.CONFIRM_SIGN_IN -> ConfirmSignInScreen(state, actions, back)
-        OnboardingStep.ACCOUNT_PIN -> AccountPinScreen(state, actions, back)
-        OnboardingStep.TERMS -> TermsScreen(state, actions, onOpenAccountSite)
+        OnboardingStep.SETUP_SCAN -> SetupScanScreen(state, actions, back, onOpenAccountSite, camera)
+        OnboardingStep.SETUP_TYPE -> SetupTypeScreen(state, actions, back)
+        OnboardingStep.CONFIRM_ACCOUNT -> ConfirmAccountScreen(state, actions)
         OnboardingStep.VAULT_ELSEWHERE -> VaultElsewhereScreen(state, actions, onOpenAccountSite)
         OnboardingStep.PIN_CREATE -> PinCreateScreen(state, actions)
         OnboardingStep.PIN_CONFIRM -> PinConfirmScreen(state, actions, back)
@@ -187,117 +182,123 @@ private fun Point(icon: ImageVector, text: String) {
     }
 }
 
+/** Why the scan was refused, if it was. */
 @Composable
-fun EmailScreen(state: OnboardingUiState, actions: OnboardingActions, onBack: (() -> Unit)?) {
+private fun ScanRefusalNotice(state: OnboardingUiState) {
+    val r = state.scanRefusal ?: return
+    val text = when (r) {
+        ScanRefusal.NOT_A_CODE -> stringResource(R.string.onboarding_setup_not_code)
+        ScanRefusal.RECOVERY_CODE -> stringResource(R.string.onboarding_setup_recovery_code)
+        ScanRefusal.OTHER_ENVIRONMENT -> stringResource(R.string.onboarding_setup_other_environment, state.otherApi ?: "")
+    }
+    Spacer(Modifier.height(Spacing.l))
+    NoticeCard(NoticeKind.WARNING, stringResource(R.string.onboarding_setup_refused_title), text, Modifier.testTag("scan_refused"))
+}
+
+/** The setup QR from the account portal (VAULT-MESSAGING §11.12.1); typing the code is the fallback. */
+@Composable
+fun SetupScanScreen(
+    state: OnboardingUiState,
+    actions: OnboardingActions,
+    onBack: (() -> Unit)?,
+    onOpenAccountSite: () -> Unit,
+    camera: (@Composable (Modifier) -> Unit)? = null,
+) {
     FormScaffold(
-        title = stringResource(R.string.onboarding_email_title),
-        body = stringResource(R.string.onboarding_email_body),
-        primaryLabel = stringResource(R.string.onboarding_email_send),
-        onPrimary = actions::submitEmail,
-        primaryEnabled = state.email.isNotBlank(),
+        title = stringResource(R.string.onboarding_setup_scan_title),
+        body = stringResource(R.string.onboarding_setup_scan_body),
+        primaryLabel = null,
+        onPrimary = {},
+        busy = state.busy,
+        secondaryLabel = stringResource(R.string.onboarding_setup_type),
+        onSecondary = actions::typeCode,
+        onBack = onBack,
+    ) {
+        if (state.busy) {
+            NoticeCard(
+                NoticeKind.INFO,
+                stringResource(R.string.onboarding_setup_redeeming),
+                stringResource(R.string.onboarding_setup_redeeming_body),
+            )
+        } else {
+            ScannerBox(actions::scanned, camera)
+        }
+        ScanRefusalNotice(state)
+        ErrorText(state, FailureKind.SETUP_CODE_INVALID, stringResource(R.string.onboarding_setup_invalid))
+        Spacer(Modifier.height(Spacing.l))
+        TextLink(stringResource(R.string.onboarding_setup_open_site), onOpenAccountSite)
+        DevHint(state)
+    }
+}
+
+/** The short code typed with the account's email (never the code alone, §11.12.1). */
+@Composable
+fun SetupTypeScreen(state: OnboardingUiState, actions: OnboardingActions, onBack: (() -> Unit)?) {
+    FormScaffold(
+        title = stringResource(R.string.onboarding_setup_type_title),
+        body = stringResource(R.string.onboarding_setup_type_body),
+        primaryLabel = stringResource(R.string.onboarding_continue),
+        onPrimary = actions::submitCode,
+        primaryEnabled = state.email.isNotBlank() && state.codeInput.isNotBlank(),
         busy = state.busy,
         onBack = onBack,
     ) {
         OutlinedTextField(
             value = state.email,
             onValueChange = actions::setEmail,
-            label = { Text(stringResource(R.string.onboarding_email_label)) },
+            label = { Text(stringResource(R.string.onboarding_setup_email_label)) },
             singleLine = true,
             isError = state.emailInvalid,
-            supportingText = if (state.emailInvalid) ({ Text(stringResource(R.string.onboarding_email_invalid)) }) else null,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Send, autoCorrectEnabled = false),
-            keyboardActions = KeyboardActions(onSend = { actions.submitEmail() }),
-            modifier = Modifier.fillMaxWidth().testTag("email"),
+            supportingText = if (state.emailInvalid) ({ Text(stringResource(R.string.onboarding_setup_email_invalid)) }) else null,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next, autoCorrectEnabled = false),
+            modifier = Modifier.fillMaxWidth().testTag("setup_email"),
         )
-        ErrorText(state)
-        DevHint(state)
-    }
-}
-
-@Composable
-fun CheckEmailScreen(state: OnboardingUiState, actions: OnboardingActions, onBack: (() -> Unit)?) {
-    FormScaffold(
-        title = stringResource(R.string.onboarding_check_title),
-        body = stringResource(R.string.onboarding_check_body, state.email),
-        primaryLabel = stringResource(R.string.onboarding_check_continue),
-        onPrimary = actions::submitLink,
-        primaryEnabled = state.linkInput.isNotBlank(),
-        busy = state.busy,
-        secondaryLabel = stringResource(R.string.onboarding_check_resend),
-        onSecondary = actions::resendLink,
-        onBack = onBack,
-    ) {
+        Spacer(Modifier.height(Spacing.m))
         OutlinedTextField(
-            value = state.linkInput,
-            onValueChange = actions::setLinkInput,
-            label = { Text(stringResource(R.string.onboarding_check_paste_label)) },
+            value = state.codeInput,
+            onValueChange = actions::setCode,
+            label = { Text(stringResource(R.string.onboarding_setup_code_label)) },
+            placeholder = { Text("XXXX-XXXX") },
             singleLine = true,
-            isError = state.linkInvalid,
-            supportingText = if (state.linkInvalid) ({ Text(stringResource(R.string.onboarding_check_paste_invalid)) }) else null,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go, autoCorrectEnabled = false),
-            keyboardActions = KeyboardActions(onGo = { actions.submitLink() }),
-            modifier = Modifier.fillMaxWidth().excludeFromAutofill().testTag("link"),
+            isError = state.codeInvalid,
+            supportingText = {
+                Text(stringResource(if (state.codeInvalid) R.string.onboarding_setup_code_invalid else R.string.onboarding_setup_code_hint))
+            },
+            textStyle = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Monospace),
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.Characters,
+                keyboardType = KeyboardType.Ascii,
+                imeAction = ImeAction.Done,
+                autoCorrectEnabled = false,
+            ),
+            keyboardActions = KeyboardActions(onDone = { actions.submitCode() }),
+            modifier = Modifier.fillMaxWidth().excludeFromAutofill().testTag("setup_code"),
         )
-        ErrorText(state, FailureKind.UNAUTHORIZED, stringResource(R.string.onboarding_link_expired))
+        ErrorText(state, FailureKind.SETUP_CODE_INVALID, stringResource(R.string.onboarding_setup_invalid))
         DevHint(state)
     }
 }
 
+/** "Setting up a vault for m***@example.com": the member checks the account before a PIN is asked for. */
 @Composable
-fun ConfirmSignInScreen(state: OnboardingUiState, actions: OnboardingActions, onBack: (() -> Unit)?) {
+fun ConfirmAccountScreen(state: OnboardingUiState, actions: OnboardingActions) {
     FormScaffold(
-        title = stringResource(R.string.onboarding_confirm_title),
-        body = stringResource(R.string.onboarding_confirm_body, state.email),
-        primaryLabel = stringResource(R.string.onboarding_confirm_sign_in),
-        onPrimary = actions::confirmSignIn,
+        title = stringResource(R.string.onboarding_confirm_account_title),
+        body = stringResource(R.string.onboarding_confirm_account_body, state.emailHint),
+        primaryLabel = stringResource(R.string.onboarding_confirm_account_yes),
+        onPrimary = actions::confirmAccount,
+        secondaryLabel = stringResource(R.string.onboarding_confirm_account_no),
+        onSecondary = actions::useAnotherCode,
         busy = state.busy,
-        secondaryLabel = stringResource(R.string.onboarding_confirm_cancel),
-        onSecondary = { actions.back() },
-        onBack = onBack,
+        modifier = Modifier.testTag("confirm_account"),
     ) {
-        ErrorText(state, FailureKind.UNAUTHORIZED, stringResource(R.string.onboarding_link_expired))
-    }
-}
-
-@Composable
-fun AccountPinScreen(state: OnboardingUiState, actions: OnboardingActions, onBack: (() -> Unit)?) {
-    FormScaffold(
-        title = stringResource(R.string.onboarding_account_pin_title),
-        body = stringResource(R.string.onboarding_account_pin_body),
-        primaryLabel = stringResource(R.string.onboarding_continue),
-        onPrimary = actions::submitAccountPin,
-        primaryEnabled = state.accountPin.length >= 4,
-        busy = state.busy,
-        onBack = onBack,
-    ) {
-        SecretField(
-            value = state.accountPin,
-            onValueChange = actions::setAccountPin,
-            label = stringResource(R.string.onboarding_account_pin_label),
-            isPin = true,
-            onImeAction = actions::submitAccountPin,
-            modifier = Modifier.testTag("account_pin"),
+        NoticeCard(
+            NoticeKind.INFO,
+            stringResource(R.string.onboarding_confirm_account_hint_title),
+            state.emailHint,
+            Modifier.testTag("email_hint"),
         )
-        ErrorText(state, FailureKind.UNAUTHORIZED, stringResource(R.string.onboarding_account_pin_wrong))
-    }
-}
-
-@Composable
-fun TermsScreen(state: OnboardingUiState, actions: OnboardingActions, onOpenAccountSite: () -> Unit) {
-    FormScaffold(
-        title = stringResource(R.string.onboarding_terms_title),
-        body = stringResource(
-            if (state.termsUpdated) R.string.onboarding_terms_body_updated else R.string.onboarding_terms_body_registered,
-        ),
-        primaryLabel = stringResource(R.string.onboarding_terms_open),
-        onPrimary = onOpenAccountSite,
-        secondaryLabel = stringResource(R.string.onboarding_terms_check),
-        onSecondary = actions::checkAgain,
-        busy = state.busy,
-    ) {
         ErrorText(state)
-        Spacer(Modifier.height(Spacing.l))
-        TextLink(stringResource(R.string.onboarding_other_account), actions::useAnotherAccount)
     }
 }
 
@@ -339,7 +340,7 @@ fun VaultElsewhereScreen(state: OnboardingUiState, actions: OnboardingActions, o
         )
         Spacer(Modifier.height(Spacing.l))
         TextLink(stringResource(R.string.onboarding_elsewhere_anyway), actions::enrollAnyway)
-        TextLink(stringResource(R.string.onboarding_other_account), actions::useAnotherAccount)
+        TextLink(stringResource(R.string.onboarding_other_code), actions::useAnotherCode)
     }
 }
 
@@ -548,13 +549,19 @@ private fun stepLabel(s: EnrollStep): String = stringResource(
 @Composable
 fun ProgressScreen(state: OnboardingUiState, actions: OnboardingActions) {
     val failed = state.progressFailed || (state.error != null && !state.busy)
+    val expired = failed && state.error == FailureKind.UNAUTHORIZED && !state.credentialOnly
     FormScaffold(
         title = stringResource(R.string.onboarding_progress_title),
         body = stringResource(R.string.onboarding_progress_body),
         primaryLabel = if (failed) stringResource(R.string.onboarding_progress_retry) else null,
         onPrimary = actions::run,
-        secondaryLabel = if (failed) stringResource(R.string.onboarding_progress_edit) else null,
-        onSecondary = actions::editAfterFailure,
+        // A pending app key lasts an hour (MEMBER-API 2.0.0): after a 401 only a new setup code helps.
+        secondaryLabel = when {
+            !failed -> null
+            expired -> stringResource(R.string.onboarding_other_code)
+            else -> stringResource(R.string.onboarding_progress_edit)
+        },
+        onSecondary = if (expired) actions::useAnotherCode else actions::editAfterFailure,
     ) {
         StepList(state.progress.map { (s, st) -> stepLabel(s) to st }, Modifier.testTag("progress"))
         ErrorText(state)

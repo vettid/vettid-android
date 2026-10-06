@@ -12,7 +12,7 @@ import androidx.compose.ui.semantics.contentDataType
 import java.util.WeakHashMap
 
 /**
- * Keeps a secret input (vault PIN, credential password, recovery code, transfer code, sign-in link, the delete
+ * Keeps a secret input (vault PIN, credential password, recovery code, transfer code, setup code, the delete
  * confirmation) away from autofill services and password managers: they neither fill it nor offer to save it
  * (owner decision 2026-10-06, after a password manager offered to save the credential password typed during a
  * recovery).
@@ -30,7 +30,7 @@ import java.util.WeakHashMap
  *   itself always reports `IMPORTANT_FOR_AUTOFILL_YES`, hence its parent. The previous value comes back when the
  *   last secret field leaves.
  *
- * Fields that may autofill (the sign-in email address) do not use this.
+ * Fields that may autofill (the account's email address for a typed setup code) do not use this.
  */
 fun Modifier.excludeFromAutofill(): Modifier = this then ExcludeFromAutofillElement
 

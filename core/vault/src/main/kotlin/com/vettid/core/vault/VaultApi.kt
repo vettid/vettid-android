@@ -70,6 +70,9 @@ class VaultApi(val device: VaultDevice) {
 
     suspend fun status(): VaultStatusInfo = op("vault.status").decode(VaultStatusInfo.serializer())
 
+    /** `account.get` (§10.2, §11.13, 0.15.0): the member's account snapshot from the member API, display only. */
+    suspend fun accountGet(): AccountView = op("account.get").decode(AccountView.serializer())
+
     /** Locks the vault (it answers, then sends vault.locking). */
     suspend fun lock() {
         op("vault.lock")

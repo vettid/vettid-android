@@ -73,11 +73,13 @@ pointed at the stack: endpoints from `BuildConfig` (`DEV_STACK_API`, `DEV_STACK_
 port, and **the phone's real Keystore attester** (StrongBox). It is a build type of its own,
 initialised from `debug`; no release variant can carry it.
 
-The stand-in has no sign-in or account routes (`/api/auth/*`, `/api/account/*`), so the
-`devStack` build simulates them in the app (`app/src/devStack/.../DevAccountGateway.kt`): no
-email is sent; paste the token `devstack-sign-in-token` on the "Check your email" screen. Each
-address is its own member (`user_guid` derived from it); `+pin` in the address asks for account
-PIN `1234`; `+registered` and `+terms` show the terms step once.
+The app never signs in (VAULT-MESSAGING 0.15.0 §11.12, MEMBER-API 2.0.0), and the stand-in has
+no setup codes yet, so the `devStack` build simulates the typed redeem in the app
+(`app/src/devStack/.../DevMemberGateway.kt`): choose "Type the code instead" and enter any
+email with the code `DEVSTACK`. Each address is its own member (`user_guid` derived from it);
+requests carry the stand-in's `Authorization: Bearer <user_guid>` instead of `X-VettID-App`.
+Scanning a setup QR and a recovery's claim need the stand-in's 2.0.0 routes. Until vettid-vault's
+dev enclave implements 0.15.0, it may refuse the sealed enrollment's `app.api_key`.
 
 ## Tests against it
 

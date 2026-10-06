@@ -64,8 +64,8 @@ class MemberApiTest {
         val path = r.url.encodedPath
         log.add("${r.method} $path")
         if (path == MemberApiClient.MANIFEST_PATH) return resp(200, String(TestSupport.served(TestSupport.manifestBytes(manifestSerial))))
-        if (path.startsWith("/api/auth/") || path.startsWith("/api/account/")) return authRoutes(r, path)
-        if (r.headers["Authorization"] != "Bearer guid-1") return resp(401, """{"error":"unauthorized","message":"sign in"}""")
+        if (r.headers[AppRequestSigning.HEADER] != null) return signedRoutes(r, path)
+        if (r.headers["Authorization"] != "Bearer guid-1") return resp(401, """{"error":"unauthorized","message":"unauthorized"}""")
         val e = enclaves.first()
         return when {
             path == "/api/vault/enclave" -> resp(
@@ -88,6 +88,7 @@ class MemberApiTest {
                 val body = StrictJson.parseObject(inner.body)
                 assertEquals(body.string("manifest_sha256"), o.string("manifest_sha256"))
                 val enroll = path.endsWith("enroll")
+                if (enroll) enrolledVaultIds.add(o.string("vault_id"))
                 val result = when {
                     manifestFailFirst -> {
                         manifestFailFirst = false
@@ -123,28 +124,60 @@ class MemberApiTest {
         }
     }
 
-    private var refreshed = 0
+    private val enrolledVaultIds = mutableListOf<String>()
+    private val signed = mutableListOf<Pair<String, String>>()
+    private val appKey = SoftAppKey()
 
-    private fun authRoutes(r: RecordedRequest, path: String): MockResponse {
-        if (r.method == "POST") assertEquals("1", r.headers[MemberAuth.CSRF_HEADER])
+    /** A software P-256 key in place of the Keystore's (the signature format is the same). */
+    class SoftAppKey : AppKeySigner {
+        private val kp = java.security.KeyPairGenerator.getInstance("EC").apply {
+            initialize(java.security.spec.ECGenParameterSpec("secp256r1"))
+        }.generateKeyPair()
+
+        override fun spki(): ByteArray = kp.public.encoded
+
+        override fun sign(message: ByteArray): ByteArray = java.security.Signature.getInstance("SHA256withECDSA").run {
+            initSign(kp.private)
+            update(message)
+            sign()
+        }
+
+        fun verify(message: ByteArray, sig: ByteArray): Boolean = java.security.Signature.getInstance("SHA256withECDSA").run {
+            initVerify(kp.public)
+            update(message)
+            verify(sig)
+        }
+    }
+
+    /** Checks `X-VettID-App` as the member API does (§11.12.2), then answers the 2.0.0 routes. */
+    private fun signedRoutes(r: RecordedRequest, path: String): MockResponse {
+        val h = r.headers[AppRequestSigning.HEADER]!!
+        val f = h.split("; ").associate { it.substringBefore('=') to it.substringAfter('=') }
+        assertEquals(listOf("v", "vault", "kid", "ts", "nonce", "sig"), h.split("; ").map { it.substringBefore('=') })
+        assertEquals("1", f["v"])
+        assertEquals(AppRequestSigning.akid(appKey.spki()), f["kid"])
+        assertEquals(22, f["nonce"]!!.length) // 16 bytes, base64url without padding
+        assertTrue(kotlin.math.abs(f["ts"]!!.toLong() - Instant.now().epochSecond) < 300)
+        val body = r.body?.toByteArray() ?: ByteArray(0)
+        val msg = AppRequestSigning.signingString(r.method!!, path, r.url.encodedQuery ?: "", f["vault"]!!, f["kid"]!!, f["ts"]!!.toLong(), f["nonce"]!!, body)
+        if (!appKey.verify(msg.toByteArray(), Base64s.decodeRawUrl(f["sig"]!!))) return resp(401, """{"error":"unauthorized"}""")
+        assertEquals("cookies are never sent", null, r.headers["Cookie"])
+        signed.add(path to f["vault"]!!)
         return when (path) {
-            "/api/auth/verify" -> MockResponse.Builder().code(200).body("""{"status":"pin_required"}""")
-                .addHeader("Set-Cookie", "vid_pin=p1; Path=/api/auth; HttpOnly; Max-Age=300").build()
-            "/api/auth/pin" -> {
-                assertTrue(r.headers["Cookie"]!!.contains("vid_pin=p1"))
-                MockResponse.Builder().code(200).body("""{"status":"signed_in"}""")
-                    .addHeader("Set-Cookie", "vid_id=id1; Path=/api; HttpOnly; Max-Age=3600")
-                    .addHeader("Set-Cookie", "vid_rt=rt1; Path=/api; HttpOnly; Max-Age=86400").build()
+            "/api/vault/enroll/redeem" -> {
+                val o = StrictJson.parseObject(body)
+                assertEquals(Base64s.encodeStd(appKey.spki()), o.string("app_key"))
+                val ok = o.optString("secret") == "AbCdEfGhIjKlMnOpQrStUv" || (o.optString("email") == "sam@example.org" && o.optString("code") == "K7QM4XRP")
+                if (ok) resp(200, """{"vault_id":"0123456789abcdef0123456789abcdef","user_guid":"guid-1","email_hint":"s***@example.org"}""")
+                else resp(404, """{"error":"invalid_code","code":"invalid_code"}""")
             }
-            "/api/auth/refresh" -> {
-                refreshed++
-                MockResponse.Builder().code(200).body("""{"ok":true}""").addHeader("Set-Cookie", "vid_id=id2; Path=/api; HttpOnly; Max-Age=3600").build()
+            "/api/vault/recovery/claim" -> {
+                val o = StrictJson.parseObject(body)
+                assertEquals(Base64s.encodeStd(appKey.spki()), o.string("app_key"))
+                if (o.string("recovery_id") == "01JA0RECVERY0000000000001X") resp(200, """{"user_guid":"guid-1","email_hint":"s***@example.org"}""")
+                else resp(409, """{"error":"recovery_not_available","code":"recovery_not_available"}""")
             }
-            "/api/account/me" -> if (r.headers["Cookie"]?.contains("vid_id=id2") == true) {
-                resp(200, """{"user_guid":"guid-1","email":"a@b.c","first_name":"A","last_name":"B","state":"member","terms":{"needs_acceptance":false},"pin_enabled":true}""")
-            } else {
-                resp(401, """{"error":"unauthorized"}""")
-            }
+            "/api/vault/status" -> resp(200, """{"vault":null,"service":"available"}""")
             else -> resp(404, """{"error":"not_found"}""")
         }
     }
@@ -219,10 +252,11 @@ class MemberApiTest {
     fun enrollUnlockLock() = runBlocking<Unit> {
         val p = Party()
         val f = flow()
-        val out = f.enroll(p, "guid-1", "246802", TestSupport.SoftAttester())
+        val out = f.enroll(p, "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester())
         assertTrue(out.ok)
         assertEquals("0123456789abcdef0123456789abcdef", out.vaultId)
         assertEquals("inst-a", out.instanceId)
+        assertEquals("MEMBER-API 2.0.0: the enroll names the redeemed vault", listOf("0123456789abcdef0123456789abcdef"), enrolledVaultIds)
         p.vaultId = out.vaultId
         p.state = AltRequests.applyEnrolled(p.state, 1)
         val u = f.unlock(p, "guid-1", "246802", TestSupport.SoftAttester())
@@ -274,7 +308,7 @@ class MemberApiTest {
     fun reSealsAfterInstanceMoved() = runBlocking<Unit> {
         enclaves.add(TestSupport.Enclave("inst-b"))
         instanceMovedFirst = true
-        val out = flow().enroll(Party(), "guid-1", "246802", TestSupport.SoftAttester())
+        val out = flow().enroll(Party(), "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester())
         assertTrue(out.ok)
         assertEquals("inst-b", out.instanceId)
         assertEquals(2, log.count { it == "POST /api/vault/enroll" })
@@ -283,7 +317,7 @@ class MemberApiTest {
     @Test
     fun refetchesTheManifestOnceAfterAManifestResult() = runBlocking<Unit> {
         manifestFailFirst = true
-        val out = flow().enroll(Party(), "guid-1", "246802", TestSupport.SoftAttester())
+        val out = flow().enroll(Party(), "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester())
         assertTrue(out.ok)
         assertEquals(2, log.count { it == "GET ${MemberApiClient.MANIFEST_PATH}" })
     }
@@ -292,7 +326,7 @@ class MemberApiTest {
     fun refusesAnOlderManifest() = runBlocking<Unit> {
         val p = Party()
         p.state = AltState(manifestSerial = 9)
-        val e = assertThrows(AltRefusedException::class.java) { runBlocking { flow().enroll(p, "guid-1", "246802", TestSupport.SoftAttester()) } }
+        val e = assertThrows(AltRefusedException::class.java) { runBlocking { flow().enroll(p, "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester()) } }
         assertEquals(AltRefusedException.Reason.MANIFEST_OLDER, e.reason)
     }
 
@@ -304,38 +338,37 @@ class MemberApiTest {
     }
 
     @Test
-    fun sessionCookiesCsrfAndRefresh() = runBlocking<Unit> {
-        val jar = SessionCookieJar()
-        val a = api(MemberAuth.Session(jar))
-        assertEquals(SignInStatus.PIN_REQUIRED, a.authVerify("a@b.c", "tok"))
-        assertEquals(SignInStatus.SIGNED_IN, a.authPin("1234"))
-        assertTrue(jar.hasSession())
-        // vid_id=id1 is refused; the client refreshes once and retries with id2.
-        val me = a.me()
-        assertEquals("guid-1", me.userGuid)
-        assertEquals(1, refreshed)
-        jar.clear()
-        assertFalse(jar.hasSession())
+    fun appKeySignedRedeemClaimAndStatus() = runBlocking<Unit> {
+        var vault: String? = null
+        val a = api(MemberAuth.AppKey(appKey) { vault })
+        // §11.12.1: the redeem names no vault (`vault=` empty) whatever the client's vault is.
+        vault = "previous-vault"
+        assertEquals(Redeemed("0123456789abcdef0123456789abcdef", "guid-1", "s***@example.org"), a.redeemSecret("AbCdEfGhIjKlMnOpQrStUv", appKey.spki()))
+        assertEquals("/api/vault/enroll/redeem" to "", signed.last())
+        assertEquals("guid-1", a.redeemTyped("sam@example.org", "K7QM4XRP", appKey.spki()).userGuid)
+        val e = assertThrows(MemberApiException::class.java) { runBlocking { a.redeemTyped("sam@example.org", "K7QM4XRQ", appKey.spki()) } }
+        assertEquals(MemberApiException.INVALID_CODE, e.code)
+        // §11.11.7: the claim is signed with the QR's vault.
+        assertEquals(Claimed("guid-1", "s***@example.org"), a.recoveryClaim("qr-vault", "01JA0RECVERY0000000000001X", appKey.spki()))
+        assertEquals("/api/vault/recovery/claim" to "qr-vault", signed.last())
+        val n = assertThrows(MemberApiException::class.java) { runBlocking { a.recoveryClaim("qr-vault", "01JA0OTHER00000000000000XX", appKey.spki()) } }
+        assertEquals(MemberApiException.RECOVERY_NOT_AVAILABLE, n.code)
+        // Later calls name the client's vault.
+        vault = "0123456789abcdef0123456789abcdef"
+        a.vaultStatusAnswer()
+        assertEquals("/api/vault/status" to "0123456789abcdef0123456789abcdef", signed.last())
     }
 
     @Test
-    fun cookiesPersist() {
-        val saved = mutableListOf<String>()
-        val p = object : CookiePersistence {
-            override fun load() = saved.toList()
+    fun aSignatureOverAnotherRequestIsRefused() = runBlocking<Unit> {
+        val other = SoftAppKey()
+        val forged = object : AppKeySigner {
+            override fun spki() = appKey.spki()
 
-            override fun save(cookies: List<String>) {
-                saved.clear()
-                saved.addAll(cookies)
-            }
+            override fun sign(message: ByteArray) = other.sign(message)
         }
-        val jar = SessionCookieJar(p)
-        val url = server.url("/api/auth/pin")
-        jar.saveFromResponse(url, listOf(okhttp3.Cookie.parse(url, "vid_id=x; Path=/api; HttpOnly; Max-Age=3600")!!))
-        val again = SessionCookieJar(p)
-        assertTrue(again.hasSession())
-        assertEquals("x", again.loadForRequest(server.url("/api/vault/status")).single().value)
-        assertTrue(again.loadForRequest(server.url("/other")).isEmpty())
+        val e = assertThrows(MemberApiException::class.java) { runBlocking { api(MemberAuth.AppKey(forged) { null }).vaultStatusAnswer() } }
+        assertEquals(401, e.status)
     }
 
     @Test
@@ -425,7 +458,7 @@ class MemberApiTest {
     @Test
     fun anUnlockWhilePausedIsNotRetried() = runBlocking<Unit> {
         val p = Party()
-        p.vaultId = flow().enroll(p, "guid-1", "246802", TestSupport.SoftAttester()).vaultId
+        p.vaultId = flow().enroll(p, "0123456789abcdef0123456789abcdef", "guid-1", "246802", TestSupport.SoftAttester()).vaultId
         p.state = AltRequests.applyEnrolled(p.state, 1)
         val before = log.size
         server.dispatcher = object : Dispatcher() {

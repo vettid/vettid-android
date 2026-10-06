@@ -1,10 +1,10 @@
 package com.vettid.feature.onboarding
 
-import com.vettid.core.altchan.SignInStatus
-import com.vettid.core.data.account.SignInLinkInbox
+import com.vettid.core.data.account.SetupLinkInbox
 import com.vettid.core.data.policy.PinPolicy
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.SetupCodeInput
 import com.vettid.core.data.vault.SetupStage
 import com.vettid.core.testing.FakeVault
 import com.vettid.core.ui.components.StepState
@@ -23,34 +23,36 @@ class OnboardingViewModelTest {
     @get:Rule
     val main = MainDispatcherRule()
 
-    private val token = "test-sign-in-token-0000"
     private val vault = FakeVault()
-    private val inbox = SignInLinkInbox()
+    private val inbox = SetupLinkInbox()
     private fun vm() = OnboardingViewModel(vault, vault, inbox)
+    private val secret = "AbCdEfGhIjKlMnOpQrStUv"
 
     @Test
-    fun signInByPastedLinkThenEnrollAndCreateTheCredential() = runTest {
+    fun typedSetupCodeThenEnrollAndCreateTheCredential() = runTest {
         val vm = vm()
         advanceUntilIdle()
         assertEquals(OnboardingStep.WELCOME, vm.uiState.value.step)
         vm.start()
+        assertEquals(OnboardingStep.SETUP_SCAN, vm.uiState.value.step)
+        vm.typeCode()
+        assertEquals(OnboardingStep.SETUP_TYPE, vm.uiState.value.step)
         vm.setEmail("not-an-email")
-        vm.submitEmail()
+        vm.setCode("K7QM-4XR0")
+        assertTrue("0 is never in a code", vm.uiState.value.codeInvalid)
+        vm.submitCode()
         assertTrue(vm.uiState.value.emailInvalid)
-        vm.setEmail("sam@example.org")
-        vm.submitEmail()
+        assertFalse("nothing is sent for a malformed code", "redeemSetupCode" in vault.calls)
+        vm.setEmail("  Sam@Example.org ")
+        vm.setCode("k7qm 4xrp")
+        assertFalse(vm.uiState.value.codeInvalid)
+        vm.submitCode()
         advanceUntilIdle()
-        assertEquals(OnboardingStep.CHECK_EMAIL, vm.uiState.value.step)
-        vm.setLinkInput("https://evil.example/auth/#t=$token")
-        vm.submitLink()
-        assertTrue(vm.uiState.value.linkInvalid)
-        vm.setLinkInput("https://account.vettid.org/auth/#t=$token&e=sam%40example.org")
-        vm.submitLink()
-        assertEquals(OnboardingStep.CONFIRM_SIGN_IN, vm.uiState.value.step)
-        // Nothing is sent before the member confirms.
-        assertFalse("verifySignIn" in vault.calls)
-        vm.confirmSignIn()
-        advanceUntilIdle()
+        assertEquals(SetupCodeInput.Typed("sam@example.org", "K7QM4XRP"), vault.lastRedeemed)
+        // The account is shown before any PIN is asked for (reverse phishing, ENROLLMENT-CODES §7).
+        assertEquals(OnboardingStep.CONFIRM_ACCOUNT, vm.uiState.value.step)
+        assertEquals("m***@example.com", vm.uiState.value.emailHint)
+        vm.confirmAccount()
         assertEquals(OnboardingStep.PIN_CREATE, vm.uiState.value.step)
 
         vm.setPin("123456")
@@ -87,10 +89,75 @@ class OnboardingViewModelTest {
     }
 
     @Test
+    fun scannedSetupQrIsRedeemedOnlyForThisEnvironment() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        vm.start()
+        vm.scanned("""{"v":1,"t":"e","api":"https://account.staging.vettid.org","s":"$secret"}""")
+        assertEquals(ScanRefusal.OTHER_ENVIRONMENT, vm.uiState.value.scanRefusal)
+        assertEquals("https://account.staging.vettid.org", vm.uiState.value.otherApi)
+        vm.scanned("hello")
+        assertEquals(ScanRefusal.NOT_A_CODE, vm.uiState.value.scanRefusal)
+        val recoveryQr = """{"v":1,"t":"r","api":"https://account.vettid.org","vault_id":"0123456789abcdef0123456789abcdef",""" +
+            """"recovery_id":"01JABCDEF0123456789ABCDEFG","code":"SK0ATG8WK2FYJ0Y5MEHJ5R5J7QZKWHX0"}"""
+        vm.scanned(recoveryQr)
+        assertEquals(ScanRefusal.RECOVERY_CODE, vm.uiState.value.scanRefusal)
+        assertFalse("redeemSetupCode" in vault.calls)
+        vm.scanned("""{"v":1,"t":"e","api":"https://account.vettid.org","s":"$secret"}""")
+        advanceUntilIdle()
+        assertEquals(SetupCodeInput.Secret(secret), vault.lastRedeemed)
+        assertEquals(OnboardingStep.CONFIRM_ACCOUNT, vm.uiState.value.step)
+    }
+
+    @Test
+    fun appLinkIsRedeemedWhileNothingIsSetUp() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        inbox.offer("https://account.vettid.org/vault/enroll/#s=$secret")
+        advanceUntilIdle()
+        assertNull(inbox.link.value)
+        assertEquals(SetupCodeInput.Secret(secret), vault.lastRedeemed)
+        assertEquals(OnboardingStep.CONFIRM_ACCOUNT, vm.uiState.value.step)
+    }
+
+    @Test
+    fun anotherEnvironmentsAppLinkIsNotRedeemed() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        inbox.offer("https://account.staging.vettid.org/vault/enroll/#s=$secret")
+        advanceUntilIdle()
+        assertFalse("redeemSetupCode" in vault.calls)
+        assertEquals(ScanRefusal.NOT_A_CODE, vm.uiState.value.scanRefusal)
+    }
+
+    @Test
+    fun aRefusedCodeSaysSoAndNotMyAccountStartsOver() = runTest {
+        val vm = vm()
+        advanceUntilIdle()
+        vm.start()
+        vm.typeCode()
+        vm.setEmail("sam@example.org")
+        vm.setCode("K7QM-4XRP")
+        vault.fail["redeemSetupCode"] = FakeVault.failure(FailureKind.SETUP_CODE_INVALID, "invalid_code")
+        vm.submitCode()
+        advanceUntilIdle()
+        assertEquals(OnboardingStep.SETUP_TYPE, vm.uiState.value.step)
+        assertEquals(FailureKind.SETUP_CODE_INVALID, vm.uiState.value.error)
+        vm.submitCode()
+        advanceUntilIdle()
+        assertEquals(OnboardingStep.CONFIRM_ACCOUNT, vm.uiState.value.step)
+        vm.useAnotherCode()
+        advanceUntilIdle()
+        assertTrue("forgetSetupCode" in vault.calls)
+        assertEquals(OnboardingStep.WELCOME, vm.uiState.value.step)
+    }
+
+    @Test
     fun backupOffNeedsTheAcknowledgement() = runTest {
         vault.phase.value = AppPhase.Setup(SetupStage.NEW_VAULT)
         val vm = vm()
         advanceUntilIdle()
+        vm.confirmAccount()
         vm.setPin("40281795"); vm.submitPin(); vm.setPinConfirm("40281795"); vm.submitPinConfirm()
         vm.setPassword("correct horse battery staple"); vm.setPasswordConfirm("correct horse battery staple"); vm.submitPassword()
         vm.setBackup(false)
@@ -104,33 +171,9 @@ class OnboardingViewModelTest {
     }
 
     @Test
-    fun appLinkAndAccountPin() = runTest {
-        vault.signInStatus = SignInStatus.PIN_REQUIRED
+    fun vaultElsewhereFollowsThePhase() = runTest {
         val vm = vm()
         advanceUntilIdle()
-        inbox.offer("https://account.vettid.org/auth/#t=$token&e=sam%40example.org")
-        advanceUntilIdle()
-        assertNull(inbox.link.value)
-        assertEquals(OnboardingStep.CONFIRM_SIGN_IN, vm.uiState.value.step)
-        assertEquals("sam@example.org", vm.uiState.value.email)
-        vm.confirmSignIn()
-        advanceUntilIdle()
-        assertEquals(OnboardingStep.ACCOUNT_PIN, vm.uiState.value.step)
-        vm.setAccountPin("12a34")
-        assertEquals("1234", vm.uiState.value.accountPin)
-        vm.submitAccountPin()
-        advanceUntilIdle()
-        assertEquals(OnboardingStep.PIN_CREATE, vm.uiState.value.step)
-    }
-
-    @Test
-    fun termsAndVaultElsewhereFollowThePhase() = runTest {
-        val vm = vm()
-        advanceUntilIdle()
-        vault.phase.value = AppPhase.TermsRequired(updated = true)
-        advanceUntilIdle()
-        assertEquals(OnboardingStep.TERMS, vm.uiState.value.step)
-        assertTrue(vm.uiState.value.termsUpdated)
         vault.phase.value = AppPhase.Setup(SetupStage.VAULT_ELSEWHERE)
         advanceUntilIdle()
         assertEquals(OnboardingStep.VAULT_ELSEWHERE, vm.uiState.value.step)
@@ -143,6 +186,7 @@ class OnboardingViewModelTest {
         vault.phase.value = AppPhase.Setup(SetupStage.NEW_VAULT)
         val vm = vm()
         advanceUntilIdle()
+        vm.confirmAccount()
         vm.setPin("40281795"); vm.submitPin(); vm.setPinConfirm("40281795"); vm.submitPinConfirm()
         vm.setPassword("correct horse battery staple"); vm.setPasswordConfirm("correct horse battery staple"); vm.submitPassword()
         vault.fail["createCredential"] = FakeVault.failure(FailureKind.NO_RESPONSE)
@@ -163,6 +207,7 @@ class OnboardingViewModelTest {
         vault.phase.value = AppPhase.Setup(SetupStage.NEW_VAULT)
         val vm = vm()
         advanceUntilIdle()
+        vm.confirmAccount()
         vm.setPin("40281795"); vm.submitPin(); vm.setPinConfirm("40281795"); vm.submitPinConfirm()
         vm.setPassword("correct horse battery staple"); vm.setPasswordConfirm("correct horse battery staple"); vm.submitPassword()
         vault.fail["enroll"] = FakeVault.failure(FailureKind.VAULT_EXISTS, "vault_exists")
@@ -182,15 +227,10 @@ class OnboardingViewModelTest {
     }
 
     @Test
-    fun recoverFromTheWelcomeScreenSignsInThenRecovers() = runTest {
-        vault.phaseAfterSignIn = AppPhase.Setup(SetupStage.VAULT_ELSEWHERE)
+    fun recoverFromTheWelcomeScreenNeedsNoSignIn() = runTest {
         val vm = vm()
         advanceUntilIdle()
         vm.startRecovery()
-        assertEquals(OnboardingStep.EMAIL, vm.uiState.value.step)
-        assertEquals(OnboardingGoal.RECOVER, vm.uiState.value.goal)
-        vault.phase.value = AppPhase.Setup(SetupStage.VAULT_ELSEWHERE)
-        advanceUntilIdle()
         assertEquals(OnboardingStep.RECOVER, vm.uiState.value.step)
         // Registered: the phase follows, the flow stays; finishing does not jump to the generic done screen.
         vault.phase.value = AppPhase.Setup(SetupStage.RECOVERING)
@@ -202,14 +242,18 @@ class OnboardingViewModelTest {
     }
 
     @Test
-    fun transferFromTheWelcomeScreenSignsInThenScans() = runTest {
+    fun transferFromTheWelcomeScreenAndBack() = runTest {
         val vm = vm()
         advanceUntilIdle()
         vm.startTransfer()
-        assertEquals(OnboardingGoal.TRANSFER, vm.uiState.value.goal)
-        vault.phase.value = AppPhase.Setup(SetupStage.VAULT_ELSEWHERE)
-        advanceUntilIdle()
         assertEquals(OnboardingStep.TRANSFER_IN, vm.uiState.value.step)
+        vm.leaveMove()
+        advanceUntilIdle()
+        assertEquals(OnboardingStep.WELCOME, vm.uiState.value.step)
+        // After a redeem that found a vault elsewhere, leaving goes back to that choice.
+        vault.phase.value = AppPhase.Setup(SetupStage.NEW_VAULT)
+        advanceUntilIdle()
+        vm.transfer()
         vm.leaveMove()
         advanceUntilIdle()
         assertEquals(OnboardingStep.VAULT_ELSEWHERE, vm.uiState.value.step)
@@ -231,7 +275,8 @@ class OnboardingViewModelTest {
         vault.phase.value = AppPhase.Setup(SetupStage.NEW_VAULT)
         val vm = vm()
         advanceUntilIdle()
-        assertEquals(OnboardingStep.PIN_CREATE, vm.uiState.value.step)
+        assertEquals(OnboardingStep.CONFIRM_ACCOUNT, vm.uiState.value.step)
+        vm.confirmAccount()
         vm.setEmail("sam@example.org")
         vm.setPin("40281795")
         vault.phase.value = AppPhase.SignedOut

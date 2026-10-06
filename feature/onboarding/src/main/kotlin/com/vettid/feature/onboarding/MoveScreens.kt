@@ -32,14 +32,11 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.vettid.core.altchan.RecoveryCodes
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.ConfirmDialog
@@ -76,7 +73,7 @@ internal fun localDateTime(rfc3339: String?): String? = try {
 
 /** The camera with a gold frame, or the permission notice; [camera] is replaced in the screen catalog. */
 @Composable
-private fun ScannerBox(onText: (String) -> Unit, camera: (@Composable (Modifier) -> Unit)?) {
+internal fun ScannerBox(onText: (String) -> Unit, camera: (@Composable (Modifier) -> Unit)?) {
     val permission = rememberCameraPermission()
     LaunchedEffect(Unit) { if (!permission.granted && camera == null) permission.request() }
     if (permission.granted || camera != null) {
@@ -161,7 +158,7 @@ fun RecoverContent(
 ) {
     val leaveable = state.step in setOf(RecoverStep.INTRO, RecoverStep.LOADING)
     val back: () -> Unit = { if (!actions.back() && leaveable) onLeave() }
-    val canBack = leaveable || state.step in setOf(RecoverStep.SCAN, RecoverStep.TYPE, RecoverStep.NEW_PASSWORD, RecoverStep.DELETE)
+    val canBack = leaveable || state.step in setOf(RecoverStep.SCAN, RecoverStep.NEW_PASSWORD, RecoverStep.DELETE)
     BackHandler(enabled = canBack) { back() }
     val onBack: (() -> Unit)? = if (canBack) back else null
     when (state.step) {
@@ -172,48 +169,8 @@ fun RecoverContent(
             primaryLabel = null,
             onPrimary = {},
             onBack = onBack,
-            secondaryLabel = stringResource(R.string.recover_type),
-            onSecondary = actions::type,
         ) {
             ScannerBox(actions::scanned, camera)
-            CodeRefusalNotice(state)
-            Failure(state.error)
-        }
-        RecoverStep.TYPE -> FormScaffold(
-            title = stringResource(R.string.recover_type_title),
-            body = stringResource(R.string.recover_type_body),
-            primaryLabel = stringResource(R.string.recover_type_submit),
-            onPrimary = actions::submitCode,
-            primaryEnabled = state.codeInput.isNotBlank(),
-            busy = state.busy,
-            onBack = onBack,
-        ) {
-            OutlinedTextField(
-                value = state.codeInput,
-                onValueChange = actions::setCode,
-                label = { Text(stringResource(R.string.recover_type_label)) },
-                singleLine = false,
-                minLines = 2,
-                textStyle = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Monospace),
-                isError = state.codeInvalid,
-                supportingText = {
-                    Text(
-                        if (state.codeInvalid) {
-                            stringResource(R.string.recover_type_invalid)
-                        } else {
-                            "${state.codeInput.count { it.isLetterOrDigit() }} / ${RecoveryCodes.LENGTH}"
-                        },
-                    )
-                },
-                keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.Characters,
-                    keyboardType = KeyboardType.Ascii,
-                    imeAction = ImeAction.Done,
-                    autoCorrectEnabled = false,
-                ),
-                keyboardActions = KeyboardActions(onDone = { actions.submitCode() }),
-                modifier = Modifier.fillMaxWidth().excludeFromAutofill().testTag("recovery_code"),
-            )
             CodeRefusalNotice(state)
             Failure(state.error)
         }
@@ -324,59 +281,18 @@ fun RecoverContent(
 
 private const val MIN_PIN = 6
 
-@Suppress("CyclomaticComplexMethod")
 @Composable
 private fun RecoverIntro(state: RecoverUiState, actions: RecoverActions, onBack: (() -> Unit)?, onOpenAccountSite: () -> Unit) {
-    val rec = state.target?.recovery
-    val available = state.codeAvailable
     FormScaffold(
         title = stringResource(R.string.recover_title),
         body = stringResource(R.string.recover_body),
-        primaryLabel = when {
-            state.step == RecoverStep.LOADING -> null
-            available -> stringResource(R.string.recover_scan)
-            rec == null || rec.state != RecoverUiState.STATE_PENDING -> stringResource(R.string.recover_open_site)
-            else -> stringResource(R.string.recover_check_again)
-        },
-        onPrimary = when {
-            available -> actions::scan
-            rec == null || rec.state != RecoverUiState.STATE_PENDING -> onOpenAccountSite
-            else -> actions::reload
-        },
+        primaryLabel = if (state.step == RecoverStep.LOADING) null else stringResource(R.string.recover_scan),
+        onPrimary = actions::scan,
         busy = state.busy || state.step == RecoverStep.LOADING,
-        secondaryLabel = if (available) stringResource(R.string.recover_type) else stringResource(R.string.recover_check_again),
-        onSecondary = if (available) actions::type else actions::reload,
+        secondaryLabel = stringResource(R.string.recover_open_site),
+        onSecondary = onOpenAccountSite,
         onBack = onBack,
     ) {
-        if (state.step != RecoverStep.LOADING && state.error == null) {
-            when (rec?.state) {
-                null -> NoticeCard(
-                    NoticeKind.INFO, stringResource(R.string.recover_none_title), stringResource(R.string.recover_none_body),
-                    Modifier.testTag("recovery_none"),
-                )
-                RecoverUiState.STATE_PENDING -> NoticeCard(
-                    NoticeKind.INFO,
-                    stringResource(R.string.recover_pending_title),
-                    stringResource(R.string.recover_pending_body, localDateTime(rec.availableAt) ?: rec.availableAt),
-                    Modifier.testTag("recovery_pending"),
-                )
-                RecoverUiState.STATE_AVAILABLE -> NoticeCard(
-                    NoticeKind.SUCCESS,
-                    stringResource(R.string.recover_available_title),
-                    stringResource(R.string.recover_available_body, localDateTime(rec.expiresAt) ?: rec.expiresAt),
-                    Modifier.testTag("recovery_available"),
-                )
-                RecoverUiState.STATE_CANCELLED -> NoticeCard(
-                    NoticeKind.WARNING, stringResource(R.string.recover_cancelled_title), stringResource(R.string.recover_cancelled_body),
-                    Modifier.testTag("recovery_cancelled"),
-                )
-                else -> NoticeCard(
-                    NoticeKind.WARNING, stringResource(R.string.recover_expired_title), stringResource(R.string.recover_expired_body),
-                    Modifier.testTag("recovery_expired"),
-                )
-            }
-            Spacer(Modifier.height(Spacing.m))
-        }
         NoticeCard(NoticeKind.INFO, stringResource(R.string.recover_need_title), stringResource(R.string.recover_need_body))
         CodeRefusalNotice(state)
         Failure(state.error)
@@ -391,13 +307,14 @@ private fun CodeRefusalNotice(state: RecoverUiState) {
         CodeRefusal.BAD_CODE -> stringResource(R.string.recover_bad_code, state.wrongCodes)
         CodeRefusal.VOIDED -> stringResource(R.string.recover_voided)
         CodeRefusal.EXPIRED -> stringResource(R.string.recover_code_expired)
-        CodeRefusal.TOO_EARLY -> localDateTime(state.target?.recovery?.availableAt)?.let { stringResource(R.string.recover_code_early, it) }
-            ?: stringResource(R.string.recover_code_early_unknown)
+        CodeRefusal.TOO_EARLY -> stringResource(R.string.recover_code_early_unknown)
         CodeRefusal.GONE -> stringResource(R.string.recover_code_gone)
         CodeRefusal.ATTESTATION -> stringResource(R.string.recover_code_attestation)
         CodeRefusal.RETRY -> stringResource(R.string.recover_code_retry)
         CodeRefusal.NOT_A_CODE -> stringResource(R.string.recover_scan_not_code)
-        CodeRefusal.OTHER_VAULT -> stringResource(R.string.recover_scan_other_vault)
+        CodeRefusal.OTHER_ENVIRONMENT -> stringResource(R.string.recover_scan_other_environment, state.otherApi ?: "")
+        CodeRefusal.NO_API -> stringResource(R.string.recover_scan_no_api)
+        CodeRefusal.NOT_AVAILABLE -> stringResource(R.string.recover_not_available)
     }
     Spacer(Modifier.height(Spacing.l))
     NoticeCard(
@@ -426,6 +343,11 @@ private fun RecoverPin(state: RecoverUiState, actions: RecoverActions) {
         busy = state.busy,
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
+            if (state.emailHint.isNotEmpty()) {
+                NoticeCard(
+                    NoticeKind.INFO, stringResource(R.string.recover_account_title), state.emailHint, Modifier.testTag("recover_account"),
+                )
+            }
             if (p == null && state.preflightError == null) Waiting(stringResource(R.string.unlock_checking))
             state.preflightError?.let {
                 NoticeCard(

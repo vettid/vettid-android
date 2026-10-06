@@ -3,15 +3,14 @@ package com.vettid.feature.onboarding
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.altchan.RecoveryCode
-import com.vettid.core.altchan.RecoveryCodes
 import com.vettid.core.data.policy.PasswordPolicy
+import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.MoveRepository
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.RecoverOutcome
 import com.vettid.core.data.vault.RecoveryRegistration
 import com.vettid.core.data.vault.RecoveryStage
-import com.vettid.core.data.vault.RecoveryTarget
 import com.vettid.core.data.vault.UnlockAttempt
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultRepository
@@ -29,10 +28,9 @@ import javax.inject.Inject
 enum class RecoverStep {
     LOADING,
 
-    /** What is needed, and the account's recovery: none, pending, available, cancelled, expired. */
+    /** What is needed, and where the code comes from (the account portal; the app never signs in). */
     INTRO,
     SCAN,
-    TYPE,
 
     /** `vault.recovery.register` (§11.11.3). */
     REGISTERING,
@@ -54,15 +52,34 @@ enum class RecoverStep {
 }
 
 /** Why the code was refused, for the member (§11.11.3 codes, the API's 409). */
-enum class CodeRefusal { BAD_CODE, VOIDED, EXPIRED, TOO_EARLY, GONE, ATTESTATION, RETRY, NOT_A_CODE, OTHER_VAULT }
+enum class CodeRefusal {
+    BAD_CODE,
+    VOIDED,
+    EXPIRED,
+    TOO_EARLY,
+    GONE,
+    ATTESTATION,
+    RETRY,
+    NOT_A_CODE,
+
+    /** A recovery QR of another environment's portal (its `api`, §11.11.2, 0.15.0). */
+    OTHER_ENVIRONMENT,
+
+    /** A recovery QR without `api` (an account site from before 0.15.0): apps of 0.15.0 require it. */
+    NO_API,
+
+    /** The member API's `409 recovery_not_available` at the claim or the register. */
+    NOT_AVAILABLE,
+}
 
 /** Immutable UI state of the recovery flow. The PIN and passwords live here only while the flow needs them. */
 data class RecoverUiState(
     val step: RecoverStep = RecoverStep.LOADING,
-    val target: RecoveryTarget? = null,
-    val codeInput: String = "",
-    val codeInvalid: Boolean = false,
     val refusal: CodeRefusal? = null,
+    /** The other environment's `api` of a refused QR. */
+    val otherApi: String? = null,
+    /** The account the vault belongs to, masked (`email_hint` from the claim, §11.11.7). */
+    val emailHint: String = "",
     /** Wrong codes sent from this phone for the current recovery (the vault voids it at 5). */
     val wrongCodes: Int = 0,
     val preflight: PreflightInfo? = null,
@@ -83,9 +100,6 @@ data class RecoverUiState(
     val error: FailureKind? = null,
     val errorCode: String? = null,
 ) {
-    val recoveryState: String? get() = target?.recovery?.state
-    val codeAvailable: Boolean get() = recoveryState == STATE_AVAILABLE
-
     /** The PIN may be entered and sent now (§11.10.6: never to an older release; the enclave's backoff). */
     val pinAllowed: Boolean
         get() = preflight != null && !preflight.rollback && preflightError != FailureKind.RELEASE_ENDED && waitSeconds == 0L && !busy
@@ -93,10 +107,6 @@ data class RecoverUiState(
     override fun toString(): String = "RecoverUiState(step=$step, busy=$busy, refusal=$refusal, error=$error)"
 
     companion object {
-        const val STATE_PENDING = "pending"
-        const val STATE_AVAILABLE = "available"
-        const val STATE_CANCELLED = "cancelled"
-        const val STATE_EXPIRED = "expired"
         const val MAX_WRONG_CODES = 5
     }
 }
@@ -104,13 +114,9 @@ data class RecoverUiState(
 /** What the recovery screens can ask for. */
 @Suppress("TooManyFunctions")
 interface RecoverActions {
-    fun reload()
     fun scan()
-    fun type()
     fun back(): Boolean
     fun scanned(text: String)
-    fun setCode(v: String)
-    fun submitCode()
     fun retryPreflight()
     fun setApproveOffer(approve: Boolean)
     fun setPin(v: String)
@@ -129,8 +135,9 @@ interface RecoverActions {
 
 /**
  * Recovery on a new phone (VAULT-MESSAGING §11.11), as vettid-vault's
- * reference client runs it: the code from the portal's QR (or typed, with
- * the account's vault and recovery ids) is registered over the alternate
+ * reference client runs it: the portal's QR is claimed with this phone's app
+ * key (§11.11.7, 0.15.0: no sign-in; a typed code would lack the vault and
+ * recovery ids the app can no longer look up) and registered over the alternate
  * channel with this phone's device attestation; then the PIN unlocks the
  * vault and the first handshake makes this phone a restricted app; then
  * `credential.recover` with the password hands the credential over and the
@@ -143,6 +150,7 @@ interface RecoverActions {
 class RecoverViewModel @Inject constructor(
     private val move: MoveRepository,
     private val vault: VaultRepository,
+    private val account: AccountRepository,
 ) : ViewModel(), RecoverActions {
     private val state = MutableStateFlow(RecoverUiState())
     val uiState: StateFlow<RecoverUiState> = state.asStateFlow()
@@ -156,8 +164,10 @@ class RecoverViewModel @Inject constructor(
             } catch (_: VaultFailure) {
                 RecoveryStage.CODE
             }
+            val hint = account.account.value?.emailHint ?: ""
+            state.update { it.copy(emailHint = hint) }
             when (stage) {
-                RecoveryStage.CODE -> reload()
+                RecoveryStage.CODE -> state.update { it.copy(step = RecoverStep.INTRO) }
                 RecoveryStage.PIN -> toPin()
                 RecoveryStage.PASSWORD -> afterUnlock()
             }
@@ -166,35 +176,15 @@ class RecoverViewModel @Inject constructor(
 
     // --- the code ---
 
-    override fun reload() {
-        state.update { it.copy(step = if (it.step == RecoverStep.LOADING) RecoverStep.LOADING else it.step, busy = true, error = null) }
-        viewModelScope.launch {
-            try {
-                val t = move.recoveryTarget()
-                state.update { s ->
-                    val fresh = t.recovery?.recoveryId != countedFor
-                    s.copy(
-                        step = if (s.step == RecoverStep.LOADING) RecoverStep.INTRO else s.step, target = t, busy = false,
-                        wrongCodes = if (fresh) 0 else s.wrongCodes,
-                    )
-                }
-            } catch (e: VaultFailure) {
-                state.update { it.copy(step = RecoverStep.INTRO, busy = false, error = e.kind, errorCode = e.code) }
-            }
-        }
-    }
-
     override fun scan() = state.update { it.copy(step = RecoverStep.SCAN, refusal = null, error = null) }
-
-    override fun type() = state.update { it.copy(step = RecoverStep.TYPE, refusal = null, error = null, codeInvalid = false) }
 
     /** Back within the flow; false when the member leaves it (the onboarding flow takes over). */
     override fun back(): Boolean {
         val s = state.value
         if (s.busy) return true
         return when (s.step) {
-            RecoverStep.SCAN, RecoverStep.TYPE -> {
-                state.update { it.copy(step = RecoverStep.INTRO, refusal = null, codeInvalid = false) }
+            RecoverStep.SCAN -> {
+                state.update { it.copy(step = RecoverStep.INTRO, refusal = null) }
                 true
             }
             RecoverStep.NEW_PASSWORD, RecoverStep.DELETE -> {
@@ -205,43 +195,32 @@ class RecoverViewModel @Inject constructor(
         }
     }
 
-    /** A QR the camera read: only a recovery QR for this account's vault is registered. */
+    /**
+     * A QR the camera read: only a recovery QR of this app's environment is claimed (its `api` compared exactly with
+     * the app's own member API origin, never contacted, §11.11.2).
+     */
     override fun scanned(text: String) {
         val s = state.value
         if (s.busy || s.step != RecoverStep.SCAN) return
         val code = RecoveryCode.parseScanned(text)
-        val vid = s.target?.vaultId
+        val api = code?.api
         when {
             code == null -> state.update { it.copy(refusal = CodeRefusal.NOT_A_CODE) }
-            vid != null && code.vaultId != vid -> state.update { it.copy(refusal = CodeRefusal.OTHER_VAULT) }
-            else -> register(code.vaultId, code.recoveryId, code.code)
+            api == null -> state.update { it.copy(refusal = CodeRefusal.NO_API) }
+            api.trimEnd('/') != account.apiOrigin -> state.update { it.copy(refusal = CodeRefusal.OTHER_ENVIRONMENT, otherApi = api) }
+            else -> register(code)
         }
     }
 
-    override fun setCode(v: String) = state.update {
-        it.copy(codeInput = v.take(MAX_TYPED), codeInvalid = false, refusal = null)
-    }
-
-    override fun submitCode() {
-        val s = state.value
-        val code = RecoveryCodes.normalize(s.codeInput)
-        val vid = s.target?.vaultId
-        val rid = s.target?.recovery?.recoveryId
-        if (code == null || vid == null || rid == null) {
-            state.update { it.copy(codeInvalid = code == null, refusal = if (code != null) CodeRefusal.GONE else null) }
-            return
-        }
-        register(vid, rid, code)
-    }
-
-    private fun register(vaultId: String, recoveryId: String, code: String) {
+    private fun register(code: RecoveryCode) {
         val from = state.value.step
+        val recoveryId = code.recoveryId
         state.update { it.copy(step = RecoverStep.REGISTERING, busy = true, refusal = null, error = null) }
         viewModelScope.launch {
             try {
-                when (val r = move.registerRecovery(vaultId, recoveryId, code)) {
-                    RecoveryRegistration.Registered -> {
-                        state.update { it.copy(busy = false, codeInput = "") }
+                when (val r = move.registerRecovery(code)) {
+                    is RecoveryRegistration.Registered -> {
+                        state.update { it.copy(busy = false, emailHint = r.emailHint) }
                         toPin()
                     }
                     is RecoveryRegistration.Refused -> refused(from, recoveryId, r.code)
@@ -253,14 +232,14 @@ class RecoverViewModel @Inject constructor(
     }
 
     @Suppress("CyclomaticComplexMethod") // one branch per §11.11.3 code
-    private suspend fun refused(from: RecoverStep, recoveryId: String, code: String) {
+    private fun refused(from: RecoverStep, recoveryId: String, code: String) {
         var refusal = when (code) {
             CODE_BAD -> CodeRefusal.BAD_CODE
             CODE_EXPIRED -> CodeRefusal.EXPIRED
             CODE_EARLY -> CodeRefusal.TOO_EARLY
             CODE_ATTESTATION -> CodeRefusal.ATTESTATION
             CODE_NONE, CODE_USED -> CodeRefusal.GONE
-            CODE_NOT_AVAILABLE -> null // the API's gate: the account's recovery says why
+            CODE_NOT_AVAILABLE -> CodeRefusal.NOT_AVAILABLE
             else -> CodeRefusal.RETRY
         }
         var wrong = state.value.wrongCodes
@@ -270,19 +249,7 @@ class RecoverViewModel @Inject constructor(
             wrong++
             if (wrong >= RecoverUiState.MAX_WRONG_CODES) refusal = CodeRefusal.VOIDED
         }
-        val target = try {
-            move.recoveryTarget()
-        } catch (_: VaultFailure) {
-            state.value.target
-        }
-        if (refusal == null) {
-            refusal = when (target?.recovery?.state) {
-                RecoverUiState.STATE_PENDING -> CodeRefusal.TOO_EARLY
-                RecoverUiState.STATE_EXPIRED -> CodeRefusal.EXPIRED
-                else -> CodeRefusal.GONE
-            }
-        }
-        state.update { it.copy(step = from, busy = false, refusal = refusal, wrongCodes = wrong, target = target ?: it.target) }
+        state.update { it.copy(step = from, busy = false, refusal = refusal, wrongCodes = wrong) }
     }
 
     // --- the PIN (§11.11.5 step 1) ---
@@ -457,7 +424,6 @@ class RecoverViewModel @Inject constructor(
         const val CODE_REQUIRED = "credential_required"
         private const val MIN_PIN = 6
         private const val MAX_PIN = 32
-        private const val MAX_TYPED = 64
         private const val TICK_MS = 1000L
     }
 }

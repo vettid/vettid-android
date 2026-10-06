@@ -6,7 +6,7 @@ import com.vettid.core.altchan.AltTrust
 import com.vettid.core.altchan.Attester
 import com.vettid.core.altchan.KeystoreAttester
 import com.vettid.core.data.Endpoints
-import com.vettid.core.data.account.AccountGateway
+import com.vettid.core.data.account.MemberGateway
 import com.vettid.core.data.env.AppEnvironment
 import com.vettid.core.relay.OriginMapInterceptor
 import com.vettid.core.testing.DevStack
@@ -20,8 +20,8 @@ import okhttp3.OkHttpClient
  * manifest key. Device attestation is the phone's REAL Keystore key
  * (StrongBox): the stack runs with devstack/device-policy.json, which adds
  * Google's attestation roots, this build's package and the debug signing
- * digest to the dev enclave's policy. The member API stand-in has no sign-in
- * or account routes, so [DevAccountGateway] simulates them in the app.
+ * digest to the dev enclave's policy. The member API stand-in has no setup
+ * codes, so [DevMemberGateway] simulates the typed redeem in the app.
  */
 internal val currentEnvironment: AppEnvironment = object : AppEnvironment {
     private val stack = DevStack(BuildConfig.DEV_STACK_API, BuildConfig.DEV_STACK_RELAY, BuildConfig.DEV_STACK_CTL)
@@ -37,6 +37,6 @@ internal val currentEnvironment: AppEnvironment = object : AppEnvironment {
 
     override fun attester(): Attester = KeystoreAttester()
 
-    override fun accountGateway(context: Context, http: OkHttpClient): AccountGateway =
-        DevAccountGateway(context, endpoints.apiBase, endpoints.manifestUrl, http)
+    override fun memberGateway(context: Context, http: OkHttpClient, vaultId: () -> String?): MemberGateway =
+        DevMemberGateway(context, endpoints.apiBase, endpoints.manifestUrl, http)
 }

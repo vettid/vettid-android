@@ -17,11 +17,28 @@
     <string name="account_vault_status_value">Unlocked</string>
     <string name="account_lock_vault">Lock vault</string>
     <string name="account_portal">Open account portal</string>
-    <string name="account_portal_url" translatable="false">https://account.vettid.org</string>
-    <string name="account_sign_out">Sign out of this device</string>
-    <string name="account_sign_out_title">Sign out of this device?</string>
-    <string name="account_sign_out_body">Ends your account session here. Your vault stays on this phone; sign in again to unlock it.</string>
-    <string name="account_sign_out_confirm">Sign out</string>
+    <string name="account_portal_body">Membership, subscription and terms are changed there</string>
+    <string name="account_membership">Membership</string>
+    <string name="account_membership_member">Member</string>
+    <string name="account_membership_registered">Registered, not yet a member</string>
+    <string name="account_membership_canceled">Account cancelled</string>
+    <string name="account_membership_canceled_until">Account cancelled: your vault is deleted on %1$s</string>
+    <string name="account_membership_unknown">VettID account</string>
+    <string name="account_membership_waiting">Shown once your vault has heard from your account</string>
+    <string name="account_subscription">Subscription</string>
+    <string name="account_subscription_none">No subscription</string>
+    <string name="account_subscription_default_name">Subscription</string>
+    <string name="account_subscription_trial">%1$s: trial</string>
+    <string name="account_subscription_trial_until">%1$s: trial until %2$s</string>
+    <string name="account_subscription_active">%1$s: active</string>
+    <string name="account_subscription_active_until">%1$s: active until %2$s</string>
+    <string name="account_subscription_expired">%1$s: expired</string>
+    <string name="account_subscription_canceled">%1$s: cancelled</string>
+    <string name="account_terms">Terms</string>
+    <string name="account_terms_needed">Updated terms are waiting: accept them on the account site</string>
+    <string name="account_voting">Voting rights</string>
+    <string name="account_voting_yes">Yes</string>
+    <string name="account_voting_no">No</string>
 
     <string name="root_starting">Opening VettID</string>
     <string name="root_unreachable_title">VettID cannot connect</string>

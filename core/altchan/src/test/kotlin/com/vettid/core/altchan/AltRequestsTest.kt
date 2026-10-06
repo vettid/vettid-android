@@ -30,7 +30,10 @@ class AltRequestsTest {
     private val ik = Ed25519PrivateKey.generate()
     private val kem = KemPrivateKey.generate()
     private val relayKey = Ed25519PrivateKey.generate()
-    private val app = AppIdentity(ik.publicKey, kem.publicKey, RelayAddr("https://relay.vettid.test", Mailbox.id(relayKey.publicKey), relayKey.publicKey), "phone")
+    private val apiKey = ByteArray(91) { it.toByte() } // an app key's SPKI DER (§11.12.2); its bytes do not matter here
+    private val app = AppIdentity(
+        ik.publicKey, kem.publicKey, RelayAddr("https://relay.vettid.test", Mailbox.id(relayKey.publicKey), relayKey.publicKey), "phone", apiKey,
+    )
 
     @Test
     fun enrollIsSealedPaddedAndBound() {
@@ -50,6 +53,10 @@ class AltRequestsTest {
         assertEquals(manifest.serial, o.uint("manifest_serial", 1, 1 shl 40))
         assertArrayEquals(ik.publicKey, o.obj("app").base64("ik"))
         assertEquals("v4.public.open", o.obj("app").string("open_token"))
+        // §11.3 (0.15.0): `app.api_key`, standard base64 of the SPKI DER, after `device_attest`.
+        assertArrayEquals(apiKey, o.obj("app").base64("api_key"))
+        val appJson = String(o.obj("app").rawBytes())
+        assertTrue(appJson.indexOf("\"device_attest\"") < appJson.indexOf("\"api_key\""))
         // The attested challenge binds request_id, "" and ts (§11.7).
         assertArrayEquals(AltChannel.devattChallenge(req.requestId, "", Timestamps.formatMillis(inner.ts)), att.lastChallenge)
         // The state to keep until vault.enrolled.
@@ -160,8 +167,11 @@ class AltRequestsTest {
     @Test
     fun recoveryQrAndRegister() {
         val rid = Ulid.new()
-        val qr = RecoveryCode.parseQr("""{"v":1,"t":"r","vault_id":"0123456789abcdef0123456789abcdef","recovery_id":"$rid","code":"${"K".repeat(32)}"}""".toByteArray())
+        val qr = RecoveryCode.parseQr(
+            """{"v":1,"t":"r","api":"https://account.vettid.org","vault_id":"0123456789abcdef0123456789abcdef","recovery_id":"$rid","code":"${"K".repeat(32)}"}""".toByteArray(),
+        )
         assertEquals(rid, qr.recoveryId)
+        assertEquals("https://account.vettid.org", qr.api)
         assertThrows(AltResultException::class.java) { RecoveryCode.parseQr("""{"v":1,"t":"x","vault_id":"a","recovery_id":"$rid","code":"c"}""".toByteArray()) }
         val att = TestSupport.SoftAttester()
         val req = AltRequests.buildRecoveryRegister("guid-1", qr, enclave.verified(manifest), att, app, now)
@@ -172,6 +182,7 @@ class AltRequestsTest {
         val o = StrictJson.parseObject(inner.body)
         assertEquals(qr.code, o.string("code"))
         assertEquals("phone", o.obj("app").string("name"))
+        assertArrayEquals(apiKey, o.obj("app").base64("api_key")) // §11.11.3 (0.15.0)
         assertArrayEquals(AltChannel.devattChallenge(req.requestId, qr.vaultId, Timestamps.formatMillis(inner.ts)), att.lastChallenge)
     }
 

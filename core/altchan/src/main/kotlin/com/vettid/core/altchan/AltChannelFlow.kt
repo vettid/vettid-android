@@ -141,8 +141,11 @@ class AltChannelFlow(
             else -> s.status == Slot.EXPIRED || s.code == Slot.ETK_UNKNOWN
         }
 
-    /** Enrolls this app (§11.3). Success also arrives as vault.enrolled over the relay. */
-    suspend fun enroll(party: AltParty, userGuid: String, pin: String, attester: Attester): EnrollOutcome {
+    /**
+     * Enrolls this app (§11.3) into [vaultId], the vault the setup code's redeem named (§11.12.1). Success also
+     * arrives as vault.enrolled over the relay.
+     */
+    suspend fun enroll(party: AltParty, vaultId: String, userGuid: String, pin: String, attester: Attester): EnrollOutcome {
         var m = manifest(party.manifestSerialSeen())
         var refetched = false
         var attempt = 1
@@ -153,7 +156,7 @@ class AltChannelFlow(
             var slot: Slot? = null
             var vid = ""
             try {
-                vid = api.enroll(info.instanceId, req)
+                vid = api.enroll(vaultId, info.instanceId, req)
                 slot = api.poll(req.requestId)
             } catch (x: MemberApiException) {
                 err = x

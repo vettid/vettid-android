@@ -32,15 +32,14 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Sign-in links (MEMBER-API "Auth"): https://account.vettid.org/auth/#t=<token>&e=<email>.
-                 Verified as an App Link once account.vettid.org serves assetlinks.json for the
-                 release signing key; until then the member pastes the link. The token is only
-                 sent after the member confirms the sign-in in the app. -->
+            <!-- The account portal's same-device setup link (VAULT-MESSAGING §11.12.1, MEMBER-API 2.0.0):
+                 https://account.vettid.org/vault/enroll/#s=<QR secret>. Verified as an App Link through the
+                 account site's assetlinks.json. The app never signs in, so it no longer claims /auth/. -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="account.vettid.org" android:pathPrefix="/auth/" />
+                <data android:scheme="https" android:host="account.vettid.org" android:pathPrefix="/vault/enroll/" />
             </intent-filter>
             <!-- Invitation links (VAULT-MESSAGING §6.4, 0.10.2): <relay>/connect#<link> on the invitation's
                  own relay. Verified as an App Link for the relays VettID runs once the relay serves

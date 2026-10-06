@@ -130,14 +130,20 @@ data class RecoveryResult(val ok: Boolean, val code: String?) {
  * `{"v":1,"t":"r","vault_id","recovery_id","code"}`, parsed as strictly as
  * vettid-vault's `ParseRecoveryQR` (and the code's alphabet checked too).
  */
-data class RecoveryCode(val vaultId: String, val recoveryId: String, val code: String) {
+data class RecoveryCode(
+    val vaultId: String,
+    val recoveryId: String,
+    val code: String,
+    /** The QR's member API origin (0.15.0): compared exactly with the app's own, never contacted; null when absent. */
+    val api: String? = null,
+) {
     override fun toString(): String = "RecoveryCode($vaultId, $recoveryId)"
 
     companion object {
         fun parseQr(b: ByteArray): RecoveryCode = wrap {
             val o = AltResults.obj(b)
             if (o.uint("v", 1, 1) != 1L || o.string("t") != "r") throw AltResultException("recovery QR")
-            val c = RecoveryCode(o.string("vault_id"), o.string("recovery_id"), o.string("code"))
+            val c = RecoveryCode(o.string("vault_id"), o.string("recovery_id"), o.string("code"), o.optString("api"))
             if (!RecoveryCodes.isValid(c.code) || !Ulid.isValid(c.recoveryId) || !validVaultId(c.vaultId)) {
                 throw AltResultException("recovery QR")
             }

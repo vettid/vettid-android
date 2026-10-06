@@ -87,7 +87,16 @@ import java.time.temporal.ChronoUnit
 import java.util.concurrent.ConcurrentHashMap
 
 /** The device's own keys (§3.2), unwrapped from the Keystore (`:core:keystore` DeviceKeys) for the device's lifetime. */
-class DeviceSecrets(val identity: Ed25519PrivateKey, val kem: KemPrivateKey, val relay: Ed25519PrivateKey) {
+class DeviceSecrets(
+    val identity: Ed25519PrivateKey,
+    val kem: KemPrivateKey,
+    val relay: Ed25519PrivateKey,
+    /**
+     * The public half of the app key (§11.12.2, 0.15.0), SPKI DER: `app.api_key` in the enrollment and a recovery's
+     * register, `api_key` in a transfer's `hs.init`. Its private half stays in the Keystore (`:core:altchan`).
+     */
+    val apiKey: ByteArray? = null,
+) {
     fun destroy() {
         identity.destroy()
         kem.destroy()
@@ -350,7 +359,7 @@ class VaultDevice private constructor(
 
     override fun vaultId(): String? = st.vaultId
 
-    private fun appIdentity() = AppIdentity(secrets.identity.publicKey, secrets.kem.publicKey, relayAddr, st.name)
+    private fun appIdentity() = AppIdentity(secrets.identity.publicKey, secrets.kem.publicKey, relayAddr, st.name, secrets.apiKey)
 
     override suspend fun prepareEnroll(
         userGuid: String,
@@ -499,13 +508,14 @@ class VaultDevice private constructor(
         deviceAttest: DeviceAttest? = null,
         id: String? = null,
         at: Instant = now(),
+        apiKey: ByteArray? = null,
     ) {
         val v = requireVault()
         val tok = mintForVault()
         val i = Initiator.create(
             InitiatorConfig(
                 purpose = purpose, ctx = ctx, identity = secrets.identity, staticKem = secrets.kem.publicKey, relay = relayAddr,
-                token = tok, profile = profile, deviceAttest = deviceAttest, responderIk = Base64s.decodeStd(v.ik),
+                token = tok, profile = profile, deviceAttest = deviceAttest, apiKey = apiKey, responderIk = Base64s.decodeStd(v.ik),
                 responderEk = KemPublicKey.parse(Base64s.decodeStd(v.kem)),
                 responderRelayKey = Base64s.decodeStd(v.relayPk), policy = Policy.VAULT_TO_DEVICE, id = id, now = at,
             ),
@@ -553,7 +563,8 @@ class VaultDevice private constructor(
             val id = Ulid.new(at)
             val attest = attester.attest(AltChannel.devattChallenge(id, "", Timestamps.formatMillis(at)))
             val profile = JsonBuilder().string("name", st.name).bytes()
-            startInit(Purpose.APP, b.inviteId, b.token, profile, attest, id, at)
+            // §6.2, §6.7.1 (0.15.0): a transfer's hs.init carries the new app's app key.
+            startInit(Purpose.APP, b.inviteId, b.token, profile, attest, id, at, apiKey = secrets.apiKey)
             save()
         }
     }

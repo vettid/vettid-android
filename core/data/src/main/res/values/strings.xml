@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="data_failure_network">VettID could not reach the service. Check your connection and try again.</string>
-    <string name="data_failure_unauthorized">You are signed out. Sign in again to continue.</string>
+    <string name="data_failure_unauthorized">VettID\'s account service does not accept this phone for your vault any more. If you moved VettID to another phone, this one was replaced. If a setup took longer than an hour, start again with a new code.</string>
+    <string name="data_failure_setup_code">That setup code did not work. Get a new one on the account site.</string>
     <string name="data_failure_terms">Accept the current membership terms on the account site first.</string>
     <string name="data_failure_rate_limited">Too many attempts. Wait a little and try again.</string>
     <string name="data_failure_vault_unavailable">The vault service is not available yet. Try again later.</string>
