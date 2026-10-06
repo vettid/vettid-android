@@ -995,12 +995,6 @@ class VaultDevice private constructor(
         save()
     }
 
-    internal suspend fun dropCredential() = lock.withLock {
-        st.credential = null
-        st.utks.clear()
-        save()
-    }
-
     internal suspend fun endRecovery() = lock.withLock {
         st.recovery = null
         save()

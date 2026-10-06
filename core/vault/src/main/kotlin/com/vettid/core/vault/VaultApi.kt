@@ -139,11 +139,8 @@ class VaultApi(val device: VaultDevice) {
         })
     }
 
-    /** Deletes the credential and every critical item with it. */
-    suspend fun credentialDelete(password: String) {
-        cred.credOp("credential.delete", { put("password", password) })
-        device.dropCredential()
-    }
+    // No `credential.delete` (VAULT-MESSAGING 0.15.2): a credential goes only with the vault (`vault.delete`);
+    // starting over with a new one is a recovery's `credential.reset`.
 
     /** A recovering app authenticates with the password and takes over the credential (§11.11.5). */
     suspend fun credentialRecover(password: String) {
@@ -728,10 +725,9 @@ class VaultApi(val device: VaultDevice) {
         const val INVITE_TTL_DEFAULT = 3600
 
         /**
-         * The owner check's message type (§3.6.1, §10.2). PENDING OWNER DECISION: VAULT-MESSAGING 0.13.0–0.15.1
-         * names it `vault.owner_check`, but §5.3 restricts every `type` to `[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)*`
-         * (no underscore), which the envelope code enforces on both sides. Like vettid-vault's implementation,
-         * this uses the hyphenated form, the registry's convention for multi-word segments.
+         * The owner check's message type (§3.6.1, §10.2; renamed from `vault.owner_check` in VAULT-MESSAGING 0.15.2
+         * to fit §5.3's `type` grammar). Settings keys, error code, feed kinds and `owner_check` members keep
+         * their underscores.
          */
         const val TYPE_OWNER_CHECK = "vault.owner-check"
         private const val AWAIT_S = 90L
