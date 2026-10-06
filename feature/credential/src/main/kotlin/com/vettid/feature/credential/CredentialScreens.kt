@@ -34,12 +34,15 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.fromHtml
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -94,7 +97,13 @@ data object CredentialAlarmRoute
 data object CredentialNewRoute
 
 /** Registers the Credential destinations. [navigate] opens a route; [onBack] pops one. */
-fun NavGraphBuilder.credentialDestination(chrome: ShellChrome, navigate: (Any) -> Unit, onBack: () -> Unit) {
+fun NavGraphBuilder.credentialDestination(
+    chrome: ShellChrome,
+    navigate: (Any) -> Unit,
+    onBack: () -> Unit,
+    /** Opens the owner check (§3.6): turning the backup on asks for the password at once so that the copy exists (§3.5.6). */
+    onOwnerCheck: () -> Unit = {},
+) {
     composable<CredentialRoute> {
         val vm: CredentialViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
@@ -116,6 +125,7 @@ fun NavGraphBuilder.credentialDestination(chrome: ShellChrome, navigate: (Any) -
                 newCredential = { navigate(CredentialNewRoute) },
             ),
         )
+        LaunchedEffect(state.notice) { if (state.notice == CredentialNotice.BACKUP_ON) onOwnerCheck() }
     }
     composable<CredentialPasswordRoute> {
         val vm: ChangePasswordViewModel = hiltViewModel()
@@ -233,6 +243,16 @@ fun CredentialContent(state: CredentialUiState, chrome: ShellChrome, actions: Cr
                             kind, stringResource(R.string.credential_title), text,
                             modifier = Modifier.padding(horizontal = Spacing.gutter),
                             actions = { TextButton(onClick = actions.dismissNotice) { Text(stringResource(R.string.credential_done)) } },
+                        )
+                    }
+                    if (state.status?.backup == false) {
+                        // §3.5.6: the warning repeated while the backup is off.
+                        Spacer(Modifier.height(Spacing.s))
+                        NoticeCard(
+                            NoticeKind.WARNING,
+                            stringResource(R.string.credential_backup),
+                            stringResource(R.string.credential_backup_off_notice),
+                            modifier = Modifier.padding(horizontal = Spacing.gutter).testTag("backup_off_notice"),
                         )
                     }
                     SettingsSectionHeader(stringResource(R.string.credential_section_status))
@@ -432,7 +452,11 @@ fun BackupOffDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
         title = { Text(stringResource(R.string.credential_backup_off_title), style = MaterialTheme.typography.titleMedium) },
         text = {
             Column {
-                Text(stringResource(R.string.credential_backup_off_body), style = MaterialTheme.typography.bodyMedium)
+                // §3.5.6 (0.16.0): the warning as ANDROID-PLAN 0.1.7 gives it, with its emphasis.
+                Text(
+                    AnnotatedString.fromHtml(stringResource(R.string.credential_backup_off_body)),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
                 Spacer(Modifier.height(Spacing.m))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,

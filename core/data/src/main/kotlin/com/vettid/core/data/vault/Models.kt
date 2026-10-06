@@ -317,11 +317,22 @@ enum class RecoverOutcome {
     /** The credential was handed over: this phone holds the vault; the old app is removed. */
     RECOVERED,
 
-    /** `credential_lost`: the backup was off. Only a new credential or deleting the vault remain. */
-    CREDENTIAL_LOST,
+    /**
+     * The vault keeps no backup copy of its credential (`no_backup`, or an older vault's `credential_lost`): it cannot
+     * be recovered (VAULT-MESSAGING 0.16.0); it can only be deleted on the account site and replaced.
+     */
+    NO_BACKUP,
 
     /** `credential_required`: the vault has no credential (should not happen past enrollment). */
     CREDENTIAL_REQUIRED,
+}
+
+/**
+ * A pending start-over (VAULT-MESSAGING 0.16.0 §11.11.9): the vault is deleted at [deletesAt] unless cancelled.
+ * [executing]: too late to cancel. [deletionId]: the API's id when the status names it (needed to cancel in the app).
+ */
+data class DeletionView(val deletesAt: Instant, val executing: Boolean, val deletionId: String?) {
+    val cancellable: Boolean get() = !executing && deletionId != null
 }
 
 /** A direct transfer the old phone opened (`device.transfer.create`, §6.7.1). */

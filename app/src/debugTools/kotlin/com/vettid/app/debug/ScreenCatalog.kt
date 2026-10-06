@@ -13,6 +13,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import com.vettid.app.ui.AccountSheet
 import com.vettid.app.ui.OwnerCheckBanners
+import com.vettid.app.ui.PendingDeletionBanner
+import com.vettid.core.data.vault.DeletionView
 import com.vettid.app.ui.OwnerCheckGateState
 import com.vettid.core.data.vault.OwnerCheckNotice
 import com.vettid.core.data.vault.OwnerCheckState
@@ -190,14 +192,7 @@ private object NoRecover : RecoverActions {
     override fun setPin(v: String) = Unit
     override fun submitPin() = Unit
     override fun setPassword(v: String) = Unit
-    override fun setPasswordConfirm(v: String) = Unit
     override fun submitPassword() = Unit
-    override fun chooseNewCredential() = Unit
-    override fun chooseDelete() = Unit
-    override fun submitNewPassword() = Unit
-    override fun submitDelete() = Unit
-    override fun confirm() = Unit
-    override fun dismissConfirm() = Unit
     override fun finish() = Unit
 }
 
@@ -409,16 +404,8 @@ object ScreenCatalog {
         "recover.pin_cancelled" to { Rec(pinState.copy(pin = "", error = FailureKind.OTHER, errorCode = "unknown_device")) },
         "recover.password" to { Rec(recState.copy(step = RecoverStep.PASSWORD, password = "correct horse battery")) },
         "recover.password_wrong" to { Rec(recState.copy(step = RecoverStep.PASSWORD, error = FailureKind.BAD_PASSWORD)) },
-        "recover.lost" to { Rec(recState.copy(step = RecoverStep.LOST)) },
-        "recover.new_password" to {
-            Rec(recState.copy(step = RecoverStep.NEW_PASSWORD, password = "a new long passphrase", passwordConfirm = "a new long passphrase", passwordStrength = PasswordPolicy.Strength.STRONG))
-        },
-        "recover.new_confirm" to { Rec(recState.copy(step = RecoverStep.NEW_PASSWORD, password = "a new long passphrase", passwordConfirm = "a new long passphrase", confirming = true)) },
-        "recover.delete" to { Rec(recState.copy(step = RecoverStep.DELETE, pin = "975310")) },
-        "recover.delete_confirm" to { Rec(recState.copy(step = RecoverStep.DELETE, pin = "975310", confirming = true)) },
+        "recover.no_backup" to { Rec(recState.copy(step = RecoverStep.NO_BACKUP)) },
         "recover.done" to { Rec(recState.copy(step = RecoverStep.DONE)) },
-        "recover.done_reset" to { Rec(recState.copy(step = RecoverStep.DONE, reset = true)) },
-        "recover.deleted" to { Rec(recState.copy(step = RecoverStep.DELETED)) },
         "transfer_in" to { TIn(TransferInUiState()) },
         "transfer_in.scan" to { TIn(TransferInUiState(step = TransferInStep.SCAN)) },
         "transfer_in.paste" to { TIn(TransferInUiState(step = TransferInStep.PASTE, input = "not a code", inputProblem = FailureKind.INVITE_INVALID)) },
@@ -557,6 +544,12 @@ object ScreenCatalog {
         },
         "settings.owner_check_offer" to {
             SettingsContent(SettingsUiState(account = sampleAccount), SettingsActions(), OwnerCheckSettingsUiState(okView, offerCheck = true))
+        },
+        "shell.deletion" to {
+            Column {
+                PendingDeletionBanner(DeletionView(Instant.now().plusSeconds(20 * 3_600L), false, "01JDELETION0000000000000000"), true, {}, {})
+                PendingDeletionBanner(DeletionView(Instant.now().plusSeconds(3 * 3_600L), false, null), false, {}, {})
+            }
         },
         "shell.owner_check_banners" to {
             Column {

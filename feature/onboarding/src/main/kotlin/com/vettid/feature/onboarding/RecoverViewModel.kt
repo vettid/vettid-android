@@ -3,7 +3,6 @@ package com.vettid.feature.onboarding
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.altchan.RecoveryCode
-import com.vettid.core.data.policy.PasswordPolicy
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.MoveRepository
@@ -41,14 +40,14 @@ enum class RecoverStep {
     /** The credential password (step 3). */
     PASSWORD,
 
-    /** Backup off: the credential is lost (step 4); a new credential or deleting the vault. */
-    LOST,
-    NEW_PASSWORD,
-    DELETE,
+    /**
+     * The vault keeps no backup copy of its credential (`no_backup`, `409 recovery_unavailable`; VAULT-MESSAGING
+     * 0.16.0): it cannot be recovered, only deleted on the account site and replaced by a new one.
+     */
+    NO_BACKUP,
 
     /** The vault is on this phone now. */
     DONE,
-    DELETED,
 }
 
 /** Why the code was refused, for the member (§11.11.3 codes, the API's 409). */
@@ -89,13 +88,8 @@ data class RecoverUiState(
     val pinWrong: Boolean = false,
     val waitSeconds: Long = 0,
     val password: String = "",
-    val passwordConfirm: String = "",
-    val passwordStrength: PasswordPolicy.Strength = PasswordPolicy.Strength.TOO_SHORT,
-    val passwordProblem: PasswordPolicy.Problem? = null,
-    val passwordMismatch: Boolean = false,
-    val confirming: Boolean = false,
-    /** Done by `credential.reset` (backup off) rather than `credential.recover`. */
-    val reset: Boolean = false,
+    /** The account site's "Delete my vault and start over" page (MEMBER-API 2.1.0), for [RecoverStep.NO_BACKUP]. */
+    val startOverUrl: String = "",
     val busy: Boolean = false,
     val error: FailureKind? = null,
     val errorCode: String? = null,
@@ -122,14 +116,7 @@ interface RecoverActions {
     fun setPin(v: String)
     fun submitPin()
     fun setPassword(v: String)
-    fun setPasswordConfirm(v: String)
     fun submitPassword()
-    fun chooseNewCredential()
-    fun chooseDelete()
-    fun submitNewPassword()
-    fun submitDelete()
-    fun confirm()
-    fun dismissConfirm()
     fun finish()
 }
 
@@ -141,9 +128,10 @@ interface RecoverActions {
  * channel with this phone's device attestation; then the PIN unlocks the
  * vault and the first handshake makes this phone a restricted app; then
  * `credential.recover` with the password hands the credential over and the
- * old app is removed. With the backup off (`credential_lost`) only a new
- * credential or deleting the vault remain (§11.11.5 step 4). Resumes where
- * it stopped after a restart ([MoveRepository.recoveryStage]).
+ * old app is removed. A vault without a backup copy of its credential cannot be
+ * recovered at all (0.16.0, `no_backup`): the app says so and links to the
+ * account site's start-over. Resumes where it stopped after a restart
+ * ([MoveRepository.recoveryStage]).
  */
 @Suppress("TooManyFunctions")
 @HiltViewModel
@@ -152,7 +140,7 @@ class RecoverViewModel @Inject constructor(
     private val vault: VaultRepository,
     private val account: AccountRepository,
 ) : ViewModel(), RecoverActions {
-    private val state = MutableStateFlow(RecoverUiState())
+    private val state = MutableStateFlow(RecoverUiState(startOverUrl = account.apiOrigin.trimEnd('/') + START_OVER_PATH))
     val uiState: StateFlow<RecoverUiState> = state.asStateFlow()
     private var ticker: Job? = null
     private var countedFor: String? = null
@@ -185,10 +173,6 @@ class RecoverViewModel @Inject constructor(
         return when (s.step) {
             RecoverStep.SCAN -> {
                 state.update { it.copy(step = RecoverStep.INTRO, refusal = null) }
-                true
-            }
-            RecoverStep.NEW_PASSWORD, RecoverStep.DELETE -> {
-                state.update { it.copy(step = RecoverStep.LOST, pin = "", password = "", passwordConfirm = "", error = null) }
                 true
             }
             else -> false
@@ -240,6 +224,11 @@ class RecoverViewModel @Inject constructor(
             CODE_ATTESTATION -> CodeRefusal.ATTESTATION
             CODE_NONE, CODE_USED -> CodeRefusal.GONE
             CODE_NOT_AVAILABLE -> CodeRefusal.NOT_AVAILABLE
+            CODE_NO_BACKUP -> {
+                state.update { it.copy(step = RecoverStep.NO_BACKUP, busy = false, refusal = null) }
+                noBackup()
+                return
+            }
             else -> CodeRefusal.RETRY
         }
         var wrong = state.value.wrongCodes
@@ -296,9 +285,13 @@ class RecoverViewModel @Inject constructor(
                     state.update { it.copy(busy = false, pin = "") }
                     startBackoff(r.retryAfterSeconds)
                 }
-                // The registered key was removed: the recovery was cancelled or voided (§11.11.4).
-                is UnlockAttempt.Failed -> state.update {
-                    it.copy(busy = false, pin = "", error = r.kind, errorCode = r.code)
+                // 0.16.0: a vault without a backup copy refuses the registered app's unlock.
+                is UnlockAttempt.Failed -> if (r.code == CODE_NO_BACKUP) {
+                    state.update { it.copy(step = RecoverStep.NO_BACKUP, busy = false, pin = "") }
+                    noBackup()
+                } else {
+                    // The registered key was removed: the recovery was cancelled or voided (§11.11.4).
+                    state.update { it.copy(busy = false, pin = "", error = r.kind, errorCode = r.code) }
                 }
                 is UnlockAttempt.UpdateRefused -> state.update {
                     it.copy(busy = false, pin = "", error = FailureKind.OTHER, errorCode = r.code)
@@ -323,8 +316,7 @@ class RecoverViewModel @Inject constructor(
 
     /**
      * After the unlock (§11.11.5 step 1, 0.10.6): the password only when the vault keeps a copy of the credential
-     * (`credential_backup` true) or did not say (an older vault, which answers `credential_lost` to the password);
-     * with the backup off, straight to the choice of step 4 without asking for a password that cannot succeed.
+     * (`credential_backup` true) or did not say; without a copy the vault cannot be recovered (0.16.0).
      */
     private suspend fun afterUnlock() {
         val backup = try {
@@ -332,16 +324,13 @@ class RecoverViewModel @Inject constructor(
         } catch (_: VaultFailure) {
             null
         }
-        state.update { it.copy(step = if (backup == false) RecoverStep.LOST else RecoverStep.PASSWORD) }
+        state.update { it.copy(step = if (backup == false) RecoverStep.NO_BACKUP else RecoverStep.PASSWORD) }
+        if (backup == false) noBackup()
     }
 
     // --- the password (step 3) ---
 
-    override fun setPassword(v: String) = state.update {
-        it.copy(password = v, passwordStrength = PasswordPolicy.strength(v), passwordProblem = null, passwordMismatch = false, error = null)
-    }
-
-    override fun setPasswordConfirm(v: String) = state.update { it.copy(passwordConfirm = v, passwordMismatch = false) }
+    override fun setPassword(v: String) = state.update { it.copy(password = v, error = null) }
 
     override fun submitPassword() {
         val s = state.value
@@ -351,7 +340,10 @@ class RecoverViewModel @Inject constructor(
             try {
                 when (move.recoverCredential(s.password)) {
                     RecoverOutcome.RECOVERED -> state.update { it.copy(step = RecoverStep.DONE, busy = false, password = "") }
-                    RecoverOutcome.CREDENTIAL_LOST -> state.update { it.copy(step = RecoverStep.LOST, busy = false, password = "") }
+                    RecoverOutcome.NO_BACKUP -> {
+                        state.update { it.copy(step = RecoverStep.NO_BACKUP, busy = false, password = "") }
+                        noBackup()
+                    }
                     RecoverOutcome.CREDENTIAL_REQUIRED -> state.update {
                         it.copy(busy = false, password = "", error = FailureKind.OTHER, errorCode = CODE_REQUIRED)
                     }
@@ -363,49 +355,9 @@ class RecoverViewModel @Inject constructor(
         }
     }
 
-    // --- backup off (step 4) ---
-
-    override fun chooseNewCredential() = state.update {
-        it.copy(step = RecoverStep.NEW_PASSWORD, password = "", passwordConfirm = "", passwordProblem = null, error = null)
-    }
-
-    override fun chooseDelete() = state.update { it.copy(step = RecoverStep.DELETE, pin = "", error = null) }
-
-    override fun submitNewPassword() {
-        val s = state.value
-        val p = PasswordPolicy.check(s.password)
-        when {
-            p != null -> state.update { it.copy(passwordProblem = p) }
-            s.passwordConfirm != s.password -> state.update { it.copy(passwordMismatch = true) }
-            else -> state.update { it.copy(confirming = true) }
-        }
-    }
-
-    override fun submitDelete() {
-        if (state.value.pin.length < MIN_PIN) return
-        state.update { it.copy(confirming = true) }
-    }
-
-    override fun dismissConfirm() = state.update { it.copy(confirming = false) }
-
-    /** The confirmed destructive step: a new credential, or the deletion. */
-    override fun confirm() {
-        val s = state.value
-        state.update { it.copy(confirming = false, busy = true, error = null) }
-        viewModelScope.launch {
-            try {
-                if (s.step == RecoverStep.NEW_PASSWORD) {
-                    move.resetCredential(s.password)
-                    state.update { it.copy(step = RecoverStep.DONE, reset = true, busy = false, password = "", passwordConfirm = "") }
-                } else {
-                    move.deleteRecoveredVault(s.pin)
-                    state.update { it.copy(step = RecoverStep.DELETED, busy = false, pin = "") }
-                }
-            } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, pin = "", error = e.kind, errorCode = e.code) }
-                if (e.kind == FailureKind.BACKOFF || e.kind == FailureKind.BAD_PIN) startBackoff(e.retryAfterSeconds)
-            }
-        }
+    /** 0.16.0: nothing more to do with this vault on this phone; forget the registration (quietly). */
+    private fun noBackup() {
+        viewModelScope.launch { runCatching { move.abandonRecovery() } }
     }
 
     override fun finish() {
@@ -422,6 +374,10 @@ class RecoverViewModel @Inject constructor(
         const val CODE_NOT_AVAILABLE = "not_available"
         const val CODE_UNKNOWN_DEVICE = "unknown_device"
         const val CODE_REQUIRED = "credential_required"
+        const val CODE_NO_BACKUP = "no_backup"
+
+        /** MEMBER-API 2.1.0: the account site's "Delete my vault and start over". */
+        const val START_OVER_PATH = "/account/vault/deletion/"
         private const val MIN_PIN = 6
         private const val MAX_PIN = 32
         private const val TICK_MS = 1000L

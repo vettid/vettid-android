@@ -26,6 +26,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -39,7 +40,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.messageRes
-import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
@@ -158,7 +158,7 @@ fun RecoverContent(
 ) {
     val leaveable = state.step in setOf(RecoverStep.INTRO, RecoverStep.LOADING)
     val back: () -> Unit = { if (!actions.back() && leaveable) onLeave() }
-    val canBack = leaveable || state.step in setOf(RecoverStep.SCAN, RecoverStep.NEW_PASSWORD, RecoverStep.DELETE)
+    val canBack = leaveable || state.step == RecoverStep.SCAN
     BackHandler(enabled = canBack) { back() }
     val onBack: (() -> Unit)? = if (canBack) back else null
     when (state.step) {
@@ -205,76 +205,27 @@ fun RecoverContent(
                 state.error != null && state.error != FailureKind.BAD_PASSWORD -> Failure(state.error)
             }
         }
-        RecoverStep.LOST -> FormScaffold(
-            title = stringResource(R.string.recover_lost_title),
-            body = stringResource(R.string.recover_lost_body),
-            primaryLabel = stringResource(R.string.recover_lost_new),
-            onPrimary = actions::chooseNewCredential,
-            secondaryLabel = stringResource(R.string.recover_lost_delete),
-            onSecondary = actions::chooseDelete,
-            modifier = Modifier.testTag("credential_lost"),
-        ) {
-            NoticeCard(NoticeKind.WARNING, stringResource(R.string.recover_lost_title), stringResource(R.string.recover_lost_choice))
-        }
-        RecoverStep.NEW_PASSWORD -> FormScaffold(
-            title = stringResource(R.string.recover_new_title),
-            body = stringResource(R.string.recover_new_body),
-            primaryLabel = stringResource(R.string.recover_new_submit),
-            onPrimary = actions::submitNewPassword,
-            primaryEnabled = state.password.isNotEmpty() && state.passwordConfirm.isNotEmpty(),
-            busy = state.busy,
-            destructive = true,
-            onBack = onBack,
-        ) {
-            NewPasswordFields(
-                state.password, state.passwordConfirm, state.passwordStrength, state.passwordProblem, state.passwordMismatch,
-                actions::setPassword, actions::setPasswordConfirm, actions::submitNewPassword,
-            )
-            Failure(state.error)
-        }
-        RecoverStep.DELETE -> FormScaffold(
-            title = stringResource(R.string.recover_delete_title),
-            body = stringResource(R.string.recover_delete_body),
-            primaryLabel = stringResource(R.string.recover_delete_submit),
-            onPrimary = actions::submitDelete,
-            primaryEnabled = state.pin.length >= MIN_PIN && state.waitSeconds == 0L,
-            busy = state.busy,
-            destructive = true,
-            onBack = onBack,
-        ) {
-            SecretField(
-                value = state.pin,
-                onValueChange = actions::setPin,
-                label = stringResource(R.string.recover_delete_pin),
-                isPin = true,
-                error = if (state.error == FailureKind.BAD_PIN) stringResource(R.string.unlock_bad_pin) else null,
-                supporting = if (state.waitSeconds > 0) stringResource(R.string.unlock_wait, formatWait(state.waitSeconds)) else null,
-                enabled = state.waitSeconds == 0L && !state.busy,
-                onImeAction = actions::submitDelete,
-                modifier = Modifier.testTag("delete_pin"),
-            )
-            if (state.error != null && state.error != FailureKind.BAD_PIN) Failure(state.error)
+        RecoverStep.NO_BACKUP -> {
+            val uri = LocalUriHandler.current
+            FormScaffold(
+                title = stringResource(R.string.recover_no_backup_title),
+                body = stringResource(R.string.recover_no_backup_body),
+                primaryLabel = stringResource(R.string.recover_no_backup_start_over),
+                onPrimary = { uri.openUri(state.startOverUrl) },
+                secondaryLabel = stringResource(R.string.recover_no_backup_new_vault),
+                onSecondary = onNewVault,
+                modifier = Modifier.testTag("recover_no_backup"),
+            ) {
+                NoticeCard(
+                    NoticeKind.URGENT,
+                    stringResource(R.string.recover_no_backup_title),
+                    stringResource(R.string.recover_no_backup_notice),
+                )
+            }
         }
         RecoverStep.DONE -> MovedScreen(
-            body = stringResource(if (state.reset) R.string.onboarding_moved_reset_body else R.string.onboarding_moved_recovered_body),
+            body = stringResource(R.string.onboarding_moved_recovered_body),
             onGo = actions::finish,
-        )
-        RecoverStep.DELETED -> FormScaffold(
-            title = stringResource(R.string.recover_deleted_title),
-            body = stringResource(R.string.recover_deleted_body),
-            primaryLabel = stringResource(R.string.recover_deleted_new),
-            onPrimary = onNewVault,
-        ) {}
-    }
-    if (state.confirming) {
-        val newCredential = state.step == RecoverStep.NEW_PASSWORD
-        ConfirmDialog(
-            title = stringResource(if (newCredential) R.string.recover_new_confirm_title else R.string.recover_delete_confirm_title),
-            text = stringResource(if (newCredential) R.string.recover_new_confirm_body else R.string.recover_delete_confirm_body),
-            confirmLabel = stringResource(if (newCredential) R.string.recover_new_confirm else R.string.recover_delete_confirm),
-            onConfirm = actions::confirm,
-            onDismiss = actions::dismissConfirm,
-            destructive = true,
         )
     }
 }

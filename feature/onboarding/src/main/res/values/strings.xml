@@ -68,12 +68,12 @@
     <string name="onboarding_backup_title">Keep a sealed backup?</string>
     <string name="onboarding_backup_body">Choose where your credential lives. You can change this later in Credential.</string>
     <string name="onboarding_backup_on">Backup on (recommended)</string>
-    <string name="onboarding_backup_on_body">Your vault keeps a copy sealed to it and to your password. If you lose this phone, a recovery restores your credential and critical items.</string>
+    <string name="onboarding_backup_on_body">Your vault keeps a copy sealed to it and to your password. If you lose this phone, a recovery restores your vault on a new one.</string>
     <string name="onboarding_backup_off">Backup off</string>
     <string name="onboarding_backup_off_body">Your credential lives only on this phone. No copy exists anywhere else.</string>
-    <string name="onboarding_backup_off_warning_title">Losing this phone loses your credential</string>
-    <string name="onboarding_backup_off_warning_body">With the backup off, losing or resetting this phone loses your credential and every critical item permanently. A recovery can then only reset the credential, destroying your critical items, or delete the vault.</string>
-    <string name="onboarding_backup_off_ack">I understand that losing this phone loses my credential and critical items</string>
+    <string name="onboarding_backup_off_warning_title">No recovery without this phone</string>
+    <string name="onboarding_backup_off_warning_body">If this phone is lost, broken, reset or replaced without a transfer, your vault cannot be recovered. It can only be deleted and replaced by a new one, and everything in it is lost.</string>
+    <string name="onboarding_backup_off_ack">I understand that without this phone my vault cannot be recovered</string>
     <string name="onboarding_backup_submit">Set up my vault</string>
 
     <!-- Progress -->
@@ -149,7 +149,6 @@
     <!-- Done, after a move -->
     <string name="onboarding_moved_title">Your vault is on this phone now</string>
     <string name="onboarding_moved_recovered_body">Your old phone no longer holds it, and the credential copy it held no longer works; it erases VettID the next time it reaches your vault. Your desktops and agents stay paired.</string>
-    <string name="onboarding_moved_reset_body">Your vault has a new credential. The old credential and your critical items were destroyed. Your old phone erases VettID the next time it reaches your vault.</string>
     <string name="onboarding_moved_transferred_body">Your old phone erases VettID as soon as it hears from your vault. Unlock with the same PIN and credential password as before.</string>
     <string name="onboarding_moved_go">Go to VettID</string>
 
@@ -182,34 +181,18 @@
     <string name="recover_pin_body">The code was accepted. Unlock your vault with your PIN. Wrong PINs are slowed down, as on your old phone.</string>
     <string name="recover_pin_submit">Unlock</string>
     <string name="recover_pin_cancelled">The recovery was cancelled before this phone finished it. Start a new recovery on the account site.</string>
+    <string name="recover_no_backup_title">This vault cannot be recovered</string>
+    <string name="recover_no_backup_body">Its credential backup was off, so VettID offers no way back into it: nothing in it can be released to a phone without the credential.</string>
+    <string name="recover_no_backup_notice">This vault cannot be recovered: its credential backup was off. Delete it on the account site and start over with a new setup code.</string>
+    <string name="recover_no_backup_start_over">Delete my vault and start over</string>
+    <string name="recover_no_backup_new_vault">I have a new setup code</string>
     <string name="recover_password_title">Enter your credential password</string>
     <string name="recover_password_body">Your vault checks it against its copy of your credential and hands the credential to this phone. Your old phone\'s copy stops working.</string>
     <string name="recover_password_label">Credential password</string>
     <string name="recover_password_submit">Recover my vault</string>
     <string name="recover_password_wrong">That password is not correct.</string>
     <string name="recover_password_wait">Too many wrong passwords. Try again in %1$s.</string>
-    <string name="recover_lost_title">Your credential cannot be recovered</string>
-    <string name="recover_lost_body">Your credential backup was off, so your vault kept no copy of your credential. It and every critical item were lost with your old phone, and nothing can bring them back. Your vault itself, your connections and your other items are still there.</string>
-    <string name="recover_lost_choice">You can now create a new credential, or delete the vault.</string>
-    <string name="recover_lost_new">Create a new credential</string>
-    <string name="recover_lost_delete">Delete my vault</string>
     <string name="recover_required">Your vault has no credential, so it cannot be recovered. Contact VettID support.</string>
-    <string name="recover_new_title">Choose a new credential password</string>
-    <string name="recover_new_body">Your vault destroys the old credential and every critical item, then creates a new credential that this phone holds.</string>
-    <string name="recover_new_submit">Create the new credential</string>
-    <string name="recover_new_confirm_title">Create a new credential?</string>
-    <string name="recover_new_confirm_body">Your old credential and every critical item are destroyed for good. Your old phone erases VettID the next time it reaches your vault.</string>
-    <string name="recover_new_confirm">Destroy and create</string>
-    <string name="recover_delete_title">Delete your vault</string>
-    <string name="recover_delete_body">Everything in it is erased: items, connections, messages. Your connections are told it is gone. Enter your vault PIN to confirm.</string>
-    <string name="recover_delete_pin">Vault PIN</string>
-    <string name="recover_delete_submit">Delete my vault</string>
-    <string name="recover_delete_confirm_title">Delete your vault?</string>
-    <string name="recover_delete_confirm_body">This cannot be undone. Your vault and everything in it are erased.</string>
-    <string name="recover_delete_confirm">Delete</string>
-    <string name="recover_deleted_title">Your vault was deleted</string>
-    <string name="recover_deleted_body">You can set up a new vault on this phone.</string>
-    <string name="recover_deleted_new">Set up a new vault</string>
     <string name="recover_failed_title">Something went wrong</string>
 
     <!-- Direct transfer, the new phone (§6.7.1) -->

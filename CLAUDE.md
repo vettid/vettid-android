@@ -80,7 +80,7 @@ Debug builds use application id `com.vettid.app.dev` (`devStack`:
 Every A3 and A4 screen with sample state, no vault needed: `--es vettid.start screen:<name>` (names in
 `app/src/debugTools/.../ScreenCatalog.kt`, e.g. `onboarding.backup_off`, `onboarding.setup_scan`, `onboarding.setup_type`, `onboarding.confirm_account`, `account_sheet`, `unlock.updated`,
 `credential.alarm`, `settings.delete_confirm`, `messages.conversation`, `invite.request`,
-`connections.detail`, `approvals.critical`; recovery and transfer: `recover.pin`, `recover.lost`,
+`connections.detail`, `approvals.critical`; recovery and transfer: `recover.pin`, `recover.no_backup`,
 `transfer_in.compare`, `settings.transfer_compare`, `settings.transfer_moved`; the member's erase of a phone the vault
 did not recognise: `unlock.not_recognised`, `unlock.erase_confirm`, `unlock.erasing`; the open app sent back after
 repeated relay refusals, `unlock.refused`; the transfer's 60 s wait for `hs.resp`, `transfer_in.no_answer`; the vault service paused for maintenance
@@ -88,7 +88,7 @@ repeated relay refusals, `unlock.refused`; the transfer's 60 s wait for `hs.resp
 `canary.confirm`, `canary.refused`, `settings.attestation_canary`; the daily owner check (VAULT-MESSAGING 0.13.0 §3.6),
 `owner_check.held`, `owner_check.due`, `owner_check.bad_password`, `owner_check.backoff`, `owner_check.voluntary`,
 `owner_check.hold_off`, `unlock.owner_check`, `unlock.owner_check_locked`, `settings.owner_check_hold_off`,
-`settings.owner_check_offer`, `shell.owner_check_banners`; a new credential (0.15.2), `credential.new`, `credential.new_confirm`). Debug builds expose Compose test tags as resource
+`settings.owner_check_offer`, `shell.owner_check_banners`; a new credential (0.15.2), `credential.new`, `credential.new_confirm`; a start-over pending on the portal (0.16.0), `shell.deletion`). Debug builds expose Compose test tags as resource
 ids, so `uiautomator dump` / `adb shell input` can drive two phones at once (`adb -s <serial>`).
 Screenshots and the Proton reference images stay out of git (`local/`, or the
 vettid.org repo's `local/android-ui/`).

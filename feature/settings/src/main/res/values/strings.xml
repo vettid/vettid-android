@@ -86,7 +86,7 @@
     <string name="settings_recovery_title">Recovery</string>
     <string name="settings_recovery_body">If you lose this phone, start a recovery on the account site. Your vault locks at once; after 24 hours the site shows a code that a new phone scans, and with your PIN and credential password the new phone takes over. This phone then erases VettID the next time it reaches your vault. While you still have this phone, use Move to a new phone instead: no waiting.</string>
     <string name="settings_recovery_transfer">Move to a new phone</string>
-    <string name="settings_recovery_backup_off">Your credential backup is off: a recovery cannot bring back your credential or critical items.</string>
+    <string name="settings_recovery_backup_off">No recovery: your credential backup is off. If this phone is lost, broken, reset or replaced without a transfer, your vault cannot be recovered; it can only be deleted and replaced, and everything in it is lost.</string>
     <string name="settings_recovery_none">No recovery is in progress.</string>
     <string name="settings_recovery_active_title">A recovery is in progress</string>
     <string name="settings_recovery_active_body">State: %1$s. Available from %2$s. If you did not start it, cancel it now on the account site.</string>

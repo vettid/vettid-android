@@ -108,6 +108,9 @@ fun AppShell(
     // The daily owner check (VAULT-MESSAGING §3.6.5): past the deadline the check comes before any other use of the
     // app, at the first open or return to the foreground, or when the member leaves the screen they are on; never
     // over an action in progress (a detail screen, a draft), whose refused requests keep their input.
+    val deletionVm: PendingDeletionViewModel = hiltViewModel()
+    val deletion by deletionVm.deletion.collectAsStateWithLifecycle()
+    val deletionPath = stringResource(R.string.deletion_path)
     val gateVm: OwnerCheckGateViewModel = hiltViewModel()
     val gate by gateVm.gate.collectAsStateWithLifecycle()
     val gated by rememberUpdatedState(gate.gated)
@@ -153,14 +156,24 @@ fun AppShell(
                         modifier = Modifier.testTag("alarm_banner"),
                     )
                 }
+                // A start-over requested on the portal (VAULT-MESSAGING 0.16.0 §11.11.9): until it runs or is cancelled.
+                val deletionShown = deletion != null
+                deletion?.let { d ->
+                    PendingDeletionBanner(
+                        d,
+                        first = !alarmShown,
+                        onCancel = deletionVm::cancel,
+                        onOpenSite = { uri.openUri(portal.trimEnd('/') + deletionPath) },
+                    )
+                }
                 OwnerCheckBanners(
                     gate,
-                    first = !alarmShown,
+                    first = !alarmShown && !deletionShown,
                     onCheckNow = { asked = OwnerCheckMode.VOLUNTARY },
                     onHoldOn = gateVm::turnHoldOn,
                     onDismissNotices = gateVm::dismissNotices,
                 )
-                val bannerShown = alarmShown || gate.bannerShown()
+                val bannerShown = alarmShown || deletionShown || gate.bannerShown()
                 Box(
                     Modifier
                         .weight(1f)
@@ -193,7 +206,12 @@ fun AppShell(
                         )
                         approvalsDestination(chrome, navigate = navigate, onBack = back)
                         itemsDestination(chrome)
-                        credentialDestination(chrome, navigate = { navController.navigate(it) }, onBack = { navController.popBackStack() })
+                        credentialDestination(
+                            chrome,
+                            navigate = { navController.navigate(it) },
+                            onBack = { navController.popBackStack() },
+                            onOwnerCheck = { asked = OwnerCheckMode.VOLUNTARY },
+                        )
                         settingsDestination(
                             SettingsHost(
                                 onBack = { navController.popBackStack() },

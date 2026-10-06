@@ -60,6 +60,9 @@ interface AccountRepository {
 /** [AccountRepository.servicePaused] of a repository that does not follow the service switch. */
 private val NEVER_PAUSED: StateFlow<Boolean> = MutableStateFlow(false)
 
+/** [VaultRepository.pendingDeletion] of a repository that does not follow it. */
+private val NO_DELETION: StateFlow<DeletionView?> = MutableStateFlow(null)
+
 /** The vault on this device: enrollment, unlock and lock, status, PIN, deletion, recovery. */
 @Suppress("TooManyFunctions")
 interface VaultRepository {
@@ -72,6 +75,15 @@ interface VaultRepository {
 
     /** Enrolls a vault with [pin] (§11.3) and runs the first handshake. */
     suspend fun enroll(pin: String, onStep: (EnrollStep) -> Unit)
+
+    /**
+     * A start-over requested on the account portal (VAULT-MESSAGING 0.16.0 §11.11.9, `deletion` in `GET
+     * /api/vault/status`): null when none is pending.
+     */
+    val pendingDeletion: StateFlow<DeletionView?> get() = NO_DELETION
+
+    /** Cancels the pending start-over (`POST /api/vault/deletion/cancel`, signed by the app key). True when cancelled. */
+    suspend fun cancelDeletion(): Boolean = false
 
     /** Creates the Protean Credential (§3.5.5), sets the backup (§3.5.6) and confirms the vault. */
     suspend fun createCredential(password: String, backup: Boolean, onStep: (EnrollStep) -> Unit)
@@ -170,19 +182,21 @@ interface MoveRepository {
 
     /**
      * Whether the vault keeps a copy of the credential, from this phone's recovery unlock (`credential_backup`,
-     * 0.10.6, §11.11.5 step 1): true, the password recovers it; false, only a new credential or deleting the vault
-     * remain (step 4), so the password is not asked for; null, the vault did not say (older than 0.10.6): ask.
+     * 0.10.6, §11.11.5 step 1): true, the password recovers it; false, the vault cannot be recovered (0.16.0: no
+     * recovery with the backup off; a vault of 0.16.0 refuses such an unlock with `no_backup` already); null, the
+     * vault did not say: ask.
      */
     suspend fun recoveryCredentialBackup(): Boolean?
+
+    /**
+     * The vault cannot be recovered (`no_backup`, VAULT-MESSAGING 0.16.0): forgets this phone's recovery registration
+     * and device state, so that a new setup code starts afresh.
+     */
+    suspend fun abandonRecovery() {}
 
     /** `credential.recover` with the password (§11.11.5 step 3). */
     suspend fun recoverCredential(password: String): RecoverOutcome
 
-    /** Backup off: a new credential under [password]; the old one and every critical item are destroyed (§11.11.5 step 4). */
-    suspend fun resetCredential(password: String)
-
-    /** Backup off: deletes the vault with the PIN alone (§11.11.5 step 4, §12.5). Irreversible. */
-    suspend fun deleteRecoveredVault(pin: String)
 
     // --- direct transfer, the new phone (§6.7.1) ---
 

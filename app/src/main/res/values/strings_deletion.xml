@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- A start-over requested on the account portal (VAULT-MESSAGING 0.16.0 §11.11.9) -->
+    <plurals name="deletion_pending">
+        <item quantity="one">Your vault will be deleted on %1$s (in %2$d hour).</item>
+        <item quantity="other">Your vault will be deleted on %1$s (in %2$d hours).</item>
+    </plurals>
+    <string name="deletion_executing">Your vault is being deleted.</string>
+    <string name="deletion_cancel">Cancel deletion</string>
+    <string name="deletion_open_site">Account site</string>
+    <string name="deletion_path" translatable="false">/account/vault/deletion/</string>
+</resources>
