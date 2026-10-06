@@ -131,6 +131,12 @@ interface CredentialRepository {
 
     suspend fun rotate(password: String)
 
+    /**
+     * A new credential (`credential.reset`, VAULT-MESSAGING 0.15.2 §3.5.5): the PIN, the current password and the
+     * new one. Every critical item is destroyed. Refused while the vault is held; restarts the owner-check clock.
+     */
+    suspend fun newCredential(pin: String, password: String, newPassword: String)
+
     suspend fun setBackup(on: Boolean)
 
     suspend fun setUnlockTtl(seconds: Int)

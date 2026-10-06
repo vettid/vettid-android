@@ -236,6 +236,15 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         alarm.value = null
     }
 
+    var lastNewPassword: String? = null
+
+    override suspend fun newCredential(pin: String, password: String, newPassword: String) {
+        call("newCredential")
+        lastPin = pin
+        lastPassword = password
+        lastNewPassword = newPassword
+    }
+
     override suspend fun setBackup(on: Boolean) {
         call("setBackup")
         lastBackup = on

@@ -148,6 +148,19 @@ class VaultApi(val device: VaultDevice) {
         device.endRecovery()
     }
 
+    /**
+     * The holder's new credential (§3.5.5, 0.15.2): with the blob, the PIN, the current password and the new one
+     * sealed to one UTK. The old credential and every critical item are destroyed; checked like an owner check
+     * (`bad_pin`, `bad_password` are failed checks) and it starts the owner-check clock afresh.
+     */
+    suspend fun credentialResetHolder(pin: String, password: String, newPassword: String) {
+        cred.credOp("credential.reset", {
+            put("pin", pin)
+            put("password", password)
+            put("new_password", newPassword)
+        })
+    }
+
     /** Ends a recovery whose credential is lost (backup off): a new credential; critical items are destroyed. */
     suspend fun credentialReset(password: String) {
         cred.sealedOp("credential.reset", { put("password", password) })

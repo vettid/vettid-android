@@ -18,6 +18,9 @@ import com.vettid.core.data.vault.OwnerCheckNotice
 import com.vettid.core.data.vault.OwnerCheckState
 import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.WaitingCounts
+import com.vettid.feature.credential.NewCredentialActions
+import com.vettid.feature.credential.NewCredentialContent
+import com.vettid.feature.credential.NewCredentialUiState
 import com.vettid.feature.onboarding.HoldOffChoice
 import com.vettid.feature.onboarding.OwnerCheckActions
 import com.vettid.feature.onboarding.OwnerCheckContent
@@ -489,6 +492,10 @@ object ScreenCatalog {
                     lockedByOwnerCheck = true),
                 NoUnlock,
             )
+        },
+        "credential.new" to { NewCredentialContent(NewCredentialUiState(pin = "975310", current = "pw", acknowledged = true), NewCredentialActions()) },
+        "credential.new_confirm" to {
+            NewCredentialContent(NewCredentialUiState(pin = "975310", current = "pw", acknowledged = true, confirming = true), NewCredentialActions())
         },
         "owner_check.held" to { OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.GATED, heldView), NoOwnerCheck) {} },
         "owner_check.due" to {

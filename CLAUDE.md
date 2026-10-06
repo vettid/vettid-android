@@ -88,7 +88,7 @@ repeated relay refusals, `unlock.refused`; the transfer's 60 s wait for `hs.resp
 `canary.confirm`, `canary.refused`, `settings.attestation_canary`; the daily owner check (VAULT-MESSAGING 0.13.0 §3.6),
 `owner_check.held`, `owner_check.due`, `owner_check.bad_password`, `owner_check.backoff`, `owner_check.voluntary`,
 `owner_check.hold_off`, `unlock.owner_check`, `unlock.owner_check_locked`, `settings.owner_check_hold_off`,
-`settings.owner_check_offer`, `shell.owner_check_banners`). Debug builds expose Compose test tags as resource
+`settings.owner_check_offer`, `shell.owner_check_banners`; a new credential (0.15.2), `credential.new`, `credential.new_confirm`). Debug builds expose Compose test tags as resource
 ids, so `uiautomator dump` / `adb shell input` can drive two phones at once (`adb -s <serial>`).
 Screenshots and the Proton reference images stay out of git (`local/`, or the
 vettid.org repo's `local/android-ui/`).

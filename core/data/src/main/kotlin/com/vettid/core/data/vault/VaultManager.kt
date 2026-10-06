@@ -686,6 +686,14 @@ class VaultManager(
         refreshAlarm(s)
     }
 
+    override suspend fun newCredential(pin: String, password: String, newPassword: String) = guard {
+        val s = session()
+        s.api.credentialResetHolder(pin, password, newPassword)
+        windowFlow.value = null
+        runCatching { refreshAlarm(s) }
+        ownerCheck.onOpened() // a new credential starts the owner-check clock afresh (§3.6.1)
+    }
+
     override suspend fun setBackup(on: Boolean) = guard {
         setSetting(session(), KEY_BACKUP, JsonPrimitive(on))
     }
