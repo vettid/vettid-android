@@ -1,6 +1,7 @@
 package com.vettid.app
 
 import android.content.Intent
+import android.net.Uri
 import android.graphics.Color
 import android.hardware.biometrics.BiometricManager.Authenticators
 import android.hardware.biometrics.BiometricPrompt
@@ -24,6 +25,7 @@ import com.vettid.app.ui.ThemeController
 import com.vettid.app.ui.VettIdApp
 import com.vettid.core.data.account.SignInLinkInbox
 import com.vettid.core.data.social.InviteLinkInbox
+import com.vettid.core.data.vault.CanaryManifestInbox
 import com.vettid.core.data.social.InviteLinks
 import com.vettid.core.data.lock.AppLock
 import com.vettid.core.data.prefs.AppPreferences
@@ -33,7 +35,9 @@ import com.vettid.core.keystore.KeystoreException
 import com.vettid.core.ui.theme.ThemeMode
 import com.vettid.core.ui.theme.VettIdTheme
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.security.GeneralSecurityException
 import javax.crypto.Cipher
 import javax.inject.Inject
@@ -52,6 +56,9 @@ class MainActivity : ComponentActivity() {
 
     @Inject
     lateinit var invites: InviteLinkInbox
+
+    @Inject
+    lateinit var canaryManifests: CanaryManifestInbox
 
     private var prompting = false
 
@@ -104,12 +111,34 @@ class MainActivity : ComponentActivity() {
      * A link the app was opened with: an invitation (`<relay>/connect#…` App Link or
      * `vettid://connect#…`, §6.4) goes to the connect flow, which asks the member
      * before anything is sent; a sign-in link (account.vettid.org `/auth/`) to
-     * onboarding, where only confirmed sign-ins send it.
+     * onboarding, where only confirmed sign-ins send it. A shared file is a canary manifest
+     * ([receiveCanaryManifest]).
      */
     private fun receiveLink(intent: Intent?) {
-        if (intent?.action != Intent.ACTION_VIEW) return
-        val data = intent.dataString ?: return
-        if (InviteLinks.isConnectUri(data)) invites.offer(data) else inbox.offer(data)
+        when (intent?.action) {
+            Intent.ACTION_SEND -> receiveCanaryManifest(intent)
+            Intent.ACTION_VIEW -> intent.dataString?.let { data ->
+                if (InviteLinks.isConnectUri(data)) invites.offer(data) else inbox.offer(data)
+            }
+        }
+    }
+
+    /**
+     * A file shared to the app as `application/json`: a canary manifest (VAULT-RELEASES §10.1 step 9) for the
+     * root of the UI, which verifies it and asks the member before anything is installed. Read here, bounded
+     * (a served manifest is at most 90,112 bytes); anything larger is refused unread.
+     */
+    private fun receiveCanaryManifest(intent: Intent) {
+        @Suppress("DEPRECATION") // getParcelableExtra(String, Class) needs API 33; minSdk is 31
+        val uri = intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM) ?: return
+        lifecycleScope.launch {
+            val bytes = withContext(Dispatchers.IO) {
+                runCatching {
+                    contentResolver.openInputStream(uri)?.use { CanaryManifestInbox.readBounded(it) }
+                }.getOrNull()
+            }
+            if (bytes != null) canaryManifests.offer(bytes)
+        }
     }
 
     override fun onStart() {

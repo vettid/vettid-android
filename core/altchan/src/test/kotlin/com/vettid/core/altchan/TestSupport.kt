@@ -42,15 +42,16 @@ object TestSupport {
         return JsonBuilder().uint("v", 1).uint("serial", serial).string("issued_at", "2026-10-01T00:00:00Z").raw("releases", "[$e]").bytes()
     }
 
-    fun served(m: ByteArray): ByteArray {
+    fun served(m: ByteArray, pair: KeyPair = manifestPair): ByteArray {
         val der = Signature.getInstance("SHA256withECDSA").run {
-            initSign(manifestPair.private)
+            initSign(pair.private)
             update(ReleaseManifest.LABEL.toByteArray())
             update(0)
             update(m)
             sign()
         }
-        return JsonBuilder().string("manifest", Base64s.encodeStd(m)).base64("sig", derToRaw(der)).string("key_id", manifestKey.keyId).bytes()
+        val keyId = ManifestKey(pair.public.encoded).keyId
+        return JsonBuilder().string("manifest", Base64s.encodeStd(m)).base64("sig", derToRaw(der)).string("key_id", keyId).bytes()
     }
 
     private fun derToRaw(der: ByteArray): ByteArray {

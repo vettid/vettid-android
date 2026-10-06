@@ -42,11 +42,13 @@ import androidx.compose.ui.text.input.KeyboardType
 import com.vettid.core.data.policy.messageArg
 import com.vettid.core.data.policy.messageRes
 import com.vettid.core.data.vault.AttestationInfo
+import com.vettid.core.data.vault.CanaryManifestView
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.ReleaseInfoView
 import com.vettid.core.data.vault.VaultOverview
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.ConfirmDialog
+import com.vettid.core.ui.components.SettingsRow
 import com.vettid.core.ui.components.DetailScaffold
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.FullScreenProgress
@@ -311,9 +313,14 @@ fun RecoveryContent(
     }
 }
 
-/** Attestation details (stateless). */
+/** Attestation details (stateless); [canary]: the installed canary manifest, shown only when there is one. */
 @Composable
-fun AttestationContent(state: LoadState<AttestationInfo>, onBack: () -> Unit) {
+fun AttestationContent(
+    state: LoadState<AttestationInfo>,
+    onBack: () -> Unit,
+    canary: CanaryManifestView? = null,
+    onRemoveCanary: () -> Unit = {},
+) {
     DetailScaffold(onBackClick = onBack, background = VettIdTheme.colors.groupedBackground) {
         Column(Modifier.verticalScroll(rememberScrollState())) {
             LargeTitle(stringResource(R.string.settings_attestation_title))
@@ -386,10 +393,52 @@ fun AttestationContent(state: LoadState<AttestationInfo>, onBack: () -> Unit) {
                             icon = Icons.Outlined.Storage,
                         )
                     }
+                    if (canary != null) CanaryManifestSection(canary, onRemoveCanary)
                     Spacer(Modifier.height(Spacing.xxl))
                 }
             }
         }
+    }
+}
+
+/**
+ * The canary manifest installed on this phone (VAULT-RELEASES §10.1 step 9): its serial and key, the releases
+ * it lists, and "Stop using it" (after a confirmation; the published manifest is used again).
+ */
+@Composable
+private fun CanaryManifestSection(canary: CanaryManifestView, onRemove: () -> Unit) {
+    var confirm by rememberSaveable { mutableStateOf(false) }
+    SettingsSectionHeader(stringResource(R.string.settings_canary_title))
+    SettingsGroup {
+        SettingsInfoRow(
+            stringResource(R.string.settings_canary_serial),
+            stringResource(R.string.settings_canary_serial_value, canary.serial, canary.keyId),
+            icon = Icons.Outlined.Tag,
+        )
+        SettingsDivider()
+        SettingsInfoRow(
+            stringResource(R.string.settings_canary_releases),
+            canary.releases.map { stringResource(R.string.settings_canary_release, it.number.toInt(), it.status) }.joinToString(", "),
+            icon = Icons.Outlined.Update,
+        )
+        SettingsDivider()
+        SettingsRow(
+            stringResource(R.string.settings_canary_remove),
+            onClick = { confirm = true },
+            icon = Icons.Outlined.Storage,
+            showChevron = false,
+            modifier = Modifier.testTag("canary_remove"),
+        )
+    }
+    if (confirm) {
+        ConfirmDialog(
+            title = stringResource(R.string.settings_canary_remove_title),
+            text = stringResource(R.string.settings_canary_remove_body),
+            confirmLabel = stringResource(R.string.settings_canary_remove),
+            destructive = true,
+            onConfirm = { confirm = false; onRemove() },
+            onDismiss = { confirm = false },
+        )
     }
 }
 

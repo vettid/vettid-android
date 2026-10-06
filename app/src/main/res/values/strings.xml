@@ -28,4 +28,17 @@
     <string name="root_retry">Try again</string>
     <string name="root_service_paused">The vault service is paused for maintenance. Try again later.</string>
     <string name="app_lock_enable_failed">The app lock cannot be used on this phone (it needs a fingerprint, face or screen lock).</string>
+    <string name="canary_confirm_title">Use a test release manifest?</string>
+    <string name="canary_confirm_body">This file is a list of vault releases signed by VettID (serial %1$d, key %2$s) that VettID has not published yet. It lists %3$s. Use it only if VettID asked you to test a new vault release. The app uses it instead of the published list until VettID publishes this list or a newer one.</string>
+    <string name="canary_confirm">Use it</string>
+    <string name="canary_release">release %1$d (%2$s)</string>
+    <string name="canary_ok">OK</string>
+    <string name="canary_installed_title">Test release manifest in use</string>
+    <string name="canary_installed_body">The app now uses the test release manifest (serial %1$d). You can stop using it in Settings, Attestation.</string>
+    <string name="canary_refused_title">This file cannot be used</string>
+    <string name="canary_refused_signature">It is not signed with a key this app trusts.</string>
+    <string name="canary_refused_older">It is older than the release list this phone already uses.</string>
+    <string name="canary_refused_published">VettID has already published this release list or a newer one, so it is not needed.</string>
+    <string name="canary_refused_format">It is not a VettID release manifest.</string>
+    <string name="canary_refused_other">It could not be checked. Try again.</string>
 </resources>

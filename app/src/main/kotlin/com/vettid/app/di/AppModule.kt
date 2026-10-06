@@ -15,6 +15,8 @@ import com.vettid.core.data.social.ApprovalsRepository
 import com.vettid.core.data.social.ConnectionsRepository
 import com.vettid.core.data.social.MessagesRepository
 import com.vettid.core.data.vault.AccountRepository
+import com.vettid.core.data.vault.CanaryManifestInbox
+import com.vettid.core.data.vault.CanaryManifestRepository
 import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.MoveRepository
 import com.vettid.core.data.vault.VaultManager
@@ -78,6 +80,7 @@ object AppModule {
         appLock: AppLock,
         signInLinks: SignInLinkInbox,
         inviteLinks: InviteLinkInbox,
+        canaryManifests: CanaryManifestInbox,
     ): LocalWipe = LocalWipe(
         AndroidWipeTargets(context),
         hooks = listOf(
@@ -85,6 +88,7 @@ object AppModule {
             { prefs.clear() },
             { signInLinks.consume() },
             { inviteLinks.consume() },
+            { canaryManifests.consume() },
         ),
     )
 
@@ -99,6 +103,9 @@ object AppModule {
 
     @Provides
     fun moveRepository(m: VaultManager): MoveRepository = m
+
+    @Provides
+    fun canaryManifestRepository(m: VaultManager): CanaryManifestRepository = m.canary
 
     @Provides
     fun connectionsRepository(m: VaultManager): ConnectionsRepository = m.social
@@ -125,4 +132,8 @@ object AppModule {
     @Provides
     @Singleton
     fun inviteLinkInbox(): InviteLinkInbox = InviteLinkInbox()
+
+    @Provides
+    @Singleton
+    fun canaryManifestInbox(): CanaryManifestInbox = CanaryManifestInbox()
 }

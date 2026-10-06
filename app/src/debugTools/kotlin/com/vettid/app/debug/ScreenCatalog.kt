@@ -115,6 +115,8 @@ import com.vettid.core.data.vault.RecoveryTarget
 import com.vettid.core.data.vault.TransferOfferView
 import com.vettid.core.data.vault.TransferPendingView
 import com.vettid.feature.settings.AttestationContent
+import com.vettid.core.data.vault.CanaryManifestRepository
+import com.vettid.core.data.vault.CanaryManifestView
 import com.vettid.feature.settings.ChangePinContent
 import com.vettid.feature.settings.ChangePinUiState
 import com.vettid.feature.settings.DeleteVaultActions
@@ -235,6 +237,8 @@ object ScreenCatalog {
     private const val EMAIL = "sam@example.org"
     private fun release(n: Long, status: String = "active") =
         ReleaseView(n, "%02d".format(n).repeat(48), status, null, "https://vettid.org/security/releases/$n")
+
+    private val canaryView = CanaryManifestView(2, "4353463f85c4012f", "ab".repeat(32), listOf(release(1, "deprecated"), release(2)))
 
     private val onboarding = OnboardingUiState(email = EMAIL)
     private val chrome = ShellChrome(accountName = "Sam Rivera", onMenuClick = {}, onAvatarClick = {})
@@ -510,6 +514,17 @@ object ScreenCatalog {
         "settings.transfer_exists" to { TOut(TransferOutUiState(error = FailureKind.OTHER, errorCode = "exists")) },
         "settings.attestation" to {
             AttestationContent(LoadState(false, AttestationInfo("devStack", true, "STRONG_BOX", true, 400, "SelfSigned", true, "4e8e e8f7 1c2d 3e4f", 3, "0303 0303 0303 0303")), {})
+        },
+        "settings.attestation_canary" to {
+            AttestationContent(
+                LoadState(false, AttestationInfo("production", true, "STRONG_BOX", true, 400, "Verified", true, "4e8e e8f7 1c2d 3e4f", 1, "0101 0101 0101 0101")),
+                {},
+                canary = canaryView,
+            )
+        },
+        "canary.confirm" to { com.vettid.app.ui.CanaryManifestDialog(com.vettid.app.ui.CanaryManifestPrompt.Confirm(canaryView), {}, {}) },
+        "canary.refused" to {
+            com.vettid.app.ui.CanaryManifestDialog(com.vettid.app.ui.CanaryManifestPrompt.Refused(CanaryManifestRepository.CODE_SIGNATURE), {}, {})
         },
         "settings.delete" to { DeleteVaultContent(DeleteVaultUiState(phrase = "delete my vault", pin = "975310", password = "pw", acknowledged = true), DeleteVaultActions()) },
         "settings.delete_confirm" to {

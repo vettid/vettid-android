@@ -57,6 +57,14 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="vettid" android:host="connect" />
             </intent-filter>
+            <!-- A canary manifest (VAULT-RELEASES §10.1 step 9, W10-READINESS B5): VettID's tester shares the
+                 signed, unpublished served document (pcr-manifest JSON) to the app. It is verified under the
+                 pinned manifest keys and installed only after the member confirms; it adds no trust. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/json" />
+            </intent-filter>
         </activity>
     </application>
 </manifest>

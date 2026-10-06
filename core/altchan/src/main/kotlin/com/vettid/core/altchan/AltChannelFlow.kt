@@ -1,5 +1,6 @@
 package com.vettid.core.altchan
 
+import com.vettid.core.attestation.AttestationException
 import com.vettid.core.attestation.EnclaveVerifier
 import com.vettid.core.attestation.VerifiedEnclave
 import com.vettid.core.attestation.manifest.ManifestKey
@@ -88,16 +89,40 @@ class AltChannelFlow(
     private val api: MemberApiClient,
     private val trust: AltTrust,
     private val clock: Clock = Clock.systemUTC(),
+    /** A canary manifest installed out of band (VAULT-RELEASES §10.1 step 9), or null. */
+    private val canary: CanaryManifestSource? = null,
     private val verifyEnclave: (ByteArray, ByteArray, ReleaseManifest, Boolean, Instant) -> VerifiedEnclave =
         EnclaveVerifier(NitroVerifier(trust.nitroRoots))::verifyEnclave,
 ) {
     private val manifests = ManifestVerifier(trust.manifestKeys)
 
-    /** Fetches and verifies the served manifest; refuses one older than [seen]. */
+    /**
+     * Fetches and verifies the served manifest; refuses one older than [seen]. With a canary manifest
+     * installed ([CanaryManifestSource]) the one with the higher serial is used ([CanaryManifests.choose]):
+     * the canary document while it is newer than the published one, also while nothing is published yet
+     * (404); once the published manifest reaches its serial, the canary document is retired.
+     */
     suspend fun manifest(seen: Long): ReleaseManifest {
-        val m = manifests.verify(api.manifest())
+        val canaryDoc = canary?.served()
+        val c = canaryDoc?.let { canaryManifest(it) }
+        val published = try {
+            manifests.verify(api.manifest())
+        } catch (e: MemberApiException) {
+            if (c == null || e.code != MemberApiException.MANIFEST_UNAVAILABLE) throw e
+            null
+        }
+        if (canaryDoc != null && c != null && published != null && published.serial >= c.serial) canary?.retire(canaryDoc)
+        val m = CanaryManifests.choose(published, c) ?: throw MemberApiException(0, MemberApiException.MANIFEST_UNAVAILABLE)
         if (m.serial < seen) throw AltRefusedException(AltRefusedException.Reason.MANIFEST_OLDER)
         return m
+    }
+
+    /** The installed canary manifest, verified again; one that no longer verifies is retired and ignored. */
+    private fun canaryManifest(served: ByteArray): ReleaseManifest? = try {
+        manifests.verify(served)
+    } catch (_: AttestationException) {
+        canary?.retire(served)
+        null
     }
 
     private suspend fun enclaveFor(release: String?, m: ReleaseManifest, enroll: Boolean): Pair<EnclaveInfo, VerifiedEnclave> {
