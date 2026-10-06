@@ -131,6 +131,7 @@
     <string name="unlock_offer_approve">Approve the update with this unlock</string>
     <string name="unlock_bad_pin">That PIN is not correct.</string>
     <string name="unlock_wait">Too many wrong PINs. Try again in %1$s.</string>
+    <string name="unlock_service_wait">Try again in %1$s.</string>
     <string name="unlock_recovery_title">A recovery is in progress</string>
     <string name="unlock_recovery_body">Someone started a recovery of this vault from the account site, so it is locked for this phone. If that was you on a new phone, let it finish there. If it was not you, cancel it now: unlocking here with your PIN cancels the recovery.</string>
     <string name="unlock_recovery_cancel">Cancel the recovery and unlock</string>

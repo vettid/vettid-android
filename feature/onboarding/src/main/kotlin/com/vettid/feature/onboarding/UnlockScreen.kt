@@ -69,7 +69,7 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
             else -> stringResource(R.string.unlock_submit)
         },
         onPrimary = if (state.preflightError != null) actions::retryPreflight else actions::submit,
-        primaryEnabled = state.preflightError != null || (state.pinAllowed && state.pin.length >= 4),
+        primaryEnabled = if (state.preflightError != null) state.retryAllowed else state.pinAllowed && state.pin.length >= 4,
         busy = state.busy || state.loading || state.erasing,
         secondaryLabel = stringResource(R.string.unlock_sign_out),
         onSecondary = actions::signOut,
@@ -94,6 +94,14 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
             }
             state.preflightError?.let { NoticeCard(if (blocked) NoticeKind.URGENT
                 else NoticeKind.WARNING, stringResource(R.string.unlock_title), stringResource(it.messageRes())) }
+            if (state.serviceWaitSeconds > 0) {
+                Text(
+                    stringResource(R.string.unlock_service_wait, formatWait(state.serviceWaitSeconds)),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("unlock_service_wait"),
+                )
+            }
             if (p != null) {
                 PreflightNotices(p, state.updateAcknowledged, actions::acknowledgeUpdate, state.approveOffer, actions::setApproveOffer)
             }
@@ -148,7 +156,9 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                     // An unreadable result is the "not recognised" notice below, with its erase action.
                     is UnlockMessage.Failed -> if (m.code != UnlockViewModel.CODE_UNREADABLE || !state.notRecognised) {
                         NoticeCard(
-                            NoticeKind.URGENT,
+                            // The service paused for maintenance or not there yet: temporary, not alarming.
+                            if (m.kind == FailureKind.SERVICE_PAUSED || m.kind == FailureKind.VAULT_UNAVAILABLE) NoticeKind.WARNING
+                                else NoticeKind.URGENT,
                             stringResource(R.string.unlock_title),
                             if (m.code == UnlockViewModel.CODE_UNREADABLE) stringResource(R.string.unlock_unreadable)
                                 else stringResource(m.kind.messageRes()),

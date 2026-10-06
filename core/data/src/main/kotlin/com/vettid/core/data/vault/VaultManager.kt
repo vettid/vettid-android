@@ -107,12 +107,14 @@ class VaultManager(
     private val pendingEmailFlow = MutableStateFlow(local.pendingEmail)
     private val alarmFlow = MutableStateFlow<CredentialAlarm?>(null)
     private val windowFlow = MutableStateFlow<Instant?>(null)
+    private val pausedFlow = MutableStateFlow(false)
 
     override val phase: StateFlow<AppPhase> = phaseFlow.asStateFlow()
     override val account: StateFlow<AccountInfo?> = accountFlow.asStateFlow()
     override val pendingEmail: StateFlow<String?> = pendingEmailFlow.asStateFlow()
     override val alarm: StateFlow<CredentialAlarm?> = alarmFlow.asStateFlow()
     override val unlockWindow: StateFlow<Instant?> = windowFlow.asStateFlow()
+    override val servicePaused: StateFlow<Boolean> = pausedFlow.asStateFlow()
     override val devHint: String? get() = gateway.devHint
     override val signInHosts: Set<String> = env.signInHosts
 
@@ -319,10 +321,10 @@ class VaultManager(
         if (d.deviceId == null) {
             if (d.recovering) return@guard AppPhase.Setup(SetupStage.RECOVERING) // registered with a recovery code (§11.11.3)
             if (d.vaultId != null) return@guard AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL) // enrolled, handshake not finished
-            val st = s.member.vaultStatus()
+            val st = vaultStatus(s)
             return@guard AppPhase.Setup(if (st != null && st.state != "enrolling") SetupStage.VAULT_ELSEWHERE else SetupStage.NEW_VAULT)
         }
-        val st = s.member.vaultStatus()
+        val st = vaultStatus(s)
         if (st == null) {
             // The vault is gone (deleted, or the account was cancelled and restored): start over.
             dropSession(forget = true)
@@ -448,9 +450,9 @@ class VaultManager(
                 out
             }
         } catch (e: VaultFailure) {
-            holder.onFailure(e) // never proof
+            holder.onFailure(e) // never proof (a 503, paused or not, included)
             if (e.kind == FailureKind.TERMS_REQUIRED) phaseFlow.value = AppPhase.TermsRequired(updated = true)
-            return UnlockAttempt.Failed(e.kind, e.code)
+            return UnlockAttempt.Failed(e.kind, e.code, e.retryAfterSeconds)
         }
         val r = outcome.result
         if (!r.ok) {
@@ -488,7 +490,7 @@ class VaultManager(
 
     override suspend fun overview(): VaultOverview = guard {
         val s = session()
-        val st = s.member.vaultStatus()
+        val st = vaultStatus(s)
         val vs = if (phaseFlow.value is AppPhase.Unlocked) {
             try {
                 s.api.status()
@@ -659,14 +661,14 @@ class VaultManager(
         when {
             !d.recovering -> RecoveryStage.CODE
             d.deviceId == null -> RecoveryStage.PIN
-            s.member.vaultStatus()?.state == "unlocked" -> RecoveryStage.PASSWORD
+            vaultStatus(s)?.state == "unlocked" -> RecoveryStage.PASSWORD
             else -> RecoveryStage.PIN
         }
     }
 
     override suspend fun recoveryTarget(): RecoveryTarget = guard {
         val s = session()
-        val vid = s.member.vaultStatus()?.vaultId
+        val vid = vaultStatus(s)?.vaultId
         val r = s.member.recoveryStatus()?.let { RecoveryView(it.recoveryId, it.state, it.availableAt, it.expiresAt) }
         RecoveryTarget(vid, r)
     }
@@ -891,7 +893,20 @@ class VaultManager(
     private suspend fun <T> io(block: suspend () -> T): T = withContext(Dispatchers.IO) { block() }
 
     /** Runs [block] on the IO dispatcher and turns every failure into a [VaultFailure]. */
-    private suspend fun <T> guard(block: suspend () -> T): T = vaultGuard(block)
+    private suspend fun <T> guard(block: suspend () -> T): T = try {
+        vaultGuard(block)
+    } catch (e: VaultFailure) {
+        // MEMBER-API 1.2.0: a refusal while paused also shows the banner (status may not have been read yet).
+        if (e.kind == FailureKind.SERVICE_PAUSED) pausedFlow.value = true
+        throw e
+    }
+
+    /** `GET /api/vault/status`, following its top-level `service` (MEMBER-API 1.2.0) for the banner. */
+    private suspend fun vaultStatus(s: Session): com.vettid.core.altchan.VaultStatus? {
+        val a = s.member.vaultStatusAnswer()
+        pausedFlow.value = a.servicePaused
+        return a.vault
+    }
 
     companion object {
         private const val DEVICE_FILE = "vault-device.bin"
@@ -942,7 +957,8 @@ class VaultManager(
             MemberApiException.UNAUTHORIZED -> FailureKind.UNAUTHORIZED
             MemberApiException.TERMS_REQUIRED -> FailureKind.TERMS_REQUIRED
             MemberApiException.RATE_LIMITED -> FailureKind.RATE_LIMITED
-            MemberApiException.VAULT_UNAVAILABLE, MemberApiException.RELEASE_STARTING -> FailureKind.VAULT_UNAVAILABLE
+            MemberApiException.VAULT_UNAVAILABLE -> if (e.servicePaused) FailureKind.SERVICE_PAUSED else FailureKind.VAULT_UNAVAILABLE
+            MemberApiException.RELEASE_STARTING -> FailureKind.VAULT_UNAVAILABLE
             MemberApiException.RELEASE_UNAVAILABLE -> FailureKind.RELEASE_ENDED
             MemberApiException.NOT_FOUND -> FailureKind.NOT_FOUND
             MemberApiException.MANIFEST_UNAVAILABLE -> FailureKind.MANIFEST

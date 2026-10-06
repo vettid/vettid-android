@@ -16,7 +16,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-/** What the root of the UI follows: the vault phase, the app lock, the clone alarm and the account. */
+/** What the root of the UI follows: the vault phase, the app lock, the clone alarm, the account and the service pause. */
 @HiltViewModel
 class RootViewModel @Inject constructor(
     private val accounts: AccountRepository,
@@ -28,6 +28,9 @@ class RootViewModel @Inject constructor(
     val lock: StateFlow<AppLockState> = appLock.state
     val alarm: StateFlow<CredentialAlarm?> = credential.alarm
     val account: StateFlow<AccountInfo?> = accounts.account
+
+    /** The vault service is paused for maintenance (MEMBER-API 1.2.0): a banner, nothing blocked. */
+    val servicePaused: StateFlow<Boolean> = accounts.servicePaused
 
     fun retry() {
         viewModelScope.launch { accounts.refresh() }

@@ -2,6 +2,7 @@ package com.vettid.core.data.vault
 
 import com.vettid.core.altchan.SignInStatus
 import com.vettid.core.data.account.SignInLink
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.time.Instant
 
@@ -22,6 +23,13 @@ interface AccountRepository {
 
     /** Hosts whose `/auth/` links are accepted. */
     val signInHosts: Set<String>
+
+    /**
+     * The operator paused the vault service (MEMBER-API 1.2.0): `GET /api/vault/status` said `service: "paused"`,
+     * or a vault route answered `503 vault_unavailable` with it. For a non-blocking banner only; cleared when
+     * `status` says the service is available again.
+     */
+    val servicePaused: StateFlow<Boolean> get() = NEVER_PAUSED
 
     /** Re-reads the session, `Me` and the vault's state, and sets [phase]. */
     suspend fun refresh()
@@ -44,6 +52,9 @@ interface AccountRepository {
      */
     suspend fun eraseThisPhone()
 }
+
+/** [AccountRepository.servicePaused] of a repository that does not follow the service switch. */
+private val NEVER_PAUSED: StateFlow<Boolean> = MutableStateFlow(false)
 
 /** The vault on this device: enrollment, unlock and lock, status, PIN, deletion, recovery. */
 @Suppress("TooManyFunctions")

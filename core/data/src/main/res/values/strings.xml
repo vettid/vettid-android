@@ -5,6 +5,7 @@
     <string name="data_failure_terms">Accept the current membership terms on the account site first.</string>
     <string name="data_failure_rate_limited">Too many attempts. Wait a little and try again.</string>
     <string name="data_failure_vault_unavailable">The vault service is not available yet. Try again later.</string>
+    <string name="data_failure_service_paused">The vault service is paused for maintenance. Try again later.</string>
     <string name="data_failure_release_ended">The vault software release your vault is sealed to has ended. The vault can no longer be opened.</string>
     <string name="data_failure_bad_pin">That PIN is not correct.</string>
     <string name="data_failure_bad_password">That credential password is not correct.</string>

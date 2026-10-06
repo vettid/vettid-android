@@ -12,6 +12,7 @@ fun FailureKind.messageRes(): Int = when (this) {
     FailureKind.TERMS_REQUIRED -> R.string.data_failure_terms
     FailureKind.RATE_LIMITED -> R.string.data_failure_rate_limited
     FailureKind.VAULT_UNAVAILABLE -> R.string.data_failure_vault_unavailable
+    FailureKind.SERVICE_PAUSED -> R.string.data_failure_service_paused
     FailureKind.RELEASE_ENDED -> R.string.data_failure_release_ended
     FailureKind.BAD_PIN -> R.string.data_failure_bad_pin
     FailureKind.BAD_PASSWORD -> R.string.data_failure_bad_password

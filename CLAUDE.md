@@ -81,7 +81,8 @@ Every A3 and A4 screen with sample state, no vault needed: `--es vettid.start sc
 `connections.detail`, `approvals.critical`; recovery and transfer: `recover.pin`, `recover.lost`,
 `transfer_in.compare`, `settings.transfer_compare`, `settings.transfer_moved`; the member's erase of a phone the vault
 did not recognise: `unlock.not_recognised`, `unlock.erase_confirm`, `unlock.erasing`; the open app sent back after
-repeated relay refusals, `unlock.refused`; the transfer's 60 s wait for `hs.resp`, `transfer_in.no_answer`). Debug builds expose Compose test tags as resource
+repeated relay refusals, `unlock.refused`; the transfer's 60 s wait for `hs.resp`, `transfer_in.no_answer`; the vault service paused for maintenance
+(MEMBER-API 1.2.0), `unlock.paused`, `unlock.paused_preflight`). Debug builds expose Compose test tags as resource
 ids, so `uiautomator dump` / `adb shell input` can drive two phones at once (`adb -s <serial>`).
 Screenshots and the Proton reference images stay out of git (`local/`, or the
 vettid.org repo's `local/android-ui/`).

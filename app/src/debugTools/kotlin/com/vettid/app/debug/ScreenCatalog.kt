@@ -403,6 +403,18 @@ object ScreenCatalog {
                 NoUnlock,
             )
         },
+        "unlock.paused" to {
+            UnlockContent(
+                UnlockUiState(
+                    loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null),
+                    message = UnlockMessage.Failed(FailureKind.SERVICE_PAUSED, "vault_unavailable"), serviceWaitSeconds = 300,
+                ),
+                NoUnlock,
+            )
+        },
+        "unlock.paused_preflight" to {
+            UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflightError = FailureKind.SERVICE_PAUSED, serviceWaitSeconds = 300), NoUnlock)
+        },
         "unlock.recovery" to {
             UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), recoveryPending = true), NoUnlock)
         },

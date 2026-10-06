@@ -4,6 +4,7 @@ import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.UnlockAttempt
+import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.testing.FakeVault
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
@@ -281,6 +282,68 @@ class UnlockViewModelTest {
         vm.submit()
         advanceUntilIdle()
         assertFalse(vm.uiState.value.refused)
+        assertFalse(vm.uiState.value.notRecognised)
+    }
+
+    @Test
+    fun aPausedServiceWaitsForRetryAfterAndNeverOffersTheErase() = runTest {
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.SERVICE_PAUSED, "vault_unavailable", retryAfterSeconds = 300)
+        val vm = UnlockViewModel(vault, vault)
+        advanceUntilIdle()
+        vm.setPin("40281795")
+        vm.submit()
+        advanceTimeBy(1)
+        val s = vm.uiState.value
+        assertEquals(UnlockMessage.Failed(FailureKind.SERVICE_PAUSED, "vault_unavailable"), s.message)
+        assertEquals(300L, s.serviceWaitSeconds)
+        assertFalse(s.notRecognised)
+        assertFalse(s.pinAllowed)
+        // The member's next try waits; nothing retries by itself.
+        vm.setPin("40281795")
+        vm.submit()
+        advanceTimeBy(299_000)
+        assertEquals(1, vault.calls.count { it == "unlock" })
+        assertFalse(vm.uiState.value.pinAllowed)
+        advanceUntilIdle()
+        assertEquals(0L, vm.uiState.value.serviceWaitSeconds)
+        assertTrue(vm.uiState.value.pinAllowed)
+        assertEquals(1, vault.calls.count { it == "unlock" })
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals(AppPhase.Unlocked, vault.phase.value)
+    }
+
+    @Test
+    fun aPausedReleaseCheckHoldsTryAgainUntilRetryAfter() = runTest {
+        vault.fail["preflight"] = VaultFailure(FailureKind.SERVICE_PAUSED, "vault_unavailable", retryAfterSeconds = 300)
+        val vm = UnlockViewModel(vault, vault)
+        advanceTimeBy(1)
+        assertEquals(FailureKind.SERVICE_PAUSED, vm.uiState.value.preflightError)
+        assertEquals(300L, vm.uiState.value.serviceWaitSeconds)
+        assertFalse(vm.uiState.value.retryAllowed)
+        vm.retryPreflight()
+        advanceTimeBy(1_000)
+        assertEquals(1, vault.calls.count { it == "preflight" })
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.retryAllowed)
+        assertEquals(1, vault.calls.count { it == "preflight" }) // no automatic retry
+        vm.retryPreflight()
+        advanceUntilIdle()
+        assertEquals(2, vault.calls.count { it == "preflight" })
+        assertNull(vm.uiState.value.preflightError)
+        assertTrue(vm.uiState.value.pinAllowed)
+    }
+
+    @Test
+    fun aServiceThatIsNotThereYetHasNoWait() = runTest {
+        vault.unlockResults += UnlockAttempt.Failed(FailureKind.VAULT_UNAVAILABLE, "vault_unavailable")
+        val vm = UnlockViewModel(vault, vault)
+        advanceUntilIdle()
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertEquals(0L, vm.uiState.value.serviceWaitSeconds)
+        assertTrue(vm.uiState.value.pinAllowed)
         assertFalse(vm.uiState.value.notRecognised)
     }
 }

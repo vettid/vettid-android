@@ -328,6 +328,29 @@ fun NoticeCard(
 }
 
 /**
+ * A non-blocking information banner above every screen (the vault service paused for maintenance, MEMBER-API
+ * 1.2.0): one line, no action, nothing behind it is disabled. Pads for the status bar itself.
+ */
+@Composable
+fun InfoBanner(text: String, modifier: Modifier = Modifier) {
+    val colors = MaterialTheme.colorScheme
+    Surface(color = colors.surfaceContainerHigh, contentColor = colors.onSurface, modifier = modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .statusBarsPadding()
+                .heightIn(min = Spacing.touchTarget)
+                .padding(horizontal = Spacing.l, vertical = Spacing.s)
+                .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Outlined.Info, contentDescription = null, tint = VettIdTheme.colors.warning)
+            Spacer(Modifier.width(Spacing.m))
+            Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+        }
+    }
+}
+
+/**
  * The urgent banner above every top-level screen (the clone alarm, §3.5.9):
  * error colour, one line and an action. Pads for the status bar itself.
  */
