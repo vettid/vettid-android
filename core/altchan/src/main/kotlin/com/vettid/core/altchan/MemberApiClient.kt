@@ -83,6 +83,12 @@ data class ReleaseInfo(
     }
 }
 
+/**
+ * `GET /api/vault/status`: the member's vault ([vault], null without one) and whether the operator paused the
+ * vault service ([servicePaused], MEMBER-API 1.2.0 top-level `service`; absent means available).
+ */
+data class VaultStatusAnswer(val vault: VaultStatus?, val servicePaused: Boolean)
+
 /** `POST /api/auth/verify` / `pin` outcome. */
 enum class SignInStatus { SIGNED_IN, PIN_REQUIRED }
 
@@ -129,7 +135,7 @@ class MemberApiClient(
         val rb = Request.Builder().url(base + path)
         auth.apply(rb, method)
         rb.method(method, body?.toRequestBody(JSON) ?: if (method == "POST") ByteArray(0).toRequestBody(null) else null)
-        val (code, bytes) = execute(rb.build())
+        val (code, bytes, retryAfter) = execute(rb.build())
         val mayRefresh = auth is MemberAuth.Session && !path.startsWith("/api/auth/")
         if (code == HTTP_UNAUTHORIZED && retryAuth && mayRefresh) {
             // MEMBER-API: a 401 that survived the server-side renewal may try /api/auth/refresh once.
@@ -141,7 +147,7 @@ class MemberApiClient(
             }
             if (refreshed) return call(method, path, body, retryAuth = false)
         }
-        if (code / 100 != 2) throw errorOf(code, bytes)
+        if (code / 100 != 2) throw errorOf(code, bytes, retryAfter)
         if (bytes.isEmpty()) return null
         return try {
             StrictJson.parseObject(bytes)
@@ -150,25 +156,37 @@ class MemberApiClient(
         }
     }
 
-    private suspend fun execute(r: Request): Pair<Int, ByteArray> {
+    /** One HTTP exchange: status, body (at most [MAX_BODY] bytes) and the `Retry-After` header in seconds (0 if absent). */
+    private class Answer(val code: Int, val body: ByteArray, val retryAfter: Int) {
+        operator fun component1() = code
+
+        operator fun component2() = body
+
+        operator fun component3() = retryAfter
+    }
+
+    private suspend fun execute(r: Request): Answer {
         val call = http.newCall(r)
         return com.vettid.core.altchan.internal.awaitCall(call) { resp ->
-            resp.code to resp.body.source().use { s ->
+            val body = resp.body.source().use { s ->
                 s.request(MAX_BODY.toLong())
                 s.buffer.readByteArray(minOf(s.buffer.size, MAX_BODY.toLong()))
             }
+            Answer(resp.code, body, retryAfterHeader(resp.header("Retry-After")))
         }
     }
 
-    private fun errorOf(code: Int, b: ByteArray): MemberApiException {
+    private fun errorOf(code: Int, b: ByteArray, headerRetry: Int = 0): MemberApiException {
         val o = try {
             StrictJson.parseObject(b)
         } catch (_: CryptoException) {
-            return MemberApiException(code, "http_$code")
+            return MemberApiException(code, "http_$code", retryAfterSeconds = headerRetry)
         }
         fun s(k: String) = (o[k] as? JsonString)?.value
         val c = s("code") ?: s("error") ?: "http_$code"
-        return MemberApiException(code, c, s("message") ?: "", s("release"), (o["retry_after"] as? JsonNumber)?.raw?.toIntOrNull() ?: 0)
+        val retry = (o["retry_after"] as? JsonNumber)?.raw?.toIntOrNull()?.takeIf { it >= 0 } ?: headerRetry
+        // `message` is the API's text for developers; `reason` (the operator's, MEMBER-API 1.2.0) is never read.
+        return MemberApiException(code, c, s("message") ?: "", s("release"), minOf(retry, MAX_RETRY_AFTER_S), s("service"))
     }
 
     // --- sign-in (MEMBER-API "Auth") ---
@@ -217,8 +235,17 @@ class MemberApiClient(
 
     // --- vault (alternate channel) ---
 
-    suspend fun vaultStatus(): VaultStatus? {
-        val v = call("GET", "/api/vault/status")?.get("vault") as? JsonObject ?: return null
+    suspend fun vaultStatus(): VaultStatus? = vaultStatusAnswer().vault
+
+    /** `GET /api/vault/status` with the top-level `service` (MEMBER-API 1.2.0); still served while paused. */
+    suspend fun vaultStatusAnswer(): VaultStatusAnswer {
+        val o = call("GET", "/api/vault/status")
+        val paused = (o?.get("service") as? JsonString)?.value == MemberApiException.SERVICE_PAUSED
+        return VaultStatusAnswer(parseVault(o?.get("vault") as? JsonObject), paused)
+    }
+
+    private fun parseVault(v: JsonObject?): VaultStatus? {
+        if (v == null) return null
         fun s(o: JsonObject?, k: String) = (o?.get(k) as? JsonString)?.value
         fun n(o: JsonObject?, k: String) = (o?.get(k) as? JsonNumber)?.raw?.toLongOrNull()
         val rel = v["release"] as? JsonObject
@@ -246,14 +273,22 @@ class MemberApiClient(
         }
     }
 
-    /** [enclave], waiting while the release starts (503 `release_starting`, §11.10.5). */
+    /**
+     * [enclave], waiting while the release starts (503 `release_starting`, §11.10.5), for at most
+     * [MAX_START_TOTAL_MS] in all; then the last `release_starting` is thrown. Any other error, including
+     * `503 vault_unavailable` (no release yet, or the vault service paused, MEMBER-API 1.2.0), is thrown at
+     * once: nothing retries it automatically.
+     */
     suspend fun enclaveWait(release: String? = null): EnclaveInfo {
+        var waited = 0L
         while (true) {
             try {
                 return enclave(release)
             } catch (e: MemberApiException) {
-                if (e.code != MemberApiException.RELEASE_STARTING) throw e
-                sleep(minOf(maxOf(e.retryAfterSeconds, 1) * MS_PER_S, MAX_START_WAIT_MS))
+                if (e.code != MemberApiException.RELEASE_STARTING || waited >= MAX_START_TOTAL_MS) throw e
+                val ms = minOf(maxOf(e.retryAfterSeconds, 1) * MS_PER_S, MAX_START_WAIT_MS)
+                sleep(ms)
+                waited += ms
             }
         }
     }
@@ -350,6 +385,16 @@ class MemberApiClient(
         private const val MAX_BODY = 1 shl 20
         private const val MS_PER_S = 1000L
         private const val MAX_START_WAIT_MS = 2000L
+
+        /** How long [enclaveWait] waits for a release to start before it gives up (an instance starts in minutes). */
+        const val MAX_START_TOTAL_MS = 10 * 60 * 1000L
+
+        /** A larger `retry_after` / `Retry-After` is clamped to this (a day). */
+        const val MAX_RETRY_AFTER_S = 86_400
+
+        /** `Retry-After` in delta-seconds; an HTTP date or anything else counts as absent (0). */
+        internal fun retryAfterHeader(v: String?): Int =
+            v?.trim()?.toIntOrNull()?.takeIf { it >= 0 }?.let { minOf(it, MAX_RETRY_AFTER_S) } ?: 0
         private val JSON = "application/json".toMediaType()
     }
 }

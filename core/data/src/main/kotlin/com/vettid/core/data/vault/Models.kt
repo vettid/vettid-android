@@ -104,7 +104,8 @@ sealed interface UnlockAttempt {
     /** The release update was refused ([code]); the vault stayed where it was. */
     data class UpdateRefused(val code: String) : UnlockAttempt
 
-    data class Failed(val kind: FailureKind, val code: String?) : UnlockAttempt
+    /** [retryAfterSeconds]: when the service said when to try again (`Retry-After`, e.g. [FailureKind.SERVICE_PAUSED]). */
+    data class Failed(val kind: FailureKind, val code: String?, val retryAfterSeconds: Long = 0) : UnlockAttempt
 }
 
 /** A clone alarm on the Protean Credential (§3.5.9). */
@@ -189,6 +190,12 @@ enum class FailureKind {
     TERMS_REQUIRED,
     RATE_LIMITED,
     VAULT_UNAVAILABLE,
+
+    /**
+     * The operator paused the vault service (MEMBER-API 1.2.0, `503 vault_unavailable` with `service: "paused"`):
+     * temporary, try again after the failure's `retryAfterSeconds`. Members see only the generic text.
+     */
+    SERVICE_PAUSED,
     RELEASE_ENDED,
     BAD_PIN,
     BAD_PASSWORD,

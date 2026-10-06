@@ -353,4 +353,106 @@ class MemberApiTest {
         assertEquals("i", a.enclaveWait().instanceId)
         assertEquals(listOf(2000L, 2000L), waits)
     }
+
+    private val pausedBody = """{"error":"vault_unavailable","code":"vault_unavailable","message":"The vault service is paused","service":"paused","retry_after":300}"""
+
+    @Test
+    fun aPausedServiceIsThrownAtOnceWithItsRetryAfter() = runBlocking<Unit> {
+        var calls = 0
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                calls++
+                return MockResponse.Builder().code(503).body(pausedBody).addHeader("Retry-After", "300").build()
+            }
+        }
+        val waits = mutableListOf<Long>()
+        val a = MemberApiClient(server.url("/").toString(), "", OkHttpClient(), MemberAuth.Bearer("g"), sleep = { waits.add(it) })
+        val e = assertThrows(MemberApiException::class.java) { runBlocking { a.enclaveWait() } }
+        assertEquals(503, e.status)
+        assertEquals(MemberApiException.VAULT_UNAVAILABLE, e.code)
+        assertTrue(e.servicePaused)
+        assertEquals(300, e.retryAfterSeconds)
+        assertEquals(1, calls) // no retry loop
+        assertTrue(waits.isEmpty())
+    }
+
+    @Test
+    fun retryAfterHeaderWhenTheBodyHasNone() = runBlocking<Unit> {
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = MockResponse.Builder().code(503)
+                .body("""{"error":"vault_unavailable","code":"vault_unavailable","service":"paused"}""").addHeader("Retry-After", "120").build()
+        }
+        val a = MemberApiClient(server.url("/").toString(), "", OkHttpClient(), MemberAuth.Bearer("g"), sleep = { })
+        val e = assertThrows(MemberApiException::class.java) { runBlocking { a.enclave() } }
+        assertTrue(e.servicePaused)
+        assertEquals(120, e.retryAfterSeconds)
+        // Not JSON (a load balancer's page): the header still counts.
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse =
+                MockResponse.Builder().code(503).body("<html>busy</html>").addHeader("Retry-After", "60").build()
+        }
+        val e2 = assertThrows(MemberApiException::class.java) { runBlocking { a.enclave() } }
+        assertFalse(e2.servicePaused)
+        assertEquals(60, e2.retryAfterSeconds)
+        assertEquals(0, MemberApiClient.retryAfterHeader("Wed, 21 Oct 2026 07:28:00 GMT"))
+        assertEquals(0, MemberApiClient.retryAfterHeader("-5"))
+        assertEquals(MemberApiClient.MAX_RETRY_AFTER_S, MemberApiClient.retryAfterHeader("99999999"))
+    }
+
+    @Test
+    fun notPausedWithoutServicePaused() {
+        assertFalse(MemberApiException(503, MemberApiException.VAULT_UNAVAILABLE, retryAfterSeconds = 300).servicePaused)
+        assertFalse(MemberApiException(503, MemberApiException.RELEASE_STARTING, service = "paused").servicePaused)
+    }
+
+    @Test
+    fun statusReportsTheServiceSwitch() = runBlocking<Unit> {
+        var body = """{"vault":null,"service":"paused"}"""
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = resp(200, body)
+        }
+        val a = MemberApiClient(server.url("/").toString(), "", OkHttpClient(), MemberAuth.Bearer("g"), sleep = { })
+        assertEquals(VaultStatusAnswer(null, servicePaused = true), a.vaultStatusAnswer())
+        body = """{"vault":{"vault_id":"v1","state":"locked","leased":false},"service":"available"}"""
+        val st = a.vaultStatusAnswer()
+        assertFalse(st.servicePaused)
+        assertEquals("v1", st.vault?.vaultId)
+        body = """{"vault":null}""" // before 1.2.0: no `service`, available
+        assertFalse(a.vaultStatusAnswer().servicePaused)
+        assertEquals(null, a.vaultStatus())
+    }
+
+    @Test
+    fun anUnlockWhilePausedIsNotRetried() = runBlocking<Unit> {
+        val p = Party()
+        p.vaultId = flow().enroll(p, "guid-1", "246802", TestSupport.SoftAttester()).vaultId
+        p.state = AltRequests.applyEnrolled(p.state, 1)
+        val before = log.size
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse = synchronized(log) {
+                log.add("${request.method} ${request.url.encodedPath}")
+                if (request.url.encodedPath == MemberApiClient.MANIFEST_PATH) {
+                    resp(200, String(TestSupport.served(TestSupport.manifestBytes(manifestSerial))))
+                } else {
+                    MockResponse.Builder().code(503).body(pausedBody).addHeader("Retry-After", "300").build()
+                }
+            }
+        }
+        val e = assertThrows(MemberApiException::class.java) { runBlocking { flow().unlock(p, "guid-1", "246802", TestSupport.SoftAttester()) } }
+        assertTrue(e.servicePaused)
+        assertEquals(listOf("GET ${MemberApiClient.MANIFEST_PATH}", "GET /api/vault/enclave"), log.drop(before))
+    }
+
+    @Test
+    fun releaseStartingIsWaitedForBoundedly() = runBlocking<Unit> {
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse =
+                resp(503, """{"error":"release_starting","code":"release_starting","release":"${TestSupport.pcr0}","retry_after":30}""")
+        }
+        var waited = 0L
+        val a = MemberApiClient(server.url("/").toString(), "", OkHttpClient(), MemberAuth.Bearer("g"), sleep = { waited += it })
+        val e = assertThrows(MemberApiException::class.java) { runBlocking { a.enclaveWait() } }
+        assertEquals(MemberApiException.RELEASE_STARTING, e.code)
+        assertEquals(MemberApiClient.MAX_START_TOTAL_MS, waited)
+    }
 }

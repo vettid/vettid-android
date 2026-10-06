@@ -38,6 +38,9 @@ import java.time.Instant
 @Suppress("TooManyFunctions")
 class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, VaultRepository, CredentialRepository, MoveRepository {
     val calls = mutableListOf<String>()
+
+    /** MEMBER-API 1.2.0: the vault service paused (the banner). */
+    override val servicePaused = MutableStateFlow(false)
     val fail = mutableMapOf<String, VaultFailure>()
     val unlockResults = ArrayDeque<UnlockAttempt>()
     var signInStatus = SignInStatus.SIGNED_IN

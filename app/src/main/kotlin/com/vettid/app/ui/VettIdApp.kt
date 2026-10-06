@@ -1,12 +1,17 @@
 package com.vettid.app.ui
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
@@ -23,6 +28,7 @@ import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.FullScreenProgress
+import com.vettid.core.ui.components.InfoBanner
 import com.vettid.feature.onboarding.AppLockScreen
 import com.vettid.feature.onboarding.OnboardingFlow
 import com.vettid.feature.onboarding.UnlockRoute
@@ -69,6 +75,7 @@ fun VettIdApp(
     val lock by viewModel.lock.collectAsStateWithLifecycle()
     val alarm by viewModel.alarm.collectAsStateWithLifecycle()
     val account by viewModel.account.collectAsStateWithLifecycle()
+    val paused by viewModel.servicePaused.collectAsStateWithLifecycle()
     val uri = LocalUriHandler.current
     val portal = stringResource(R.string.account_portal_url)
     val nav = rememberNavController()
@@ -85,30 +92,40 @@ fun VettIdApp(
     // Debug builds expose test tags as resource ids, so that adb (uiautomator) can drive two phones at once.
     val root = if (BuildConfig.DEBUG) Modifier.fillMaxSize().semantics { testTagsAsResourceId = true } else Modifier.fillMaxSize()
     Box(root) {
-        Box(if (locked) Modifier.fillMaxSize().clearAndSetSemantics {} else Modifier.fillMaxSize()) {
-            NavHost(nav, startDestination = StartingDest) {
-                composable<StartingDest> { FullScreenProgress(stringResource(R.string.root_starting)) }
-                composable<UnreachableDest> {
-                    val kind = (phase as? AppPhase.Unreachable)?.failure
-                    FormScaffold(
-                        title = stringResource(R.string.root_unreachable_title),
-                        body = kind?.let { stringResource(it.messageRes()) },
-                        primaryLabel = stringResource(R.string.root_retry),
-                        onPrimary = viewModel::retry,
-                    ) {}
-                }
-                composable<OnboardingDest> { OnboardingFlow(onOpenAccountSite = { uri.openUri(portal) }) }
-                composable<UnlockDest> { UnlockRoute() }
-                composable<MainDest> {
-                    AppShell(
-                        launchRoute = launchRoute,
-                        accountName = account?.displayName ?: stringResource(R.string.account_placeholder_name),
-                        accountDetail = account?.email ?: "",
-                        alarm = alarm,
-                        onLockVault = viewModel::lockVault,
-                        onSignOut = viewModel::signOut,
-                        onEnableAppLock = onEnableAppLock,
-                    )
+        Column(if (locked) Modifier.fillMaxSize().clearAndSetSemantics {} else Modifier.fillMaxSize()) {
+            // MEMBER-API 1.2.0: the vault service is paused for maintenance. Non-blocking: every screen stays usable
+            // below it, and only the generic text is shown (never the operator's reason).
+            if (paused) InfoBanner(stringResource(R.string.root_service_paused), Modifier.testTag("service_paused_banner"))
+            Box(
+                Modifier
+                    .weight(1f)
+                    .fillMaxSize()
+                    .then(if (paused) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
+            ) {
+                NavHost(nav, startDestination = StartingDest) {
+                    composable<StartingDest> { FullScreenProgress(stringResource(R.string.root_starting)) }
+                    composable<UnreachableDest> {
+                        val kind = (phase as? AppPhase.Unreachable)?.failure
+                        FormScaffold(
+                            title = stringResource(R.string.root_unreachable_title),
+                            body = kind?.let { stringResource(it.messageRes()) },
+                            primaryLabel = stringResource(R.string.root_retry),
+                            onPrimary = viewModel::retry,
+                        ) {}
+                    }
+                    composable<OnboardingDest> { OnboardingFlow(onOpenAccountSite = { uri.openUri(portal) }) }
+                    composable<UnlockDest> { UnlockRoute() }
+                    composable<MainDest> {
+                        AppShell(
+                            launchRoute = launchRoute,
+                            accountName = account?.displayName ?: stringResource(R.string.account_placeholder_name),
+                            accountDetail = account?.email ?: "",
+                            alarm = alarm,
+                            onLockVault = viewModel::lockVault,
+                            onSignOut = viewModel::signOut,
+                            onEnableAppLock = onEnableAppLock,
+                        )
+                    }
                 }
             }
         }

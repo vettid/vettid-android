@@ -26,5 +26,6 @@
     <string name="root_starting">Opening VettID</string>
     <string name="root_unreachable_title">VettID cannot connect</string>
     <string name="root_retry">Try again</string>
+    <string name="root_service_paused">The vault service is paused for maintenance. Try again later.</string>
     <string name="app_lock_enable_failed">The app lock cannot be used on this phone (it needs a fingerprint, face or screen lock).</string>
 </resources>

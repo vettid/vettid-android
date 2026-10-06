@@ -42,6 +42,11 @@ data class UnlockUiState(
     val message: UnlockMessage? = null,
     /** Seconds until the enclave's backoff allows another try (§11.8). */
     val waitSeconds: Long = 0,
+    /**
+     * Seconds until the paused vault service asked to be tried again (`Retry-After` of `503 vault_unavailable`,
+     * MEMBER-API 1.2.0). Nothing retries by itself: the member's next try (PIN or "Try again") waits for it.
+     */
+    val serviceWaitSeconds: Long = 0,
     val recoveryPending: Boolean = false,
     val stateRollback: Boolean = false,
     /**
@@ -62,15 +67,19 @@ data class UnlockUiState(
     /** The erase runs. */
     val erasing: Boolean = false,
 ) {
+    /** Whether "Try again" (after a failed release check) may be pressed now. */
+    val retryAllowed: Boolean get() = serviceWaitSeconds == 0L && !loading
+
     /** Whether the PIN may be entered and sent now. */
     val pinAllowed: Boolean
         get() {
             val p = preflight ?: return false
-            return !p.rollback && (!p.softwareUpdated || updateAcknowledged) && waitSeconds == 0L && !busy
+            return !p.rollback && (!p.softwareUpdated || updateAcknowledged) && waitSeconds == 0L && serviceWaitSeconds == 0L && !busy
         }
 
     override fun toString(): String =
-        "UnlockUiState(loading=$loading, busy=$busy, message=$message, wait=$waitSeconds, refused=$refused, " +
+        "UnlockUiState(loading=$loading, busy=$busy, message=$message, wait=$waitSeconds, serviceWait=$serviceWaitSeconds, " +
+            "refused=$refused, " +
             "notRecognised=$notRecognised, erasing=$erasing)"
 }
 
@@ -114,6 +123,7 @@ class UnlockViewModel @Inject constructor(
     private val state = MutableStateFlow(UnlockUiState(email = account.account.value?.email))
     val uiState: StateFlow<UnlockUiState> = state.asStateFlow()
     private var ticker: Job? = null
+    private var serviceTicker: Job? = null
 
     init {
         retryPreflight()
@@ -121,6 +131,7 @@ class UnlockViewModel @Inject constructor(
     }
 
     override fun retryPreflight() {
+        if (state.value.serviceWaitSeconds > 0) return
         state.update { it.copy(loading = true, preflightError = null) }
         viewModelScope.launch {
             try {
@@ -128,6 +139,7 @@ class UnlockViewModel @Inject constructor(
                 state.update { it.copy(loading = false, preflight = p) }
             } catch (e: VaultFailure) {
                 state.update { it.copy(loading = false, preflightError = e.kind) }
+                if (e.kind == FailureKind.SERVICE_PAUSED) startServiceWait(e.retryAfterSeconds)
             }
         }
     }
@@ -181,7 +193,11 @@ class UnlockViewModel @Inject constructor(
                 UnlockAttempt.StateRollback -> state.update { it.copy(busy = false, pin = "", stateRollback = true) }
                 is UnlockAttempt.UpdateRefused -> state.update { it.copy(busy = false, pin = "", message =
                     UnlockMessage.UpdateRefused(r.code)) }
-                is UnlockAttempt.Failed -> state.update { it.copy(busy = false, pin = "", message = UnlockMessage.Failed(r.kind, r.code)) }
+                is UnlockAttempt.Failed -> {
+                    state.update { it.copy(busy = false, pin = "", message = UnlockMessage.Failed(r.kind, r.code)) }
+                    // A paused service (503, never proof of anything, never a wipe): wait as it asked, no automatic retry.
+                    if (r.kind == FailureKind.SERVICE_PAUSED) startServiceWait(r.retryAfterSeconds)
+                }
             }
         }
     }
@@ -201,6 +217,19 @@ class UnlockViewModel @Inject constructor(
             while (state.value.waitSeconds > 0) {
                 delay(TICK_MS)
                 state.update { it.copy(waitSeconds = (it.waitSeconds - 1).coerceAtLeast(0)) }
+            }
+        }
+    }
+
+    /** Counts [UnlockUiState.serviceWaitSeconds] down; the member tries again when it reaches 0. */
+    private fun startServiceWait(seconds: Long) {
+        if (seconds <= 0) return
+        serviceTicker?.cancel()
+        state.update { it.copy(serviceWaitSeconds = seconds) }
+        serviceTicker = viewModelScope.launch {
+            while (state.value.serviceWaitSeconds > 0) {
+                delay(TICK_MS)
+                state.update { it.copy(serviceWaitSeconds = (it.serviceWaitSeconds - 1).coerceAtLeast(0)) }
             }
         }
     }

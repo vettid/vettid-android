@@ -178,6 +178,7 @@ class HolderWatchTest {
             { throw MemberApiException(404, MemberApiException.NOT_FOUND) },
             { throw MemberApiException(409, MemberApiException.INSTANCE_MOVED) },
             { throw MemberApiException(503, "vault_unavailable") },
+            { throw MemberApiException(503, MemberApiException.VAULT_UNAVAILABLE, retryAfterSeconds = 300, service = "paused") },
             { throw RelayException(403, RelayException.TOKEN_REVOKED, "revoked") }, // the relay refusing this phone's key
             { throw RelayException(401, RelayException.TOKEN_EXPIRED, "") },
             { throw RelayException(404, "not_found", "") },
@@ -209,5 +210,34 @@ class HolderWatchTest {
                 assertFalse(HolderPolicy.proves(HolderSignal.Failure(k, c)))
             }
         }
+    }
+
+    @Test
+    fun aPausedServiceIsItsOwnTemporaryFailureAndNeverProof() = runTest {
+        val w = watch()
+        val f = try {
+            vaultGuard {
+                throw MemberApiException(503, MemberApiException.VAULT_UNAVAILABLE, "paused", retryAfterSeconds = 300, service = "paused")
+            }
+            null
+        } catch (e: VaultFailure) {
+            e
+        }
+        requireNotNull(f)
+        assertEquals(FailureKind.SERVICE_PAUSED, f.kind)
+        assertEquals(MemberApiException.VAULT_UNAVAILABLE, f.code)
+        assertEquals(300L, f.retryAfterSeconds)
+        assertFalse(w.onFailure(f))
+        // Not paused (dark launch, before the first release): the older "not available yet".
+        assertEquals(
+            FailureKind.VAULT_UNAVAILABLE,
+            VaultManager.memberFailure(MemberApiException(503, MemberApiException.VAULT_UNAVAILABLE)),
+        )
+        assertEquals(
+            FailureKind.VAULT_UNAVAILABLE,
+            VaultManager.memberFailure(MemberApiException(503, MemberApiException.VAULT_UNAVAILABLE, service = "available")),
+        )
+        advanceUntilIdle()
+        assertEquals(0, wipes)
     }
 }
