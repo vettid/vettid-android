@@ -100,7 +100,9 @@ class AltChannelFlow(
      * Fetches and verifies the served manifest; refuses one older than [seen]. With a canary manifest
      * installed ([CanaryManifestSource]) the one with the higher serial is used ([CanaryManifests.choose]):
      * the canary document while it is newer than the published one, also while nothing is published yet
-     * (404); once the published manifest reaches its serial, the canary document is retired.
+     * (404); once the published manifest reaches its serial, the canary document is retired. Only a 404 falls
+     * back to the canary (VAULT-MESSAGING §11.10.1): any other failure to fetch the published manifest (another
+     * status, a network error) stays an error.
      */
     suspend fun manifest(seen: Long): ReleaseManifest {
         val canaryDoc = canary?.served()
@@ -108,7 +110,7 @@ class AltChannelFlow(
         val published = try {
             manifests.verify(api.manifest())
         } catch (e: MemberApiException) {
-            if (c == null || e.code != MemberApiException.MANIFEST_UNAVAILABLE) throw e
+            if (c == null || e.code != MemberApiException.MANIFEST_UNAVAILABLE || e.status != HTTP_NOT_FOUND) throw e
             null
         }
         if (canaryDoc != null && c != null && published != null && published.serial >= c.serial) canary?.retire(canaryDoc)
@@ -267,6 +269,9 @@ class AltChannelFlow(
     companion object {
         const val MAX_ATTEMPTS = 4
         const val CODE_MANIFEST = "manifest"
+
+        /** Nothing is published yet (release 1): the only status that falls back to the canary manifest. */
+        private const val HTTP_NOT_FOUND = 404
     }
 }
 
