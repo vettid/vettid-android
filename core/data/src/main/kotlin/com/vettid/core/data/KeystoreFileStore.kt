@@ -1,6 +1,5 @@
 package com.vettid.core.data
 
-import com.vettid.core.altchan.CookiePersistence
 import com.vettid.core.crypto.Bytes
 import com.vettid.core.keystore.KeystoreException
 import com.vettid.core.keystore.SeedWrapKey
@@ -61,14 +60,6 @@ class KeystoreFileStore(
     }
 
     private fun aad() = Bytes.concat(LABEL.toByteArray(), byteArrayOf(0), purpose.toByteArray())
-
-    /** The member session's cookies in this store (MEMBER-API session; secrets). */
-    fun asCookiePersistence(): CookiePersistence = object : CookiePersistence {
-        override fun load(): List<String> =
-            this@KeystoreFileStore.load()?.let { String(it).split('\n').filter { l -> l.isNotEmpty() } } ?: emptyList()
-
-        override fun save(cookies: List<String>) = this@KeystoreFileStore.save(cookies.joinToString("\n").toByteArray())
-    }
 
     companion object {
         /** The Keystore key of the app's encrypted files. */

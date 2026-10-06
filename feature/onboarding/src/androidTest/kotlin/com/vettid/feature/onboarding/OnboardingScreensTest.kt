@@ -37,7 +37,6 @@ private object NoUnlockActions : UnlockActions {
     override fun setPin(v: String) = Unit
     override fun submit() = Unit
     override fun cancelRecoveryAndUnlock() = Unit
-    override fun signOut() = Unit
     override fun askErase() = Unit
     override fun dismissErase() = Unit
     override fun confirmErase() = Unit

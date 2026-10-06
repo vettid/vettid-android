@@ -42,7 +42,7 @@ data class SettingsUiState(
     val error: FailureKind? = null,
 )
 
-/** Settings (ANDROID-PLAN §4): theme (DataStore), app lock and its timeout (D6), lock vault, sign out. */
+/** Settings (ANDROID-PLAN §4): theme (DataStore), app lock and its timeout (D6), lock vault; the account read-only. */
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val account: AccountRepository,
@@ -73,8 +73,6 @@ class SettingsViewModel @Inject constructor(
     fun acknowledgeInvalidated() = appLock.acknowledgeInvalidated()
 
     fun lockVault() = act { vault.lock() }
-
-    fun signOut() = act { account.signOut() }
 
     fun dismissError() = local.update { it.copy(error = null) }
 
@@ -153,11 +151,13 @@ data class RecoveryUiState(
     val recovery: RecoveryView? = null,
     val backupOff: Boolean = false,
     val busy: Boolean = false,
-    val cancelled: Boolean = false,
     val error: FailureKind? = null,
 )
 
-/** Recovery info (MEMBER-API "Vault recovery"): what a recovery does, one in progress, and cancelling it. */
+/**
+ * Recovery info (MEMBER-API "Vault recovery"): what a recovery does and one in progress (from the vault's status).
+ * A recovery is started and cancelled on the account portal (MEMBER-API 2.0.0: those routes are the portal's).
+ */
 @HiltViewModel
 class RecoveryViewModel @Inject constructor(
     private val vault: VaultRepository,
@@ -183,19 +183,6 @@ class RecoveryViewModel @Inject constructor(
                 state.update { it.copy(loading = false, recovery = r, backupOff = backupOff) }
             } catch (e: VaultFailure) {
                 state.update { it.copy(loading = false, error = e.kind) }
-            }
-        }
-    }
-
-    fun cancel() {
-        val r = state.value.recovery ?: return
-        state.update { it.copy(busy = true, error = null) }
-        viewModelScope.launch {
-            try {
-                vault.cancelRecovery(r.recoveryId)
-                state.update { it.copy(busy = false, cancelled = true, recovery = null) }
-            } catch (e: VaultFailure) {
-                state.update { it.copy(busy = false, error = e.kind) }
             }
         }
     }

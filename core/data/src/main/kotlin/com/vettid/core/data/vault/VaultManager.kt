@@ -7,7 +7,6 @@ import com.vettid.core.altchan.Approval
 import com.vettid.core.altchan.MemberApiClient
 import com.vettid.core.altchan.MemberApiException
 import com.vettid.core.altchan.RecoveryCode
-import com.vettid.core.altchan.SignInStatus
 import com.vettid.core.altchan.UnlockOptions
 import com.vettid.core.altchan.UnlockOutcome
 import com.vettid.core.attestation.AttestationException
@@ -18,10 +17,9 @@ import com.vettid.core.attestation.manifest.Release
 import com.vettid.core.attestation.manifest.ReleaseManifest
 import com.vettid.core.crypto.Bytes
 import com.vettid.core.data.KeystoreFileStore
-import com.vettid.core.data.account.AccountGateway
+import com.vettid.core.data.account.MemberGateway
 import com.vettid.core.data.social.InviteLinks
 import com.vettid.core.data.social.SocialManager
-import com.vettid.core.data.account.SignInLink
 import com.vettid.core.data.env.AppEnvironment
 import com.vettid.core.data.wipe.LocalWipe
 import com.vettid.core.keystore.AndroidKeys
@@ -68,7 +66,8 @@ import java.time.Instant
 import java.time.format.DateTimeParseException
 
 /**
- * The app's vault on this device: the member session ([AccountGateway]), the
+ * The app's vault on this device: the member API signed by the app key
+ * ([MemberGateway]; no sign-in, VAULT-MESSAGING 0.15.0 §11.12), the
  * device keys from the Keystore, the device state in an encrypted file, the
  * vault client and the alternate channel. Implements the repositories the
  * features use; nothing in a feature touches transport or crypto.
@@ -91,7 +90,7 @@ class VaultManager(
 ) : AccountRepository, VaultRepository, CredentialRepository, MoveRepository {
     private val app = context.applicationContext
     private val http = env.http(baseHttp)
-    private val gateway: AccountGateway = env.accountGateway(app, http)
+    private val gateway: MemberGateway = env.memberGateway(app, http) { session?.device?.vaultId ?: local.vaultId.ifEmpty { null } }
     private val accountFile = KeystoreFileStore(File(app.noBackupFilesDir, "account.bin"), "account")
     private val mutex = Mutex()
     private var session: Session? = null
@@ -107,19 +106,17 @@ class VaultManager(
 
     private val phaseFlow = MutableStateFlow<AppPhase>(AppPhase.Starting)
     private val accountFlow = MutableStateFlow(local.toInfo())
-    private val pendingEmailFlow = MutableStateFlow(local.pendingEmail)
     private val alarmFlow = MutableStateFlow<CredentialAlarm?>(null)
     private val windowFlow = MutableStateFlow<Instant?>(null)
     private val pausedFlow = MutableStateFlow(false)
 
     override val phase: StateFlow<AppPhase> = phaseFlow.asStateFlow()
     override val account: StateFlow<AccountInfo?> = accountFlow.asStateFlow()
-    override val pendingEmail: StateFlow<String?> = pendingEmailFlow.asStateFlow()
     override val alarm: StateFlow<CredentialAlarm?> = alarmFlow.asStateFlow()
     override val unlockWindow: StateFlow<Instant?> = windowFlow.asStateFlow()
     override val servicePaused: StateFlow<Boolean> = pausedFlow.asStateFlow()
     override val devHint: String? get() = gateway.devHint
-    override val signInHosts: Set<String> = env.signInHosts
+    override val apiOrigin: String = env.endpoints.apiBase.trimEnd('/')
 
     /** Refused deposits to the vault: the open app goes to the unlock screen (never a wipe, [RefusalWatch]). */
     private val refusals = RefusalWatch {
@@ -151,12 +148,14 @@ class VaultManager(
 
     init {
         scope.launch { runCatching { canary.load() } }
+        // Before MEMBER-API 2.0.0 the app kept the account site's session cookies here; it never signs in now.
+        scope.launch { io { runCatching { File(app.noBackupFilesDir, LEGACY_SESSION_FILE).delete() } } }
         scope.launch {
             // Lists are re-read whenever the vault opens (unlock, end of onboarding, app start while unlocked).
             phaseFlow.collect {
                 if (it == AppPhase.Unlocked) {
                     social.refreshAllQuietly()
-                    launch { runCatching { ensureProfileName() } }
+                    launch { refreshAccount() }
                 }
             }
         }
@@ -164,13 +163,19 @@ class VaultManager(
 
     // --- local account record (encrypted under a Keystore key) ---
 
+    /**
+     * What this phone knows of its member without signing in: the `user_guid` and `vault_id` from the setup code's
+     * redeem or the recovery's claim (§11.12.1, §11.11.7), the masked email to show, and the last account snapshot
+     * the vault sent (§11.13). Fields of older builds (the signed-in member's email and names) are ignored.
+     */
     @Serializable
     private data class LocalAccount(
-        val email: String = "",
         val userGuid: String = "",
-        val firstName: String = "",
-        val lastName: String = "",
-        val pendingEmail: String? = null,
+        val vaultId: String = "",
+        val emailHint: String = "",
+        val snapshot: com.vettid.core.vault.AccountSnapshot? = null,
+        /** A direct transfer to this phone started (§6.7.1): it has a vault to come without a redeem. */
+        val transferIn: Boolean = false,
         val setupComplete: Boolean = false,
         /**
          * Written by the build before the wipe (0af6ba1) when this phone stopped holding the vault; that build had
@@ -178,7 +183,11 @@ class VaultManager(
          */
         val replaced: String? = null,
     ) {
-        fun toInfo(): AccountInfo? = if (userGuid.isEmpty()) null else AccountInfo(email, firstName, lastName)
+        fun toInfo(): AccountInfo? = when {
+            snapshot != null -> snapshot.toInfo(emailHint)
+            emailHint.isNotEmpty() -> AccountInfo(emailHint)
+            else -> null
+        }
     }
 
     private fun loadLocal(): LocalAccount = try {
@@ -193,7 +202,6 @@ class VaultManager(
         local = a
         accountFile.save(json.encodeToString(LocalAccount.serializer(), a).toByteArray())
         accountFlow.value = a.toInfo()
-        pendingEmailFlow.value = a.pendingEmail
     }
 
     // --- session ---
@@ -203,12 +211,10 @@ class VaultManager(
     }
 
     private suspend fun openSession(): Session = io {
-        // Nothing of a vault without a member session (and nothing re-created after a wipe).
-        if (!gateway.hasSession()) throw VaultFailure(FailureKind.UNAUTHORIZED)
         val trust: AltTrust = env.trust(http)
         val keys = deviceKeys()
         for (slot in KeySlot.entries) if (!keys.has(slot)) keys.generate(slot)
-        val secrets = DeviceSecrets(keys.ed25519(KeySlot.IDENTITY), keys.kem(), keys.ed25519(KeySlot.RELAY))
+        val secrets = DeviceSecrets(keys.ed25519(KeySlot.IDENTITY), keys.kem(), keys.ed25519(KeySlot.RELAY), gateway.appKey())
         val store = KeystoreFileStore(File(app.noBackupFilesDir, DEVICE_FILE), "vault-device")
         val cfg = DeviceConfig(name = deviceName, relayUrl = env.endpoints.relayUrl, http = http, store = store, trust = trust)
         val device = VaultDevice.load(cfg, secrets) ?: VaultDevice.create(cfg, secrets)
@@ -232,12 +238,13 @@ class VaultManager(
             io {
                 val keys = deviceKeys()
                 KeySlot.entries.forEach { keys.generate(it) }
+                gateway.newAppKey() // the app key is per vault (§11.12.2)
                 File(app.noBackupFilesDir, DEVICE_FILE).delete()
             }
             alarmFlow.value = null
             windowFlow.value = null
             social.clear()
-            saveLocal(local.copy(setupComplete = false))
+            saveLocal(local.copy(setupComplete = false, snapshot = null))
         }
     }
 
@@ -275,7 +282,9 @@ class VaultManager(
                 alarmFlow.value = CredentialAlarm(id, VaultJson.str(b, "state") ?: CredentialAlarm.STATE_FROZEN, VaultJson.str(b, "at"),
                     VaultJson.str(b, "presenter"))
             }
-            "sync.event" -> if (VaultJson.str(m.body, "kind") == "credential.alarm") {
+            "sync.event" -> if (VaultJson.str(m.body, "kind") == SYNC_ACCOUNT_CHANGED) {
+                scope.launch { refreshAccount() }
+            } else if (VaultJson.str(m.body, "kind") == "credential.alarm") {
                 val state = VaultJson.str(m.body, "state")
                 val id = VaultJson.str(m.body, "alarm_id")
                 alarmFlow.value = when {
@@ -292,17 +301,6 @@ class VaultManager(
         }
     }
 
-    /**
-     * The vault's display name (§10.8) is what connections see first (`hs.init` profile, §6.2). A vault
-     * without one gets the member's account name once; the member changes it later in the profile.
-     */
-    private suspend fun ensureProfileName() {
-        val name = local.toInfo()?.displayName?.takeIf { it.isNotBlank() && it != local.email } ?: return
-        val api = session().api
-        val p = api.profileGet()
-        if (p.name.isBlank()) api.profileSet(p.version, name = name.take(PROFILE_NAME_MAX))
-    }
-
     // --- AccountRepository ---
 
     override suspend fun refresh() {
@@ -310,40 +308,43 @@ class VaultManager(
         val p = try {
             evaluate()
         } catch (e: VaultFailure) {
-            when (e.kind) {
-                FailureKind.UNAUTHORIZED -> AppPhase.SignedOut
-                FailureKind.TERMS_REQUIRED -> AppPhase.TermsRequired(updated = false)
-                else -> AppPhase.Unreachable(e.kind)
-            }
+            AppPhase.Unreachable(e.kind)
         }
         if (gen == generation) phaseFlow.value = p // a wipe meanwhile already said SignedOut
     }
 
+    @Suppress("ReturnCount", "CyclomaticComplexMethod") // one phase per state of the device
     private suspend fun evaluate(): AppPhase = guard {
-        if (!gateway.hasSession()) return@guard AppPhase.SignedOut
-        val me = gateway.me()
-        saveLocal(
-            local.copy(email = me.email, userGuid = me.userGuid, firstName = me.firstName, lastName = me.lastName, pendingEmail = null),
-        )
         if (local.replaced != null) {
             // A phone the build before the wipe marked replaced (its device keys already forgotten): erase it now.
             holder.wipeNow()
             return@guard AppPhase.SignedOut
         }
-        if (me.state != STATE_MEMBER || me.termsNeedAcceptance) return@guard AppPhase.TermsRequired(updated = me.state == STATE_MEMBER)
+        // Nothing redeemed or claimed on this phone (and nothing re-created after a wipe): the welcome screen.
+        if (local.userGuid.isEmpty() && !local.transferIn) return@guard AppPhase.SignedOut
         val s = session()
         val d = s.device
         if (d.deviceId == null) {
             if (d.recovering) return@guard AppPhase.Setup(SetupStage.RECOVERING) // registered with a recovery code (§11.11.3)
             if (d.vaultId != null) return@guard AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL) // enrolled, handshake not finished
-            val st = vaultStatus(s)
-            return@guard AppPhase.Setup(if (st != null && st.state != "enrolling") SetupStage.VAULT_ELSEWHERE else SetupStage.NEW_VAULT)
+            // A setup code was redeemed: enroll. The pending key may not read the status (MEMBER-API 2.0.0); the
+            // enrollment itself answers vault_exists for a vault this phone does not hold. A transfer that did not
+            // complete leaves nothing to resume: the welcome screen.
+            return@guard if (local.userGuid.isEmpty()) AppPhase.SignedOut else AppPhase.Setup(SetupStage.NEW_VAULT)
         }
-        val st = vaultStatus(s)
+        val st = try {
+            vaultStatus(s)
+        } catch (e: VaultFailure) {
+            // The API no longer accepts this phone's app key (another phone took the vault over, or the vault went):
+            // the unlock screen says so; only the enclave's own answer erases anything.
+            if (e.kind == FailureKind.UNAUTHORIZED) return@guard AppPhase.Locked
+            throw e
+        }
         if (st == null) {
-            // The vault is gone (deleted, or the account was cancelled and restored): start over.
+            // The vault is gone (deleted, or the account was cancelled and restored): start over with a new code.
             dropSession(forget = true)
-            return@guard AppPhase.Setup(SetupStage.NEW_VAULT)
+            saveLocal(LocalAccount())
+            return@guard AppPhase.SignedOut
         }
         if (d.recovering) return@guard AppPhase.Setup(SetupStage.RECOVERING) // paired, the credential not recovered yet
         if (st.state != "unlocked") AppPhase.Locked else afterUnlocked(s)
@@ -365,32 +366,41 @@ class VaultManager(
         }
     }
 
-    override suspend fun startSignIn(email: String) = guard {
-        gateway.start(email.trim())
-        saveLocal(local.copy(pendingEmail = email.trim()))
-    }
-
-    override suspend fun verifySignIn(email: String, link: SignInLink): SignInStatus = guard {
-        val st = gateway.verify(email.trim(), link.token)
-        if (st == SignInStatus.SIGNED_IN) saveLocal(local.copy(pendingEmail = null))
-        st
-    }
-
-    override suspend fun signInPin(pin: String): SignInStatus = guard {
-        val st = gateway.pin(pin)
-        if (st == SignInStatus.SIGNED_IN) saveLocal(local.copy(pendingEmail = null))
-        st
-    }
-
-    override suspend fun signOut() {
-        try {
-            guard { gateway.signOut() }
-        } catch (_: VaultFailure) {
-            // the local session is cleared either way
+    override suspend fun redeemSetupCode(code: SetupCodeInput): String {
+        // Any refusal of the code itself is `404 invalid_code` ([FailureKind.SETUP_CODE_INVALID], [memberFailure]).
+        val r = guard {
+            // A phone that holds nothing yet but carries a stale enrollment starts afresh (with a new app key).
+            freshDeviceIfUnpaired()
+            when (code) {
+                is SetupCodeInput.Secret -> gateway.redeemSecret(code.secret)
+                is SetupCodeInput.Typed -> gateway.redeemTyped(code.email, code.code)
+            }
         }
-        dropSession(forget = false)
-        windowFlow.value = null
+        gateway.memberChanged(r.userGuid)
+        io { saveLocal(LocalAccount(userGuid = r.userGuid, vaultId = r.vaultId, emailHint = r.emailHint)) }
+        phaseFlow.value = AppPhase.Setup(SetupStage.NEW_VAULT)
+        return r.emailHint
+    }
+
+    override suspend fun forgetSetupCode() {
+        val paired = session?.device?.deviceId != null
+        if (paired) return // a vault on this phone is never dropped this way
+        if (session != null) dropSession(forget = true)
+        io { saveLocal(LocalAccount()) }
         phaseFlow.value = AppPhase.SignedOut
+    }
+
+    /** Re-reads the account snapshot (`account.get`, §11.13); kept only when newer (`as_of`). Quiet on failure. */
+    override suspend fun refreshAccount() {
+        try {
+            val v = guard { session().api.accountGet() }
+            val snap = v.account ?: return
+            val stored = local.snapshot
+            if (stored != null && !newer(snap.asOf, stored.asOf)) return
+            io { saveLocal(local.copy(snapshot = snap, emailHint = snap.emailHint ?: local.emailHint)) }
+        } catch (_: VaultFailure) {
+            // display only: the last snapshot stays
+        }
     }
 
     /**
@@ -406,8 +416,9 @@ class VaultManager(
     override suspend fun enroll(pin: String, onStep: (EnrollStep) -> Unit) = guard {
         val s = session()
         onStep(EnrollStep.ENROLL)
-        val out = s.alt.enroll(s.device, local.userGuid, pin, env.attester())
+        val out = s.alt.enroll(s.device, local.vaultId, local.userGuid, pin, env.attester())
         if (!out.ok) throw VaultFailure(enrollFailure(out.code), out.code)
+        if (out.vaultId.isNotEmpty() && out.vaultId != local.vaultId) io { saveLocal(local.copy(vaultId = out.vaultId)) }
         onStep(EnrollStep.WAIT_FOR_VAULT)
         s.device.awaitEnrolled()
         onStep(EnrollStep.HANDSHAKE)
@@ -466,7 +477,6 @@ class VaultManager(
             }
         } catch (e: VaultFailure) {
             holder.onFailure(e) // never proof (a 503, paused or not, included)
-            if (e.kind == FailureKind.TERMS_REQUIRED) phaseFlow.value = AppPhase.TermsRequired(updated = true)
             return UnlockAttempt.Failed(e.kind, e.code, e.retryAfterSeconds)
         }
         val r = outcome.result
@@ -533,16 +543,19 @@ class VaultManager(
 
     override suspend fun deleteVault(pin: String, password: String) {
         guard { session().api.deleteVault(pin, password) }
+        afterVaultDeleted()
+    }
+
+    /** A new vault needs a new setup code (its redeem makes the pending key, MEMBER-API 2.0.0): the welcome screen. */
+    private suspend fun afterVaultDeleted() {
         dropSession(forget = true)
-        phaseFlow.value = AppPhase.Setup(SetupStage.NEW_VAULT)
+        io { saveLocal(LocalAccount()) }
+        phaseFlow.value = AppPhase.SignedOut
     }
 
     override suspend fun recovery(): RecoveryView? = guard {
-        session().member.recoveryStatus()?.let { RecoveryView(it.recoveryId, it.state, it.availableAt, it.expiresAt) }
-    }
-
-    override suspend fun cancelRecovery(recoveryId: String) = guard {
-        session().member.recoveryCancel(recoveryId)
+        val st = vaultStatus(session()) ?: return@guard null
+        st.recoveryState?.let { RecoveryView(it, st.recoveryAvailableAt ?: "") }
     }
 
     override suspend fun attestationInfo(): AttestationInfo = io {
@@ -681,21 +694,26 @@ class VaultManager(
         }
     }
 
-    override suspend fun recoveryTarget(): RecoveryTarget = guard {
-        val s = session()
-        val vid = vaultStatus(s)?.vaultId
-        val r = s.member.recoveryStatus()?.let { RecoveryView(it.recoveryId, it.state, it.availableAt, it.expiresAt) }
-        RecoveryTarget(vid, r)
-    }
-
-    override suspend fun registerRecovery(vaultId: String, recoveryId: String, code: String): RecoveryRegistration = guard {
+    @Suppress("ReturnCount")
+    override suspend fun registerRecovery(code: RecoveryCode): RecoveryRegistration = guard {
         if (!session().device.recovering) freshDeviceIfUnpaired()
         val s = session()
-        val rc = RecoveryCode(vaultId, recoveryId, code)
+        // §11.11.7 (0.15.0): the claim gives this phone's key the right to register, and names the member.
+        val claimed = try {
+            gateway.claimRecovery(code.vaultId, code.recoveryId)
+        } catch (e: MemberApiException) {
+            return@guard when (e.code) {
+                MemberApiException.RECOVERY_NOT_AVAILABLE -> RecoveryRegistration.Refused(CODE_NOT_AVAILABLE)
+                MemberApiException.NOT_FOUND -> RecoveryRegistration.Refused(CODE_NO_RECOVERY)
+                else -> throw e
+            }
+        }
+        gateway.memberChanged(claimed.userGuid)
+        io { saveLocal(LocalAccount(userGuid = claimed.userGuid, vaultId = code.vaultId, emailHint = claimed.emailHint)) }
         val r = try {
             s.alt.recoveryRegister(
-                vaultId,
-                build = { e -> s.device.prepareRecoveryRegister(local.userGuid, rc, e, env.attester()) },
+                code.vaultId,
+                build = { e -> s.device.prepareRecoveryRegister(local.userGuid, code, e, env.attester()) },
                 open = { raw, rid -> s.device.openRecoveryResult(raw, rid) },
             )
         } catch (e: MemberApiException) {
@@ -709,7 +727,7 @@ class VaultManager(
             }
             r.ok -> {
                 phaseFlow.value = AppPhase.Setup(SetupStage.RECOVERING)
-                RecoveryRegistration.Registered
+                RecoveryRegistration.Registered(claimed.emailHint)
             }
             else -> {
                 s.device.dropRecoveryRegistration()
@@ -761,8 +779,7 @@ class VaultManager(
 
     override suspend fun deleteRecoveredVault(pin: String) {
         guard { session().api.deleteVault(pin, null) }
-        dropSession(forget = true)
-        phaseFlow.value = AppPhase.Setup(SetupStage.NEW_VAULT)
+        afterVaultDeleted()
     }
 
     // --- MoveRepository: direct transfer (§6.7.1) ---
@@ -785,6 +802,7 @@ class VaultManager(
         freshDeviceIfUnpaired()
         val d = session().device
         if (d.deviceId != null) throw VaultFailure(FailureKind.VAULT_EXISTS)
+        if (!local.transferIn) io { saveLocal(local.copy(transferIn = true)) }
         d.startTransfer(link, env.attester())
         transferStartedAt = Instant.now()
         try {
@@ -884,9 +902,6 @@ class VaultManager(
                 runCatching { d.forget() }
             }
         }
-        // The member session: revoked at the API if it answers in time; forgotten locally whatever happens.
-        withTimeoutOrNull(BEST_EFFORT_MS) { runCatching { io { gateway.signOut() } } }
-        runCatching { gateway.forgetLocal() }
         social.clear()
         canary.removeCanaryManifest()
         transferStartedAt = null
@@ -897,7 +912,6 @@ class VaultManager(
         io { if (wiper.erase()) wiper.finish() }
         local = LocalAccount()
         accountFlow.value = null
-        pendingEmailFlow.value = null
         generation++
         phaseFlow.value = AppPhase.SignedOut
     }
@@ -940,8 +954,9 @@ class VaultManager(
         private const val SOCIAL_FILE = "social.bin"
         private const val CANARY_FILE = "canary-manifest.bin"
         private const val HTTP_OK = 200
-        private const val PROFILE_NAME_MAX = 64
-        private const val STATE_MEMBER = "member"
+        private const val LEGACY_SESSION_FILE = "member-session.bin"
+        private const val SYNC_ACCOUNT_CHANGED = "account.changed"
+        private const val CODE_NO_RECOVERY = "no_recovery"
         private const val UPDATE_MOVED = "moved"
         private const val KEY_BACKUP = "credential.backup"
         private const val KEY_TTL = "credential.unlock_ttl_seconds"
@@ -984,6 +999,7 @@ class VaultManager(
 
         fun memberFailure(e: MemberApiException): FailureKind = when (e.code) {
             MemberApiException.UNAUTHORIZED -> FailureKind.UNAUTHORIZED
+            MemberApiException.INVALID_CODE -> FailureKind.SETUP_CODE_INVALID
             MemberApiException.TERMS_REQUIRED -> FailureKind.TERMS_REQUIRED
             MemberApiException.RATE_LIMITED -> FailureKind.RATE_LIMITED
             MemberApiException.VAULT_UNAVAILABLE -> if (e.servicePaused) FailureKind.SERVICE_PAUSED else FailureKind.VAULT_UNAVAILABLE
@@ -1014,4 +1030,30 @@ class VaultManager(
             else -> FailureKind.OTHER
         }
     }
+}
+
+/** Whether RFC 3339 [a] is later than [b] (a snapshot without a parsable `as_of` replaces one only when none is stored). */
+private fun newer(a: String?, b: String?): Boolean {
+    val ia = a?.let { runCatching { Instant.parse(it) }.getOrNull() }
+    val ib = b?.let { runCatching { Instant.parse(it) }.getOrNull() }
+    return when {
+        ia == null -> b == null
+        ib == null -> true
+        else -> ia.isAfter(ib)
+    }
+}
+
+/** The snapshot for display (§11.13). */
+private fun com.vettid.core.vault.AccountSnapshot.toInfo(fallbackHint: String): AccountInfo {
+    fun t(s: String?): Instant? = s?.let { runCatching { Instant.parse(it) }.getOrNull() }
+    return AccountInfo(
+        emailHint = emailHint ?: fallbackHint,
+        state = state ?: "",
+        accountStatus = accountStatus,
+        deletesAt = t(deletesAt),
+        termsNeedAcceptance = terms?.needsAcceptance ?: false,
+        subscription = subscription?.let { SubscriptionInfo(it.typeName, it.status, it.paid, t(it.expiresAt)) },
+        votingRights = votingRights,
+        asOf = t(asOf),
+    )
 }

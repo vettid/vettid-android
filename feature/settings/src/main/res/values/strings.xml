@@ -36,9 +36,7 @@
     <string name="settings_timeout_1h">1 hour</string>
     <string name="settings_section_account">Account</string>
     <string name="settings_account_site">Account site</string>
-    <string name="settings_sign_out">Sign out of this phone</string>
-    <string name="settings_sign_out_body">Ends your account session here. Your vault stays on this phone; sign in again to unlock it.</string>
-    <string name="settings_sign_out_confirm">Sign out</string>
+    <string name="settings_account_detail">Membership and subscription</string>
     <string name="settings_delete_vault">Delete vault</string>
     <string name="settings_delete_vault_body">Erase your vault and everything in it</string>
     <string name="settings_cancel">Cancel</string>
@@ -91,11 +89,7 @@
     <string name="settings_recovery_backup_off">Your credential backup is off: a recovery cannot bring back your credential or critical items.</string>
     <string name="settings_recovery_none">No recovery is in progress.</string>
     <string name="settings_recovery_active_title">A recovery is in progress</string>
-    <string name="settings_recovery_active_body">State: %1$s. Available from %2$s until %3$s. If you did not start it, cancel it now.</string>
-    <string name="settings_recovery_cancel">Cancel the recovery</string>
-    <string name="settings_recovery_cancel_title">Cancel the recovery?</string>
-    <string name="settings_recovery_cancel_body">The new phone will not be able to take over the vault. You can start a new recovery later.</string>
-    <string name="settings_recovery_cancelled">The recovery was cancelled.</string>
+    <string name="settings_recovery_active_body">State: %1$s. Available from %2$s. If you did not start it, cancel it now on the account site.</string>
     <string name="settings_recovery_open">Open the account site</string>
 
     <!-- Attestation -->

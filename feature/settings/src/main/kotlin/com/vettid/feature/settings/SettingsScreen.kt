@@ -13,7 +13,6 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.DeleteForever
@@ -122,7 +121,6 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 setTimeout = vm::setAppLockTimeout,
                 setTheme = vm::setTheme,
                 accountSite = host.onOpenAccountSite,
-                signOut = vm::signOut,
                 deleteVault = { host.navigate(DeleteVaultRoute) },
                 dismissError = vm::dismissError,
             ),
@@ -141,7 +139,7 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
     composable<RecoveryRoute> {
         val vm: RecoveryViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
-        RecoveryContent(state, vm::cancel, host.onOpenAccountSite, host.onBack, onTransfer = { host.navigate(TransferOutRoute) })
+        RecoveryContent(state, host.onOpenAccountSite, host.onBack, onTransfer = { host.navigate(TransferOutRoute) })
     }
     composable<TransferOutRoute> {
         val vm: TransferOutViewModel = hiltViewModel()
@@ -216,7 +214,6 @@ data class SettingsActions(
     val setTimeout: (AppLockTimeout) -> Unit = {},
     val setTheme: (ThemePreference) -> Unit = {},
     val accountSite: () -> Unit = {},
-    val signOut: () -> Unit = {},
     val deleteVault: () -> Unit = {},
     val dismissError: () -> Unit = {},
 )
@@ -229,15 +226,14 @@ data class SettingsActions(
 @Composable
 fun SettingsContent(state: SettingsUiState, actions: SettingsActions) {
     var confirmLock by rememberSaveable { mutableStateOf(false) }
-    var confirmSignOut by rememberSaveable { mutableStateOf(false) }
     var themePicker by rememberSaveable { mutableStateOf(false) }
     var timeoutPicker by rememberSaveable { mutableStateOf(false) }
-    val name = state.account?.displayName ?: ""
+    val name = state.account?.emailHint ?: ""
     DetailScaffold(onBackClick = actions.back, background = VettIdTheme.colors.groupedBackground) {
         Column(Modifier.verticalScroll(rememberScrollState())) {
             LargeTitle(stringResource(R.string.settings_title))
             SettingsGroup {
-                SettingsAccountRow(name = name, detail = state.account?.email ?: "", onClick = actions.account)
+                SettingsAccountRow(name = name, detail = stringResource(R.string.settings_account_detail), onClick = actions.account)
             }
             state.error?.let {
                 NoticeCard(
@@ -341,11 +337,6 @@ fun SettingsContent(state: SettingsUiState, actions: SettingsActions) {
                     Icons.AutoMirrored.Outlined.OpenInNew, showChevron = false)
                 SettingsDivider()
                 SettingsRow(
-                    stringResource(R.string.settings_sign_out), { confirmSignOut = true }, icon = Icons.AutoMirrored.Outlined.Logout,
-                    showChevron = false,
-                )
-                SettingsDivider()
-                SettingsRow(
                     stringResource(R.string.settings_delete_vault), actions.deleteVault, icon = Icons.Outlined.DeleteForever,
                     iconTint = MaterialTheme.colorScheme.error, supporting = stringResource(R.string.settings_delete_vault_body),
                     modifier = Modifier.testTag("delete_vault"),
@@ -361,16 +352,6 @@ fun SettingsContent(state: SettingsUiState, actions: SettingsActions) {
             confirmLabel = stringResource(R.string.settings_vault_lock),
             onConfirm = { confirmLock = false; actions.lockVault() },
             onDismiss = { confirmLock = false },
-        )
-    }
-    if (confirmSignOut) {
-        ConfirmDialog(
-            title = stringResource(R.string.settings_sign_out),
-            text = stringResource(R.string.settings_sign_out_body),
-            confirmLabel = stringResource(R.string.settings_sign_out_confirm),
-            destructive = true,
-            onConfirm = { confirmSignOut = false; actions.signOut() },
-            onDismiss = { confirmSignOut = false },
         )
     }
     if (themePicker) {

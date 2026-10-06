@@ -167,7 +167,6 @@ class UnlockViewModelTest {
         assertFalse(vm.uiState.value.eraseConfirm)
         assertEquals(AppPhase.SignedOut, vault.phase.value)
         assertNull(vault.account.value)
-        assertFalse("the erase is not a sign-out", "signOut" in vault.calls)
     }
 
     @Test

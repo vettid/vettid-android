@@ -2,16 +2,17 @@ package com.vettid.feature.onboarding
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.vettid.core.altchan.SignInStatus
+import com.vettid.core.altchan.RecoveryCode
+import com.vettid.core.altchan.SetupCodes
 import com.vettid.core.data.account.EmailFormat
-import com.vettid.core.data.account.SignInLink
-import com.vettid.core.data.account.SignInLinkInbox
+import com.vettid.core.data.account.SetupLinkInbox
 import com.vettid.core.data.policy.PasswordPolicy
 import com.vettid.core.data.policy.PinPolicy
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.EnrollStep
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.SetupCodeInput
 import com.vettid.core.data.vault.SetupStage
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultRepository
@@ -27,11 +28,15 @@ import javax.inject.Inject
 /** The onboarding steps (ANDROID-PLAN §4 "Onboarding"). */
 enum class OnboardingStep {
     WELCOME,
-    EMAIL,
-    CHECK_EMAIL,
-    CONFIRM_SIGN_IN,
-    ACCOUNT_PIN,
-    TERMS,
+
+    /** Scan the setup QR from the account portal (VAULT-MESSAGING §11.12.1), the primary path. */
+    SETUP_SCAN,
+
+    /** Type the short code with the account's email. */
+    SETUP_TYPE,
+
+    /** The code was redeemed: "Setting up a vault for m***@example.com" (`email_hint`), before the PIN. */
+    CONFIRM_ACCOUNT,
     VAULT_ELSEWHERE,
     PIN_CREATE,
     PIN_CONFIRM,
@@ -47,19 +52,31 @@ enum class OnboardingStep {
     TRANSFER_IN,
 }
 
-/** What the member came to do on the welcome screen; decides where onboarding goes after sign-in. */
-enum class OnboardingGoal { NEW_VAULT, RECOVER, TRANSFER }
+/** Why a scanned code or an opened link was not redeemed. */
+enum class ScanRefusal {
+    /** Not a setup QR. */
+    NOT_A_CODE,
+
+    /** A recovery QR: it belongs to "I lost my phone". */
+    RECOVERY_CODE,
+
+    /** A setup QR (or link) made by another environment's portal ([OnboardingUiState.otherApi]). */
+    OTHER_ENVIRONMENT,
+}
 
 /** Immutable UI state of the onboarding flow. Secrets live here only while the flow needs them. */
 data class OnboardingUiState(
     val step: OnboardingStep = OnboardingStep.WELCOME,
     val email: String = "",
     val emailInvalid: Boolean = false,
-    val linkInput: String = "",
-    val linkInvalid: Boolean = false,
-    val link: SignInLink? = null,
-    val accountPin: String = "",
-    val termsUpdated: Boolean = false,
+    val codeInput: String = "",
+    /** The typed code has a character a code never contains (0, 1, I, L, O) or is not 8 symbols long. */
+    val codeInvalid: Boolean = false,
+    val scanRefusal: ScanRefusal? = null,
+    /** The other environment's `api` of a refused QR, shown so the member knows which portal made it. */
+    val otherApi: String? = null,
+    /** The account the redeemed code belongs to, masked (`email_hint`). */
+    val emailHint: String = "",
     val pin: String = "",
     val pinConfirm: String = "",
     val pinProblem: PinPolicy.Problem? = null,
@@ -78,7 +95,6 @@ data class OnboardingUiState(
     val error: FailureKind? = null,
     val errorCode: String? = null,
     val devHint: String? = null,
-    val goal: OnboardingGoal = OnboardingGoal.NEW_VAULT,
 ) {
     val canContinueBackup: Boolean get() = backup || backupOffAcknowledged
     val progressFailed: Boolean get() = progress.any { it.second == StepState.FAILED }
@@ -87,20 +103,20 @@ data class OnboardingUiState(
 }
 
 /**
- * Drives onboarding: sign-in by magic link (or a pasted link) with the
- * optional account PIN, the membership and terms checks, then the vault:
- * PIN, credential password, backup choice, enrollment with device
- * attestation, the first handshake, the credential, and the confirmation.
- * The app-level phase ([AccountRepository.phase]) decides where it starts.
+ * Drives onboarding (VAULT-MESSAGING 0.15.0 §11.12; the app never signs in): the setup code from the account
+ * portal, scanned (or opened as its App Link) or typed with the account's email, redeemed with this phone's app
+ * key; the account's masked email to confirm; then the vault: PIN, credential password, backup choice, enrollment
+ * with device attestation, the first handshake, the credential, and the confirmation. The app-level phase
+ * ([AccountRepository.phase]) decides where it starts.
  */
 @Suppress("TooManyFunctions") // one action per form field and step
 @HiltViewModel
 class OnboardingViewModel @Inject constructor(
     private val account: AccountRepository,
     private val vault: VaultRepository,
-    private val inbox: SignInLinkInbox,
+    private val inbox: SetupLinkInbox,
 ) : ViewModel(), OnboardingActions {
-    private val state = MutableStateFlow(OnboardingUiState(devHint = account.devHint, email = account.pendingEmail.value ?: ""))
+    private val state = MutableStateFlow(OnboardingUiState(devHint = account.devHint))
     val uiState: StateFlow<OnboardingUiState> = state.asStateFlow()
 
     /** Set once enrollment succeeded in this flow, so a retry resumes with the credential. */
@@ -114,10 +130,7 @@ class OnboardingViewModel @Inject constructor(
     @Suppress("CyclomaticComplexMethod")
     private fun route(phase: AppPhase) {
         val s = state.value
-        val signInSteps = setOf(
-            OnboardingStep.WELCOME, OnboardingStep.EMAIL, OnboardingStep.CHECK_EMAIL, OnboardingStep.CONFIRM_SIGN_IN,
-            OnboardingStep.ACCOUNT_PIN,
-        )
+        val codeSteps = setOf(OnboardingStep.WELCOME, OnboardingStep.SETUP_SCAN, OnboardingStep.SETUP_TYPE)
         val vaultSteps = setOf(
             OnboardingStep.PIN_CREATE,
             OnboardingStep.PIN_CONFIRM,
@@ -126,32 +139,28 @@ class OnboardingViewModel @Inject constructor(
             OnboardingStep.PROGRESS,
         )
         val moving = s.step == OnboardingStep.RECOVER || s.step == OnboardingStep.TRANSFER_IN
+        val accountSteps = setOf(OnboardingStep.VAULT_ELSEWHERE, OnboardingStep.CONFIRM_ACCOUNT)
         when (phase) {
-            // Signed out, or a replaced phone that erased itself: the welcome screen, nothing of before kept.
-            AppPhase.SignedOut -> if (s.step !in signInSteps) {
+            // Nothing set up, or a replaced phone that erased itself: the welcome screen, nothing of before kept. A
+            // recovery or a transfer started from the welcome screen runs while nothing is set up yet.
+            AppPhase.SignedOut -> if (s.step !in codeSteps && !moving) {
                 enrolled = false
-                val pending = account.pendingEmail.value
-                state.value = OnboardingUiState(
-                    step = if (pending != null) OnboardingStep.CHECK_EMAIL else OnboardingStep.WELCOME,
-                    devHint = account.devHint,
-                    email = pending ?: "",
-                )
+                state.value = OnboardingUiState(devHint = account.devHint)
             }
-            is AppPhase.TermsRequired -> state.update { it.copy(step = OnboardingStep.TERMS, termsUpdated = phase.updated, busy = false) }
             is AppPhase.Setup -> when (phase.stage) {
-                // After a recovery that deleted the vault, the recovery screen says so first.
-                SetupStage.NEW_VAULT -> if (s.step !in vaultSteps && s.step != OnboardingStep.RECOVER) go(OnboardingStep.PIN_CREATE)
-                SetupStage.VAULT_ELSEWHERE -> if (s.step != OnboardingStep.PROGRESS && !moving) {
-                    go(
-                        when (s.goal) {
-                            OnboardingGoal.RECOVER -> OnboardingStep.RECOVER
-                            OnboardingGoal.TRANSFER -> OnboardingStep.TRANSFER_IN
-                            OnboardingGoal.NEW_VAULT -> OnboardingStep.VAULT_ELSEWHERE
-                        },
-                    )
+                // A redeemed code: confirm the account first (also after a restart); a recovery that deleted the
+                // vault says so first.
+                SetupStage.NEW_VAULT -> if (s.step !in vaultSteps + accountSteps && !moving) {
+                    state.update {
+                        it.copy(
+                            step = OnboardingStep.CONFIRM_ACCOUNT, busy = false, error = null, errorCode = null,
+                            emailHint = it.emailHint.ifEmpty { account.account.value?.emailHint ?: "" },
+                        )
+                    }
                 }
+                SetupStage.VAULT_ELSEWHERE -> if (s.step != OnboardingStep.PROGRESS && !moving) go(OnboardingStep.VAULT_ELSEWHERE)
                 SetupStage.RECOVERING -> if (s.step != OnboardingStep.RECOVER) {
-                    state.update { it.copy(step = OnboardingStep.RECOVER, goal = OnboardingGoal.RECOVER, busy = false, error = null) }
+                    state.update { it.copy(step = OnboardingStep.RECOVER, busy = false, error = null) }
                 }
                 SetupStage.NEEDS_CREDENTIAL -> if (s.step != OnboardingStep.PROGRESS && s.step != OnboardingStep.BACKUP) {
                     enrolled = true
@@ -171,9 +180,8 @@ class OnboardingViewModel @Inject constructor(
     override fun back(): Boolean {
         val s = state.value
         val to = when (s.step) {
-            OnboardingStep.EMAIL -> OnboardingStep.WELCOME
-            OnboardingStep.CHECK_EMAIL -> OnboardingStep.EMAIL
-            OnboardingStep.CONFIRM_SIGN_IN, OnboardingStep.ACCOUNT_PIN -> OnboardingStep.CHECK_EMAIL
+            OnboardingStep.SETUP_SCAN -> OnboardingStep.WELCOME
+            OnboardingStep.SETUP_TYPE -> OnboardingStep.SETUP_SCAN
             OnboardingStep.PIN_CONFIRM -> OnboardingStep.PIN_CREATE
             OnboardingStep.PASSWORD -> if (s.credentialOnly) null else OnboardingStep.PIN_CONFIRM
             OnboardingStep.BACKUP -> OnboardingStep.PASSWORD
@@ -184,7 +192,7 @@ class OnboardingViewModel @Inject constructor(
             when (to) {
                 OnboardingStep.PIN_CREATE -> it.copy(step = to, pinConfirm = "", pinMismatch = false, error = null)
                 OnboardingStep.PIN_CONFIRM -> it.copy(step = to, password = "", passwordConfirm = "", passwordProblem = null, error = null)
-                else -> it.copy(step = to, error = null)
+                else -> it.copy(step = to, error = null, scanRefusal = null, codeInvalid = false)
             }
         }
         return true
@@ -197,144 +205,106 @@ class OnboardingViewModel @Inject constructor(
             state.update { it.copy(busy = false) }
         } catch (e: VaultFailure) {
             state.update { it.copy(busy = false, error = e.kind, errorCode = e.code) }
-            if (e.kind == FailureKind.TERMS_REQUIRED) account.refresh()
         }
     }
 
-    // --- sign-in ---
+    // --- the welcome choices ---
 
-    override fun start() {
-        state.update { it.copy(goal = OnboardingGoal.NEW_VAULT) }
-        go(OnboardingStep.EMAIL)
-    }
+    /** Welcome: set up a vault with the portal's setup code. */
+    override fun start() = state.update { it.copy(step = OnboardingStep.SETUP_SCAN, scanRefusal = null, error = null) }
 
-    /** Welcome: "I lost my phone": sign in, then the recovery (§11.11). */
-    override fun startRecovery() {
-        state.update { it.copy(goal = OnboardingGoal.RECOVER) }
-        go(OnboardingStep.EMAIL)
-    }
+    /** Welcome: "I lost my phone": the recovery (§11.11), with the portal's recovery QR. */
+    override fun startRecovery() = go(OnboardingStep.RECOVER)
 
-    /** Welcome: "Move from my old phone": sign in, then the direct transfer (§6.7.1). */
-    override fun startTransfer() {
-        state.update { it.copy(goal = OnboardingGoal.TRANSFER) }
-        go(OnboardingStep.EMAIL)
-    }
+    /** Welcome: "Move from my old phone": the direct transfer (§6.7.1). */
+    override fun startTransfer() = go(OnboardingStep.TRANSFER_IN)
 
     /** Vault elsewhere: recover it on this phone. */
-    override fun recover() {
-        state.update { it.copy(goal = OnboardingGoal.RECOVER) }
-        go(OnboardingStep.RECOVER)
-    }
+    override fun recover() = go(OnboardingStep.RECOVER)
 
     /** Vault elsewhere: move it here from the old phone. */
-    override fun transfer() {
-        state.update { it.copy(goal = OnboardingGoal.TRANSFER) }
-        go(OnboardingStep.TRANSFER_IN)
-    }
+    override fun transfer() = go(OnboardingStep.TRANSFER_IN)
 
-    /** Leaves the recovery or the transfer for the choice of what to do with this phone. */
+    /** Leaves the recovery or the transfer: back where it was started from. */
     override fun leaveMove() {
-        state.update { it.copy(goal = OnboardingGoal.NEW_VAULT) }
-        go(OnboardingStep.VAULT_ELSEWHERE)
+        go(if (account.phase.value is AppPhase.Setup) OnboardingStep.VAULT_ELSEWHERE else OnboardingStep.WELCOME)
         viewModelScope.launch { account.refresh() }
     }
 
-    /** After a recovery deleted the vault: set up a new one. */
-    override fun newVaultAfterMove() {
-        state.update { it.copy(goal = OnboardingGoal.NEW_VAULT) }
-        go(OnboardingStep.PIN_CREATE)
+    /** After a recovery deleted the vault: a new vault needs a new setup code. */
+    override fun newVaultAfterMove() = start()
+
+    // --- the setup code (§11.12.1) ---
+
+    override fun typeCode() = state.update {
+        it.copy(step = OnboardingStep.SETUP_TYPE, scanRefusal = null, codeInvalid = false, error = null)
+    }
+
+    /** A QR the camera read: only this environment's setup QR is redeemed; nothing is sent anywhere else. */
+    override fun scanned(text: String) {
+        val s = state.value
+        if (s.busy || s.step != OnboardingStep.SETUP_SCAN) return
+        when (val r = SetupCodes.parseScanned(text, account.apiOrigin)) {
+            is SetupCodes.Scanned.Secret -> redeem(SetupCodeInput.Secret(r.secret))
+            is SetupCodes.Scanned.OtherEnvironment -> state.update {
+                it.copy(scanRefusal = ScanRefusal.OTHER_ENVIRONMENT, otherApi = r.api)
+            }
+            SetupCodes.Scanned.NotACode -> {
+                val rc = RecoveryCode.parseScanned(text)
+                state.update { it.copy(scanRefusal = if (rc != null) ScanRefusal.RECOVERY_CODE else ScanRefusal.NOT_A_CODE) }
+            }
+        }
+    }
+
+    /** The portal's same-device App Link: redeemed only while nothing is set up on this phone. */
+    private fun receiveLink(raw: String) {
+        inbox.consume()
+        if (account.phase.value != AppPhase.SignedOut || state.value.busy) return
+        val secret = SetupCodes.parseLink(raw, account.apiOrigin)
+        if (secret == null) {
+            state.update { it.copy(step = OnboardingStep.SETUP_SCAN, scanRefusal = ScanRefusal.NOT_A_CODE) }
+            return
+        }
+        state.update { it.copy(step = OnboardingStep.SETUP_SCAN) }
+        redeem(SetupCodeInput.Secret(secret))
     }
 
     override fun setEmail(v: String) = state.update { it.copy(email = v.take(MAX_EMAIL), emailInvalid = false) }
 
-    override fun submitEmail() {
-        val email = state.value.email.trim()
-        if (!EmailFormat.isPlausible(email)) {
-            state.update { it.copy(emailInvalid = true) }
-            return
-        }
-        viewModelScope.launch {
-            attempt {
-                account.startSignIn(email)
-                state.update { it.copy(step = OnboardingStep.CHECK_EMAIL, linkInput = "", linkInvalid = false) }
-            }
-        }
+    override fun setCode(v: String) = state.update {
+        it.copy(codeInput = v.take(MAX_CODE_INPUT), codeInvalid = SetupCodes.hasForeignCharacter(v), error = null)
     }
 
-    override fun resendLink() {
-        viewModelScope.launch { attempt { account.startSignIn(state.value.email.trim()) } }
-    }
-
-    override fun setLinkInput(v: String) = state.update { it.copy(linkInput = v, linkInvalid = false) }
-
-    override fun submitLink() {
-        val link = SignInLink.parse(state.value.linkInput, account.signInHosts)
-        if (link == null) {
-            state.update { it.copy(linkInvalid = true) }
-            return
-        }
-        confirmStep(link)
-    }
-
-    private fun receiveLink(raw: String) {
-        inbox.consume()
-        val link = SignInLink.parse(raw, account.signInHosts)
-        if (link == null) {
-            state.update { it.copy(step = OnboardingStep.CHECK_EMAIL, linkInvalid = true) }
-            return
-        }
-        if (account.phase.value != AppPhase.SignedOut) return // already signed in: ignore a stray link
-        confirmStep(link)
-    }
-
-    private fun confirmStep(link: SignInLink) {
-        state.update {
-            val email = link.email ?: it.email.ifBlank { account.pendingEmail.value ?: "" }
-            it.copy(step = OnboardingStep.CONFIRM_SIGN_IN, link = link, email = email, linkInvalid = false, error = null)
-        }
-    }
-
-    /** The member confirms which account to sign in to; only now is the token sent (MEMBER-API). */
-    override fun confirmSignIn() {
+    override fun submitCode() {
         val s = state.value
-        val link = s.link ?: return
+        val email = s.email.trim()
+        val code = SetupCodes.normalize(s.codeInput)
+        val emailOk = EmailFormat.isPlausible(email)
+        if (!emailOk || code == null) {
+            state.update { it.copy(emailInvalid = !emailOk, codeInvalid = code == null) }
+            return
+        }
+        redeem(SetupCodeInput.Typed(SetupCodes.normalizeEmail(email), code))
+    }
+
+    private fun redeem(code: SetupCodeInput) {
         viewModelScope.launch {
             attempt {
-                when (account.verifySignIn(s.email, link)) {
-                    SignInStatus.SIGNED_IN -> {
-                        state.update { it.copy(link = null) }
-                        account.refresh()
-                    }
-                    SignInStatus.PIN_REQUIRED -> state.update { it.copy(step = OnboardingStep.ACCOUNT_PIN, link = null, accountPin = "") }
-                }
+                val hint = account.redeemSetupCode(code)
+                state.update { it.copy(emailHint = hint, codeInput = "", scanRefusal = null, step = OnboardingStep.CONFIRM_ACCOUNT) }
             }
         }
     }
 
-    override fun setAccountPin(v: String) = state.update { it.copy(accountPin = v.filter { c -> c.isDigit() }.take(MAX_ACCOUNT_PIN)) }
+    /** The account is the member's: on to the vault PIN. */
+    override fun confirmAccount() = go(OnboardingStep.PIN_CREATE)
 
-    override fun submitAccountPin() {
-        val pin = state.value.accountPin
-        if (pin.length < MIN_ACCOUNT_PIN) return
+    /** "That is not my account" (or another code): the redeemed code is dropped; back to the welcome screen. */
+    override fun useAnotherCode() {
         viewModelScope.launch {
-            attempt {
-                account.signInPin(pin)
-                state.update { it.copy(accountPin = "") }
-                account.refresh()
-            }
-        }
-    }
-
-    // --- membership ---
-
-    override fun checkAgain() {
-        viewModelScope.launch { attempt { account.refresh() } }
-    }
-
-    override fun useAnotherAccount() {
-        viewModelScope.launch {
-            attempt { account.signOut() }
-            state.update { OnboardingUiState(devHint = account.devHint) }
+            attempt { account.forgetSetupCode() }
+            enrolled = false
+            state.value = OnboardingUiState(devHint = account.devHint)
         }
     }
 
@@ -435,10 +405,8 @@ class OnboardingViewModel @Inject constructor(
                         progress = it.progress.map { (st, ps) -> st to if (ps == StepState.ACTIVE) StepState.FAILED else ps },
                     )
                 }
-                when (e.kind) {
-                    FailureKind.VAULT_EXISTS -> state.update { it.copy(step = OnboardingStep.VAULT_ELSEWHERE, pin = "", pinConfirm = "") }
-                    FailureKind.TERMS_REQUIRED -> account.refresh()
-                    else -> Unit
+                if (e.kind == FailureKind.VAULT_EXISTS) {
+                    state.update { it.copy(step = OnboardingStep.VAULT_ELSEWHERE, pin = "", pinConfirm = "") }
                 }
             }
         }
@@ -460,7 +428,6 @@ class OnboardingViewModel @Inject constructor(
 
     private companion object {
         const val MAX_EMAIL = 254
-        const val MIN_ACCOUNT_PIN = 4
-        const val MAX_ACCOUNT_PIN = 8
+        const val MAX_CODE_INPUT = 16
     }
 }

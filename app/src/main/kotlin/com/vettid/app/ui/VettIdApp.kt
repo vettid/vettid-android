@@ -52,7 +52,7 @@ private data object MainDest
 private fun destinationOf(phase: AppPhase): Any = when (phase) {
     AppPhase.Starting -> StartingDest
     is AppPhase.Unreachable -> UnreachableDest
-    AppPhase.SignedOut, is AppPhase.TermsRequired, is AppPhase.Setup -> OnboardingDest
+    AppPhase.SignedOut, is AppPhase.Setup -> OnboardingDest
     AppPhase.Locked -> UnlockDest
     AppPhase.Unlocked -> MainDest
 }
@@ -79,7 +79,7 @@ fun VettIdApp(
     val canaryVm: CanaryManifestViewModel = hiltViewModel()
     val canaryPrompt by canaryVm.prompt.collectAsStateWithLifecycle()
     val uri = LocalUriHandler.current
-    val portal = stringResource(R.string.account_portal_url)
+    val portal = viewModel.portalUrl
     val nav = rememberNavController()
     val target = destinationOf(phase)
 
@@ -120,11 +120,12 @@ fun VettIdApp(
                     composable<MainDest> {
                         AppShell(
                             launchRoute = launchRoute,
-                            accountName = account?.displayName ?: stringResource(R.string.account_placeholder_name),
-                            accountDetail = account?.email ?: "",
+                            accountName = account?.emailHint?.takeIf { it.isNotEmpty() }
+                                ?: stringResource(R.string.account_placeholder_name),
+                            account = account,
+                            portalUrl = portal,
                             alarm = alarm,
                             onLockVault = viewModel::lockVault,
-                            onSignOut = viewModel::signOut,
                             onEnableAppLock = onEnableAppLock,
                         )
                     }

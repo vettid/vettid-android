@@ -4,46 +4,36 @@
     <string name="onboarding_welcome_title">Your vault, only with you</string>
     <string name="onboarding_welcome_body">VettID keeps your messages, connections and most important secrets in a vault that only you can open.</string>
     <string name="onboarding_welcome_point_keys">Your keys stay on this phone and in your vault\'s sealed enclave.</string>
-    <string name="onboarding_welcome_point_member">You need a VettID membership (account.vettid.org).</string>
+    <string name="onboarding_welcome_point_member">You need a VettID membership: the account site gives you a code to set up your vault here.</string>
     <string name="onboarding_welcome_start">Get started</string>
     <string name="onboarding_welcome_transfer">Move from my old phone</string>
     <string name="onboarding_welcome_recover">I lost my phone: recover my vault</string>
 
-    <!-- Email -->
-    <string name="onboarding_email_title">Sign in to your account</string>
-    <string name="onboarding_email_body">Enter the email address of your VettID account. We will email you a sign-in link.</string>
-    <string name="onboarding_email_label">Email address</string>
-    <string name="onboarding_email_invalid">Enter a valid email address.</string>
-    <string name="onboarding_email_send">Send sign-in link</string>
-
-    <!-- Check email -->
-    <string name="onboarding_check_title">Check your email</string>
-    <string name="onboarding_check_body">If %1$s belongs to a VettID account, a sign-in link is on its way. Open it on this phone. It works once, for 15 minutes.</string>
-    <string name="onboarding_check_paste_label">Or paste the sign-in link</string>
-    <string name="onboarding_check_paste_invalid">That is not a VettID sign-in link.</string>
-    <string name="onboarding_check_continue">Continue</string>
-    <string name="onboarding_check_resend">Send a new link</string>
-
-    <!-- Confirm sign-in -->
-    <string name="onboarding_confirm_title">Sign in on this phone?</string>
-    <string name="onboarding_confirm_body">You are signing in as %1$s. Only continue if you asked for this link.</string>
-    <string name="onboarding_confirm_sign_in">Sign in</string>
-    <string name="onboarding_confirm_cancel">Not now</string>
-    <string name="onboarding_link_expired">This link is not valid any more. Ask for a new one.</string>
-
-    <!-- Account PIN -->
-    <string name="onboarding_account_pin_title">Enter your account PIN</string>
-    <string name="onboarding_account_pin_body">Your account asks for its sign-in PIN, the one you set on the account site. It is not your vault PIN.</string>
-    <string name="onboarding_account_pin_label">Account PIN</string>
-    <string name="onboarding_account_pin_wrong">That account PIN is not correct.</string>
-
-    <!-- Terms -->
-    <string name="onboarding_terms_title">Accept the membership terms</string>
-    <string name="onboarding_terms_body_registered">Your account is registered. To get a vault, become a member by accepting the membership terms on the account site.</string>
-    <string name="onboarding_terms_body_updated">The membership terms have changed. Accept the current terms on the account site to keep using your vault.</string>
-    <string name="onboarding_terms_open">Open the account site</string>
-    <string name="onboarding_terms_check">I have accepted them, check again</string>
-    <string name="onboarding_other_account">Use a different account</string>
+    <!-- Setup code (VAULT-MESSAGING §11.12.1: the app never signs in) -->
+    <string name="onboarding_setup_scan_title">Scan your setup code</string>
+    <string name="onboarding_setup_scan_body">On the account site (Vault, then Set up your vault), get a setup code and scan its QR code with this phone. It works once, for 5 minutes.</string>
+    <string name="onboarding_setup_type">Type the code instead</string>
+    <string name="onboarding_setup_open_site">Open the account site</string>
+    <string name="onboarding_setup_refused_title">Not a setup code</string>
+    <string name="onboarding_setup_not_code">That is not a VettID setup code. Scan the QR code the account site shows under Set up your vault.</string>
+    <string name="onboarding_setup_recovery_code">That is a recovery code. To recover your vault, go back and choose \"I lost my phone\".</string>
+    <string name="onboarding_setup_other_environment">That code is from another VettID environment (%1$s), not the one this app uses. Get a code from this app\'s account site.</string>
+    <string name="onboarding_setup_redeeming">Checking your code</string>
+    <string name="onboarding_setup_redeeming_body">One moment.</string>
+    <string name="onboarding_setup_invalid">That code did not work. It may be mistyped, used already, or older than 5 minutes, or the email may not be your account\'s. Get a new code on the account site.</string>
+    <string name="onboarding_setup_type_title">Type your setup code</string>
+    <string name="onboarding_setup_type_body">Enter your account\'s email address and the 8 characters shown under the QR code on the account site.</string>
+    <string name="onboarding_setup_email_label">Email address of your account</string>
+    <string name="onboarding_setup_email_invalid">Enter a valid email address.</string>
+    <string name="onboarding_setup_code_label">Setup code</string>
+    <string name="onboarding_setup_code_hint">8 characters, like ABCD-EFGH</string>
+    <string name="onboarding_setup_code_invalid">Codes have 8 characters and never contain 0, 1, I, L or O.</string>
+    <string name="onboarding_confirm_account_title">Is this your account?</string>
+    <string name="onboarding_confirm_account_body">You are setting up a vault for %1$s. Only continue if this is your own account and you got the code yourself.</string>
+    <string name="onboarding_confirm_account_hint_title">Account</string>
+    <string name="onboarding_confirm_account_yes">Yes, continue</string>
+    <string name="onboarding_confirm_account_no">That is not my account</string>
+    <string name="onboarding_other_code">Use a different setup code</string>
 
     <!-- Vault elsewhere -->
     <string name="onboarding_elsewhere_title">Your account already has a vault</string>
@@ -148,7 +138,6 @@
     <string name="unlock_erase_confirm_body">This erases VettID\'s data on this phone only: its keys, your account details and the app\'s settings. Nothing else on the phone is touched, and it works without a connection.\n\nIt cannot be undone. If this phone still holds your vault, you will need a recovery on another phone to use it again.</string>
     <string name="unlock_erase_confirm">Erase</string>
     <string name="unlock_erasing">Erasing VettID from this phone…</string>
-    <string name="unlock_sign_out">Sign out</string>
 
     <!-- App lock -->
     <string name="app_lock_title">VettID is locked</string>
@@ -166,40 +155,25 @@
 
     <!-- Recovery on this phone (§11.11) -->
     <string name="recover_title">Recover your vault</string>
-    <string name="recover_body">Your account site shows a recovery code 24 hours after you start a recovery. Open it there (Vault, then Recovery, then Show the code) and scan it with this phone.</string>
+    <string name="recover_body">Your account site shows a recovery QR code 24 hours after you start a recovery there. Open it (Vault, then Recovery, then Show the code) and scan it with this phone.</string>
     <string name="recover_need_title">You will need</string>
     <string name="recover_need_body">The recovery code from the account site, your vault PIN and your credential password. This phone then replaces your old one, which erases VettID the next time it reaches your vault.</string>
     <string name="recover_scan">Scan the code</string>
-    <string name="recover_type">Type the code instead</string>
-    <string name="recover_check_again">Check again</string>
     <string name="recover_open_site">Open the account site</string>
-    <string name="recover_none_title">No recovery in progress</string>
-    <string name="recover_none_body">Start a recovery on the account site (Vault, then Recovery). Your vault locks at once; after 24 hours the site shows the code for this phone.</string>
-    <string name="recover_pending_title">Your code is not available yet</string>
-    <string name="recover_pending_body">The account site shows the code from %1$s. Until then nobody can use it, and anyone holding your old phone can still cancel the recovery.</string>
-    <string name="recover_available_title">Your code is ready</string>
-    <string name="recover_available_body">Use it before %1$s. It works once.</string>
-    <string name="recover_cancelled_title">The recovery was cancelled</string>
-    <string name="recover_cancelled_body">It was cancelled on the account site, by the link in the email, or from your old phone. If that was not you, your old phone may still be in someone else\'s hands. Start a new recovery on the account site.</string>
-    <string name="recover_expired_title">The recovery expired</string>
-    <string name="recover_expired_body">Its code was valid for 24 hours and was not used. Start a new recovery on the account site.</string>
     <string name="recover_scan_title">Scan the recovery code</string>
     <string name="recover_scan_body">Point the camera at the code on the account site.</string>
     <string name="recover_scan_allow">Allow the camera</string>
     <string name="recover_scan_permission_title">Camera access</string>
-    <string name="recover_scan_permission_body">VettID uses the camera only to read the code; nothing is recorded. You can type the code instead.</string>
+    <string name="recover_scan_permission_body">VettID uses the camera only to read the code; nothing is recorded.</string>
     <string name="recover_scan_not_code">That is not a VettID recovery code.</string>
-    <string name="recover_scan_other_vault">That code is for a vault of another account. Sign in with the account you started the recovery from.</string>
-    <string name="recover_type_title">Type the recovery code</string>
-    <string name="recover_type_body">Type the 32 characters the account site shows, in groups of four. Spaces do not matter.</string>
-    <string name="recover_type_label">Recovery code</string>
-    <string name="recover_type_invalid">A recovery code has 32 letters and digits (no U).</string>
-    <string name="recover_type_submit">Continue</string>
+    <string name="recover_scan_other_environment">That code is from another VettID environment (%1$s), not the one this app uses.</string>
+    <string name="recover_scan_no_api">That recovery code is from an older account site. Reload the recovery page on the account site and scan the new code.</string>
+    <string name="recover_not_available">This recovery is not available: its code may not be ready yet (24 hours after the request), or the recovery was cancelled, used or has expired. Check the account site.</string>
+    <string name="recover_account_title">Recovering the vault of</string>
     <string name="recover_registering">Checking the code with your vault</string>
     <string name="recover_bad_code">That code is not right. After 5 wrong codes the recovery is cancelled. Wrong codes from this phone: %1$d of 5.</string>
     <string name="recover_voided">That was the fifth wrong code, so the recovery was cancelled. Start a new recovery on the account site.</string>
     <string name="recover_code_expired">This code has expired. Start a new recovery on the account site.</string>
-    <string name="recover_code_early">This code is not valid yet. Try again from %1$s.</string>
     <string name="recover_code_early_unknown">This code is not valid yet. Try again later.</string>
     <string name="recover_code_gone">This recovery is no longer active: it was cancelled, already used, or voided after wrong codes. Start a new recovery on the account site.</string>
     <string name="recover_code_attestation">Your vault could not verify this phone (device attestation). The code is still valid; this phone may not be supported.</string>

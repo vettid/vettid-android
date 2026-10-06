@@ -27,6 +27,7 @@ import com.vettid.app.debug.debugTools
 import com.vettid.core.ui.components.DrawerItem
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.core.ui.components.VettIdDrawerSheet
+import com.vettid.core.data.vault.AccountInfo
 import com.vettid.core.data.vault.CredentialAlarm
 import com.vettid.core.ui.components.UrgentBanner
 import com.vettid.feature.credential.CredentialAlarmRoute
@@ -67,10 +68,10 @@ import kotlinx.coroutines.launch
 fun AppShell(
     launchRoute: Any?,
     accountName: String,
-    accountDetail: String,
+    account: AccountInfo?,
+    portalUrl: String,
     alarm: CredentialAlarm?,
     onLockVault: () -> Unit,
-    onSignOut: () -> Unit,
     onEnableAppLock: () -> Unit,
 ) {
     val navController = rememberNavController()
@@ -79,7 +80,7 @@ fun AppShell(
     var showAccount by rememberSaveable { mutableStateOf(false) }
     val theme = LocalThemeController.current
     val uri = LocalUriHandler.current
-    val portal = stringResource(R.string.account_portal_url)
+    val portal = portalUrl
     val chrome = remember(accountName) {
         ShellChrome(
             accountName = accountName,
@@ -191,16 +192,12 @@ fun AppShell(
 
     if (showAccount) {
         AccountSheet(
-            name = accountName,
-            detail = accountDetail,
+            account = account,
+            portalUrl = portal,
             onDismiss = { showAccount = false },
             onLockVault = {
                 showAccount = false
                 onLockVault()
-            },
-            onSignOut = {
-                showAccount = false
-                onSignOut()
             },
         )
     }

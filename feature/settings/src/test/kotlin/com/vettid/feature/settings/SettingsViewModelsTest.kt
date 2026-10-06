@@ -43,7 +43,7 @@ class SettingsViewModelsTest {
     }
 
     @Test
-    fun themeIsPersistedAndLockAndSignOutWork() = runTest {
+    fun themeIsPersistedAndLockWorks() = runTest {
         val vm = SettingsViewModel(vault, vault, prefs, AppLock(prefs, noKeys, noFile))
         vm.setTheme(ThemePreference.DARK)
         advanceUntilIdle()
@@ -52,9 +52,6 @@ class SettingsViewModelsTest {
         vm.lockVault()
         advanceUntilIdle()
         assertEquals(AppPhase.Locked, vault.phase.value)
-        vm.signOut()
-        advanceUntilIdle()
-        assertEquals(AppPhase.SignedOut, vault.phase.value)
     }
 
     @Test
@@ -106,19 +103,16 @@ class SettingsViewModelsTest {
         assertFalse("deleteVault" in vault.calls)
         vm.confirm()
         advanceUntilIdle()
-        assertEquals(AppPhase.Setup(SetupStage.NEW_VAULT), vault.phase.value)
+        assertEquals(AppPhase.SignedOut, vault.phase.value)
         assertEquals("40281795", vault.lastPin)
     }
 
     @Test
-    fun recoveryCanBeCancelled() = runTest {
-        vault.recoveryValue = RecoveryView("01J0000000000000000000000R", "pending", "2026-10-05T00:00:00Z", "2026-10-06T00:00:00Z")
+    fun aRecoveryInProgressIsShown() = runTest {
+        // MEMBER-API 2.0.0: the app reads it from the vault's status; it is cancelled on the account portal.
+        vault.recoveryValue = RecoveryView("pending", "2026-10-05T00:00:00Z")
         val vm = RecoveryViewModel(vault, vault)
         advanceUntilIdle()
         assertEquals("pending", vm.uiState.value.recovery?.state)
-        vm.cancel()
-        advanceUntilIdle()
-        assertTrue(vm.uiState.value.cancelled)
-        assertNull(vm.uiState.value.recovery)
     }
 }

@@ -14,14 +14,14 @@ import org.junit.Test
 import java.io.IOException
 
 /**
- * The phase read at app start (`GET /api/account/me`) over the app's client: a connection that died while the phone
+ * The phase read at app start (`GET /api/vault/status`) over the app's client: a connection that died while the phone
  * dozed is retried instead of showing "VettID cannot connect"; an answer of the API keeps its handling.
  */
 class MemberApiRetryTest {
     private lateinit var server: MockWebServer
     private lateinit var api: MemberApiClient
 
-    private val me = """{"user_guid":"guid-1","email":"a@example.org","state":"member","terms":{"needs_acceptance":false}}"""
+    private val status = """{"vault":{"vault_id":"v1","state":"locked"},"service":"available"}"""
 
     private fun resp(code: Int, body: String) =
         MockResponse.Builder().code(code).body(body).addHeader("Content-Type", "application/json").build()
@@ -40,24 +40,24 @@ class MemberApiRetryTest {
     fun stop() = server.close()
 
     @Test
-    fun meRecoversFromADroppedConnection() = runBlocking {
+    fun statusRecoversFromADroppedConnection() = runBlocking {
         server.enqueue(dropped())
-        server.enqueue(resp(200, me))
-        assertEquals("guid-1", api.me().userGuid)
+        server.enqueue(resp(200, status))
+        assertEquals("v1", api.vaultStatusAnswer().vault?.vaultId)
         assertEquals(2, server.requestCount)
     }
 
     @Test
-    fun meFailsAfterTheRetriesWhenTheServiceStaysUnreachable() {
+    fun statusFailsAfterTheRetriesWhenTheServiceStaysUnreachable() {
         repeat(1 + TransportRetry.DEFAULT_RETRIES) { server.enqueue(dropped()) }
-        assertThrows(IOException::class.java) { runBlocking { api.me() } }
+        assertThrows(IOException::class.java) { runBlocking { api.vaultStatusAnswer() } }
         assertEquals(1 + TransportRetry.DEFAULT_RETRIES, server.requestCount)
     }
 
     @Test
     fun anApiRefusalIsNotRetried() {
         server.enqueue(resp(403, """{"code":"forbidden","message":"no"}"""))
-        val e = assertThrows(MemberApiException::class.java) { runBlocking { api.me() } }
+        val e = assertThrows(MemberApiException::class.java) { runBlocking { api.vaultStatusAnswer() } }
         assertEquals(403, e.status)
         assertEquals(1, server.requestCount)
     }

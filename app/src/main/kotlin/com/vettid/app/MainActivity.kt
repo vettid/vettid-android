@@ -23,7 +23,7 @@ import com.vettid.app.debug.debugTools
 import com.vettid.app.ui.LocalThemeController
 import com.vettid.app.ui.ThemeController
 import com.vettid.app.ui.VettIdApp
-import com.vettid.core.data.account.SignInLinkInbox
+import com.vettid.core.data.account.SetupLinkInbox
 import com.vettid.core.data.social.InviteLinkInbox
 import com.vettid.core.data.vault.CanaryManifestInbox
 import com.vettid.core.data.social.InviteLinks
@@ -52,7 +52,7 @@ class MainActivity : ComponentActivity() {
     lateinit var prefs: PreferencesRepository
 
     @Inject
-    lateinit var inbox: SignInLinkInbox
+    lateinit var inbox: SetupLinkInbox
 
     @Inject
     lateinit var invites: InviteLinkInbox
@@ -110,8 +110,8 @@ class MainActivity : ComponentActivity() {
     /**
      * A link the app was opened with: an invitation (`<relay>/connect#…` App Link or
      * `vettid://connect#…`, §6.4) goes to the connect flow, which asks the member
-     * before anything is sent; a sign-in link (account.vettid.org `/auth/`) to
-     * onboarding, where only confirmed sign-ins send it. A shared file is a canary manifest
+     * before anything is sent; the account portal's setup link (`/vault/enroll/#s=…`, VAULT-MESSAGING §11.12.1) to
+     * onboarding, which redeems it only while this phone has no vault. A shared file is a canary manifest
      * ([receiveCanaryManifest]).
      */
     private fun receiveLink(intent: Intent?) {

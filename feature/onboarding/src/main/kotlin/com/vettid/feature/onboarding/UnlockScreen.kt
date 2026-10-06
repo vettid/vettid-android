@@ -71,8 +71,6 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
         onPrimary = if (state.preflightError != null) actions::retryPreflight else actions::submit,
         primaryEnabled = if (state.preflightError != null) state.retryAllowed else state.pinAllowed && state.pin.length >= 4,
         busy = state.busy || state.loading || state.erasing,
-        secondaryLabel = stringResource(R.string.unlock_sign_out),
-        onSecondary = actions::signOut,
         header = {
             Spacer(Modifier.height(Spacing.l))
             Icon(

@@ -10,17 +10,13 @@ sealed interface AppPhase {
     /** The member API could not be reached at start ([failure] says why). */
     data class Unreachable(val failure: FailureKind) : AppPhase
 
-    /** No member session on this device: sign in. */
+    /**
+     * Nothing set up on this phone: the welcome screen (a setup code, a recovery or a transfer). The app never
+     * signs in (VAULT-MESSAGING 0.15.0 §11.12); the name is kept from when it did.
+     */
     data object SignedOut : AppPhase
 
-    /**
-     * Signed in, but the account is `registered` or the current terms are not
-     * accepted (MEMBER-API: the vault routes answer `terms_required`).
-     * [updated]: a member whose accepted terms are out of date.
-     */
-    data class TermsRequired(val updated: Boolean) : AppPhase
-
-    /** Signed in and allowed a vault; setting it up on this device. */
+    /** A setup code was redeemed (or a recovery claimed): setting the vault up on this device. */
     data class Setup(val stage: SetupStage) : AppPhase
 
     /** Enrolled; the vault is locked: unlock with the PIN. */
@@ -50,9 +46,61 @@ enum class SetupStage {
     RECOVERING,
 }
 
-/** The signed-in member, for display. */
-data class AccountInfo(val email: String, val firstName: String, val lastName: String) {
-    val displayName: String get() = listOf(firstName, lastName).filter { it.isNotBlank() }.joinToString(" ").ifBlank { email }
+/**
+ * The member's account as the vault reports it (VAULT-MESSAGING §11.13, 0.15.0): membership, terms and
+ * subscription, read-only and display only (changes are made on the account portal). Before the first snapshot
+ * only [emailHint] is known (from the setup code's redeem or the recovery's claim).
+ */
+data class AccountInfo(
+    /** The masked address, `m***@example.com`. */
+    val emailHint: String,
+    /** `member` or another account state; null before the vault sent a snapshot. */
+    val state: String? = null,
+    /** `active` or `canceled`. */
+    val accountStatus: String? = null,
+    /** When a cancelled account's vault is deleted. */
+    val deletesAt: Instant? = null,
+    val termsNeedAcceptance: Boolean = false,
+    val subscription: SubscriptionInfo? = null,
+    val votingRights: Boolean = false,
+    val asOf: Instant? = null,
+) {
+    val hasSnapshot: Boolean get() = state != null
+    val canceled: Boolean get() = accountStatus == ACCOUNT_CANCELED
+
+    companion object {
+        const val ACCOUNT_CANCELED = "canceled"
+    }
+}
+
+/** The member's subscription (§11.13): `trial`, `active`, `expired` or `canceled`. */
+data class SubscriptionInfo(val typeName: String?, val status: String?, val paid: Boolean, val expiresAt: Instant?) {
+    /** The status to show at [now]: a trial (or any subscription) whose `expires_at` has passed reads `expired`. */
+    fun statusAt(now: Instant): String? = if (expiresAt != null && !now.isBefore(expiresAt) && status != STATUS_CANCELED) {
+        STATUS_EXPIRED
+    } else {
+        status
+    }
+
+    companion object {
+        const val STATUS_TRIAL = "trial"
+        const val STATUS_ACTIVE = "active"
+        const val STATUS_EXPIRED = "expired"
+        const val STATUS_CANCELED = "canceled"
+    }
+}
+
+/** A setup code as the member gave it (VAULT-MESSAGING §11.12.1). */
+sealed interface SetupCodeInput {
+    /** The QR's (or the App Link's) 128-bit secret. */
+    data class Secret(val secret: String) : SetupCodeInput {
+        override fun toString(): String = "Secret(…)"
+    }
+
+    /** The typed code (canonical, 8 symbols) with the member's email. */
+    data class Typed(val email: String, val code: String) : SetupCodeInput {
+        override fun toString(): String = "Typed(…)"
+    }
 }
 
 /** The enrollment steps the progress screen shows (§11.3, §3.5.7). */
@@ -164,8 +212,8 @@ data class ReleaseInfoView(
     val notice: String?,
 )
 
-/** A recovery in progress (MEMBER-API "Vault recovery"). */
-data class RecoveryView(val recoveryId: String, val state: String, val availableAt: String, val expiresAt: String)
+/** A recovery in progress, as `GET /api/vault/status` reports it (`recovery: {state, available_at}`). */
+data class RecoveryView(val state: String, val availableAt: String)
 
 /** What Settings shows about attestation: this device's key and the enclave last verified. */
 data class AttestationInfo(
@@ -187,6 +235,9 @@ data class AttestationInfo(
 enum class FailureKind {
     NETWORK,
     UNAUTHORIZED,
+
+    /** A setup code the member API refused (`404 invalid_code`: wrong, expired, used, or another email's). */
+    SETUP_CODE_INVALID,
     TERMS_REQUIRED,
     RATE_LIMITED,
     VAULT_UNAVAILABLE,
@@ -230,9 +281,6 @@ class VaultFailure(val kind: FailureKind, val code: String? = null, val retryAft
 
 // --- recovery on a new phone (§11.11) and direct transfer (§6.7.1) ---
 
-/** The account's recovery as this (new) phone sees it: the vault the account has and the member API's recovery record. */
-data class RecoveryTarget(val vaultId: String?, val recovery: RecoveryView?)
-
 /** Where a recovery on this phone stands (it survives restarts). */
 enum class RecoveryStage {
     /** Not registered yet: scan or type the code. */
@@ -247,11 +295,13 @@ enum class RecoveryStage {
 
 /** `vault.recovery.register`'s answer (§11.11.3), or the member API's gate before it. */
 sealed interface RecoveryRegistration {
-    data object Registered : RecoveryRegistration
+    /** Claimed and registered: [emailHint] names the account the vault belongs to (§11.11.7). */
+    data class Registered(val emailHint: String) : RecoveryRegistration
 
     /**
      * Refused: [code] is the enclave's (`no_recovery`, `used`, `expired`, `too_early`, `bad_code`,
-     * `attestation`, `bad_request`, `retry`) or `not_available` (the API's `409 recovery_not_available`).
+     * `attestation`, `bad_request`, `retry`), `not_available` (the API's `409 recovery_not_available`, at the claim
+     * or the register) or `no_recovery` (the claim's `404`: the QR does not name the vault's current recovery).
      */
     data class Refused(val code: String) : RecoveryRegistration
 }

@@ -3,7 +3,7 @@
  * storage ([KeystoreFileStore]) and [VaultSession]. A3: the repositories the
  * features use (`vault.AccountRepository`, `VaultRepository`,
  * `CredentialRepository`), implemented by `vault.VaultManager`; the app
- * environment (`env.AppEnvironment`) and the member session (`account`);
+ * environment (`env.AppEnvironment`) and the member API signed by the app key (`account`);
  * the PIN and password policies (`policy`); DataStore preferences (`prefs`);
  * and the biometric app lock (`lock.AppLock`, D6). Room caches per feature
  * follow in A4 and A5.

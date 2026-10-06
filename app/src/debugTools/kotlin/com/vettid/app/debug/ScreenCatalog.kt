@@ -111,7 +111,8 @@ import com.vettid.feature.settings.TransferOutActions
 import com.vettid.feature.settings.TransferOutContent
 import com.vettid.feature.settings.TransferOutStep
 import com.vettid.feature.settings.TransferOutUiState
-import com.vettid.core.data.vault.RecoveryTarget
+import com.vettid.core.data.vault.SubscriptionInfo
+import com.vettid.feature.onboarding.ScanRefusal
 import com.vettid.core.data.vault.TransferOfferView
 import com.vettid.core.data.vault.TransferPendingView
 import com.vettid.feature.settings.AttestationContent
@@ -140,17 +141,14 @@ private object NoOnboarding : OnboardingActions {
     override fun transfer() = Unit
     override fun leaveMove() = Unit
     override fun newVaultAfterMove() = Unit
+    override fun typeCode() = Unit
+    override fun scanned(text: String) = Unit
     override fun setEmail(v: String) = Unit
-    override fun submitEmail() = Unit
-    override fun resendLink() = Unit
-    override fun setLinkInput(v: String) = Unit
-    override fun submitLink() = Unit
-    override fun confirmSignIn() = Unit
+    override fun setCode(v: String) = Unit
+    override fun submitCode() = Unit
+    override fun confirmAccount() = Unit
     override fun back(): Boolean = false
-    override fun setAccountPin(v: String) = Unit
-    override fun submitAccountPin() = Unit
-    override fun checkAgain() = Unit
-    override fun useAnotherAccount() = Unit
+    override fun useAnotherCode() = Unit
     override fun enrollAnyway() = Unit
     override fun setPin(v: String) = Unit
     override fun submitPin() = Unit
@@ -168,13 +166,9 @@ private object NoOnboarding : OnboardingActions {
 }
 
 private object NoRecover : RecoverActions {
-    override fun reload() = Unit
     override fun scan() = Unit
-    override fun type() = Unit
     override fun back(): Boolean = false
     override fun scanned(text: String) = Unit
-    override fun setCode(v: String) = Unit
-    override fun submitCode() = Unit
     override fun retryPreflight() = Unit
     override fun setApproveOffer(approve: Boolean) = Unit
     override fun setPin(v: String) = Unit
@@ -222,7 +216,6 @@ private object NoUnlock : UnlockActions {
     override fun setPin(v: String) = Unit
     override fun submit() = Unit
     override fun cancelRecoveryAndUnlock() = Unit
-    override fun signOut() = Unit
     override fun askErase() = Unit
     override fun dismissErase() = Unit
     override fun confirmErase() = Unit
@@ -241,6 +234,10 @@ object ScreenCatalog {
     private val canaryView = CanaryManifestView(2, "4353463f85c4012f", "ab".repeat(32), listOf(release(1, "deprecated"), release(2)))
 
     private val onboarding = OnboardingUiState(email = EMAIL)
+    private val sampleAccount = AccountInfo(
+        emailHint = "s***@example.org", state = "member", accountStatus = "active",
+        subscription = SubscriptionInfo("Annual", SubscriptionInfo.STATUS_ACTIVE, true, Instant.parse("2027-10-01T00:00:00Z")),
+    )
     private val chrome = ShellChrome(accountName = "Sam Rivera", onMenuClick = {}, onAvatarClick = {})
     private val credential = CredentialStatus(true, 7, "Jk4m2Qx9TzA1", "2026-10-04T14:12:00Z", null, true, 300, 3)
     private val alarm = CredentialAlarm("01JABCDEF0123456789ABCDEFG", CredentialAlarm.STATE_FROZEN, "2026-10-04T14:20:00Z", "other")
@@ -292,13 +289,14 @@ object ScreenCatalog {
     )
 
     @Composable
-    private fun Ob(state: OnboardingUiState) = OnboardingContent(state, NoOnboarding, {})
+    private fun Ob(state: OnboardingUiState) =
+        OnboardingContent(state, NoOnboarding, {}) { m -> Box(m.background(MaterialTheme.colorScheme.surfaceContainerHigh)) }
 
     // --- recovery and transfer sample data (made up) ---
-    private const val VID = "3f9c2a7be41d4c0e9b8a6f5d2c1e0a9b"
-    private val rec = RecoveryView("01JABCDEF0123456789ABCDEFG", "available", "2026-10-05T14:00:00Z", "2026-10-06T14:00:00Z")
-    private val recState = RecoverUiState(step = RecoverStep.INTRO, target = RecoveryTarget(VID, rec))
-    private val pinState = recState.copy(step = RecoverStep.PIN, preflight = PreflightInfo(release(3), 0, false, false, null), pin = "975310")
+    private val recState = RecoverUiState(step = RecoverStep.INTRO)
+    private val pinState = recState.copy(
+        step = RecoverStep.PIN, preflight = PreflightInfo(release(3), 0, false, false, null), pin = "975310", emailHint = "s***@example.org",
+    )
 
     @Composable
     private fun Rec(state: RecoverUiState) = RecoverContent(state, NoRecover, {}, {}, {}) { m -> Box(m.background(MaterialTheme.colorScheme.surfaceContainerHigh)) }
@@ -320,11 +318,18 @@ object ScreenCatalog {
 
     val screens: Map<String, @Composable () -> Unit> = linkedMapOf(
         "onboarding.welcome" to { Ob(onboarding) },
-        "onboarding.email" to { Ob(onboarding.copy(step = OnboardingStep.EMAIL)) },
-        "onboarding.check_email" to { Ob(onboarding.copy(step = OnboardingStep.CHECK_EMAIL)) },
-        "onboarding.confirm" to { Ob(onboarding.copy(step = OnboardingStep.CONFIRM_SIGN_IN)) },
-        "onboarding.account_pin" to { Ob(onboarding.copy(step = OnboardingStep.ACCOUNT_PIN, accountPin = "12")) },
-        "onboarding.terms" to { Ob(onboarding.copy(step = OnboardingStep.TERMS)) },
+        "onboarding.setup_scan" to { Ob(onboarding.copy(step = OnboardingStep.SETUP_SCAN)) },
+        "onboarding.setup_other_env" to {
+            Ob(onboarding.copy(step = OnboardingStep.SETUP_SCAN, scanRefusal = ScanRefusal.OTHER_ENVIRONMENT, otherApi = "https://account.staging.vettid.org"))
+        },
+        "onboarding.setup_type" to { Ob(onboarding.copy(step = OnboardingStep.SETUP_TYPE, codeInput = "K7QM-4XRP")) },
+        "onboarding.setup_type_invalid" to {
+            Ob(onboarding.copy(step = OnboardingStep.SETUP_TYPE, codeInput = "K7QM-4XR0", codeInvalid = true))
+        },
+        "onboarding.setup_refused" to {
+            Ob(onboarding.copy(step = OnboardingStep.SETUP_TYPE, codeInput = "K7QM-4XRP", error = FailureKind.SETUP_CODE_INVALID))
+        },
+        "onboarding.confirm_account" to { Ob(onboarding.copy(step = OnboardingStep.CONFIRM_ACCOUNT, emailHint = "s***@example.org")) },
         "onboarding.elsewhere" to { Ob(onboarding.copy(step = OnboardingStep.VAULT_ELSEWHERE)) },
         "onboarding.pin" to { Ob(onboarding.copy(step = OnboardingStep.PIN_CREATE, pin = "1234")) },
         "onboarding.pin_problem" to {
@@ -359,15 +364,14 @@ object ScreenCatalog {
         },
         "onboarding.done" to { Ob(onboarding.copy(step = OnboardingStep.DONE)) },
         "recover" to { Rec(recState) },
-        "recover.none" to { Rec(recState.copy(target = RecoveryTarget(VID, null))) },
-        "recover.pending" to { Rec(recState.copy(target = RecoveryTarget(VID, rec.copy(state = "pending")))) },
-        "recover.cancelled" to { Rec(recState.copy(target = RecoveryTarget(VID, rec.copy(state = "cancelled")))) },
-        "recover.expired" to { Rec(recState.copy(target = RecoveryTarget(VID, rec.copy(state = "expired")))) },
         "recover.scan" to { Rec(recState.copy(step = RecoverStep.SCAN, refusal = CodeRefusal.NOT_A_CODE)) },
-        "recover.type" to { Rec(recState.copy(step = RecoverStep.TYPE, codeInput = "SK01 TG8W K2FY J1Y5 MEHJ 5R5J 7QZK WHX0")) },
-        "recover.bad_code" to { Rec(recState.copy(step = RecoverStep.TYPE, codeInput = "SK01 TG8W K2FY J1Y5 MEHJ 5R5J 7QZK WHX1", refusal = CodeRefusal.BAD_CODE, wrongCodes = 2)) },
-        "recover.voided" to { Rec(recState.copy(step = RecoverStep.TYPE, refusal = CodeRefusal.VOIDED, wrongCodes = 5)) },
-        "recover.too_early" to { Rec(recState.copy(step = RecoverStep.SCAN, target = RecoveryTarget(VID, rec.copy(state = "pending")), refusal = CodeRefusal.TOO_EARLY)) },
+        "recover.other_env" to {
+            Rec(recState.copy(step = RecoverStep.SCAN, refusal = CodeRefusal.OTHER_ENVIRONMENT, otherApi = "https://account.staging.vettid.org"))
+        },
+        "recover.not_available" to { Rec(recState.copy(step = RecoverStep.SCAN, refusal = CodeRefusal.NOT_AVAILABLE)) },
+        "recover.bad_code" to { Rec(recState.copy(step = RecoverStep.SCAN, refusal = CodeRefusal.BAD_CODE, wrongCodes = 2)) },
+        "recover.voided" to { Rec(recState.copy(step = RecoverStep.SCAN, refusal = CodeRefusal.VOIDED, wrongCodes = 5)) },
+        "recover.too_early" to { Rec(recState.copy(step = RecoverStep.SCAN, refusal = CodeRefusal.TOO_EARLY)) },
         "recover.code_expired" to { Rec(recState.copy(step = RecoverStep.SCAN, refusal = CodeRefusal.EXPIRED)) },
         "recover.registering" to { Rec(recState.copy(step = RecoverStep.REGISTERING)) },
         "recover.pin" to { Rec(pinState) },
@@ -474,7 +478,7 @@ object ScreenCatalog {
         "settings" to {
             SettingsContent(
                 SettingsUiState(
-                    account = AccountInfo(EMAIL, "Sam", "Rivera"),
+                    account = sampleAccount,
                     preferences = AppPreferences(ThemePreference.SYSTEM, true, AppLockTimeout.FIVE_MINUTES), appLockOn = true,
                 ),
                 SettingsActions(),
@@ -495,8 +499,8 @@ object ScreenCatalog {
         "settings.pin" to { ChangePinContent(ChangePinUiState(current = "975310", pin = "1111"), {}, {}, {}, {}, {}) },
         "settings.recovery" to {
             RecoveryContent(
-                RecoveryUiState(loading = false, recovery = RecoveryView("01JABCDEF0123456789ABCDEFG", "pending", "2026-10-05T14:00:00Z", "2026-10-06T14:00:00Z")),
-                {}, {}, {},
+                RecoveryUiState(loading = false, recovery = RecoveryView("pending", "2026-10-05T14:00:00Z")),
+                {}, {},
             )
         },
         "settings.transfer" to { TOut(TransferOutUiState()) },
@@ -609,7 +613,19 @@ object ScreenCatalog {
         },
         "approvals.device" to { ApprovalDetailScreen(ApprovalDetailUiState(approvals[5].key, approvals[5]), DecisionActions()) },
         "gallery" to { GalleryScreen(themeMode = LocalThemeController.current.mode, onThemeModeChange = {}, onBack = {}) },
-        "account_sheet" to { AccountSheet(name = "Sam Rivera", detail = EMAIL, onDismiss = {}, onLockVault = {}, onSignOut = {}) },
+        "account_sheet" to { AccountSheet(sampleAccount, "https://account.vettid.org", onDismiss = {}, onLockVault = {}) },
+        "account_sheet.trial_expired" to {
+            AccountSheet(
+                sampleAccount.copy(
+                    termsNeedAcceptance = true,
+                    subscription = SubscriptionInfo("Trial", SubscriptionInfo.STATUS_TRIAL, false, Instant.parse("2026-09-01T00:00:00Z")),
+                ),
+                "https://account.vettid.org",
+                onDismiss = {},
+                onLockVault = {},
+            )
+        },
+        "account_sheet.waiting" to { AccountSheet(AccountInfo("s***@example.org"), "https://account.vettid.org", onDismiss = {}, onLockVault = {}) },
     )
 }
 

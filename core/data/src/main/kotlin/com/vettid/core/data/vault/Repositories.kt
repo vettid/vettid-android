@@ -1,28 +1,29 @@
 package com.vettid.core.data.vault
 
-import com.vettid.core.altchan.SignInStatus
-import com.vettid.core.data.account.SignInLink
+import com.vettid.core.altchan.RecoveryCode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.time.Instant
 
 /**
- * The member's account on this device: the phase the app is in, sign-in
- * (magic link, optional account PIN), the membership and terms checks, and
- * sign-out. Every failure is a [VaultFailure].
+ * The member's account on this device: the phase the app is in, the setup code that starts a vault here
+ * (VAULT-MESSAGING 0.15.0 §11.12: the app never signs in), and the account as the vault reports it (§11.13).
+ * Every failure is a [VaultFailure].
  */
 interface AccountRepository {
     val phase: StateFlow<AppPhase>
+
+    /** The member's account from the vault's snapshot (read-only), or only its masked email before one arrived. */
     val account: StateFlow<AccountInfo?>
 
-    /** The address a sign-in link was last requested for (survives restarts). */
-    val pendingEmail: StateFlow<String?>
-
-    /** A development hint for the sign-in screens (devStack builds only). */
+    /** A development hint for the setup screens (devStack builds only). */
     val devHint: String?
 
-    /** Hosts whose `/auth/` links are accepted. */
-    val signInHosts: Set<String>
+    /**
+     * This build's member API origin (`https://account.vettid.org`): setup and recovery QR codes name the portal
+     * that made them in `api`, which must equal it exactly (an identifier, never contacted).
+     */
+    val apiOrigin: String
 
     /**
      * The operator paused the vault service (MEMBER-API 1.2.0): `GET /api/vault/status` said `service: "paused"`,
@@ -31,24 +32,27 @@ interface AccountRepository {
      */
     val servicePaused: StateFlow<Boolean> get() = NEVER_PAUSED
 
-    /** Re-reads the session, `Me` and the vault's state, and sets [phase]. */
+    /** Re-reads the vault's state and sets [phase]. */
     suspend fun refresh()
 
-    suspend fun startSignIn(email: String)
+    /**
+     * Redeems the portal's setup code with this phone's app key (§11.12.1) and returns the account's masked email
+     * (`email_hint`) for the member to confirm before a PIN is asked for. [FailureKind.SETUP_CODE_INVALID] for any
+     * refusal of the code itself.
+     */
+    suspend fun redeemSetupCode(code: SetupCodeInput): String
 
-    suspend fun verifySignIn(email: String, link: SignInLink): SignInStatus
+    /** "That is not my account" after a redeem, or a pending key that expired: back to the welcome screen. */
+    suspend fun forgetSetupCode()
 
-    suspend fun signInPin(pin: String): SignInStatus
-
-    /** Ends the member session on this device; the vault stays paired with it. */
-    suspend fun signOut()
+    /** Re-reads the account snapshot from the vault (`account.get`); quiet on failure. */
+    suspend fun refreshAccount() {}
 
     /**
      * The member's "Erase VettID from this phone" (owner decision, 2026-10-05), offered only where the vault
      * did not recognise this phone at unlock: the same crash-safe wipe as a replaced phone's (`LocalWipe`),
-     * with the same best-effort, bounded sign-out at the member API and the relay. The erase itself needs no
-     * network. Returns once the phone is as freshly installed ([phase] [AppPhase.SignedOut]); it runs to the
-     * end even if the caller is cancelled.
+     * with the same best-effort, bounded relay cleanup. The erase itself needs no network. Returns once the phone
+     * is as freshly installed ([phase] [AppPhase.SignedOut]); it runs to the end even if the caller is cancelled.
      */
     suspend fun eraseThisPhone()
 }
@@ -91,9 +95,8 @@ interface VaultRepository {
     /** `vault.delete` (§12.5): irreversible. */
     suspend fun deleteVault(pin: String, password: String)
 
+    /** A recovery in progress, from `GET /api/vault/status` (it is cancelled on the account portal, or by an unlock). */
     suspend fun recovery(): RecoveryView?
-
-    suspend fun cancelRecovery(recoveryId: String)
 
     suspend fun attestationInfo(): AttestationInfo
 }
@@ -135,14 +138,11 @@ interface MoveRepository {
     /** Where a recovery on this phone stands. */
     suspend fun recoveryStage(): RecoveryStage
 
-    /** The account's vault and its recovery (member API `GET /api/vault/status` and `GET /api/vault/recovery`). */
-    suspend fun recoveryTarget(): RecoveryTarget
-
     /**
-     * Registers this phone with the portal's code (§11.11.3), attested. A typed
-     * [code] uses the vault and recovery ids of [target].
+     * Claims the recovery of the portal's QR with this phone's app key (§11.11.7, 0.15.0), then registers this
+     * phone with its code (§11.11.3), attested.
      */
-    suspend fun registerRecovery(vaultId: String, recoveryId: String, code: String): RecoveryRegistration
+    suspend fun registerRecovery(code: RecoveryCode): RecoveryRegistration
 
     /** The release check before the PIN (§11.10.6), as for an unlock. */
     suspend fun recoveryPreflight(): PreflightInfo

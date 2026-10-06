@@ -4,7 +4,7 @@ import android.content.Context
 import android.os.Build
 import com.vettid.app.env.currentEnvironment
 import com.vettid.app.net.ConnectivityGate
-import com.vettid.core.data.account.SignInLinkInbox
+import com.vettid.core.data.account.SetupLinkInbox
 import com.vettid.core.data.social.InviteLinkInbox
 import com.vettid.core.data.env.AppEnvironment
 import com.vettid.core.data.lock.AppLock
@@ -101,7 +101,7 @@ object AppModule {
         @ApplicationContext context: Context,
         prefs: PreferencesRepository,
         appLock: AppLock,
-        signInLinks: SignInLinkInbox,
+        setupLinks: SetupLinkInbox,
         inviteLinks: InviteLinkInbox,
         canaryManifests: CanaryManifestInbox,
     ): LocalWipe = LocalWipe(
@@ -109,7 +109,7 @@ object AppModule {
         hooks = listOf(
             { appLock.reset() },
             { prefs.clear() },
-            { signInLinks.consume() },
+            { setupLinks.consume() },
             { inviteLinks.consume() },
             { canaryManifests.consume() },
         ),
@@ -150,7 +150,7 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun signInLinkInbox(): SignInLinkInbox = SignInLinkInbox()
+    fun setupLinkInbox(): SetupLinkInbox = SetupLinkInbox()
 
     @Provides
     @Singleton

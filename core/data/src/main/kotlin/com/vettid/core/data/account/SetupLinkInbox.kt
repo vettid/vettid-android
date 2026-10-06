@@ -5,13 +5,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 /**
- * A sign-in link the app was opened with (App Link on account.vettid.org
- * `/auth/`), handed from the activity to the onboarding flow. The link is
- * never sent anywhere until the member confirms the sign-in (MEMBER-API: a
- * link scanner must not burn the token, and opening a link must not silently
- * switch accounts).
+ * A setup link the app was opened with (the account portal's same-device App Link,
+ * `https://<account host>/vault/enroll/#s=<secret>`, VAULT-MESSAGING §11.12.1), handed from the activity to the
+ * onboarding flow, which redeems it only while this phone has no vault.
  */
-class SignInLinkInbox {
+class SetupLinkInbox {
     private val flow = MutableStateFlow<String?>(null)
     val link: StateFlow<String?> = flow.asStateFlow()
 

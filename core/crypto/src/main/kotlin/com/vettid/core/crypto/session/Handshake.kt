@@ -33,6 +33,8 @@ class InitiatorConfig(
     val profile: ByteArray? = null,
     val rotations: List<Rotation> = emptyList(),
     val deviceAttest: DeviceAttest? = null,
+    /** A transfer's app key (§6.2, 0.15.0): SPKI DER, only with purpose app. */
+    val apiKey: ByteArray? = null,
     /** hs.init sender_kid all-zero instead of kid(staticKem). */
     val anonymousSender: Boolean = false,
     /** The pinned ik_R (or the stored ik for rekey/reconnect). */
@@ -194,6 +196,7 @@ class Initiator private constructor(
                     profile = cfg.profile,
                     rotations = cfg.rotations,
                     deviceAttest = cfg.deviceAttest,
+                    apiKey = cfg.apiKey,
                     sasCommit = nI?.let { Schedule.sasCommit(it) },
                 )
                 val inner = Inner(id = id, type = HsTypes.INIT, ts = now, body = body.marshal())

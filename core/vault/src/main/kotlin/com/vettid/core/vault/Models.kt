@@ -248,3 +248,42 @@ data class TransferOffer(val transferId: String, val link: String, val exp: Stri
 
 /** `device.transfer.pending` (§10.3): the new app's self-asserted [name] and the SAS to compare. */
 data class TransferPending(val transferId: String, val name: String, val sas: String)
+
+/**
+ * The member's account snapshot from the member API (§11.13, 0.15.0): display only, never a security signal.
+ * `email_hint` is the masked address (`m***@example.com`); nothing else about the member is sent.
+ */
+@Serializable
+data class AccountSnapshot(
+    val v: Int = 1,
+    @SerialName("as_of") val asOf: String? = null,
+    @SerialName("email_hint") val emailHint: String? = null,
+    /** `member` (or another account state). */
+    val state: String? = null,
+    /** `active` or `canceled`. */
+    @SerialName("account_status") val accountStatus: String? = null,
+    @SerialName("deletes_at") val deletesAt: String? = null,
+    val terms: AccountTerms? = null,
+    val subscription: AccountSubscription? = null,
+    @SerialName("voting_rights") val votingRights: Boolean = false,
+)
+
+@Serializable
+data class AccountTerms(@SerialName("needs_acceptance") val needsAcceptance: Boolean = false)
+
+@Serializable
+data class AccountSubscription(
+    @SerialName("type_name") val typeName: String? = null,
+    /** `trial`, `active`, `expired` or `canceled`. */
+    val status: String? = null,
+    val paid: Boolean = false,
+    @SerialName("expires_at") val expiresAt: String? = null,
+)
+
+/** `account.get` (§10.2, 0.15.0): `account` null (and `version` 0) before any snapshot arrived. */
+@Serializable
+data class AccountView(
+    val account: AccountSnapshot? = null,
+    val version: Long = 0,
+    @SerialName("received_at") val receivedAt: String? = null,
+)

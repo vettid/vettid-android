@@ -28,7 +28,7 @@ import org.junit.runner.RunWith
  * `./gradlew -PvettidTestBuildType=devStack :app:connectedDevStackAndroidTest`
  *
  * A fresh install goes through onboarding with a new test member (the dev
- * stack's sign-in stand-in), enrolls a vault with the phone's REAL Keystore
+ * stack's simulated setup-code redeem), enrolls a vault with the phone's REAL Keystore
  * attestation (StrongBox; the stack runs with devstack/device-policy.json),
  * creates the Protean Credential, then locks the vault and unlocks it with
  * the PIN, all through the UI. Screenshots of each step go to
@@ -77,23 +77,24 @@ class A3ExitTest {
         val email = "a3-exit-${System.currentTimeMillis()}@example.org"
         val intent = Intent(context, MainActivity::class.java).putExtra("vettid.screenshot", true).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         ActivityScenario.launch<MainActivity>(intent).use {
-            // Welcome → sign in (the dev stack's stand-in: the token is pasted).
+            // Welcome → setup code (the dev stack simulates the typed redeem: any email, the code DEVSTACK).
             waitText("Get started")
             screenshot("welcome")
+            shell("pm grant ${context.packageName} android.permission.CAMERA")
             text("Get started").performClick()
-            waitTag("email")
-            tag("email").performTextInput(email)
-            screenshot("email")
+            waitText("Type the code instead")
+            screenshot("setup-scan")
+            text("Type the code instead").performClick()
+            waitTag("setup_email")
+            tag("setup_email").performTextInput(email)
+            tag("setup_code").performTextInput("DEVSTACK")
+            screenshot("setup-type")
             primary()
-            waitTag("link")
-            tag("link").performTextInput("devstack-sign-in-token")
-            screenshot("check-email")
-            primary()
-            waitText("Sign in on this phone?")
-            screenshot("confirm-sign-in")
+            waitText("Is this your account?", LONG_WAIT_MS)
+            screenshot("confirm-account")
             primary()
 
-            // Membership ok → vault PIN, confirmation, credential password, backup.
+            // The account confirmed → vault PIN, confirmation, credential password, backup.
             waitTag("pin", LONG_WAIT_MS)
             tag("pin").performTextInput(PIN)
             screenshot("pin")

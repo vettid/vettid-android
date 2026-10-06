@@ -1,7 +1,6 @@
 package com.vettid.core.testing
 
-import com.vettid.core.altchan.SignInStatus
-import com.vettid.core.data.account.SignInLink
+import com.vettid.core.altchan.RecoveryCode
 import com.vettid.core.data.vault.AccountInfo
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.AppPhase
@@ -23,7 +22,7 @@ import com.vettid.core.data.vault.MoveRepository
 import com.vettid.core.data.vault.RecoverOutcome
 import com.vettid.core.data.vault.RecoveryRegistration
 import com.vettid.core.data.vault.RecoveryStage
-import com.vettid.core.data.vault.RecoveryTarget
+import com.vettid.core.data.vault.SetupCodeInput
 import com.vettid.core.data.vault.TransferOfferView
 import com.vettid.core.data.vault.TransferPendingView
 import kotlinx.coroutines.CompletableDeferred
@@ -43,8 +42,10 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, Vau
     override val servicePaused = MutableStateFlow(false)
     val fail = mutableMapOf<String, VaultFailure>()
     val unlockResults = ArrayDeque<UnlockAttempt>()
-    var signInStatus = SignInStatus.SIGNED_IN
-    var phaseAfterSignIn: AppPhase = AppPhase.Setup(SetupStage.NEW_VAULT)
+    /** What [redeemSetupCode] answers (`email_hint`); the phase it moves to. */
+    var emailHint = "m***@example.com"
+    var phaseAfterRedeem: AppPhase = AppPhase.Setup(SetupStage.NEW_VAULT)
+    var lastRedeemed: SetupCodeInput? = null
     var preflightInfo = PreflightInfo(release(3), 3, softwareUpdated = false, rollback = false, offer = null)
     var credential = CredentialStatus(
         true,
@@ -66,9 +67,8 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, Vau
 
     // --- recovery and transfer (MoveRepository) ---
     var recoveryStageValue = RecoveryStage.CODE
-    var recoveryTargetValue = RecoveryTarget("0123456789abcdef0123456789abcdef", null)
     val registrations = ArrayDeque<RecoveryRegistration>()
-    var lastRegistered: Triple<String, String, String>? = null
+    var lastRegistered: RecoveryCode? = null
     val recoveryUnlockResults = ArrayDeque<UnlockAttempt>()
     var recoverOutcome = RecoverOutcome.RECOVERED
 
@@ -91,14 +91,13 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, Vau
 
     override val phase = MutableStateFlow(initial)
     override val account = MutableStateFlow<AccountInfo?>(null)
-    override val pendingEmail = MutableStateFlow<String?>(null)
     override val alarm = MutableStateFlow<CredentialAlarm?>(null)
     override val unlockWindow = MutableStateFlow<Instant?>(null)
 
     /** Set by a test: the open app was sent to the unlock screen after repeated relay refusals. */
     override val refusedByVault = MutableStateFlow(false)
     override val devHint: String? = null
-    override val signInHosts: Set<String> = setOf(SignInLink.HOST)
+    override val apiOrigin: String = "https://account.vettid.org"
 
     private fun call(name: String) {
         calls += name
@@ -107,30 +106,17 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, Vau
 
     override suspend fun refresh() = call("refresh")
 
-    override suspend fun startSignIn(email: String) {
-        call("startSignIn")
-        pendingEmail.value = email
+    override suspend fun redeemSetupCode(code: SetupCodeInput): String {
+        call("redeemSetupCode")
+        lastRedeemed = code
+        account.value = AccountInfo(emailHint)
+        phase.value = phaseAfterRedeem
+        return emailHint
     }
 
-    override suspend fun verifySignIn(email: String, link: SignInLink): SignInStatus {
-        call("verifySignIn")
-        if (signInStatus == SignInStatus.SIGNED_IN) signedIn(email)
-        return signInStatus
-    }
-
-    override suspend fun signInPin(pin: String): SignInStatus {
-        call("signInPin")
-        signedIn(pendingEmail.value ?: "")
-        return SignInStatus.SIGNED_IN
-    }
-
-    private fun signedIn(email: String) {
-        account.value = AccountInfo(email, "Test", "Member")
-        phase.value = phaseAfterSignIn
-    }
-
-    override suspend fun signOut() {
-        call("signOut")
+    override suspend fun forgetSetupCode() {
+        call("forgetSetupCode")
+        account.value = null
         phase.value = AppPhase.SignedOut
     }
 
@@ -194,7 +180,7 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, Vau
         call("deleteVault")
         lastPin = pin
         lastPassword = password
-        phase.value = AppPhase.Setup(SetupStage.NEW_VAULT)
+        phase.value = AppPhase.SignedOut // a new vault needs a new setup code
     }
 
     override suspend fun recovery(): RecoveryView? {
@@ -202,10 +188,6 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, Vau
         return recoveryValue
     }
 
-    override suspend fun cancelRecovery(recoveryId: String) {
-        call("cancelRecovery")
-        recoveryValue = recoveryValue?.copy(state = "cancelled")
-    }
 
     override suspend fun attestationInfo(): AttestationInfo {
         call("attestationInfo")
@@ -262,16 +244,11 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, Vau
         return recoveryStageValue
     }
 
-    override suspend fun recoveryTarget(): RecoveryTarget {
-        call("recoveryTarget")
-        return recoveryTargetValue
-    }
-
-    override suspend fun registerRecovery(vaultId: String, recoveryId: String, code: String): RecoveryRegistration {
+    override suspend fun registerRecovery(code: RecoveryCode): RecoveryRegistration {
         call("registerRecovery")
-        lastRegistered = Triple(vaultId, recoveryId, code)
-        val r = registrations.removeFirstOrNull() ?: RecoveryRegistration.Registered
-        if (r == RecoveryRegistration.Registered) phase.value = AppPhase.Setup(SetupStage.RECOVERING)
+        lastRegistered = code
+        val r = registrations.removeFirstOrNull() ?: RecoveryRegistration.Registered(emailHint)
+        if (r is RecoveryRegistration.Registered) phase.value = AppPhase.Setup(SetupStage.RECOVERING)
         return r
     }
 
@@ -308,7 +285,7 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, Vau
     override suspend fun deleteRecoveredVault(pin: String) {
         call("deleteRecoveredVault")
         lastPin = pin
-        phase.value = AppPhase.Setup(SetupStage.NEW_VAULT)
+        phase.value = AppPhase.SignedOut // a new vault needs a new setup code
     }
 
     override suspend fun transferIn(code: String): String {

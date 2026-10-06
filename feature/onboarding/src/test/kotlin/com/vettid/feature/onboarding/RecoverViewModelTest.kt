@@ -6,8 +6,7 @@ import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.RecoverOutcome
 import com.vettid.core.data.vault.RecoveryRegistration
 import com.vettid.core.data.vault.RecoveryStage
-import com.vettid.core.data.vault.RecoveryTarget
-import com.vettid.core.data.vault.RecoveryView
+import com.vettid.core.altchan.RecoveryCode
 import com.vettid.core.data.vault.SetupStage
 import com.vettid.core.data.vault.UnlockAttempt
 import com.vettid.core.testing.FakeVault
@@ -17,7 +16,6 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -31,23 +29,19 @@ class RecoverViewModelTest {
     private val vid = "0123456789abcdef0123456789abcdef"
     private val rid = "01JA0RECVERY0000000000001X"
     private val code = "SK01TG8WK2FYJ1Y5MEHJ5R5J7QZKWHX0"
-    private val qr = """{"v":1,"t":"r","vault_id":"$vid","recovery_id":"$rid","code":"$code"}"""
-
-    private fun available() {
-        vault.recoveryTargetValue = RecoveryTarget(vid, RecoveryView(rid, "available", "2026-10-05T12:00:00Z", "2026-10-06T12:00:00Z"))
-    }
+    private val api = "https://account.vettid.org"
+    private val qr = """{"v":1,"t":"r","api":"$api","vault_id":"$vid","recovery_id":"$rid","code":"$code"}"""
 
     @Test
     fun scanRegisterPinPasswordDone() = runTest {
-        available()
-        val vm = RecoverViewModel(vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault)
         advanceUntilIdle()
         assertEquals(RecoverStep.INTRO, vm.uiState.value.step)
-        assertTrue(vm.uiState.value.codeAvailable)
         vm.scan()
         vm.scanned(qr)
         advanceUntilIdle()
-        assertEquals(Triple(vid, rid, code), vault.lastRegistered)
+        assertEquals(RecoveryCode(vid, rid, code, api), vault.lastRegistered)
+        assertEquals(vault.emailHint, vm.uiState.value.emailHint)
         assertEquals(AppPhase.Setup(SetupStage.RECOVERING), vault.phase.value)
         assertEquals(RecoverStep.PIN, vm.uiState.value.step)
         assertTrue(vm.uiState.value.pinAllowed)
@@ -70,68 +64,42 @@ class RecoverViewModelTest {
     }
 
     @Test
-    fun aTypedCodeUsesTheAccountsRecovery() = runTest {
-        available()
-        val vm = RecoverViewModel(vault, vault)
-        advanceUntilIdle()
-        vm.type()
-        vm.setCode("sk01-tg8w k2fy j1y5 mehj 5r5j 7qzk whxo")
-        vm.submitCode()
-        advanceUntilIdle()
-        assertEquals(Triple(vid, rid, code), vault.lastRegistered)
-        assertEquals(RecoverStep.PIN, vm.uiState.value.step)
-    }
-
-    @Test
-    fun aMalformedTypedCodeIsNotSent() = runTest {
-        available()
-        val vm = RecoverViewModel(vault, vault)
-        advanceUntilIdle()
-        vm.type()
-        vm.setCode("SK01 TG8W")
-        vm.submitCode()
-        advanceUntilIdle()
-        assertTrue(vm.uiState.value.codeInvalid)
-        assertFalse("registerRecovery" in vault.calls)
-    }
-
-    @Test
     fun scansThatAreNotThisAccountsRecoveryCodeAreRefusedLocally() = runTest {
-        available()
-        val vm = RecoverViewModel(vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault)
         advanceUntilIdle()
         vm.scan()
         vm.scanned("https://example.org")
         assertEquals(CodeRefusal.NOT_A_CODE, vm.uiState.value.refusal)
-        vm.scanned(qr.replace(vid, "another-vault"))
-        assertEquals(CodeRefusal.OTHER_VAULT, vm.uiState.value.refusal)
+        // §11.11.2 (0.15.0): `api` must equal this build's member API origin exactly; it is never contacted.
+        vm.scanned(qr.replace(api, "https://account.staging.vettid.org"))
+        assertEquals(CodeRefusal.OTHER_ENVIRONMENT, vm.uiState.value.refusal)
+        assertEquals("https://account.staging.vettid.org", vm.uiState.value.otherApi)
+        vm.scanned(qr.replace("\"api\":\"$api\",", ""))
+        assertEquals(CodeRefusal.NO_API, vm.uiState.value.refusal)
         assertFalse("registerRecovery" in vault.calls)
     }
 
     @Test
     fun wrongCodesAreCountedAndTheFifthVoidsTheRecovery() = runTest {
-        available()
         repeat(5) { vault.registrations.add(RecoveryRegistration.Refused("bad_code")) }
-        val vm = RecoverViewModel(vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault)
         advanceUntilIdle()
-        vm.type()
+        vm.scan()
         for (i in 1..4) {
-            vm.setCode(code)
-            vm.submitCode()
+            vm.scanned(qr)
             advanceUntilIdle()
-            assertEquals(RecoverStep.TYPE, vm.uiState.value.step)
+            assertEquals(RecoverStep.SCAN, vm.uiState.value.step)
             assertEquals(CodeRefusal.BAD_CODE, vm.uiState.value.refusal)
             assertEquals(i, vm.uiState.value.wrongCodes)
         }
-        vm.submitCode()
+        vm.scanned(qr)
         advanceUntilIdle()
         assertEquals(CodeRefusal.VOIDED, vm.uiState.value.refusal)
     }
 
     @Test
     fun enclaveRefusalsSayWhy() = runTest {
-        available()
-        val vm = RecoverViewModel(vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault)
         advanceUntilIdle()
         vm.scan()
         for ((c, r) in listOf(
@@ -144,24 +112,18 @@ class RecoverViewModelTest {
             assertEquals(c, r, vm.uiState.value.refusal)
             assertEquals(RecoverStep.SCAN, vm.uiState.value.step)
         }
-        // The API's 409 recovery_not_available: the account's recovery says why (here: still pending).
-        vault.recoveryTargetValue = RecoveryTarget(vid, RecoveryView(rid, "pending", "2026-10-05T12:00:00Z", "2026-10-06T12:00:00Z"))
+        // The API's 409 recovery_not_available at the claim or the register (the app cannot read the recovery).
         vault.registrations.add(RecoveryRegistration.Refused("not_available"))
         vm.scanned(qr)
         advanceUntilIdle()
-        assertEquals(CodeRefusal.TOO_EARLY, vm.uiState.value.refusal)
-        vault.recoveryTargetValue = RecoveryTarget(vid, RecoveryView(rid, "cancelled", "", ""))
-        vault.registrations.add(RecoveryRegistration.Refused("not_available"))
-        vm.scanned(qr)
-        advanceUntilIdle()
-        assertEquals(CodeRefusal.GONE, vm.uiState.value.refusal)
+        assertEquals(CodeRefusal.NOT_AVAILABLE, vm.uiState.value.refusal)
     }
 
     @Test
     fun aCancelledRecoveryAtThePinSaysSo() = runTest {
         vault.recoveryStageValue = RecoveryStage.PIN
         vault.recoveryUnlockResults.add(UnlockAttempt.Failed(FailureKind.OTHER, "unknown_device"))
-        val vm = RecoverViewModel(vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault)
         advanceUntilIdle()
         assertEquals(RecoverStep.PIN, vm.uiState.value.step)
         vm.setPin("975310")
@@ -175,7 +137,7 @@ class RecoverViewModelTest {
     fun badPinStartsTheBackoff() = runTest {
         vault.recoveryStageValue = RecoveryStage.PIN
         vault.recoveryUnlockResults.add(UnlockAttempt.BadPin(30))
-        val vm = RecoverViewModel(vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault)
         advanceUntilIdle()
         vm.setPin("975310")
         vm.submitPin()
@@ -189,7 +151,7 @@ class RecoverViewModelTest {
     fun aReleaseThatEndedBlocksThePin() = runTest {
         vault.recoveryStageValue = RecoveryStage.PIN
         vault.fail["recoveryPreflight"] = FakeVault.failure(FailureKind.RELEASE_ENDED)
-        val vm = RecoverViewModel(vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault)
         advanceUntilIdle()
         assertEquals(FailureKind.RELEASE_ENDED, vm.uiState.value.preflightError)
         assertFalse(vm.uiState.value.pinAllowed)
@@ -204,7 +166,7 @@ class RecoverViewModelTest {
         vault.recoveryStageValue = RecoveryStage.PIN
         vault.preflightInfo =
             PreflightInfo(FakeVault.release(3), 0, softwareUpdated = false, rollback = false, offer = FakeVault.release(4))
-        val vm = RecoverViewModel(vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault)
         advanceUntilIdle()
         vm.setApproveOffer(true)
         vm.setPin("975310")
@@ -217,7 +179,7 @@ class RecoverViewModelTest {
     fun backupOffOffersANewCredential() = runTest {
         vault.recoveryStageValue = RecoveryStage.PASSWORD
         vault.recoverOutcome = RecoverOutcome.CREDENTIAL_LOST
-        val vm = RecoverViewModel(vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault)
         advanceUntilIdle()
         assertEquals(RecoverStep.PASSWORD, vm.uiState.value.step)
         vm.setPassword("whatever")
@@ -241,7 +203,7 @@ class RecoverViewModelTest {
     private fun kotlinx.coroutines.test.TestScope.unlockedWith(backup: Boolean?): RecoverViewModel {
         vault.recoveryStageValue = RecoveryStage.PIN
         vault.recoveryCredentialBackupValue = backup
-        val vm = RecoverViewModel(vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault)
         advanceUntilIdle()
         assertEquals(RecoverStep.PIN, vm.uiState.value.step)
         vm.setPin("975310")
@@ -292,7 +254,7 @@ class RecoverViewModelTest {
     fun credentialBackupFalseAlsoAppliesWhenTheFlowResumes() = runTest {
         vault.recoveryStageValue = RecoveryStage.PASSWORD
         vault.recoveryCredentialBackupValue = false
-        val vm = RecoverViewModel(vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault)
         advanceUntilIdle()
         assertEquals(RecoverStep.LOST, vm.uiState.value.step)
         assertFalse("recoverCredential" in vault.calls)
@@ -302,7 +264,7 @@ class RecoverViewModelTest {
     fun backupOffDeleteNeedsThePinAndAConfirmation() = runTest {
         vault.recoveryStageValue = RecoveryStage.PASSWORD
         vault.recoverOutcome = RecoverOutcome.CREDENTIAL_LOST
-        val vm = RecoverViewModel(vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault)
         advanceUntilIdle()
         vm.setPassword("x")
         vm.submitPassword()
@@ -319,14 +281,14 @@ class RecoverViewModelTest {
         advanceUntilIdle()
         assertEquals("975310", vault.lastPin)
         assertEquals(RecoverStep.DELETED, vm.uiState.value.step)
-        assertEquals(AppPhase.Setup(SetupStage.NEW_VAULT), vault.phase.value)
+        assertEquals(AppPhase.SignedOut, vault.phase.value)
     }
 
     @Test
     fun aWrongPasswordIsShownAndTheFieldCleared() = runTest {
         vault.recoveryStageValue = RecoveryStage.PASSWORD
         vault.fail["recoverCredential"] = FakeVault.failure(FailureKind.BAD_PASSWORD, "bad_password")
-        val vm = RecoverViewModel(vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault)
         advanceUntilIdle()
         vm.setPassword("wrong")
         vm.submitPassword()
@@ -338,11 +300,9 @@ class RecoverViewModelTest {
 
     @Test
     fun noRecoveryShowsWhatToDo() = runTest {
-        val vm = RecoverViewModel(vault, vault)
+        val vm = RecoverViewModel(vault, vault, vault)
         advanceUntilIdle()
         assertEquals(RecoverStep.INTRO, vm.uiState.value.step)
-        assertNull(vm.uiState.value.recoveryState)
-        assertFalse(vm.uiState.value.codeAvailable)
         assertFalse(vm.back())
         vm.scan()
         assertTrue(vm.back())

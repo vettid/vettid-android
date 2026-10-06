@@ -29,6 +29,9 @@ class RootViewModel @Inject constructor(
     val alarm: StateFlow<CredentialAlarm?> = credential.alarm
     val account: StateFlow<AccountInfo?> = accounts.account
 
+    /** The account portal of this build's environment (the member API origin), opened in the browser. */
+    val portalUrl: String = accounts.apiOrigin
+
     /** The vault service is paused for maintenance (MEMBER-API 1.2.0): a banner, nothing blocked. */
     val servicePaused: StateFlow<Boolean> = accounts.servicePaused
 
@@ -44,9 +47,5 @@ class RootViewModel @Inject constructor(
                 accounts.refresh()
             }
         }
-    }
-
-    fun signOut() {
-        viewModelScope.launch { accounts.signOut() }
     }
 }
