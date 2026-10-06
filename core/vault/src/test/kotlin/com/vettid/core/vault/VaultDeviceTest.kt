@@ -31,8 +31,10 @@ import com.vettid.core.relay.DepositTokens
 import com.vettid.core.relay.RelayAuth
 import com.vettid.core.relay.RelayException
 import com.vettid.core.relay.RelayMessage
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -70,6 +72,19 @@ class VaultDeviceTest {
     /** When set, the relay refuses every deposit with this code (403). */
     @Volatile
     private var refuseDeposits: String? = null
+
+    /** Deposits the relay refused (any code). */
+    private val refused = java.util.concurrent.atomic.AtomicInteger()
+
+    /** When true, GET /v1/mailbox serves [queued] (empty after a short wait); otherwise it answers 404. */
+    @Volatile
+    private var serveMailbox = false
+
+    /** When set, GET /v1/mailbox is refused with this code (403). */
+    @Volatile
+    private var refuseCollect: String? = null
+    private val queued = LinkedBlockingQueue<RelayMessage>()
+    private val acked = LinkedBlockingQueue<String>()
 
     /** The fake vault's keys and session with the device. */
     private inner class FakeVault {
@@ -139,8 +154,22 @@ class VaultDeviceTest {
                         """{"mailbox_id":"x","limits":{"max_payload_bytes":262144,"message_ttl_seconds":1,"visibility_timeout_seconds":60,""" +
                             """"max_token_lifetime_seconds":1,"open_token_max_lifetime_seconds":1,"max_claim_bytes":1,"claim_ttl_seconds":1}}""",
                     ).build()
-                    path.startsWith("/v1/mailbox/") && request.method == "POST" && refuseDeposits != null ->
+                    path.startsWith("/v1/mailbox/") && request.method == "POST" && refuseDeposits != null -> {
+                        refused.incrementAndGet()
                         MockResponse.Builder().code(403).body("""{"code":"$refuseDeposits","message":""}""").build()
+                    }
+                    path == "/v1/mailbox" && request.method == "GET" && refuseCollect != null ->
+                        MockResponse.Builder().code(403).body("""{"code":"$refuseCollect","message":""}""").build()
+                    path == "/v1/mailbox" && request.method == "GET" && serveMailbox -> {
+                        val m = queued.poll(200, TimeUnit.MILLISECONDS)
+                        val msgs = if (m == null) "" else JsonBuilder().string("msg_id", m.msgId).string("sender", m.sender)
+                            .base64("payload", m.payload()).build()
+                        MockResponse.Builder().code(200).body("""{"messages":[$msgs]}""").build()
+                    }
+                    path.startsWith("/v1/mailbox/") && request.method == "DELETE" -> {
+                        acked.add(path.removePrefix("/v1/mailbox/"))
+                        MockResponse.Builder().code(204).build()
+                    }
                     path.startsWith("/v1/mailbox/") && request.method == "POST" -> {
                         val o = StrictJson.parseObject(request.body!!.toByteArray())
                         deposits.add(path.removePrefix("/v1/mailbox/") to o.base64("payload"))
@@ -354,6 +383,103 @@ class VaultDeviceTest {
             d.clearVaultRefusals()
             assertEquals(0, d.vaultRefusals.value)
             refuseDeposits = null
+        }
+    }
+
+    /**
+     * W9 staging (2026-10-06): the old phone of a recovery found a vault message in its mailbox whose answer the
+     * relay refused with `token_revoked` (the vault had denylisted it, §7.4). The refusal escaped the handler, ended
+     * the collector and killed the process, and the unacked message did the same at every launch, so the
+     * `device.unlinked` behind it was never read. Now the refused answer is counted as a refusal by the vault
+     * (RefusalWatch then offers the erase), the message is handled once and acked, and the next one is read.
+     */
+    @Test
+    fun aRefusedAnswerToTheVaultNeitherThrowsNorRepeats() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, v) = pairedDevice(this, store, secrets)
+            refuseDeposits = RelayException.TOKEN_REVOKED
+            val refresh = v.seal("relay.token.refresh", "{}")
+            d.handle(refresh) // does not throw
+            assertEquals(1, refused.get())
+            assertEquals(1, d.vaultRefusals.value)
+            // The message was handled once, also across a restart (its msg_id was saved with the refusal).
+            val again = VaultDevice.load(config(store), secrets)!!
+            again.handle(refresh)
+            assertEquals(1, refused.get())
+            // A rekey whose answer is refused: counted the same way, nothing thrown.
+            val ini = Initiator.create(
+                InitiatorConfig(
+                    purpose = Purpose.REKEY, ctx = "", identity = v.ik, staticKem = v.kem.publicKey, relay = v.principal().relay,
+                    responderIk = d.identityKey, responderEk = null, responderRelayKey = d.relayAddr.pk(), current = v.keyring.current(),
+                    policy = Policy.VAULT_TO_DEVICE,
+                ),
+            )
+            d.handle(v.msg(ini.envelope()))
+            assertEquals(2, refused.get())
+            assertEquals(1, d.vaultRefusals.value) // the rekey came from the vault (reset), then its answer was refused
+            refuseDeposits = null
+        }
+    }
+
+    /** Other relay errors on an answer neither throw nor count as a refusal by the vault. */
+    @Test
+    fun otherRelayErrorsOnAnAnswerAreNotRefusals() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            for (code in listOf(RelayException.TOKEN_EXPIRED, RelayException.MAILBOX_UNKNOWN, RelayException.TOKEN_INVALID)) {
+                refuseDeposits = code
+                d.handle(v.seal("relay.token.refresh", "{}"))
+                assertEquals(code, 0, d.vaultRefusals.value)
+            }
+            refuseDeposits = null
+        }
+    }
+
+    /** The collector itself: a refused answer is acked and the device.unlinked behind it arrives; nothing escapes. */
+    @Test
+    fun theCollectorSurvivesARefusedAnswerAndReadsTheNextMessage() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val escaped = LinkedBlockingQueue<Throwable>()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, e -> escaped.add(e) })
+            refuseDeposits = RelayException.TOKEN_REVOKED
+            serveMailbox = true
+            val refresh = v.seal("relay.token.refresh", "{}")
+            val unlinked = v.seal("device.unlinked", """{"reason":"replaced"}""")
+            queued.add(refresh)
+            queued.add(unlinked)
+            val job = d.start(scope)
+            assertEquals("replaced", VaultJson.str(d.awaitEvent("device.unlinked", java.time.Duration.ofSeconds(10)).body, "reason"))
+            assertEquals(refresh.msgId, acked.poll(10, TimeUnit.SECONDS))
+            assertEquals(unlinked.msgId, acked.poll(10, TimeUnit.SECONDS))
+            assertTrue(job.isActive)
+            job.cancel()
+            assertTrue(escaped.isEmpty())
+            serveMailbox = false
+            refuseDeposits = null
+        }
+    }
+
+    /** A terminal relay error on collecting ends the collection quietly; a later start collects again. */
+    @Test
+    fun aTerminalCollectErrorEndsTheCollectionWithoutEscaping() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, _) = pairedDevice(this)
+            val escaped = LinkedBlockingQueue<Throwable>()
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, e -> escaped.add(e) })
+            refuseCollect = RelayException.TOKEN_REVOKED
+            d.start(scope).join()
+            assertEquals(RelayException.TOKEN_REVOKED, d.collectionEnded.value)
+            assertTrue(escaped.isEmpty())
+            refuseCollect = null
+            serveMailbox = true
+            val job = d.start(scope)
+            assertNull(d.collectionEnded.value)
+            assertTrue(job.isActive)
+            job.cancel()
+            serveMailbox = false
         }
     }
 

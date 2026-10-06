@@ -157,6 +157,28 @@ class HolderWatchTest {
         assertEquals(0, wipes)
     }
 
+    /**
+     * A peer that revoked this member's token: the app never deposits to a peer's mailbox; the vault does, stops
+     * sending there (§8.6, `token_revoked` is terminal for that mailbox) and tells the app about the connection
+     * (`connection.event`, §10.4). That marks the connection, never this phone: no wipe and no route to the
+     * unlock screen.
+     */
+    @Test
+    fun aPeersRevokedTokenMarksTheConnectionNeverThisPhone() = runTest {
+        val w = watch()
+        var routed = 0
+        val refusals = RefusalWatch { routed++ }
+        for (e in listOf("stale", "removed", "failed")) {
+            assertFalse(e, w.onVaultEvent(event("connection.event", """{"connection_id":"c1","event":"$e"}""")))
+        }
+        assertFalse(w.onVaultEvent(event("sync.event", """{"kind":"connection.stale","connection_id":"c1"}""")))
+        // Only deposits to this phone's own vault count as refusals; a vault message resets them to 0.
+        assertFalse(refusals.onRefusals(0, AppPhase.Unlocked))
+        advanceUntilIdle()
+        assertEquals(0, wipes)
+        assertEquals(0, routed)
+    }
+
     @Test
     fun otherSealedUnlockResultsDoNotWipe() = runTest {
         val w = watch()

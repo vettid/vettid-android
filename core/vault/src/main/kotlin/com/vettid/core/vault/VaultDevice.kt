@@ -218,6 +218,10 @@ class VaultDevice private constructor(
         refusalCount.value = 0
     }
     private var collector: Job? = null
+    private val collectorEnd = MutableStateFlow<String?>(null)
+
+    /** The relay error code that ended the last collection ([start]), or null while it runs or never ended. */
+    val collectionEnded: StateFlow<String?> = collectorEnd.asStateFlow()
 
     /** Every event from the vault (no responses), as it arrives. */
     val events: SharedFlow<VaultMessage> = eventFlow.asSharedFlow()
@@ -277,9 +281,16 @@ class VaultDevice private constructor(
     /** Starts collecting from the device's mailbox in [scope] and flushes the outbox. */
     fun start(scope: CoroutineScope): Job {
         collector?.let { if (it.isActive) return it }
+        collectorEnd.value = null
         val job = scope.launch {
             launch { flushOutbox() }
-            MailboxCollector(own, cfg.collectMode, cfg.pollWait, clock = clock).run { handle(it) }
+            try {
+                MailboxCollector(own, cfg.collectMode, cfg.pollWait, clock = clock).run { handle(it) }
+            } catch (e: RelayException) {
+                // A terminal relay error ends the collection (MailboxCollector); it must never end the process. The
+                // next start() collects again.
+                collectorEnd.value = e.code
+            }
         }
         collector = job
         return job
@@ -598,12 +609,29 @@ class VaultDevice private constructor(
                 save()
                 throw x
             }
-            val v = st.vault
-            if (x.code == RelayException.TOKEN_REVOKED && v != null && e.mailbox == v.mailbox && e.token == v.token) {
-                refusalCount.value++
-            }
+            countRefusal(x, e.mailbox, e.token)
             st.outbox.remove(e)
             save()
+            throw x
+        }
+    }
+
+    /**
+     * A deposit to this device's vault under the vault's current token that the relay refused with `token_revoked`
+     * counts towards [vaultRefusals] (§7.4: a vault that removed this device denylists it). A refusal by any other
+     * mailbox, or under another token, does not.
+     */
+    private fun countRefusal(x: RelayException, mailbox: String, token: String) {
+        val v = st.vault
+        if (x.code == RelayException.TOKEN_REVOKED && v != null && mailbox == v.mailbox && token == v.token) refusalCount.value++
+    }
+
+    /** A deposit straight to the vault (handshake messages, outside the outbox), its refusal counted as [deliver]'s. */
+    private suspend fun depositToVault(v: VaultRecord, payload: ByteArray) {
+        try {
+            relayFor(v.relayUrl).deposit(v.mailbox, v.token, payload)
+        } catch (x: RelayException) {
+            countRefusal(x, v.mailbox, v.token)
             throw x
         }
     }
@@ -703,6 +731,12 @@ class VaultDevice private constructor(
             // dropped
         } catch (_: TokenException) {
             // dropped
+        } catch (_: IOException) {
+            // A reply to the vault that the relay refused or could not take (a token refresh, a rekey's answer, a
+            // handshake's fin). The message itself was handled; it is acked and never handled again. A refusal with
+            // `token_revoked` is counted ([vaultRefusals]); a retryable one of an outbox deposit stays there. Letting it out
+            // would end the collector, and without the ack the same message would fail again at every start, so the
+            // device.unlinked queued behind it would never be read.
         }
         save()
     }
@@ -854,7 +888,7 @@ class VaultDevice private constructor(
         if (res.epoch.suite > v.suite) v.suite = res.epoch.suite
         keyring.activate(res.epoch, t)
         save()
-        relayFor(v.relayUrl).deposit(v.mailbox, v.token, res.fin)
+        depositToVault(v, res.fin)
         res.sas?.let { sasState.value = it }
     }
 
@@ -870,7 +904,7 @@ class VaultDevice private constructor(
             ),
         )
         try {
-            relayFor(v.relayUrl).deposit(v.mailbox, v.token, env)
+            depositToVault(v, env)
         } catch (e: IOException) {
             resp.abort()
             throw e

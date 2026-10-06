@@ -51,6 +51,8 @@ says so (attestation, crypto helpers, WebRTC, QR scanner), with its tests.
   test-process "new phone" (TEST attester), after which the app erases itself (owner decision 2026-10-05;
   `LocalWipe`, `HolderWatch`: only an authenticated `device.unlinked{transferred|replaced}` or a sealed
   `unknown_device` wipes; repeated relay `token_revoked` only sends the open app to the unlock screen, `RefusalWatch`).
+  No relay error may end the process: `VaultDevice.handle` absorbs a refused answer to the vault, `start` absorbs
+  the collector's terminal error, and the process scope carries `RelaySafetyNet`.
 The A2 exit test:
   `ANDROID_SERIAL=<serial> ./gradlew :core:data:connectedDebugAndroidTest`; the JVM
   variant is `:core:vault:testDebugUnitTest --tests '*DevStackJvmTest*'`. All skip

@@ -19,6 +19,7 @@ import com.vettid.core.data.vault.CanaryManifestInbox
 import com.vettid.core.data.vault.CanaryManifestRepository
 import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.MoveRepository
+import com.vettid.core.data.vault.RelaySafetyNet
 import com.vettid.core.data.vault.VaultManager
 import com.vettid.core.data.vault.VaultRepository
 import com.vettid.core.data.wipe.AndroidWipeTargets
@@ -55,7 +56,10 @@ object AppModule {
     @Provides
     @Singleton
     @AppScope
-    fun scope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    fun scope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default + safetyNet)
+
+    /** A relay or transport error that escapes a coroutine of the process scope is logged, never fatal. */
+    private val safetyNet = RelaySafetyNet(onRelayError = { e -> android.util.Log.w("VettID", "relay error not handled: ${e.message}") })
 
     @Provides
     @Singleton
