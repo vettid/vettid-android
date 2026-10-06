@@ -33,7 +33,7 @@ class KeystoreAppKeySigner(private val key: AppApiKey = AppApiKey()) : AppKeySig
  *
  * `sig` signs (each `\n` a literal newline, no trailing newline)
  * `"vettid/member-api/app/1" \n METHOD \n path \n query \n vault_id \n akid \n ts \n nonce \n hex(SHA-256(body))`.
- * base64url is written without padding, as everywhere else in the spec's links and QR codes (§6.4).
+ * `nonce` and `sig` are base64url without padding (§11.12.2 says so since 0.17.0; the member API refuses padding).
  */
 object AppRequestSigning {
     const val HEADER = "X-VettID-App"

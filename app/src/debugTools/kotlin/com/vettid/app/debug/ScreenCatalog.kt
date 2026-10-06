@@ -412,6 +412,7 @@ object ScreenCatalog {
         "transfer_in.connecting" to { TIn(TransferInUiState(step = TransferInStep.CONNECTING)) },
         "transfer_in.compare" to { TIn(TransferInUiState(step = TransferInStep.COMPARE, sas = "042817", secondsLeft = 563)) },
         "transfer_in.done" to { TIn(TransferInUiState(step = TransferInStep.DONE)) },
+        "transfer_in.done_no_guid" to { TIn(TransferInUiState(step = TransferInStep.DONE, canUnlockLater = false)) },
         "transfer_in.rejected" to { TIn(TransferInUiState(step = TransferInStep.REJECTED)) },
         "transfer_in.timed_out" to { TIn(TransferInUiState(step = TransferInStep.TIMED_OUT)) },
         "transfer_in.no_answer" to { TIn(TransferInUiState(step = TransferInStep.NOT_ANSWERED)) },

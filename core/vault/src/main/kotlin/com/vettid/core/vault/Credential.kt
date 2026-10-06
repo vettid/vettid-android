@@ -100,7 +100,8 @@ internal class CredentialOps(private val d: VaultDevice) {
         val r = d.requestWithId(id, type, body)
         if (r.inner.status != Inner.STATUS_OK) {
             rk?.destroy()
-            throw VaultOpException(type, r.inner.error?.code ?: "error", r.inner.error?.message ?: "")
+            // The error's body: `backoff` carries `retry_after` (§10.1, 0.17.0).
+            throw VaultOpException(type, r.inner.error?.code ?: "error", r.inner.error?.message ?: "", r.body.takeIf { it.isNotEmpty() })
         }
         keep(r.body)
         return Triple(r.body, rk, id)

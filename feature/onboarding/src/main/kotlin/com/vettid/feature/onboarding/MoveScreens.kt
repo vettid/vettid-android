@@ -437,7 +437,16 @@ fun TransferInContent(
             Spacer(Modifier.height(Spacing.l))
             Waiting(stringResource(R.string.transfer_in_waiting, formatWait(state.secondsLeft)), Modifier.testTag("waiting_old_phone"))
         }
-        TransferInStep.DONE -> MovedScreen(stringResource(R.string.onboarding_moved_transferred_body), actions::finish)
+        TransferInStep.DONE -> MovedScreen(
+            stringResource(
+                if (state.canUnlockLater) {
+                    R.string.onboarding_moved_transferred_body
+                } else {
+                    R.string.onboarding_moved_transferred_no_guid_body
+                },
+            ),
+            actions::finish,
+        )
         TransferInStep.REJECTED -> FormScaffold(
             title = stringResource(R.string.transfer_in_rejected_title),
             body = stringResource(R.string.transfer_in_rejected_body),
