@@ -3,6 +3,7 @@ package com.vettid.app.di
 import android.content.Context
 import android.os.Build
 import com.vettid.app.env.currentEnvironment
+import com.vettid.app.net.ConnectivityGate
 import com.vettid.core.data.account.SignInLinkInbox
 import com.vettid.core.data.social.InviteLinkInbox
 import com.vettid.core.data.env.AppEnvironment
@@ -24,6 +25,8 @@ import com.vettid.core.data.vault.VaultManager
 import com.vettid.core.data.vault.VaultRepository
 import com.vettid.core.data.wipe.AndroidWipeTargets
 import com.vettid.core.data.wipe.LocalWipe
+import com.vettid.core.relay.NetworkGate
+import com.vettid.core.relay.TransportRetry
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -32,6 +35,7 @@ import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -61,9 +65,24 @@ object AppModule {
     /** A relay or transport error that escapes a coroutine of the process scope is logged, never fatal. */
     private val safetyNet = RelaySafetyNet(onRelayError = { e -> android.util.Log.w("VettID", "relay error not handled: ${e.message}") })
 
+    /** One pool for every client derived from [http]; emptied when the network changes or the app comes back (VettIdApplication). */
     @Provides
     @Singleton
-    fun http(): OkHttpClient = OkHttpClient.Builder().readTimeout(READ_TIMEOUT_S, TimeUnit.SECONDS).build()
+    fun connectionPool(): ConnectionPool = ConnectionPool()
+
+    @Provides
+    @Singleton
+    fun networkGate(@ApplicationContext context: Context, pool: ConnectionPool): NetworkGate =
+        ConnectivityGate(context, onNewNetwork = { pool.evictAll() })
+
+    /** Transport failures while the phone wakes from Doze are retried before anything reaches the screen ([TransportRetry]). */
+    @Provides
+    @Singleton
+    fun http(pool: ConnectionPool, gate: NetworkGate): OkHttpClient = OkHttpClient.Builder()
+        .connectionPool(pool)
+        .addInterceptor(TransportRetry(gate))
+        .readTimeout(READ_TIMEOUT_S, TimeUnit.SECONDS)
+        .build()
 
     @Provides
     @Singleton

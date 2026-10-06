@@ -10,6 +10,7 @@ dependencies {
     api(libs.kotlinx.coroutines.core)
 
     testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(projects.core.relay) // TransportRetry, as the app installs it (MemberApiRetryTest)
     testImplementation(libs.kotlinx.coroutines.test)
 
     androidTestImplementation(libs.junit)

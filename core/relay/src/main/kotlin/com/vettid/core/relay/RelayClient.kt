@@ -144,6 +144,8 @@ class RelayClient(
         val contentType: String? = null,
         val unsigned: Boolean = false,
         val longPoll: Boolean = false,
+        /** A signed request's signature is accepted once (§4.1): [TransportRetry] resends it only if it never went out. */
+        val transportRetry: TransportRetry.Policy = TransportRetry.Policy.UNSENT_ONLY,
     )
 
     private fun backoffMillis(attempt: Int): Long {
@@ -190,6 +192,7 @@ class RelayClient(
             else -> null
         }
         rb.method(c.method, body)
+        rb.tag(TransportRetry.Policy::class.java, c.transportRetry)
         val client = if (c.longPoll) pollHttp else http
         client.newCall(rb.build()).await().use { resp ->
             if (resp.code >= HTTP_ERROR) throw errorOf(resp)
@@ -325,7 +328,7 @@ class RelayClient(
      * and NEVER retried: after a lost response the claim is gone (`claim_unknown`).
      */
     suspend fun getClaim(claimId: String): ByteArray =
-        once(Call("GET", "/v1/claim/$claimId", unsigned = true)) { resp ->
+        once(Call("GET", "/v1/claim/$claimId", unsigned = true, transportRetry = TransportRetry.Policy.NEVER)) { resp ->
             resp.body.bytesAtMost(MAX_CLAIM_READ.toLong())
         }
 
@@ -337,7 +340,7 @@ class RelayClient(
     /** Opens a WebSocket collect session (§6.4), owner-signed at the upgrade. */
     fun openStream(): RelayStream {
         val path = "/v1/mailbox/ws"
-        val rb = Request.Builder().url(baseUrl + path)
+        val rb = Request.Builder().url(baseUrl + path).tag(TransportRetry.Policy::class.java, TransportRetry.Policy.UNSENT_ONLY)
         RelayAuth.headers(key, "GET", path, Instant.now(clock), RelayAuth.bodyHash(null)).forEach { (k, v) -> rb.header(k, v) }
         return RelayStream.open(http, rb.build())
     }

@@ -4,6 +4,8 @@
 
     <!-- The relay and the member API (ANDROID-PLAN §5). -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Whether a network is usable before a request is retried after Doze (TransportRetry). -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- The biometric app lock (ANDROID-PLAN D6). -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
