@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.LockClock
 import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.outlined.Password
 import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.RestartAlt
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.AlertDialog
@@ -89,6 +90,9 @@ data object CredentialRotateRoute
 @Serializable
 data object CredentialAlarmRoute
 
+@Serializable
+data object CredentialNewRoute
+
 /** Registers the Credential destinations. [navigate] opens a route; [onBack] pops one. */
 fun NavGraphBuilder.credentialDestination(chrome: ShellChrome, navigate: (Any) -> Unit, onBack: () -> Unit) {
     composable<CredentialRoute> {
@@ -109,6 +113,7 @@ fun NavGraphBuilder.credentialDestination(chrome: ShellChrome, navigate: (Any) -
                 changePassword = { navigate(CredentialPasswordRoute) },
                 rotate = { navigate(CredentialRotateRoute) },
                 reviewAlarm = { navigate(CredentialAlarmRoute) },
+                newCredential = { navigate(CredentialNewRoute) },
             ),
         )
     }
@@ -121,6 +126,17 @@ fun NavGraphBuilder.credentialDestination(chrome: ShellChrome, navigate: (Any) -
         val vm: RotateViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
         RotateContent(state, vm::setPassword, vm::submit, onBack)
+    }
+    composable<CredentialNewRoute> {
+        val vm: NewCredentialViewModel = hiltViewModel()
+        val state by vm.uiState.collectAsStateWithLifecycle()
+        NewCredentialContent(
+            state,
+            NewCredentialActions(
+                vm::setPin, vm::setCurrent, vm::setPassword, vm::setConfirm, vm::setAcknowledged,
+                vm::submit, vm::cancelConfirm, vm::confirm, onBack,
+            ),
+        )
     }
     composable<CredentialAlarmRoute> {
         val vm: AlarmViewModel = hiltViewModel()
@@ -142,6 +158,8 @@ data class CredentialActions(
     val changePassword: () -> Unit = {},
     val rotate: () -> Unit = {},
     val reviewAlarm: () -> Unit = {},
+    /** A new credential (`credential.reset`, 0.15.2): the old one and every critical item are destroyed. */
+    val newCredential: () -> Unit = {},
 )
 
 private val TTL_OPTIONS = listOf(30, 60, 300, 900, 3600)
@@ -295,6 +313,15 @@ fun CredentialContent(state: CredentialUiState, chrome: ShellChrome, actions: Cr
                                 if (st.backup) R.string.credential_backup_supporting_on else R.string.credential_backup_supporting_off,
                             ),
                             modifier = Modifier.testTag("backup_switch"),
+                        )
+                        SettingsDivider()
+                        SettingsRow(
+                            stringResource(R.string.credential_new_title),
+                            actions.newCredential,
+                            icon = Icons.Outlined.RestartAlt,
+                            iconTint = MaterialTheme.colorScheme.error,
+                            supporting = stringResource(R.string.credential_new_supporting),
+                            modifier = Modifier.testTag("new_credential_row"),
                         )
                     }
                     Spacer(Modifier.height(Spacing.xxl))

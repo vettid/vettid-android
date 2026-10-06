@@ -331,23 +331,42 @@ fun NoticeCard(
 
 /**
  * A non-blocking information banner above every screen (the vault service paused for maintenance, MEMBER-API
- * 1.2.0): one line, no action, nothing behind it is disabled. Pads for the status bar itself.
+ * 1.2.0; the owner check's early warning and "hold is off", VAULT-MESSAGING §3.6.5): one line and an optional
+ * action, nothing behind it is disabled. Pads for the status bar itself unless [statusBarPadding] is false (a
+ * banner under another one).
  */
 @Composable
-fun InfoBanner(text: String, modifier: Modifier = Modifier) {
+fun InfoBanner(
+    text: String,
+    modifier: Modifier = Modifier,
+    actionLabel: String? = null,
+    onAction: () -> Unit = {},
+    statusBarPadding: Boolean = true,
+) {
     val colors = MaterialTheme.colorScheme
     Surface(color = colors.surfaceContainerHigh, contentColor = colors.onSurface, modifier = modifier.fillMaxWidth()) {
         Row(
             Modifier
-                .statusBarsPadding()
+                .then(if (statusBarPadding) Modifier.statusBarsPadding() else Modifier)
                 .heightIn(min = Spacing.touchTarget)
-                .padding(horizontal = Spacing.l, vertical = Spacing.s)
-                .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+                .padding(start = Spacing.l, end = if (actionLabel != null) Spacing.s else Spacing.l, top = Spacing.s, bottom = Spacing.s),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Outlined.Info, contentDescription = null, tint = VettIdTheme.colors.warning)
-            Spacer(Modifier.width(Spacing.m))
-            Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            Row(
+                Modifier
+                    .weight(1f)
+                    .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Outlined.Info, contentDescription = null, tint = VettIdTheme.colors.warning)
+                Spacer(Modifier.width(Spacing.m))
+                Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            }
+            if (actionLabel != null) {
+                TextButton(onClick = onAction, modifier = Modifier.heightIn(min = Spacing.touchTarget)) {
+                    Text(actionLabel, color = colors.primary, fontWeight = FontWeight.SemiBold)
+                }
+            }
         }
     }
 }
@@ -357,12 +376,12 @@ fun InfoBanner(text: String, modifier: Modifier = Modifier) {
  * error colour, one line and an action. Pads for the status bar itself.
  */
 @Composable
-fun UrgentBanner(text: String, actionLabel: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun UrgentBanner(text: String, actionLabel: String, onClick: () -> Unit, modifier: Modifier = Modifier, statusBarPadding: Boolean = true) {
     val colors = MaterialTheme.colorScheme
     Surface(color = colors.error, contentColor = colors.onError, modifier = modifier.fillMaxWidth()) {
         Row(
             Modifier
-                .statusBarsPadding()
+                .then(if (statusBarPadding) Modifier.statusBarsPadding() else Modifier)
                 .padding(start = Spacing.l, end = Spacing.s, top = Spacing.s, bottom = Spacing.s)
                 .semantics { liveRegion = LiveRegionMode.Assertive },
             verticalAlignment = Alignment.CenterVertically,

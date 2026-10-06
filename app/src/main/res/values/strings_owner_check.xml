@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The daily owner check in the shell (VAULT-MESSAGING §3.6.5, §3.6.7) -->
+    <string name="owner_check_warning">Your daily check is due at %1$s.</string>
+    <string name="owner_check_warning_soon">Your daily check is due within the hour.</string>
+    <string name="owner_check_now">Check now</string>
+    <string name="owner_check_hold_off">The hold is off.</string>
+    <string name="owner_check_hold_off_until">The hold is off until %1$s.</string>
+    <string name="owner_check_hold_on">Turn on</string>
+    <string name="owner_check_notice_ok">OK</string>
+    <string name="owner_check_notice_locked">Your vault locked after ten wrong daily checks.</string>
+    <string name="owner_check_notice_failed_pin">A daily check failed: wrong PIN.</string>
+    <string name="owner_check_notice_failed_password">A daily check failed: wrong credential password.</string>
+    <string name="owner_check_notice_hold_off">The hold was turned off.</string>
+    <string name="owner_check_notice_hold_off_until">The hold was turned off until %1$s.</string>
+    <string name="owner_check_notice_hold_on">The hold was turned back on.</string>
+    <string name="owner_check_notice_hold_expired">The hold is back on: its end date passed.</string>
+    <string name="owner_check_notice_at">%1$s (%2$s)</string>
+    <string name="owner_check_notice_more">%1$s And %2$d more.</string>
+</resources>

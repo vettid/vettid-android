@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The daily owner check (VAULT-MESSAGING §3.6) -->
+    <string name="ownercheck_title_gated">Daily check</string>
+    <string name="ownercheck_body_gated">Your vault asks for your PIN and your credential password together at least once every %1$s. Until you check, the app shows nothing from your vault.</string>
+    <string name="ownercheck_title_voluntary">Check now</string>
+    <string name="ownercheck_body_voluntary">Enter your PIN and your credential password. Your next check is then due %1$s from now.</string>
+    <string name="ownercheck_title_hold_off">Turn the hold off</string>
+    <string name="ownercheck_body_hold_off">Turning the hold off is part of a check: enter your PIN and your credential password.</string>
+    <string name="ownercheck_hold_off_warning_title">What this gives up</string>
+    <string name="ownercheck_hold_off_warning">When a check is late, your vault normally holds: your desktops and agents stop, calls do not ring and you do not appear online. With the hold off they keep running until the hold is back on, your vault locks or you check. Someone with your unlocked phone could keep a desktop or agent working for you. This phone still asks for the check before you can use it.</string>
+    <string name="ownercheck_hold_off_until">Turn the hold back on</string>
+    <string name="ownercheck_hold_off_never">When I turn it back on</string>
+    <string name="ownercheck_hold_off_1d">After 1 day</string>
+    <string name="ownercheck_hold_off_3d">After 3 days</string>
+    <string name="ownercheck_hold_off_1w">After 1 week</string>
+    <string name="ownercheck_hold_off_30d">After 30 days</string>
+    <string name="ownercheck_waiting_title">Waiting in your vault</string>
+    <plurals name="ownercheck_waiting_messages">
+        <item quantity="one">%d new message</item>
+        <item quantity="other">%d new messages</item>
+    </plurals>
+    <plurals name="ownercheck_waiting_requests">
+        <item quantity="one">%d connection request</item>
+        <item quantity="other">%d connection requests</item>
+    </plurals>
+    <plurals name="ownercheck_waiting_calls">
+        <item quantity="one">%d missed call</item>
+        <item quantity="other">%d missed calls</item>
+    </plurals>
+    <plurals name="ownercheck_waiting_other">
+        <item quantity="one">%d other update</item>
+        <item quantity="other">%d other updates</item>
+    </plurals>
+    <string name="ownercheck_waiting_none">Nothing new has arrived since your check was due.</string>
+    <string name="ownercheck_held_note">Your vault is held: it keeps receiving for you, but your desktops and agents wait for your check and calls do not ring.</string>
+    <string name="ownercheck_due_note">The hold is off: your desktops and agents keep running. This phone needs the check first.</string>
+    <string name="ownercheck_pin_label">Vault PIN</string>
+    <string name="ownercheck_password_label">Credential password</string>
+    <string name="ownercheck_bad_pin">Wrong PIN.</string>
+    <string name="ownercheck_bad_password">Wrong credential password.</string>
+    <plurals name="ownercheck_checks_left">
+        <item quantity="one">%d wrong check left before your vault locks.</item>
+        <item quantity="other">%d wrong checks left before your vault locks.</item>
+    </plurals>
+    <string name="ownercheck_backoff_wait">Too many wrong entries. Try again in %1$s.</string>
+    <string name="ownercheck_backoff">Too many wrong entries. Wait a few minutes, then try again.</string>
+    <string name="ownercheck_submit">Check</string>
+    <string name="ownercheck_submit_hold_off">Check and turn the hold off</string>
+    <string name="ownercheck_lock">Lock vault</string>
+    <string name="ownercheck_cancel">Cancel</string>
+    <plurals name="ownercheck_hours">
+        <item quantity="one">%d hour</item>
+        <item quantity="other">%d hours</item>
+    </plurals>
+
+    <!-- Unlock past the deadline (§3.6.5) and after ten failed checks (§3.6.4) -->
+    <string name="unlock_owner_check_title">Your daily check is due</string>
+    <string name="unlock_owner_check_body">Enter your credential password too: the app sends the check right after the unlock.</string>
+    <string name="unlock_password_label">Credential password</string>
+    <string name="unlock_owner_check_locked_title">Locked after ten wrong checks</string>
+    <string name="unlock_owner_check_locked_body">Your vault locked itself after ten wrong daily checks in a row. Unlock it with your PIN; it then asks for the check again.</string>
+</resources>

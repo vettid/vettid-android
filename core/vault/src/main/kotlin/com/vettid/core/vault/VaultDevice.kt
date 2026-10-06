@@ -222,6 +222,15 @@ class VaultDevice private constructor(
      */
     val vaultRefusals: StateFlow<Int> = refusalCount.asStateFlow()
 
+    private val ownerCheckRefusals =
+        MutableSharedFlow<String>(extraBufferCapacity = EVENT_BUFFER, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    /**
+     * The types of requests the vault answered `owner_check_required` (§3.6.3, 0.13.0): the vault is past its
+     * owner-check deadline and serves this app nothing but the check until it passes.
+     */
+    val ownerCheckRequired: SharedFlow<String> = ownerCheckRefusals.asSharedFlow()
+
     /** Starts [vaultRefusals] again (after a sealed unlock result: the enclave knows this device). */
     fun clearVaultRefusals() {
         refusalCount.value = 0
@@ -805,6 +814,7 @@ class VaultDevice private constructor(
         }
         val re = inner.re
         if (re != null) {
+            if (inner.status != Inner.STATUS_OK && inner.error?.code == CODE_OWNER_CHECK_REQUIRED) ownerCheckRefusals.tryEmit(inner.type)
             pending[re]?.complete(inner)
         } else {
             publish(VaultMessage(inner))
@@ -985,12 +995,6 @@ class VaultDevice private constructor(
         save()
     }
 
-    internal suspend fun dropCredential() = lock.withLock {
-        st.credential = null
-        st.utks.clear()
-        save()
-    }
-
     internal suspend fun endRecovery() = lock.withLock {
         st.recovery = null
         save()
@@ -1054,6 +1058,8 @@ class VaultDevice private constructor(
         private const val TYPE_HS_INIT = "hs.init"
         private const val TYPE_PAIR_REJECTED = "device.pair.rejected"
         private const val EVENT_BUFFER = 256
+        /** §10.1 (0.13.0): the vault is past its owner-check deadline (§3.6.3). */
+        const val CODE_OWNER_CHECK_REQUIRED = "owner_check_required"
         private const val INBOX_MAX = 500
         private const val PCR_HEX = 96
         private const val APP_RETRIES = 2

@@ -15,7 +15,8 @@ Credential, settings and the biometric app lock (A3); connections, messages and
 approvals (A4). Since then: VAULT-MESSAGING 0.10.1–0.10.5 (commit-then-reveal
 SAS, connection requests, invitation URLs, a peer's decline), recovery on a new
 phone and direct transfer, a replaced phone erasing itself, the pinned
-production manifest keys A and B, and the `staging` build type, which enrolls
+production manifest keys A and B, the daily owner check (VAULT-MESSAGING 0.13.0 §3.6), and
+the `staging` build type, which enrolls
 against the staging vault service (see *Staging build*). The Items screen is a
 placeholder until A5. The v1 app is preserved at the tag `legacy-v1-final` and
 the branch `legacy/v1`.

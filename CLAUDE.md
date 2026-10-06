@@ -85,7 +85,10 @@ Every A3 and A4 screen with sample state, no vault needed: `--es vettid.start sc
 did not recognise: `unlock.not_recognised`, `unlock.erase_confirm`, `unlock.erasing`; the open app sent back after
 repeated relay refusals, `unlock.refused`; the transfer's 60 s wait for `hs.resp`, `transfer_in.no_answer`; the vault service paused for maintenance
 (MEMBER-API 1.2.0), `unlock.paused`, `unlock.paused_preflight`; the canary manifest (VAULT-RELEASES §10.1 step 9),
-`canary.confirm`, `canary.refused`, `settings.attestation_canary`). Debug builds expose Compose test tags as resource
+`canary.confirm`, `canary.refused`, `settings.attestation_canary`; the daily owner check (VAULT-MESSAGING 0.13.0 §3.6),
+`owner_check.held`, `owner_check.due`, `owner_check.bad_password`, `owner_check.backoff`, `owner_check.voluntary`,
+`owner_check.hold_off`, `unlock.owner_check`, `unlock.owner_check_locked`, `settings.owner_check_hold_off`,
+`settings.owner_check_offer`, `shell.owner_check_banners`; a new credential (0.15.2), `credential.new`, `credential.new_confirm`). Debug builds expose Compose test tags as resource
 ids, so `uiautomator dump` / `adb shell input` can drive two phones at once (`adb -s <serial>`).
 Screenshots and the Proton reference images stay out of git (`local/`, or the
 vettid.org repo's `local/android-ui/`).

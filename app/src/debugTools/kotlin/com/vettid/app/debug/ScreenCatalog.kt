@@ -12,6 +12,22 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import com.vettid.app.ui.AccountSheet
+import com.vettid.app.ui.OwnerCheckBanners
+import com.vettid.app.ui.OwnerCheckGateState
+import com.vettid.core.data.vault.OwnerCheckNotice
+import com.vettid.core.data.vault.OwnerCheckState
+import com.vettid.core.data.vault.OwnerCheckView
+import com.vettid.core.data.vault.WaitingCounts
+import com.vettid.feature.credential.NewCredentialActions
+import com.vettid.feature.credential.NewCredentialContent
+import com.vettid.feature.credential.NewCredentialUiState
+import com.vettid.feature.onboarding.HoldOffChoice
+import com.vettid.feature.onboarding.OwnerCheckActions
+import com.vettid.feature.onboarding.OwnerCheckContent
+import com.vettid.feature.onboarding.OwnerCheckMessage
+import com.vettid.feature.onboarding.OwnerCheckMode
+import com.vettid.feature.onboarding.OwnerCheckUiState
+import com.vettid.feature.settings.OwnerCheckSettingsUiState
 import com.vettid.app.ui.LocalThemeController
 import com.vettid.core.data.policy.PasswordPolicy
 import com.vettid.core.data.prefs.AppLockTimeout
@@ -209,7 +225,16 @@ private object NoTransferOut : TransferOutActions {
     override fun leave() = Unit
 }
 
+private object NoOwnerCheck : OwnerCheckActions {
+    override fun setPin(v: String) = Unit
+    override fun setPassword(v: String) = Unit
+    override fun setHoldOff(choice: HoldOffChoice) = Unit
+    override fun submit() = Unit
+    override fun lockVault() = Unit
+}
+
 private object NoUnlock : UnlockActions {
+    override fun setPassword(v: String) = Unit
     override fun retryPreflight() = Unit
     override fun acknowledgeUpdate() = Unit
     override fun setApproveOffer(approve: Boolean) = Unit
@@ -315,6 +340,9 @@ object ScreenCatalog {
 
     @Composable
     private fun TOut(state: TransferOutUiState) = TransferOutContent(state, NoTransferOut, {}, {})
+
+    private val okView = OwnerCheckView(OwnerCheckState.OK, Instant.now().plusSeconds(20_000), 86_400, 0, hold = true, holdOffUntil = null)
+    private val heldView = okView.copy(state = OwnerCheckState.HELD, deadline = Instant.now().minusSeconds(4_000), waiting = WaitingCounts(3, 1, 0, 2))
 
     val screens: Map<String, @Composable () -> Unit> = linkedMapOf(
         "onboarding.welcome" to { Ob(onboarding) },
@@ -451,6 +479,42 @@ object ScreenCatalog {
                 NoUnlock,
             )
         },
+        // The daily owner check (VAULT-MESSAGING §3.6.5): a locked vault past its deadline, and after ten failed checks.
+        "unlock.owner_check" to {
+            UnlockContent(
+                UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), checkDue = true, pin = "975310"),
+                NoUnlock,
+            )
+        },
+        "unlock.owner_check_locked" to {
+            UnlockContent(
+                UnlockUiState(loading = false, email = EMAIL, preflight = PreflightInfo(release(3), 3, false, false, null), checkDue = true,
+                    lockedByOwnerCheck = true),
+                NoUnlock,
+            )
+        },
+        "credential.new" to { NewCredentialContent(NewCredentialUiState(pin = "975310", current = "pw", acknowledged = true), NewCredentialActions()) },
+        "credential.new_confirm" to {
+            NewCredentialContent(NewCredentialUiState(pin = "975310", current = "pw", acknowledged = true, confirming = true), NewCredentialActions())
+        },
+        "owner_check.held" to { OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.GATED, heldView), NoOwnerCheck) {} },
+        "owner_check.due" to {
+            OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.GATED, heldView.copy(state = OwnerCheckState.DUE, hold = false, waiting = WaitingCounts())), NoOwnerCheck) {}
+        },
+        "owner_check.bad_password" to {
+            OwnerCheckContent(
+                OwnerCheckUiState(OwnerCheckMode.GATED, heldView.copy(failures = 2), message = OwnerCheckMessage.BadPassword(8)),
+                NoOwnerCheck,
+            ) {}
+        },
+        "owner_check.backoff" to {
+            OwnerCheckContent(
+                OwnerCheckUiState(OwnerCheckMode.GATED, heldView.copy(failures = 4), message = OwnerCheckMessage.BadPin(6), waitSeconds = 290),
+                NoOwnerCheck,
+            ) {}
+        },
+        "owner_check.voluntary" to { OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.VOLUNTARY, okView), NoOwnerCheck) {} },
+        "owner_check.hold_off" to { OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.HOLD_OFF, okView), NoOwnerCheck) {} },
         "unlock.ended" to { UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflightError = FailureKind.RELEASE_ENDED), NoUnlock) },
         "app_lock" to { AppLockScreen(onUnlock = {}) },
         "credential" to { CredentialContent(CredentialUiState(loading = false, status = credential, windowUntil = Instant.now().plusSeconds(240)), chrome, CredentialActions()) },
@@ -483,6 +547,27 @@ object ScreenCatalog {
                 ),
                 SettingsActions(),
             )
+        },
+        "settings.owner_check_hold_off" to {
+            SettingsContent(
+                SettingsUiState(account = sampleAccount),
+                SettingsActions(),
+                OwnerCheckSettingsUiState(okView.copy(intervalSeconds = 43_200, hold = false, holdOffUntil = Instant.now().plusSeconds(3 * 86_400L))),
+            )
+        },
+        "settings.owner_check_offer" to {
+            SettingsContent(SettingsUiState(account = sampleAccount), SettingsActions(), OwnerCheckSettingsUiState(okView, offerCheck = true))
+        },
+        "shell.owner_check_banners" to {
+            Column {
+                OwnerCheckBanners(
+                    OwnerCheckGateState(
+                        warning = true, deadline = Instant.now().plusSeconds(1_800), holdOff = true, holdOffUntil = Instant.now().plusSeconds(86_400),
+                        notices = listOf(OwnerCheckNotice("01J0000000000000000000000A", "owner_check.failed", "password", Instant.now().minusSeconds(600), false)),
+                    ),
+                    first = true, onCheckNow = {}, onHoldOn = {}, onDismissNotices = {},
+                )
+            }
         },
         "settings.status" to {
             VaultStatusContent(

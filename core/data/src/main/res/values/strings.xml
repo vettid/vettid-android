@@ -29,6 +29,7 @@
     <string name="data_failure_credential_locked">Your credential is locked. Enter your credential password to continue.</string>
     <string name="data_failure_conflict">This changed on another device. Look again and retry.</string>
     <string name="data_failure_rejected">Rejected on your phone.</string>
+    <string name="data_failure_owner_check_required">Your daily check is due. What you entered is kept: the check opens when you leave this screen.</string>
     <string name="data_failure_limit">A limit was reached. Remove something first.</string>
     <string name="data_failure_other">Something went wrong. Try again.</string>
     <string name="data_pin_problem_digits">Use digits only.</string>

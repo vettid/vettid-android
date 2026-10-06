@@ -36,6 +36,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonPrimitive
@@ -528,6 +529,92 @@ class VaultDeviceTest {
             create.await()
             assertEquals(1L, d.credentialVersion)
             assertEquals(0, d.utkCount)
+        }
+    }
+
+    /**
+     * The daily owner check (VAULT-MESSAGING 0.13.0 §3.6.1): one `vault.owner_check` with the blob, the PIN, the
+     * password and a hold change sealed together to one UTK; the new blob is kept and acked. A request answered
+     * `owner_check_required` is signalled (§3.6.3); `vault.status` reports the check and `vault.held` its counts.
+     */
+    @Test
+    fun ownerCheckSealsPinPasswordAndHoldTogether() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val api = VaultApi(d)
+            val utk = KemPrivateKey.generate()
+            d.keepCredential("QkxPQg==", 3)
+            val check = async(Dispatchers.IO) { api.ownerCheck("975310", "password one", hold = false, holdOffUntil = "2026-10-09T12:00:00Z") }
+            val get = v.open(nextDeposit().second)
+            assertEquals("credential.utk.get", get.type)
+            val utkJson = """{"utk_id":"00112233445566bb","ek":"${Base64s.encodeStd(utk.publicKey.bytes())}","expires_at":"2099-01-01T00:00:00.000Z"}"""
+            d.handle(v.seal(get.type, """{"utks":[$utkJson]}""", re = get.id, status = Inner.STATUS_OK))
+            val oc = v.open(nextDeposit().second)
+            assertEquals(VaultApi.TYPE_OWNER_CHECK, oc.type)
+            val body = StrictJson.parseObject(oc.body)
+            assertEquals("QkxPQg==", body.string("credential"))
+            assertEquals("00112233445566bb", body.string("utk_id"))
+            val payload = StrictJson.parseObject(
+                com.vettid.core.crypto.credential.CredentialSeal.openPayload(utk, v.vaultId, "00112233445566bb", oc.type, oc.id, body.base64("sealed")),
+            )
+            assertEquals("975310", payload.string("pin"))
+            assertEquals("password one", payload.string("password"))
+            assertEquals(false, payload.bool("hold"))
+            assertEquals("2026-10-09T12:00:00Z", payload.string("hold_off_until"))
+            d.handle(
+                v.seal(
+                    oc.type,
+                    """{"credential":"TkVX","version":4,"utks":[],"deadline":"2026-10-07T12:00:00.000Z","interval_seconds":86400,"hold":false,"hold_off_until":"2026-10-09T12:00:00Z"}""",
+                    re = oc.id, status = Inner.STATUS_OK,
+                ),
+            )
+            val ack = v.open(nextDeposit().second)
+            assertEquals("credential.ack", ack.type)
+            d.handle(v.seal(ack.type, "{}", re = ack.id, status = Inner.STATUS_OK))
+            val passed = check.await()
+            assertEquals("2026-10-07T12:00:00.000Z", passed.deadline)
+            assertEquals(false, passed.hold)
+            assertEquals(4L, d.credentialVersion)
+            assertEquals("TkVX", d.credentialBlob())
+
+            // Held: a refused request is signalled, with its type.
+            // Subscribed before the refusal arrives (a SharedFlow without replay).
+            val signal = async(Dispatchers.Unconfined, start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                withTimeout(5_000) { d.ownerCheckRequired.first() }
+            }
+            val refused = async(Dispatchers.IO) { runCatching { api.messageSend("c1", "draft") } }
+            val ms = v.open(nextDeposit().second)
+            d.handle(
+                v.msg(
+                    v.keyring.current()!!.seal(
+                        Inner(id = Ulid.new(), type = ms.type, ts = Instant.now(), re = ms.id, status = Inner.STATUS_ERROR,
+                            error = com.vettid.core.crypto.envelope.InnerError("owner_check_required")),
+                    ),
+                ),
+            )
+            assertEquals("owner_check_required", (refused.await().exceptionOrNull() as VaultOpException).code)
+            assertEquals("message.send", signal.await())
+
+            val status = async(Dispatchers.IO) { api.status() }
+            val sr = v.open(nextDeposit().second)
+            d.handle(
+                v.seal(
+                    "vault.status",
+                    """{"vault_id":"${v.vaultId}","state_seq":9,"owner_check":{"state":"held","deadline":"2026-10-07T12:00:00.000Z","interval_seconds":3600,"failures":2,"hold":true}}""",
+                    re = sr.id, status = Inner.STATUS_OK,
+                ),
+            )
+            val oc2 = status.await().ownerCheck!!
+            assertEquals("held", oc2.state)
+            assertEquals(2, oc2.failures)
+            assertEquals(3600L, oc2.intervalSeconds)
+            assertNull(oc2.holdOffUntil)
+
+            val held = async(Dispatchers.Unconfined, start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+                withTimeout(5_000) { api.held.first() }
+            }
+            d.handle(v.seal("vault.held", """{"deadline":"2026-10-07T12:00:00.000Z","waiting":{"messages":3,"requests":1,"calls":0,"other":2}}"""))
+            assertEquals(HeldCounts(3, 1, 0, 2), held.await().waiting)
         }
     }
 

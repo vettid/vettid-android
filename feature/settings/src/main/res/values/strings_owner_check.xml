@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The daily owner check (VAULT-MESSAGING §3.6.2, §3.6.7) -->
+    <string name="settings_owner_check">Daily check</string>
+    <plurals name="settings_owner_check_every">
+        <item quantity="one">Every hour</item>
+        <item quantity="other">Every %d hours</item>
+    </plurals>
+    <string name="settings_owner_check_next">next by %1$s</string>
+    <string name="settings_owner_check_now">Check now</string>
+    <string name="settings_owner_check_now_body">Your PIN and your credential password together; resets the clock</string>
+    <string name="settings_owner_check_hold">Hold the vault when a check is late</string>
+    <string name="settings_owner_check_hold_on_body">On: a late check pauses your desktops, agents and calls until you check</string>
+    <string name="settings_owner_check_hold_off_body">Off until you turn it back on. Turning it off needs a check.</string>
+    <string name="settings_owner_check_hold_off_until">Off until %1$s</string>
+    <string name="settings_owner_check_offer_title">Check now?</string>
+    <string name="settings_owner_check_offer_body">A shorter interval can put your vault on hold at once. A check now starts the new interval from now.</string>
+</resources>

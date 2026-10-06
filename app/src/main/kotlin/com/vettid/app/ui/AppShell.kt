@@ -59,11 +59,18 @@ import com.vettid.feature.settings.SettingsHost
 import com.vettid.feature.settings.helpDestination
 import com.vettid.feature.settings.settingsDestination
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import com.vettid.feature.onboarding.OwnerCheckMode
+import com.vettid.feature.onboarding.OwnerCheckRoute
 
 /**
  * App shell: navigation drawer (the only top-level navigation, no bottom tabs),
  * the type-safe NavHost, and the account sheet.
  */
+@Suppress("CyclomaticComplexMethod", "LongMethod") // the shell: drawer, banners, NavHost, owner-check gate
 @Composable
 fun AppShell(
     launchRoute: Any?,
@@ -98,83 +105,125 @@ fun AppShell(
     val navigate: (Any) -> Unit = { navController.navigate(it) }
     val back: () -> Unit = { navController.popBackStack() }
 
-    ModalNavigationDrawer(
-        drawerState = drawerState,
-        gesturesEnabled = drawerState.isOpen,
-        drawerContent = {
-            VettIdDrawerSheet(
-                sections = sections,
-                selectedKey = selectedKey(current, debugItems),
-                onItemClick = { item ->
-                    scope.launch { drawerState.close() }
-                    val route = TopLevelDestination.fromKey(item.key)?.route ?: debugTools.routeFor(item.key)
-                    if (route != null) navController.navigateTopLevel(route)
-                },
-                versionLabel = stringResource(R.string.drawer_version, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
-            )
-        },
-    ) {
-        Column(Modifier.fillMaxSize()) {
-            // The clone alarm (§3.5.9): an urgent banner above every screen until it is resolved.
-            val bannerShown = alarm != null && current?.hierarchy?.any { it.hasRoute(CredentialAlarmRoute::class) } != true
-            if (bannerShown) {
-                UrgentBanner(
-                    text = stringResource(com.vettid.feature.credential.R.string.credential_alarm_banner),
-                    actionLabel = stringResource(com.vettid.feature.credential.R.string.credential_alarm_review),
-                    onClick = { navController.navigate(CredentialAlarmRoute) { launchSingleTop = true } },
-                    modifier = Modifier.testTag("alarm_banner"),
+    // The daily owner check (VAULT-MESSAGING §3.6.5): past the deadline the check comes before any other use of the
+    // app, at the first open or return to the foreground, or when the member leaves the screen they are on; never
+    // over an action in progress (a detail screen, a draft), whose refused requests keep their input.
+    val gateVm: OwnerCheckGateViewModel = hiltViewModel()
+    val gate by gateVm.gate.collectAsStateWithLifecycle()
+    val gated by rememberUpdatedState(gate.gated)
+    var armed by remember { mutableStateOf(false) }
+    var asked by rememberSaveable { mutableStateOf<OwnerCheckMode?>(null) }
+    LaunchedEffect(gate.gated) { if (!gate.gated) armed = false }
+    LaunchedEffect(backStackEntry?.id) { if (gated) armed = true }
+    LifecycleEventEffect(Lifecycle.Event.ON_START) {
+        gateVm.onForeground()
+        if (gated) armed = true
+    }
+    val onList = current?.let { d -> TopLevelDestination.entries.any { t -> d.hierarchy.any { it.hasRoute(t.routeClass) } } } ?: true
+    val checkMode = if (gate.gated && (armed || onList)) OwnerCheckMode.GATED else asked
+    LaunchedEffect(checkMode) { if (checkMode == OwnerCheckMode.GATED) showAccount = false }
+
+    Box(Modifier.fillMaxSize()) {
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            // While the check is shown, nothing of the vault under it is visible or reachable (§3.6.5).
+            modifier = if (checkMode != null) Modifier.clearAndSetSemantics {} else Modifier,
+            gesturesEnabled = drawerState.isOpen,
+            drawerContent = {
+                VettIdDrawerSheet(
+                    sections = sections,
+                    selectedKey = selectedKey(current, debugItems),
+                    onItemClick = { item ->
+                        scope.launch { drawerState.close() }
+                        val route = TopLevelDestination.fromKey(item.key)?.route ?: debugTools.routeFor(item.key)
+                        if (route != null) navController.navigateTopLevel(route)
+                    },
+                    versionLabel = stringResource(R.string.drawer_version, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE),
                 )
-            }
-            Box(
-                Modifier
-                    .weight(1f)
-                    .fillMaxSize()
-                    .then(if (bannerShown) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
-            ) {
-                NavHost(navController = navController, startDestination = MessagesRoute) {
-                    messagesDestination(
-                        chrome,
-                        MessagesHost(
-                            navigate = navigate,
-                            onBack = back,
-                            onOpenConnection = { navController.navigate(ConnectionDetailRoute(it)) },
-                            onInvite = { navController.navigate(InviteRoute) },
-                        ),
-                    )
-                    connectionsDestination(
-                        chrome,
-                        ConnectionsHost(
-                            navigate = navigate,
-                            onBack = back,
-                            replace = { route ->
-                                navController.popBackStack()
-                                navController.navigate(route)
-                            },
-                            onOpenConversation = { id ->
-                                navController.navigate(ConversationRoute(id)) { launchSingleTop = true }
-                            },
-                        ),
-                    )
-                    approvalsDestination(chrome, navigate = navigate, onBack = back)
-                    itemsDestination(chrome)
-                    credentialDestination(chrome, navigate = { navController.navigate(it) }, onBack = { navController.popBackStack() })
-                    settingsDestination(
-                        SettingsHost(
-                            onBack = { navController.popBackStack() },
-                            navigate = { navController.navigate(it) },
-                            onOpenCredential = { navController.navigateTopLevel(CredentialRoute) },
-                            onEnableAppLock = onEnableAppLock,
-                            onAccountClick = { showAccount = true },
-                            onOpenAccountSite = { uri.openUri(portal) },
-                        ),
-                    )
-                    helpDestination(onBack = { navController.popBackStack() })
-                    debugTools.register(
-                        this,
-                        DebugHost(theme.mode, theme.set, onBack = { navController.popBackStack() }),
+            },
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                // The clone alarm (§3.5.9): an urgent banner above every screen until it is resolved.
+                val alarmShown = alarm != null && current?.hierarchy?.any { it.hasRoute(CredentialAlarmRoute::class) } != true
+                if (alarmShown) {
+                    UrgentBanner(
+                        text = stringResource(com.vettid.feature.credential.R.string.credential_alarm_banner),
+                        actionLabel = stringResource(com.vettid.feature.credential.R.string.credential_alarm_review),
+                        onClick = { navController.navigate(CredentialAlarmRoute) { launchSingleTop = true } },
+                        modifier = Modifier.testTag("alarm_banner"),
                     )
                 }
+                OwnerCheckBanners(
+                    gate,
+                    first = !alarmShown,
+                    onCheckNow = { asked = OwnerCheckMode.VOLUNTARY },
+                    onHoldOn = gateVm::turnHoldOn,
+                    onDismissNotices = gateVm::dismissNotices,
+                )
+                val bannerShown = alarmShown || gate.bannerShown()
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxSize()
+                        .then(if (bannerShown) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
+                ) {
+                    NavHost(navController = navController, startDestination = MessagesRoute) {
+                        messagesDestination(
+                            chrome,
+                            MessagesHost(
+                                navigate = navigate,
+                                onBack = back,
+                                onOpenConnection = { navController.navigate(ConnectionDetailRoute(it)) },
+                                onInvite = { navController.navigate(InviteRoute) },
+                            ),
+                        )
+                        connectionsDestination(
+                            chrome,
+                            ConnectionsHost(
+                                navigate = navigate,
+                                onBack = back,
+                                replace = { route ->
+                                    navController.popBackStack()
+                                    navController.navigate(route)
+                                },
+                                onOpenConversation = { id ->
+                                    navController.navigate(ConversationRoute(id)) { launchSingleTop = true }
+                                },
+                            ),
+                        )
+                        approvalsDestination(chrome, navigate = navigate, onBack = back)
+                        itemsDestination(chrome)
+                        credentialDestination(chrome, navigate = { navController.navigate(it) }, onBack = { navController.popBackStack() })
+                        settingsDestination(
+                            SettingsHost(
+                                onBack = { navController.popBackStack() },
+                                navigate = { navController.navigate(it) },
+                                onOpenCredential = { navController.navigateTopLevel(CredentialRoute) },
+                                onEnableAppLock = onEnableAppLock,
+                                onAccountClick = { showAccount = true },
+                                onOpenAccountSite = { uri.openUri(portal) },
+                                onOwnerCheck = { holdOff -> asked = if (holdOff) OwnerCheckMode.HOLD_OFF else OwnerCheckMode.VOLUNTARY },
+                            ),
+                        )
+                        helpDestination(onBack = { navController.popBackStack() })
+                        debugTools.register(
+                            this,
+                            DebugHost(theme.mode, theme.set, onBack = { navController.popBackStack() }),
+                        )
+                    }
+                }
             }
+        }
+
+        checkMode?.let { mode ->
+            OwnerCheckRoute(
+                mode = mode,
+                onDone = {
+                    asked = null
+                    armed = false
+                },
+                onCancel = { asked = null },
+            )
         }
     }
 

@@ -85,6 +85,18 @@ interface VaultRepository {
     /** Unlocks (§11.4), optionally approving [approve] (§11.10.3) or cancelling a recovery (§11.11.4). */
     suspend fun unlock(pin: String, approve: ReleaseView? = null, cancelRecovery: Boolean = false): UnlockAttempt
 
+    /**
+     * Unlocks a vault past its owner-check deadline (VAULT-MESSAGING §3.6.5): the PIN unlocks; if `vault.status`
+     * then says held or due, the check follows with [pin] and [password] ([OwnerCheckRepository.unlockCheckOutcome]).
+     */
+    suspend fun unlockWithCheck(
+        pin: String,
+        password: String,
+        approve: ReleaseView? = null,
+        cancelRecovery: Boolean = false,
+    ): UnlockAttempt =
+        unlock(pin, approve, cancelRecovery)
+
     suspend fun lock()
 
     suspend fun overview(): VaultOverview
@@ -118,6 +130,12 @@ interface CredentialRepository {
     suspend fun changePassword(password: String, newPassword: String)
 
     suspend fun rotate(password: String)
+
+    /**
+     * A new credential (`credential.reset`, VAULT-MESSAGING 0.15.2 §3.5.5): the PIN, the current password and the
+     * new one. Every critical item is destroyed. Refused while the vault is held; restarts the owner-check clock.
+     */
+    suspend fun newCredential(pin: String, password: String, newPassword: String)
 
     suspend fun setBackup(on: Boolean)
 

@@ -58,6 +58,9 @@ class VaultApi(val device: VaultDevice) {
     /** `feed.event`: new activity items. */
     val feedEvents: Flow<FeedItem> get() = events("feed.event").map { it.body.decode(FeedItem.serializer()) }
 
+    /** `vault.held` (§3.6.3): the vault is held (or the app gated); content-free counts. */
+    val held: Flow<HeldNotice> get() = events("vault.held").map { it.body.decode(HeldNotice.serializer()) }
+
     /** The approvals the app shows (§4 Approvals): connection requests, grants, critical-item uses, share decisions, held requests. */
     val approvals: Flow<VaultMessage>
         get() = device.events.filter { it.type in APPROVAL_TYPES }
@@ -92,6 +95,19 @@ class VaultApi(val device: VaultDevice) {
         device.forget()
     }
 
+    /**
+     * The daily owner check (§3.6.1): the PIN and the credential password sealed together to one UTK, with the
+     * blob (a credential operation: the CEK rotates and the new blob is kept and acked). [hold] `false` with an
+     * optional [holdOffUntil] (RFC 3339, at most 30 days ahead) turns the hold off (§3.6.7); `true` turns it on.
+     */
+    suspend fun ownerCheck(pin: String, password: String, hold: Boolean? = null, holdOffUntil: String? = null): OwnerCheckPassed =
+        cred.credOp(TYPE_OWNER_CHECK, {
+            put("pin", pin)
+            put("password", password)
+            hold?.let { put("hold", it) }
+            holdOffUntil?.let { put("hold_off_until", it) }
+        }).first.decode(OwnerCheckPassed.serializer())
+
     // --- credential (§10.6) ---
 
     /** Creates the Protean Credential under [password] and keeps the blob (enrollment, §3.5.7). */
@@ -123,16 +139,26 @@ class VaultApi(val device: VaultDevice) {
         })
     }
 
-    /** Deletes the credential and every critical item with it. */
-    suspend fun credentialDelete(password: String) {
-        cred.credOp("credential.delete", { put("password", password) })
-        device.dropCredential()
-    }
+    // No `credential.delete` (VAULT-MESSAGING 0.15.2): a credential goes only with the vault (`vault.delete`);
+    // starting over with a new one is a recovery's `credential.reset`.
 
     /** A recovering app authenticates with the password and takes over the credential (§11.11.5). */
     suspend fun credentialRecover(password: String) {
         cred.sealedOp("credential.recover", { put("password", password) })
         device.endRecovery()
+    }
+
+    /**
+     * The holder's new credential (§3.5.5, 0.15.2): with the blob, the PIN, the current password and the new one
+     * sealed to one UTK. The old credential and every critical item are destroyed; checked like an owner check
+     * (`bad_pin`, `bad_password` are failed checks) and it starts the owner-check clock afresh.
+     */
+    suspend fun credentialResetHolder(pin: String, password: String, newPassword: String) {
+        cred.credOp("credential.reset", {
+            put("pin", pin)
+            put("password", password)
+            put("new_password", newPassword)
+        })
     }
 
     /** Ends a recovery whose credential is lost (backup off): a new credential; critical items are destroyed. */
@@ -710,6 +736,13 @@ class VaultApi(val device: VaultDevice) {
 
     companion object {
         const val INVITE_TTL_DEFAULT = 3600
+
+        /**
+         * The owner check's message type (§3.6.1, §10.2; renamed from `vault.owner_check` in VAULT-MESSAGING 0.15.2
+         * to fit §5.3's `type` grammar). Settings keys, error code, feed kinds and `owner_check` members keep
+         * their underscores.
+         */
+        const val TYPE_OWNER_CHECK = "vault.owner-check"
         private const val AWAIT_S = 90L
         val APPROVAL_TYPES = setOf(
             "connection.request.pending", "connection.request.outgoing", "grant.pending", "critical-secret-use.pending",

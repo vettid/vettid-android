@@ -270,6 +270,12 @@ enum class FailureKind {
     CONFLICT,
     LIMIT,
 
+    /**
+     * The vault is past its owner-check deadline (`owner_check_required`, VAULT-MESSAGING §3.6.3): nothing but
+     * the check until it passes. What the member entered stays; the check follows when they leave the screen.
+     */
+    OWNER_CHECK_REQUIRED,
+
     /** The owner rejected this phone's transfer on their old phone (`device.pair.rejected`, §6.7). */
     REJECTED,
     OTHER,
