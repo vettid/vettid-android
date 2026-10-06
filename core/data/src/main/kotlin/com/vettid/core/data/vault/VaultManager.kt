@@ -146,6 +146,18 @@ class VaultManager(
         store = KeystoreFileStore(File(app.noBackupFilesDir, SOCIAL_FILE), "social"),
     )
 
+    /** The daily owner check (VAULT-MESSAGING 0.13.0 §3.6): its state, the check, the interval and the hold. */
+    val ownerCheck: OwnerCheckManager = KeystoreFileStore(File(app.noBackupFilesDir, OWNER_CHECK_FILE), "owner-check").let { f ->
+        OwnerCheckManager(
+            scope,
+            ops = { VaultOwnerCheckOps(session().api) },
+            load = { runCatching { f.load() }.getOrNull() },
+            persist = { f.save(it) },
+            // §3.6.3: nothing held back is replayed as events; the lists are read again.
+            onPassed = { social.refreshAllQuietly() },
+        )
+    }
+
     init {
         scope.launch { runCatching { canary.load() } }
         // Before MEMBER-API 2.0.0 the app kept the account site's session cookies here; it never signs in now.
@@ -244,6 +256,7 @@ class VaultManager(
             alarmFlow.value = null
             windowFlow.value = null
             social.clear()
+            ownerCheck.clear()
             saveLocal(local.copy(setupComplete = false, snapshot = null))
         }
     }
@@ -253,6 +266,7 @@ class VaultManager(
         observer?.cancel()
         observer = scope.launch {
             launch { s.device.vaultRefusals.collect { n -> refusals.onRefusals(n, phaseFlow.value) } }
+            launch { s.device.ownerCheckRequired.collect { ownerCheck.onRequired() } }
             s.device.events.collect { m ->
                 onEvent(m)
                 try {
@@ -269,7 +283,10 @@ class VaultManager(
 
     @Suppress("CyclomaticComplexMethod") // one branch per event the app follows
     private suspend fun onEvent(m: VaultMessage) {
+        ownerCheck.onEvent(m)
         when (m.type) {
+            // §3.6.3: entering the hold ends the credential's unlock window.
+            "vault.held" -> windowFlow.value = null
             "vault.locking" -> {
                 windowFlow.value = null
                 val p = phaseFlow.value
@@ -355,6 +372,7 @@ class VaultManager(
         if (s.device.recovering) return AppPhase.Setup(SetupStage.RECOVERING)
         if (s.device.credentialVersion == null) return AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)
         scope.launch { runCatching { refreshAlarm(s) } }
+        ownerCheck.onOpened()
         return if (local.setupComplete) AppPhase.Unlocked else AppPhase.Setup(SetupStage.FINISHING)
     }
 
@@ -455,12 +473,25 @@ class VaultManager(
         unlockOnce(pin, approve, cancelRecovery, holderApp = true)
 
     /**
+     * A locked vault past its owner-check deadline (§3.6.5): unlocks with [pin], reads `vault.status` and sends
+     * the check with [pin] and [password] before the app opens, so that the member types both once.
+     */
+    override suspend fun unlockWithCheck(pin: String, password: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt =
+        unlockOnce(pin, approve, cancelRecovery, holderApp = true) { ownerCheck.afterUnlock(pin, password) }
+
+    /**
      * [holderApp]: this phone unlocks as the vault's app (not a recovering one): an enclave's sealed
      * `unknown_device` then means a transfer (§6.7.1) or a recovery (§11.11.5) replaced it, and it is wiped.
      * A failure before the sealed result (network, HTTP status, timeout, unreadable result) never wipes.
      */
     @Suppress("ReturnCount", "CyclomaticComplexMethod") // one answer per §11.4 result code
-    private suspend fun unlockOnce(pin: String, approve: ReleaseView?, cancelRecovery: Boolean, holderApp: Boolean = false): UnlockAttempt {
+    private suspend fun unlockOnce(
+        pin: String,
+        approve: ReleaseView?,
+        cancelRecovery: Boolean,
+        holderApp: Boolean = false,
+        beforeOpen: suspend () -> Unit = {},
+    ): UnlockAttempt {
         val outcome = try {
             guard {
                 val s = session()
@@ -496,6 +527,7 @@ class VaultManager(
         val gen = generation
         val s = session()
         scope.launch { runCatching { s.device.flushOutbox() } }
+        if (!s.device.recovering) beforeOpen()
         val p = afterUnlocked(s)
         if (gen == generation) phaseFlow.value = p
         return if (refused != null) UnlockAttempt.UpdateRefused(refused.code ?: "refused") else UnlockAttempt.Success
@@ -903,6 +935,7 @@ class VaultManager(
             }
         }
         social.clear()
+        ownerCheck.clear()
         canary.removeCanaryManifest()
         transferStartedAt = null
         openTransferId = null
@@ -953,6 +986,7 @@ class VaultManager(
         private const val DEVICE_FILE = "vault-device.bin"
         private const val SOCIAL_FILE = "social.bin"
         private const val CANARY_FILE = "canary-manifest.bin"
+        private const val OWNER_CHECK_FILE = "owner-check.bin"
         private const val HTTP_OK = 200
         private const val LEGACY_SESSION_FILE = "member-session.bin"
         private const val SYNC_ACCOUNT_CHANGED = "account.changed"
@@ -1027,6 +1061,7 @@ class VaultManager(
             "limit" -> FailureKind.LIMIT
             "ttl_not_allowed" -> FailureKind.NOT_SUPPORTED
             "stale_credential", "utk_invalid" -> FailureKind.NO_RESPONSE
+            "owner_check_required" -> FailureKind.OWNER_CHECK_REQUIRED
             else -> FailureKind.OTHER
         }
     }

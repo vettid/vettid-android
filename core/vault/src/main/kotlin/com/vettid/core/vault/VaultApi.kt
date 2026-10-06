@@ -58,6 +58,9 @@ class VaultApi(val device: VaultDevice) {
     /** `feed.event`: new activity items. */
     val feedEvents: Flow<FeedItem> get() = events("feed.event").map { it.body.decode(FeedItem.serializer()) }
 
+    /** `vault.held` (§3.6.3): the vault is held (or the app gated); content-free counts. */
+    val held: Flow<HeldNotice> get() = events("vault.held").map { it.body.decode(HeldNotice.serializer()) }
+
     /** The approvals the app shows (§4 Approvals): connection requests, grants, critical-item uses, share decisions, held requests. */
     val approvals: Flow<VaultMessage>
         get() = device.events.filter { it.type in APPROVAL_TYPES }
@@ -91,6 +94,19 @@ class VaultApi(val device: VaultDevice) {
         if (device.hasCredential()) cred.credOp("vault.delete", payload, extra = extra) else cred.sealedOp("vault.delete", payload, extra)
         device.forget()
     }
+
+    /**
+     * The daily owner check (§3.6.1): the PIN and the credential password sealed together to one UTK, with the
+     * blob (a credential operation: the CEK rotates and the new blob is kept and acked). [hold] `false` with an
+     * optional [holdOffUntil] (RFC 3339, at most 30 days ahead) turns the hold off (§3.6.7); `true` turns it on.
+     */
+    suspend fun ownerCheck(pin: String, password: String, hold: Boolean? = null, holdOffUntil: String? = null): OwnerCheckPassed =
+        cred.credOp(TYPE_OWNER_CHECK, {
+            put("pin", pin)
+            put("password", password)
+            hold?.let { put("hold", it) }
+            holdOffUntil?.let { put("hold_off_until", it) }
+        }).first.decode(OwnerCheckPassed.serializer())
 
     // --- credential (§10.6) ---
 
@@ -710,6 +726,14 @@ class VaultApi(val device: VaultDevice) {
 
     companion object {
         const val INVITE_TTL_DEFAULT = 3600
+
+        /**
+         * The owner check's message type (§3.6.1, §10.2). PENDING OWNER DECISION: VAULT-MESSAGING 0.13.0–0.15.1
+         * names it `vault.owner_check`, but §5.3 restricts every `type` to `[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)*`
+         * (no underscore), which the envelope code enforces on both sides. Like vettid-vault's implementation,
+         * this uses the hyphenated form, the registry's convention for multi-word segments.
+         */
+        const val TYPE_OWNER_CHECK = "vault.owner-check"
         private const val AWAIT_S = 90L
         val APPROVAL_TYPES = setOf(
             "connection.request.pending", "connection.request.outgoing", "grant.pending", "critical-secret-use.pending",

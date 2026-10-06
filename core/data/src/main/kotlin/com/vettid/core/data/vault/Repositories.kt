@@ -85,6 +85,18 @@ interface VaultRepository {
     /** Unlocks (§11.4), optionally approving [approve] (§11.10.3) or cancelling a recovery (§11.11.4). */
     suspend fun unlock(pin: String, approve: ReleaseView? = null, cancelRecovery: Boolean = false): UnlockAttempt
 
+    /**
+     * Unlocks a vault past its owner-check deadline (VAULT-MESSAGING §3.6.5): the PIN unlocks; if `vault.status`
+     * then says held or due, the check follows with [pin] and [password] ([OwnerCheckRepository.unlockCheckOutcome]).
+     */
+    suspend fun unlockWithCheck(
+        pin: String,
+        password: String,
+        approve: ReleaseView? = null,
+        cancelRecovery: Boolean = false,
+    ): UnlockAttempt =
+        unlock(pin, approve, cancelRecovery)
+
     suspend fun lock()
 
     suspend fun overview(): VaultOverview

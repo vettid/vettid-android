@@ -21,6 +21,7 @@ import com.vettid.core.data.vault.CanaryManifestRepository
 import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.MoveRepository
 import com.vettid.core.data.vault.RelaySafetyNet
+import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.VaultManager
 import com.vettid.core.data.vault.VaultRepository
 import com.vettid.core.data.wipe.AndroidWipeTargets
@@ -126,6 +127,9 @@ object AppModule {
 
     @Provides
     fun moveRepository(m: VaultManager): MoveRepository = m
+
+    @Provides
+    fun ownerCheckRepository(m: VaultManager): OwnerCheckRepository = m.ownerCheck
 
     @Provides
     fun canaryManifestRepository(m: VaultManager): CanaryManifestRepository = m.canary

@@ -26,6 +26,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -69,7 +70,7 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
             else -> stringResource(R.string.unlock_submit)
         },
         onPrimary = if (state.preflightError != null) actions::retryPreflight else actions::submit,
-        primaryEnabled = if (state.preflightError != null) state.retryAllowed else state.pinAllowed && state.pin.length >= 4,
+        primaryEnabled = if (state.preflightError != null) state.retryAllowed else state.submitAllowed,
         busy = state.busy || state.loading || state.erasing,
         header = {
             Spacer(Modifier.height(Spacing.l))
@@ -111,6 +112,21 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                     modifier = Modifier.testTag("unlock_refused"),
                 )
             }
+            if (state.lockedByOwnerCheck) {
+                NoticeCard(
+                    NoticeKind.URGENT,
+                    stringResource(R.string.unlock_owner_check_locked_title),
+                    stringResource(R.string.unlock_owner_check_locked_body),
+                    modifier = Modifier.testTag("unlock_owner_check_locked"),
+                )
+            } else if (state.checkDue) {
+                NoticeCard(
+                    NoticeKind.INFO,
+                    stringResource(R.string.unlock_owner_check_title),
+                    stringResource(R.string.unlock_owner_check_body),
+                    modifier = Modifier.testTag("unlock_owner_check"),
+                )
+            }
             if (state.stateRollback) {
                 NoticeCard(
                     NoticeKind.URGENT,
@@ -142,9 +158,21 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                     enabled = state.pinAllowed,
                     error = if (state.message == UnlockMessage.BadPin) stringResource(R.string.unlock_bad_pin) else null,
                     supporting = waitText,
-                    onImeAction = actions::submit,
+                    imeAction = if (state.checkDue) ImeAction.Next else ImeAction.Done,
+                    onImeAction = if (state.checkDue) ({}) else actions::submit,
                     modifier = Modifier.testTag("unlock_pin"),
                 )
+                if (state.checkDue) {
+                    // §3.6.5: a locked vault past its deadline asks for the PIN and the password on one screen.
+                    SecretField(
+                        value = state.password,
+                        onValueChange = actions::setPassword,
+                        label = stringResource(R.string.unlock_password_label),
+                        enabled = state.pinAllowed,
+                        onImeAction = actions::submit,
+                        modifier = Modifier.testTag("unlock_password"),
+                    )
+                }
                 when (val m = state.message) {
                     is UnlockMessage.UpdateRefused -> NoticeCard(
                         NoticeKind.WARNING,

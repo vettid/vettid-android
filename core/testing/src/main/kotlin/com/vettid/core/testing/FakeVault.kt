@@ -19,6 +19,12 @@ import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultOverview
 import com.vettid.core.data.vault.VaultRepository
 import com.vettid.core.data.vault.MoveRepository
+import com.vettid.core.data.vault.HoldOff
+import com.vettid.core.data.vault.OwnerCheckNotice
+import com.vettid.core.data.vault.OwnerCheckOutcome
+import com.vettid.core.data.vault.OwnerCheckRepository
+import com.vettid.core.data.vault.OwnerCheckState
+import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.RecoverOutcome
 import com.vettid.core.data.vault.RecoveryRegistration
 import com.vettid.core.data.vault.RecoveryStage
@@ -35,7 +41,8 @@ import java.time.Instant
  * throw; the unlock outcomes are scripted in [unlockResults].
  */
 @Suppress("TooManyFunctions")
-class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, VaultRepository, CredentialRepository, MoveRepository {
+class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
+    AccountRepository, VaultRepository, CredentialRepository, MoveRepository, OwnerCheckRepository {
     val calls = mutableListOf<String>()
 
     /** MEMBER-API 1.2.0: the vault service paused (the banner). */
@@ -158,6 +165,14 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, Vau
         val r = unlockResults.removeFirstOrNull() ?: UnlockAttempt.Success
         if (r !is UnlockAttempt.Failed) refusedByVault.value = false // a sealed answer, as VaultManager
         if (r == UnlockAttempt.Success) phase.value = AppPhase.Unlocked
+        return r
+    }
+
+    override suspend fun unlockWithCheck(pin: String, password: String, approve: ReleaseView?, cancelRecovery: Boolean): UnlockAttempt {
+        lastPassword = password
+        val r = unlock(pin, approve, cancelRecovery)
+        calls += "unlockWithCheck"
+        if (r == UnlockAttempt.Success) unlockCheckOutcome.value = checkResults.removeFirstOrNull() ?: passed()
         return r
     }
 
@@ -327,6 +342,59 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) : AccountRepository, Vau
     override suspend fun transferReject(transferId: String) {
         call("transferReject")
         lastTransferRejected = transferId
+    }
+
+    // --- the daily owner check (OwnerCheckRepository) ---
+
+    override val ownerCheck = MutableStateFlow<OwnerCheckView?>(null)
+    override val lockedByOwnerCheck = MutableStateFlow(false)
+    override val unlockCheckOutcome = MutableStateFlow<OwnerCheckOutcome?>(null)
+    override val notices = MutableStateFlow<List<OwnerCheckNotice>>(emptyList())
+
+    /** Scripted answers to [check] (default: passed). */
+    val checkResults = ArrayDeque<OwnerCheckOutcome>()
+    var lastHoldOff: HoldOff? = null
+    var lastInterval: Long? = null
+
+    private fun passed(): OwnerCheckOutcome {
+        ownerCheck.value = ownerCheck.value?.copy(
+            state = OwnerCheckState.OK, deadline = Instant.now().plusSeconds(86_400), failures = 0, waiting = null,
+        )
+        return OwnerCheckOutcome.Passed
+    }
+
+    override suspend fun refreshOwnerCheck() = call("refreshOwnerCheck")
+
+    override suspend fun check(pin: String, password: String, holdOff: HoldOff?): OwnerCheckOutcome {
+        call("check")
+        lastPin = pin
+        lastPassword = password
+        lastHoldOff = holdOff
+        val r = checkResults.removeFirstOrNull() ?: passed()
+        if (r == OwnerCheckOutcome.Passed && holdOff != null) {
+            ownerCheck.value = ownerCheck.value?.copy(hold = false, holdOffUntil = holdOff.until)
+        }
+        return r
+    }
+
+    override suspend fun setCheckInterval(seconds: Long) {
+        call("setCheckInterval")
+        lastInterval = seconds
+        ownerCheck.value = ownerCheck.value?.copy(intervalSeconds = seconds)
+    }
+
+    override suspend fun turnHoldOn() {
+        call("turnHoldOn")
+        ownerCheck.value = ownerCheck.value?.copy(hold = true, holdOffUntil = null)
+    }
+
+    override fun consumeUnlockCheckOutcome() {
+        unlockCheckOutcome.value = null
+    }
+
+    override suspend fun dismissNotices() {
+        call("dismissNotices")
+        notices.value = emptyList()
     }
 
     companion object {

@@ -97,13 +97,18 @@ data class SettingsHost(
     val onEnableAppLock: () -> Unit,
     val onAccountClick: () -> Unit,
     val onOpenAccountSite: () -> Unit,
+    /** Opens the owner check (VAULT-MESSAGING §3.6.5): [holdOff] true turns the hold off with it (§3.6.7). */
+    val onOwnerCheck: (holdOff: Boolean) -> Unit = {},
 )
 
 /** Registers Settings and its sub-screens. */
+@Suppress("LongMethod") // one composable per sub-screen
 fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
     composable<SettingsRoute> {
         val vm: SettingsViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
+        val ocVm: OwnerCheckSettingsViewModel = hiltViewModel()
+        val ownerCheck by ocVm.uiState.collectAsStateWithLifecycle()
         SettingsContent(
             state,
             SettingsActions(
@@ -123,6 +128,14 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 accountSite = host.onOpenAccountSite,
                 deleteVault = { host.navigate(DeleteVaultRoute) },
                 dismissError = vm::dismissError,
+            ),
+            ownerCheck = ownerCheck,
+            ownerCheckActions = OwnerCheckSettingsActions(
+                setIntervalHours = ocVm::setIntervalHours,
+                setHold = { on -> if (on) ocVm.turnHoldOn() else host.onOwnerCheck(true) },
+                checkNow = { host.onOwnerCheck(false) },
+                dismissOffer = ocVm::dismissOffer,
+                dismissError = ocVm::dismissError,
             ),
         )
     }
@@ -224,7 +237,12 @@ data class SettingsActions(
  */
 @Suppress("LongMethod")
 @Composable
-fun SettingsContent(state: SettingsUiState, actions: SettingsActions) {
+fun SettingsContent(
+    state: SettingsUiState,
+    actions: SettingsActions,
+    ownerCheck: OwnerCheckSettingsUiState = OwnerCheckSettingsUiState(),
+    ownerCheckActions: OwnerCheckSettingsActions = OwnerCheckSettingsActions(),
+) {
     var confirmLock by rememberSaveable { mutableStateOf(false) }
     var themePicker by rememberSaveable { mutableStateOf(false) }
     var timeoutPicker by rememberSaveable { mutableStateOf(false) }
@@ -281,6 +299,8 @@ fun SettingsContent(state: SettingsUiState, actions: SettingsActions) {
                 SettingsRow(stringResource(R.string.settings_security_recovery), actions.recovery, icon = Icons.Outlined.Restore)
                 SettingsDivider()
                 SettingsRow(stringResource(R.string.settings_security_attestation), actions.attestation, icon = Icons.Outlined.VerifiedUser)
+                // The daily owner check (VAULT-MESSAGING §3.6.2, §3.6.7): the interval, a check now, the hold switch.
+                OwnerCheckSettingsRows(ownerCheck, ownerCheckActions)
                 SettingsDivider()
                 SettingsSwitchRow(
                     label = stringResource(R.string.settings_security_app_lock),

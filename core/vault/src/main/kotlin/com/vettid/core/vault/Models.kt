@@ -17,7 +17,40 @@ data class VaultStatusInfo(
     val provisional: Boolean = false,
     val devices: Int = 0,
     val connections: Int = 0,
+    /** The daily owner check (§3.6, 0.13.0); absent from a vault older than 0.13.0. */
+    @SerialName("owner_check") val ownerCheck: OwnerCheckStatus? = null,
 )
+
+/**
+ * `vault.status`'s `owner_check` (§3.6, §3.6.7): `state` is `ok`, `due` (past the deadline with the hold off: the
+ * app is gated) or `held` (past the deadline with the hold on).
+ */
+@Serializable
+data class OwnerCheckStatus(
+    val state: String,
+    val deadline: String? = null,
+    @SerialName("interval_seconds") val intervalSeconds: Long? = null,
+    val failures: Int = 0,
+    val hold: Boolean = true,
+    @SerialName("hold_off_until") val holdOffUntil: String? = null,
+)
+
+/** `vault.owner_check`'s answer (§3.6.1), less the blob and UTKs the credential layer keeps. */
+@Serializable
+data class OwnerCheckPassed(
+    val deadline: String? = null,
+    @SerialName("interval_seconds") val intervalSeconds: Long? = null,
+    val hold: Boolean = true,
+    @SerialName("hold_off_until") val holdOffUntil: String? = null,
+)
+
+/** `vault.held` (§3.6.3): content-free counts of what waits since the deadline. */
+@Serializable
+data class HeldNotice(val deadline: String? = null, val waiting: HeldCounts = HeldCounts())
+
+/** `vault.held`'s `waiting`. */
+@Serializable
+data class HeldCounts(val messages: Int = 0, val requests: Int = 0, val calls: Int = 0, val other: Int = 0)
 
 /** `credential.version` (§10.6). */
 @Serializable

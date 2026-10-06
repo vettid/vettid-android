@@ -2,6 +2,9 @@ package com.vettid.feature.onboarding
 
 import com.vettid.core.data.vault.AppPhase
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.OwnerCheckOutcome
+import com.vettid.core.data.vault.OwnerCheckState
+import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.UnlockAttempt
 import com.vettid.core.data.vault.VaultFailure
@@ -17,6 +20,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import java.time.Instant
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class UnlockViewModelTest {
@@ -27,7 +31,7 @@ class UnlockViewModelTest {
 
     @Test
     fun unlocksWithThePin() = runTest {
-        val vm = UnlockViewModel(vault, vault)
+        val vm = UnlockViewModel(vault, vault, vault)
         advanceUntilIdle()
         assertTrue(vm.uiState.value.pinAllowed)
         vm.setPin("4028 1795")
@@ -39,10 +43,53 @@ class UnlockViewModelTest {
         assertNull(vault.lastApproved)
     }
 
+    private fun view(state: OwnerCheckState, deadline: Instant) =
+        OwnerCheckView(state, deadline, 86_400, 0, hold = true, holdOffUntil = null)
+
+    /** A locked vault past its owner-check deadline: PIN and password on one screen, the check after the unlock (§3.6.5). */
+    @Test
+    fun pastTheDeadlineAsksForThePasswordWithThePin() = runTest {
+        vault.ownerCheck.value = view(OwnerCheckState.HELD, Instant.now().minusSeconds(60))
+        val vm = UnlockViewModel(vault, vault, vault)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.checkDue)
+        vm.setPin("40281795")
+        assertFalse(vm.uiState.value.submitAllowed) // the password too
+        vm.setPassword("correct horse")
+        vm.submit()
+        advanceUntilIdle()
+        assertTrue("unlockWithCheck" in vault.calls)
+        assertEquals("correct horse", vault.lastPassword)
+        assertEquals("", vm.uiState.value.password)
+        assertEquals(OwnerCheckOutcome.Passed, vault.unlockCheckOutcome.value)
+    }
+
+    @Test
+    fun beforeTheDeadlineOnlyThePin() = runTest {
+        vault.ownerCheck.value = view(OwnerCheckState.OK, Instant.now().plusSeconds(3_600))
+        val vm = UnlockViewModel(vault, vault, vault)
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.checkDue)
+        vm.setPin("40281795")
+        vm.submit()
+        advanceUntilIdle()
+        assertFalse("unlockWithCheck" in vault.calls)
+        assertTrue("unlock" in vault.calls)
+    }
+
+    @Test
+    fun tenFailedChecksShowTheLock() = runTest {
+        vault.lockedByOwnerCheck.value = true
+        val vm = UnlockViewModel(vault, vault, vault)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.lockedByOwnerCheck)
+        assertTrue(vm.uiState.value.checkDue)
+    }
+
     @Test
     fun softwareUpdatedMustBeAcknowledgedBeforeThePin() = runTest {
         vault.preflightInfo = PreflightInfo(FakeVault.release(4), 3, softwareUpdated = true, rollback = false, offer = null)
-        val vm = UnlockViewModel(vault, vault)
+        val vm = UnlockViewModel(vault, vault, vault)
         advanceUntilIdle()
         vm.setPin("40281795")
         vm.submit()
@@ -57,7 +104,7 @@ class UnlockViewModelTest {
     @Test
     fun rollbackNeverSendsThePin() = runTest {
         vault.preflightInfo = PreflightInfo(FakeVault.release(2), 3, softwareUpdated = false, rollback = true, offer = null)
-        val vm = UnlockViewModel(vault, vault)
+        val vm = UnlockViewModel(vault, vault, vault)
         advanceUntilIdle()
         vm.setPin("40281795")
         vm.submit()
@@ -70,7 +117,7 @@ class UnlockViewModelTest {
     fun approvedOfferTravelsWithTheUnlock() = runTest {
         val offer = FakeVault.release(5)
         vault.preflightInfo = PreflightInfo(FakeVault.release(4, "deprecated"), 4, false, false, offer)
-        val vm = UnlockViewModel(vault, vault)
+        val vm = UnlockViewModel(vault, vault, vault)
         advanceUntilIdle()
         vm.setApproveOffer(true)
         vm.setPin("40281795")
@@ -82,7 +129,7 @@ class UnlockViewModelTest {
     @Test
     fun badPinStartsTheBackoffCountdown() = runTest {
         vault.unlockResults += UnlockAttempt.BadPin(retryAfterSeconds = 30)
-        val vm = UnlockViewModel(vault, vault)
+        val vm = UnlockViewModel(vault, vault, vault)
         advanceUntilIdle()
         vm.setPin("11112222")
         vm.submit()
@@ -100,7 +147,7 @@ class UnlockViewModelTest {
     @Test
     fun recoveryPendingThenCancelAndUnlock() = runTest {
         vault.unlockResults += UnlockAttempt.RecoveryPending
-        val vm = UnlockViewModel(vault, vault)
+        val vm = UnlockViewModel(vault, vault, vault)
         advanceUntilIdle()
         vm.setPin("40281795")
         vm.submit()
@@ -116,7 +163,7 @@ class UnlockViewModelTest {
     @Test
     fun stateRollbackAndFailures() = runTest {
         vault.unlockResults += UnlockAttempt.StateRollback
-        val vm = UnlockViewModel(vault, vault)
+        val vm = UnlockViewModel(vault, vault, vault)
         advanceUntilIdle()
         vm.setPin("40281795")
         vm.submit()
@@ -124,7 +171,7 @@ class UnlockViewModelTest {
         assertTrue(vm.uiState.value.stateRollback)
 
         vault.fail["preflight"] = FakeVault.failure(FailureKind.RELEASE_ENDED)
-        val ended = UnlockViewModel(vault, vault)
+        val ended = UnlockViewModel(vault, vault, vault)
         advanceUntilIdle()
         assertEquals(FailureKind.RELEASE_ENDED, ended.uiState.value.preflightError)
         assertFalse(ended.uiState.value.pinAllowed)
@@ -134,7 +181,7 @@ class UnlockViewModelTest {
 
     private suspend fun TestScope.unrecognised(): UnlockViewModel {
         vault.unlockResults += UnlockAttempt.Failed(FailureKind.OTHER, UnlockViewModel.CODE_UNREADABLE)
-        val vm = UnlockViewModel(vault, vault)
+        val vm = UnlockViewModel(vault, vault, vault)
         advanceUntilIdle()
         vm.setPin("40281795")
         vm.submit()
@@ -194,7 +241,7 @@ class UnlockViewModelTest {
         )
         for (o in outcomes) {
             vault.unlockResults += o
-            val vm = UnlockViewModel(vault, vault)
+            val vm = UnlockViewModel(vault, vault, vault)
             advanceUntilIdle()
             assertFalse(vm.uiState.value.notRecognised)
             vm.setPin("40281795")
@@ -233,7 +280,7 @@ class UnlockViewModelTest {
     @Test
     fun aRefusedPhoneIsOfferedTheEraseAfterAnUnreadableUnlock() = runTest {
         vault.refusedByVault.value = true
-        val vm = UnlockViewModel(vault, vault)
+        val vm = UnlockViewModel(vault, vault, vault)
         advanceUntilIdle()
         assertTrue(vm.uiState.value.refused)
         assertFalse("the refusals alone offer nothing", vm.uiState.value.notRecognised)
@@ -256,7 +303,7 @@ class UnlockViewModelTest {
     fun aRefusedPhoneThatTheVaultKnowsIsNotOfferedTheErase() = runTest {
         // A working phone whose token errors were passing: its PIN gets a sealed answer.
         vault.refusedByVault.value = true
-        val vm = UnlockViewModel(vault, vault)
+        val vm = UnlockViewModel(vault, vault, vault)
         advanceUntilIdle()
         vault.unlockResults += UnlockAttempt.BadPin(retryAfterSeconds = 0)
         vm.setPin("40281795")
@@ -273,7 +320,7 @@ class UnlockViewModelTest {
 
     @Test
     fun withoutRefusalsTheUnlockScreenSaysNothingOfThem() = runTest {
-        val vm = UnlockViewModel(vault, vault)
+        val vm = UnlockViewModel(vault, vault, vault)
         advanceUntilIdle()
         assertFalse(vm.uiState.value.refused)
         vault.unlockResults += UnlockAttempt.Failed(FailureKind.NETWORK, null)
@@ -287,7 +334,7 @@ class UnlockViewModelTest {
     @Test
     fun aPausedServiceWaitsForRetryAfterAndNeverOffersTheErase() = runTest {
         vault.unlockResults += UnlockAttempt.Failed(FailureKind.SERVICE_PAUSED, "vault_unavailable", retryAfterSeconds = 300)
-        val vm = UnlockViewModel(vault, vault)
+        val vm = UnlockViewModel(vault, vault, vault)
         advanceUntilIdle()
         vm.setPin("40281795")
         vm.submit()
@@ -315,7 +362,7 @@ class UnlockViewModelTest {
     @Test
     fun aPausedReleaseCheckHoldsTryAgainUntilRetryAfter() = runTest {
         vault.fail["preflight"] = VaultFailure(FailureKind.SERVICE_PAUSED, "vault_unavailable", retryAfterSeconds = 300)
-        val vm = UnlockViewModel(vault, vault)
+        val vm = UnlockViewModel(vault, vault, vault)
         advanceTimeBy(1)
         assertEquals(FailureKind.SERVICE_PAUSED, vm.uiState.value.preflightError)
         assertEquals(300L, vm.uiState.value.serviceWaitSeconds)
@@ -336,7 +383,7 @@ class UnlockViewModelTest {
     @Test
     fun aServiceThatIsNotThereYetHasNoWait() = runTest {
         vault.unlockResults += UnlockAttempt.Failed(FailureKind.VAULT_UNAVAILABLE, "vault_unavailable")
-        val vm = UnlockViewModel(vault, vault)
+        val vm = UnlockViewModel(vault, vault, vault)
         advanceUntilIdle()
         vm.setPin("40281795")
         vm.submit()

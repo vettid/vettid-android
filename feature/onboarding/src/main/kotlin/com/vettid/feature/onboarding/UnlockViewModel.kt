@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.UnlockAttempt
 import com.vettid.core.data.vault.VaultFailure
@@ -14,8 +15,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.time.Instant
 import javax.inject.Inject
 
 /** A message under the PIN field. */
@@ -66,6 +69,14 @@ data class UnlockUiState(
     val eraseConfirm: Boolean = false,
     /** The erase runs. */
     val erasing: Boolean = false,
+    /**
+     * The vault is past its owner-check deadline, as this phone last learnt (VAULT-MESSAGING §3.6.5): the
+     * credential password is asked for with the PIN, and the check follows the unlock.
+     */
+    val checkDue: Boolean = false,
+    val password: String = "",
+    /** The vault locked after ten failed checks (§3.6.4). */
+    val lockedByOwnerCheck: Boolean = false,
 ) {
     /** Whether "Try again" (after a failed release check) may be pressed now. */
     val retryAllowed: Boolean get() = serviceWaitSeconds == 0L && !loading
@@ -77,18 +88,29 @@ data class UnlockUiState(
             return !p.rollback && (!p.softwareUpdated || updateAcknowledged) && waitSeconds == 0L && serviceWaitSeconds == 0L && !busy
         }
 
+    /** Whether the unlock may be sent: a PIN, and with a check due, the password too. */
+    val submitAllowed: Boolean get() = pinAllowed && pin.length >= MIN_PIN_LENGTH && (!checkDue || password.isNotEmpty())
+
     override fun toString(): String =
         "UnlockUiState(loading=$loading, busy=$busy, message=$message, wait=$waitSeconds, serviceWait=$serviceWaitSeconds, " +
             "refused=$refused, " +
-            "notRecognised=$notRecognised, erasing=$erasing)"
+            "notRecognised=$notRecognised, erasing=$erasing, checkDue=$checkDue)"
+
+    private companion object {
+        const val MIN_PIN_LENGTH = 4
+    }
 }
 
 /** What the unlock screen can ask for. */
+@Suppress("TooManyFunctions")
 interface UnlockActions {
     fun retryPreflight()
     fun acknowledgeUpdate()
     fun setApproveOffer(approve: Boolean)
     fun setPin(v: String)
+
+    /** The credential password, asked for with the PIN when the owner check is due (§3.6.5). */
+    fun setPassword(v: String)
     fun submit()
     fun cancelRecoveryAndUnlock()
 
@@ -114,10 +136,12 @@ interface UnlockActions {
  * phone's messages to the vault ([UnlockUiState.refused]); the refusals alone
  * offer nothing and never erase.
  */
+@Suppress("TooManyFunctions")
 @HiltViewModel
 class UnlockViewModel @Inject constructor(
     private val vault: VaultRepository,
     private val account: AccountRepository,
+    ownerCheck: OwnerCheckRepository,
 ) : ViewModel(), UnlockActions {
     private val state = MutableStateFlow(UnlockUiState(email = account.account.value?.emailHint?.takeIf { it.isNotEmpty() }))
     val uiState: StateFlow<UnlockUiState> = state.asStateFlow()
@@ -127,6 +151,10 @@ class UnlockViewModel @Inject constructor(
     init {
         retryPreflight()
         viewModelScope.launch { vault.refusedByVault.collect { r -> state.update { it.copy(refused = r) } } }
+        viewModelScope.launch {
+            combine(ownerCheck.ownerCheck, ownerCheck.lockedByOwnerCheck) { v, locked -> (v?.gated(Instant.now()) == true) to locked }
+                .collect { (due, locked) -> state.update { it.copy(checkDue = due || locked, lockedByOwnerCheck = locked) } }
+        }
     }
 
     override fun retryPreflight() {
@@ -149,6 +177,8 @@ class UnlockViewModel @Inject constructor(
 
     override fun setPin(v: String) = state.update { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN), message = null) }
 
+    override fun setPassword(v: String) = state.update { it.copy(password = v, message = null) }
+
     override fun submit() = attempt(cancelRecovery = false)
 
     override fun cancelRecoveryAndUnlock() = attempt(cancelRecovery = true)
@@ -167,12 +197,17 @@ class UnlockViewModel @Inject constructor(
 
     private fun attempt(cancelRecovery: Boolean) {
         val s = state.value
-        if (!s.pinAllowed || s.pin.length < MIN_PIN || s.erasing) return
+        if (!s.submitAllowed || s.erasing) return
         state.update { it.copy(busy = true, message = null) }
         viewModelScope.launch {
             val offer = if (s.approveOffer) s.preflight?.offer else null
-            val r = vault.unlock(s.pin, offer, cancelRecovery)
-            state.update { it.copy(notRecognised = notRecognisedAfter(r, it.notRecognised)) }
+            val r = if (s.checkDue) {
+                vault.unlockWithCheck(s.pin, s.password, offer, cancelRecovery)
+            } else {
+                vault.unlock(s.pin, offer, cancelRecovery)
+            }
+            // §3.6.5: the password is not kept beyond the unlock and the check that follows it.
+            state.update { it.copy(password = "", notRecognised = notRecognisedAfter(r, it.notRecognised)) }
             when (r) {
                 UnlockAttempt.Success -> state.update { it.copy(busy = false, pin = "", recoveryPending = false) }
                 is UnlockAttempt.BadPin -> {
@@ -235,7 +270,6 @@ class UnlockViewModel @Inject constructor(
         /** The unlock result this phone could not read ([com.vettid.core.data.vault.VaultFailure] code). */
         const val CODE_UNREADABLE = "unreadable_result"
 
-        private const val MIN_PIN = 4
         private const val MAX_PIN = 32
         private const val TICK_MS = 1000L
     }
