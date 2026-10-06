@@ -165,6 +165,30 @@ class CanaryManifestTest {
     }
 
     @Test
+    fun onlyA404FallsBackToTheCanary() = runBlocking<Unit> {
+        // §11.10.1: a server error is not "nothing published"; the canary is not used.
+        for (status in listOf(500, 502, 503)) {
+            server.dispatcher = object : Dispatcher() {
+                override fun dispatch(request: RecordedRequest): MockResponse =
+                    MockResponse.Builder().code(status).body("unavailable").build()
+            }
+            val src = Source(served(1, number = 1))
+            val e = assertThrows(MemberApiException::class.java) { runBlocking { flow(src).manifest(0) } }
+            assertEquals(MemberApiException.MANIFEST_UNAVAILABLE, e.code)
+            assertEquals(status, e.status)
+            assertTrue(src.retired.isEmpty())
+        }
+    }
+
+    @Test
+    fun aNetworkErrorDoesNotFallBackToTheCanary() = runBlocking<Unit> {
+        val f = flow(Source(served(1, number = 1)))
+        server.close() // the published manifest cannot be fetched at all
+        val e = assertThrows(java.io.IOException::class.java) { runBlocking { f.manifest(0) } }
+        assertTrue(e !is MemberApiException)
+    }
+
+    @Test
     fun aNewerCanaryWinsOverThePublishedManifest() = runBlocking<Unit> {
         publishedSerial = 7
         val src = Source(served(8, number = 4))
