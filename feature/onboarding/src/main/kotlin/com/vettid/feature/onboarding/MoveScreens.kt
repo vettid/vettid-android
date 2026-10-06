@@ -50,6 +50,7 @@ import com.vettid.core.ui.components.QrScanner
 import com.vettid.core.ui.components.RookLogo
 import com.vettid.core.ui.components.SafetyCode
 import com.vettid.core.ui.components.SecretField
+import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.components.rememberCameraPermission
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
@@ -211,7 +212,7 @@ fun RecoverContent(
                     autoCorrectEnabled = false,
                 ),
                 keyboardActions = KeyboardActions(onDone = { actions.submitCode() }),
-                modifier = Modifier.fillMaxWidth().testTag("recovery_code"),
+                modifier = Modifier.fillMaxWidth().excludeFromAutofill().testTag("recovery_code"),
             )
             CodeRefusalNotice(state)
             Failure(state.error)
@@ -537,7 +538,7 @@ fun TransferInContent(
                 isError = state.inputProblem != null,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done, autoCorrectEnabled = false),
                 keyboardActions = KeyboardActions(onDone = { actions.submitInput() }),
-                modifier = Modifier.fillMaxWidth().testTag("transfer_code"),
+                modifier = Modifier.fillMaxWidth().excludeFromAutofill().testTag("transfer_code"),
             )
             InputProblem(state.inputProblem)
             Failure(state.error, if (state.error == FailureKind.NO_RESPONSE) stringResource(R.string.transfer_in_no_answer) else null)

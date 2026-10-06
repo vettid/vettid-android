@@ -54,6 +54,7 @@ import com.vettid.core.ui.components.RookLogo
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.components.StepList
 import com.vettid.core.ui.components.StrengthMeter
+import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
 
@@ -235,7 +236,7 @@ fun CheckEmailScreen(state: OnboardingUiState, actions: OnboardingActions, onBac
             supportingText = if (state.linkInvalid) ({ Text(stringResource(R.string.onboarding_check_paste_invalid)) }) else null,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Go, autoCorrectEnabled = false),
             keyboardActions = KeyboardActions(onGo = { actions.submitLink() }),
-            modifier = Modifier.fillMaxWidth().testTag("link"),
+            modifier = Modifier.fillMaxWidth().excludeFromAutofill().testTag("link"),
         )
         ErrorText(state, FailureKind.UNAUTHORIZED, stringResource(R.string.onboarding_link_expired))
         DevHint(state)

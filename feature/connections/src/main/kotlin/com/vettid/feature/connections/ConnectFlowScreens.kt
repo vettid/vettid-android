@@ -63,6 +63,7 @@ import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.QrCode
 import com.vettid.core.ui.components.SafetyCode
+import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
@@ -471,7 +472,7 @@ fun AcceptScreen(state: AcceptUiState, actions: AcceptActions, modifier: Modifie
                 isError = state.error != null,
                 minLines = 3,
                 maxLines = 6,
-                modifier = Modifier.fillMaxWidth().testTag("invite_input"),
+                modifier = Modifier.fillMaxWidth().excludeFromAutofill().testTag("invite_input"),
             )
             FailureText(state.error, Modifier.padding(top = Spacing.s))
         }
