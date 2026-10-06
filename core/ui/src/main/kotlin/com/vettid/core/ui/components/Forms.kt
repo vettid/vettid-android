@@ -75,6 +75,8 @@ import com.vettid.core.ui.theme.VettIdTheme
  * A secret text field (vault PIN, account PIN, credential password): masked,
  * with a show/hide toggle. [isPin] switches to the digit keyboard. Nothing is
  * saved across process death: callers keep secrets in ViewModel state only.
+ * Excluded from autofill: password managers neither fill nor offer to save it
+ * ([excludeFromAutofill]).
  */
 @Composable
 fun SecretField(
@@ -116,7 +118,7 @@ fun SecretField(
                 )
             }
         },
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.excludeFromAutofill().fillMaxWidth(),
     )
 }
 

@@ -61,6 +61,7 @@ import com.vettid.core.ui.components.SettingsDivider
 import com.vettid.core.ui.components.SettingsGroup
 import com.vettid.core.ui.components.SettingsInfoRow
 import com.vettid.core.ui.components.SettingsSectionHeader
+import com.vettid.core.ui.components.excludeFromAutofill
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdTheme
 import java.time.Instant
@@ -475,7 +476,7 @@ fun DeleteVaultContent(state: DeleteVaultUiState, actions: DeleteVaultActions) {
             isError = state.phraseWrong,
             supportingText = if (state.phraseWrong) ({ Text(stringResource(R.string.settings_delete_phrase_wrong)) }) else null,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text, imeAction = ImeAction.Next, autoCorrectEnabled = false),
-            modifier = Modifier.fillMaxWidth().testTag("delete_phrase"),
+            modifier = Modifier.fillMaxWidth().excludeFromAutofill().testTag("delete_phrase"),
         )
         Spacer(Modifier.height(Spacing.l))
         SecretField(state.pin, actions.setPin, stringResource(R.string.settings_delete_pin), isPin = true, imeAction = ImeAction.Next)
