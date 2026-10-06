@@ -161,12 +161,6 @@ class VaultApi(val device: VaultDevice) {
         })
     }
 
-    /** Ends a recovery whose credential is lost (backup off): a new credential; critical items are destroyed. */
-    suspend fun credentialReset(password: String) {
-        cred.sealedOp("credential.reset", { put("password", password) })
-        device.endRecovery()
-    }
-
     /**
      * After a direct transfer (§6.7.1 step 5): fetches the blob the vault kept
      * (`credential.get`), confirms it (`credential.ack`) and fills the UTK pool

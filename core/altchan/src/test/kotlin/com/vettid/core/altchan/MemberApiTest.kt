@@ -124,6 +124,7 @@ class MemberApiTest {
         }
     }
 
+    private var statusBody = """{"vault":null,"service":"available"}"""
     private val enrolledVaultIds = mutableListOf<String>()
     private val signed = mutableListOf<Pair<String, String>>()
     private val appKey = SoftAppKey()
@@ -177,7 +178,11 @@ class MemberApiTest {
                 if (o.string("recovery_id") == "01JA0RECVERY0000000000001X") resp(200, """{"user_guid":"guid-1","email_hint":"s***@example.org"}""")
                 else resp(409, """{"error":"recovery_not_available","code":"recovery_not_available"}""")
             }
-            "/api/vault/status" -> resp(200, """{"vault":null,"service":"available"}""")
+            "/api/vault/status" -> resp(200, statusBody)
+            "/api/vault/deletion/cancel" -> {
+                val id = StrictJson.parseObject(body).string("deletion_id")
+                resp(200, """{"cancelled":${id == "01JDELETION0000000000000000"}}""")
+            }
             else -> resp(404, """{"error":"not_found"}""")
         }
     }
@@ -335,6 +340,26 @@ class MemberApiTest {
         val e = assertThrows(MemberApiException::class.java) { runBlocking { api(MemberAuth.Bearer("someone-else")).enclave() } }
         assertEquals(401, e.status)
         assertEquals(MemberApiException.UNAUTHORIZED, e.code)
+    }
+
+    /** MEMBER-API 2.1.0: `credential_backup` and a pending start-over in the status; the app's signed cancel. */
+    @Test
+    fun deletionInTheStatusAndTheAppsCancel() = runBlocking<Unit> {
+        val vid = "0123456789abcdef0123456789abcdef"
+        val a = api(MemberAuth.AppKey(appKey) { vid })
+        statusBody = """{"vault":{"vault_id":"$vid","state":"unlocked","leased":true,"credential_backup":false,""" +
+            """"deletion":{"state":"pending","deletes_at":"2026-10-07T20:00:00Z","deletion_id":"01JDELETION0000000000000000"}},"service":"available"}"""
+        val v = a.vaultStatus()!!
+        assertEquals(false, v.credentialBackup)
+        assertEquals(PendingDeletion("pending", "2026-10-07T20:00:00Z", "01JDELETION0000000000000000"), v.deletion)
+        statusBody = """{"vault":{"vault_id":"$vid","state":"locked","deletion":{"state":"executing","deletes_at":"2026-10-07T20:00:00Z"}}}"""
+        assertEquals(PendingDeletion("executing", "2026-10-07T20:00:00Z", null), a.vaultStatus()!!.deletion)
+        statusBody = """{"vault":{"vault_id":"$vid","state":"locked","deletion":null,"credential_backup":null}}"""
+        assertEquals(null, a.vaultStatus()!!.deletion)
+        assertEquals(null, a.vaultStatus()!!.credentialBackup)
+        assertTrue(a.deletionCancel("01JDELETION0000000000000000"))
+        assertEquals("/api/vault/deletion/cancel" to vid, signed.last())
+        assertEquals(false, a.deletionCancel("01JOTHER0000000000000000XX"))
     }
 
     @Test

@@ -19,6 +19,7 @@ import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultOverview
 import com.vettid.core.data.vault.VaultRepository
 import com.vettid.core.data.vault.MoveRepository
+import com.vettid.core.data.vault.DeletionView
 import com.vettid.core.data.vault.HoldOff
 import com.vettid.core.data.vault.OwnerCheckNotice
 import com.vettid.core.data.vault.OwnerCheckOutcome
@@ -176,6 +177,15 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         return r
     }
 
+    override val pendingDeletion = MutableStateFlow<DeletionView?>(null)
+
+    override suspend fun cancelDeletion(): Boolean {
+        call("cancelDeletion")
+        val was = pendingDeletion.value?.cancellable == true
+        if (was) pendingDeletion.value = null
+        return was
+    }
+
     override suspend fun lock() {
         call("lock")
         phase.value = AppPhase.Locked
@@ -293,23 +303,13 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         return recoveryUnlockResults.removeFirstOrNull() ?: UnlockAttempt.Success
     }
 
+    override suspend fun abandonRecovery() = call("abandonRecovery")
+
     override suspend fun recoverCredential(password: String): RecoverOutcome {
         call("recoverCredential")
         lastPassword = password
         if (recoverOutcome == RecoverOutcome.RECOVERED) phase.value = AppPhase.Setup(SetupStage.FINISHING)
         return recoverOutcome
-    }
-
-    override suspend fun resetCredential(password: String) {
-        call("resetCredential")
-        lastPassword = password
-        phase.value = AppPhase.Setup(SetupStage.FINISHING)
-    }
-
-    override suspend fun deleteRecoveredVault(pin: String) {
-        call("deleteRecoveredVault")
-        lastPin = pin
-        phase.value = AppPhase.SignedOut // a new vault needs a new setup code
     }
 
     override suspend fun transferIn(code: String): String {

@@ -109,6 +109,8 @@ class VaultManager(
     private val alarmFlow = MutableStateFlow<CredentialAlarm?>(null)
     private val windowFlow = MutableStateFlow<Instant?>(null)
     private val pausedFlow = MutableStateFlow(false)
+    private val deletionFlow = MutableStateFlow<DeletionView?>(null)
+    override val pendingDeletion: StateFlow<DeletionView?> = deletionFlow.asStateFlow()
 
     override val phase: StateFlow<AppPhase> = phaseFlow.asStateFlow()
     override val account: StateFlow<AccountInfo?> = accountFlow.asStateFlow()
@@ -372,6 +374,8 @@ class VaultManager(
         if (s.device.recovering) return AppPhase.Setup(SetupStage.RECOVERING)
         if (s.device.credentialVersion == null) return AppPhase.Setup(SetupStage.NEEDS_CREDENTIAL)
         scope.launch { runCatching { refreshAlarm(s) } }
+        // §11.11.9: a start-over requested on the portal shows after every unlock.
+        scope.launch { runCatching { vaultStatus(s) } }
         ownerCheck.onOpened()
         return if (local.setupComplete) AppPhase.Unlocked else AppPhase.Setup(SetupStage.FINISHING)
     }
@@ -744,6 +748,7 @@ class VaultManager(
         } catch (e: MemberApiException) {
             return@guard when (e.code) {
                 MemberApiException.RECOVERY_NOT_AVAILABLE -> RecoveryRegistration.Refused(CODE_NOT_AVAILABLE)
+                MemberApiException.RECOVERY_UNAVAILABLE -> RecoveryRegistration.Refused(CODE_NO_BACKUP)
                 MemberApiException.NOT_FOUND -> RecoveryRegistration.Refused(CODE_NO_RECOVERY)
                 else -> throw e
             }
@@ -757,6 +762,11 @@ class VaultManager(
                 open = { raw, rid -> s.device.openRecoveryResult(raw, rid) },
             )
         } catch (e: MemberApiException) {
+            // 2.1.0: a recovery the enclave refused (no backup copy) is `unavailable`: the register is refused too.
+            if (e.code == MemberApiException.RECOVERY_UNAVAILABLE) {
+                s.device.dropRecoveryRegistration()
+                return@guard RecoveryRegistration.Refused(CODE_NO_BACKUP)
+            }
             if (e.code != MemberApiException.RECOVERY_NOT_AVAILABLE) throw e
             null
         }
@@ -796,6 +806,10 @@ class VaultManager(
 
     override suspend fun recoveryCredentialBackup(): Boolean? = guard { session().device.recoveryCredentialBackup }
 
+    override suspend fun abandonRecovery() {
+        if (session?.device?.recovering == true) dropSession(forget = true)
+    }
+
     override suspend fun recoverCredential(password: String): RecoverOutcome = guard {
         val s = session()
         val outcome = try {
@@ -803,7 +817,8 @@ class VaultManager(
             RecoverOutcome.RECOVERED
         } catch (e: VaultOpException) {
             when (e.code) {
-                "credential_lost" -> RecoverOutcome.CREDENTIAL_LOST
+                // 0.16.0: a vault without a backup copy cannot be recovered; `credential_lost` is an older vault's word.
+                "credential_lost", CODE_NO_BACKUP -> RecoverOutcome.NO_BACKUP
                 "credential_required" -> RecoverOutcome.CREDENTIAL_REQUIRED
                 else -> throw e
             }
@@ -812,15 +827,6 @@ class VaultManager(
         outcome
     }
 
-    override suspend fun resetCredential(password: String) = guard {
-        session().api.credentialReset(password)
-        phaseFlow.value = AppPhase.Setup(SetupStage.FINISHING)
-    }
-
-    override suspend fun deleteRecoveredVault(pin: String) {
-        guard { session().api.deleteVault(pin, null) }
-        afterVaultDeleted()
-    }
 
     // --- MoveRepository: direct transfer (§6.7.1) ---
 
@@ -987,7 +993,18 @@ class VaultManager(
     private suspend fun vaultStatus(s: Session): com.vettid.core.altchan.VaultStatus? {
         val a = s.member.vaultStatusAnswer()
         pausedFlow.value = a.servicePaused
+        deletionFlow.value = a.vault?.deletion?.let { d ->
+            runCatching { Instant.parse(d.deletesAt) }.getOrNull()?.let { DeletionView(it, d.state == "executing", d.deletionId) }
+        }
         return a.vault
+    }
+
+    override suspend fun cancelDeletion(): Boolean = guard {
+        val s = session()
+        val id = deletionFlow.value?.deletionId ?: throw VaultFailure(FailureKind.NOT_SUPPORTED)
+        val cancelled = s.member.deletionCancel(id)
+        runCatching { vaultStatus(s) }
+        cancelled
     }
 
     companion object {
@@ -1009,6 +1026,7 @@ class VaultManager(
         private const val LIST_PAGE = 500
         private const val MAX_PAGES = 4
         private const val FINGERPRINT_HEX = 16
+        private const val CODE_NO_BACKUP = "no_backup"
         private const val CODE_NOT_AVAILABLE = "not_available"
         private const val CODE_NOT_TRANSFER = "not_transfer"
         private const val CODE_EXISTS = "exists"

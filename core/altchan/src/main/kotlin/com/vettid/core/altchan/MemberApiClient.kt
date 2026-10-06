@@ -60,7 +60,17 @@ data class VaultStatus(
     val recoveryAvailableAt: String? = null,
     /** The sealed release from the routing table (W8); null while not sealed yet. */
     val release: ReleaseInfo? = null,
+    /** 2.1.0: whether the vault keeps a backup copy of its credential (false: it cannot be recovered); null: not reported. */
+    val credentialBackup: Boolean? = null,
+    /** 2.1.0: a start-over requested on the portal (VAULT-MESSAGING §11.11.9), until it executes or is cancelled. */
+    val deletion: PendingDeletion? = null,
 )
+
+/**
+ * `VaultStatus.deletion` (MEMBER-API 2.1.0, `deletion_id` since 2.1.1): `state` `pending` or `executing`, when the
+ * vault is deleted, and the id the app's cancel names (null from an API before 2.1.1: the app links to the portal).
+ */
+data class PendingDeletion(val state: String, val deletesAt: String, val deletionId: String? = null)
 
 /**
  * `VaultStatus.release` (MEMBER-API "Vault", W8): advisory release status and
@@ -216,6 +226,11 @@ class MemberApiClient(
             release = rel?.let {
                 ReleaseInfo(n(it, "number"), s(it, "status") ?: "unknown", s(it, "ends_at"), n(it, "newest_active"), s(it, "notice"))
             },
+            credentialBackup = (v["credential_backup"] as? JsonBool)?.value,
+            deletion = (v["deletion"] as? JsonObject)?.let { d ->
+                val at = s(d, "deletes_at") ?: return@let null
+                PendingDeletion(s(d, "state") ?: "pending", at, s(d, "deletion_id"))
+            },
         )
     }
 
@@ -324,6 +339,15 @@ class MemberApiClient(
         val body = JsonBuilder().string("vault_id", vaultId).string("recovery_id", recoveryId).base64("app_key", appKey).build()
         val o = call("POST", "/api/vault/recovery/claim", body, vault = vaultId) ?: throw IOException("member API: empty")
         return Claimed(o.string("user_guid"), o.optString("email_hint") ?: "")
+    }
+
+    /**
+     * Cancels a pending start-over (`POST /api/vault/deletion/cancel {deletion_id}`, MEMBER-API 2.1.0), signed by the
+     * vault's app key. True when it was cancelled; false once it is executing.
+     */
+    suspend fun deletionCancel(deletionId: String): Boolean {
+        val o = call("POST", "/api/vault/deletion/cancel", JsonBuilder().string("deletion_id", deletionId).build())
+        return (o?.get("cancelled") as? JsonBool)?.value ?: false
     }
 
     /** Posts a sealed vault.recovery.register (no manifest_sha256). */

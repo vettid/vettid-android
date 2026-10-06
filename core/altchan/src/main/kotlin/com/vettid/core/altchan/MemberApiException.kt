@@ -36,6 +36,9 @@ class MemberApiException(
         const val VAULT_UNAVAILABLE = "vault_unavailable"
         const val RECOVERY_ACTIVE = "recovery_active"
         const val RECOVERY_NOT_AVAILABLE = "recovery_not_available"
+
+        /** 2.1.0: the vault keeps no backup copy of its credential and cannot be recovered (`reason: "no_backup"`). */
+        const val RECOVERY_UNAVAILABLE = "recovery_unavailable"
         const val RATE_LIMITED = "rate_limited"
         const val MANIFEST_UNAVAILABLE = "manifest_unavailable"
 
