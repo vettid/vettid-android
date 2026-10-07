@@ -18,7 +18,6 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.longOrNull
 import java.time.Instant
 import java.time.format.DateTimeParseException
 import java.time.temporal.ChronoUnit
@@ -204,11 +203,9 @@ class OwnerCheckManager(
         }
     }
 
-    /** A backoff's wait, when the error's body carries `retry_after` (§3.5.3 and §11.8 do not require it). */
-    private fun retryAfter(e: VaultFailure): Long {
-        val body = (e.cause as? VaultOpException)?.body ?: return 0
-        return (body["retry_after"] as? JsonPrimitive)?.longOrNull ?: 0
-    }
+    /** A backoff's wait: the error body's `retry_after` (VAULT-MESSAGING 0.17.0 §3.6.1, §10.1); 0 from older vaults. */
+    private fun retryAfter(e: VaultFailure): Long =
+        e.retryAfterSeconds.takeIf { it > 0 } ?: (e.cause as? VaultOpException)?.let { retryAfterOf(it) } ?: 0
 
     private fun clampHoldOff(until: Instant): Instant {
         // At most 30 days ahead at the vault (§3.6.7): a small margin for the clocks of the phone and the enclave.

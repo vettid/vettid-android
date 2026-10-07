@@ -16,6 +16,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import java.io.IOException
 
 /** Runs [block] on the IO dispatcher and turns every failure into a [VaultFailure]. */
@@ -31,7 +33,7 @@ internal suspend fun <T> vaultGuard(block: suspend () -> T): T = try {
 } catch (e: MemberApiException) {
     throw VaultFailure(VaultManager.memberFailure(e), e.code, e.retryAfterSeconds.toLong(), e)
 } catch (e: VaultOpException) {
-    throw VaultFailure(VaultManager.opFailure(e.code), e.code, cause = e)
+    throw VaultFailure(VaultManager.opFailure(e.code), e.code, retryAfterOf(e), e)
 } catch (e: AltRefusedException) {
     val kind = if (e.reason == AltRefusedException.Reason.ROLLBACK_RELEASE) FailureKind.ROLLBACK else FailureKind.MANIFEST
     throw VaultFailure(kind, e.reason.name.lowercase(), cause = e)
@@ -56,3 +58,10 @@ internal suspend fun <T> vaultGuard(block: suspend () -> T): T = try {
 } catch (e: CryptoException) {
     throw VaultFailure(FailureKind.OTHER, "crypto", cause = e)
 }
+
+/**
+ * A vault error's `retry_after` (VAULT-MESSAGING 0.17.0 §10.1: a `backoff` error's body is `{retry_after}`, the
+ * seconds until the backoff ends); 0 when absent (a vault release before 0.17.0) or not a positive integer.
+ */
+internal fun retryAfterOf(e: VaultOpException): Long =
+    (e.body?.get("retry_after") as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull?.takeIf { it > 0 } ?: 0

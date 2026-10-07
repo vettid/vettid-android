@@ -83,6 +83,8 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     /** The recovery unlock's `credential_backup` (null: an older vault that does not send it). */
     var recoveryCredentialBackupValue: Boolean? = null
     var transferSas = "042817"
+    /** What [awaitTransferIn] answers: false as from a vault release before VAULT-MESSAGING 0.17.0 (no `user_guid`). */
+    var transferGaveUserGuid = true
 
     /** When set, the new phone's wait for the vault's `hs.resp` (and so the SAS) lasts until it completes. */
     var transferHsResp: CompletableDeferred<String>? = null
@@ -318,10 +320,11 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         return transferHsResp?.await() ?: transferSas
     }
 
-    override suspend fun awaitTransferIn() {
+    override suspend fun awaitTransferIn(): Boolean {
         call("awaitTransferIn")
         transferApproval.await()
         phase.value = AppPhase.Setup(SetupStage.FINISHING)
+        return transferGaveUserGuid
     }
 
     override suspend fun abandonTransferIn() = call("abandonTransferIn")

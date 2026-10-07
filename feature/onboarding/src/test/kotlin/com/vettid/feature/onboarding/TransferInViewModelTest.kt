@@ -47,10 +47,26 @@ class TransferInViewModelTest {
         advanceTimeBy(1500)
         assertEquals(TransferInStep.DONE, vm.uiState.value.step)
         assertNull(vm.uiState.value.sas)
+        assertTrue(vm.uiState.value.canUnlockLater)
         assertEquals(AppPhase.Setup(SetupStage.FINISHING), vault.phase.value)
         vm.finish()
         advanceUntilIdle()
         assertEquals(AppPhase.Unlocked, vault.phase.value)
+    }
+
+    /** VAULT-MESSAGING 0.17.0 §6.7.1: a vault release before 0.17.0 gives no user_guid; the transfer completes with a warning. */
+    @Test
+    fun aTransferWithoutUserGuidCompletesAndWarns() = runTest {
+        vault.transferGaveUserGuid = false
+        val vm = TransferInViewModel(vault, vault)
+        vm.scan()
+        vm.scanned(qr())
+        advanceTimeBy(100)
+        vault.transferApproval.complete(Unit)
+        advanceTimeBy(1500)
+        assertEquals(TransferInStep.DONE, vm.uiState.value.step)
+        assertFalse(vm.uiState.value.canUnlockLater)
+        assertEquals(AppPhase.Setup(SetupStage.FINISHING), vault.phase.value)
     }
 
     @Test

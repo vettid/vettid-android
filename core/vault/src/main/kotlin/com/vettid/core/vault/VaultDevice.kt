@@ -76,6 +76,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
@@ -492,11 +494,12 @@ class VaultDevice private constructor(
      * Waits for `device.paired`, or (0.10.5) `device.pair.rejected`, which ends the
      * wait with [PairingRejectedException] (§6.7: the owner rejected the pairing or
      * transfer after this device's `hs.fin`; [process] has already dropped its state).
+     * Returns a transfer's `user_guid` (0.17.0, §6.7.1), or null (not a transfer, or a vault release before 0.17.0).
      */
-    private suspend fun awaitPaired(timeout: Duration) {
+    private suspend fun awaitPaired(timeout: Duration): String? {
         val ev = awaitEventOf(setOf("device.paired", TYPE_PAIR_REJECTED), timeout)
         if (ev.type == TYPE_PAIR_REJECTED) throw PairingRejectedException()
-        lock.withLock {
+        val guid = lock.withLock {
             val o = ev.body
             st.deviceId = VaultJson.str(o, "device_id")
             VaultJson.str(o, "vault_id")?.let { st.vaultId = it }
@@ -504,8 +507,10 @@ class VaultDevice private constructor(
             val num = VaultJson.long(o, "release_number")
             if (rel != null && rel.length == PCR_HEX && num != null && num > 0) setAlt(alt().copy(release = rel, releaseNumber = num))
             save()
+            transferUserGuid(o)
         }
         pairedState.value = true
+        return guid
     }
 
     @Suppress("LongParameterList")
@@ -581,8 +586,11 @@ class VaultDevice private constructor(
     /**
      * Waits for the transfer's `device.paired` (the old app's approval completes
      * the transfer, §6.7.1) or `device.pair.rejected` ([PairingRejectedException]).
+     * Returns the member's `user_guid` from it (0.17.0), which this phone's unlocks
+     * need, or null when the vault sent none (a release before 0.17.0): the transfer
+     * is complete either way.
      */
-    suspend fun awaitTransfer(timeout: Duration) = awaitPaired(timeout)
+    suspend fun awaitTransfer(timeout: Duration): String? = awaitPaired(timeout)
 
     /** Drops a transfer this device started and has not completed (left the screen, timed out). */
     suspend fun abandonTransfer() = lock.withLock {
@@ -1070,6 +1078,20 @@ class VaultDevice private constructor(
         private val ISSUE_BEFORE: Duration = Duration.ofDays(10)
         private val REFRESH_BEFORE: Duration = Duration.ofDays(3)
         internal val EMPTY = JsonObject(emptyMap())
+        private const val USER_GUID_MAX = 128
+        private const val PRINTABLE_MIN = 0x21
+        private const val PRINTABLE_MAX = 0x7e
+
+        /**
+         * The member's `user_guid` from a transfer's `device.paired` (`transfer: true`, VAULT-MESSAGING 0.17.0
+         * §6.7.1): 1–128 printable ASCII characters, so that it fits the unlock's signing string (§11.4). Null for a
+         * plain pairing, or when it is absent or fails the check.
+         */
+        internal fun transferUserGuid(o: JsonObject): String? {
+            if ((o["transfer"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull != true) return null
+            val g = VaultJson.str(o, "user_guid") ?: return null
+            return g.takeIf { it.length in 1..USER_GUID_MAX && it.all { c -> c.code in PRINTABLE_MIN..PRINTABLE_MAX } }
+        }
 
         /** A new device with fresh state; registers its mailbox on its relay. */
         suspend fun create(cfg: DeviceConfig, secrets: DeviceSecrets): VaultDevice {

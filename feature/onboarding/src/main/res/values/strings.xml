@@ -128,6 +128,7 @@
     <string name="unlock_rollback_state_title">Your vault\'s state is older than expected</string>
     <string name="unlock_rollback_state_body">The vault\'s stored state is older than state this phone has already seen. Someone may have restored an old copy. Contact VettID support before you continue.</string>
     <string name="unlock_update_refused">The update was refused (%1$s). Your vault stayed on its current release.</string>
+    <string name="unlock_no_user_guid">This phone cannot unlock your vault yet: it was moved here while your vault ran an older release. It can unlock once your vault is updated.</string>
     <string name="unlock_unreadable">Your vault did not recognise this phone. It may have been replaced by a recovery or a transfer.</string>
     <string name="unlock_not_recognised_title">Your vault did not recognise this phone</string>
     <string name="unlock_not_recognised_body">This phone may have been replaced by a recovery or a transfer while it was offline. If your vault now works on another phone, you can erase VettID from this one.</string>
@@ -150,6 +151,7 @@
     <string name="onboarding_moved_title">Your vault is on this phone now</string>
     <string name="onboarding_moved_recovered_body">Your old phone no longer holds it, and the credential copy it held no longer works; it erases VettID the next time it reaches your vault. Your desktops and agents stay paired.</string>
     <string name="onboarding_moved_transferred_body">Your old phone erases VettID as soon as it hears from your vault. Unlock with the same PIN and credential password as before.</string>
+    <string name="onboarding_moved_transferred_no_guid_body">Your old phone erases VettID as soon as it hears from your vault. Your vault runs an older release, so this phone cannot unlock it after it locks until your vault is updated.</string>
     <string name="onboarding_moved_go">Go to VettID</string>
 
     <!-- Recovery on this phone (§11.11) -->

@@ -496,6 +496,8 @@ class VaultManager(
         holderApp: Boolean = false,
         beforeOpen: suspend () -> Unit = {},
     ): UnlockAttempt {
+        // §6.7.1 (0.17.0): a phone a transfer set up from an older vault release has no user_guid (§11.4 needs it).
+        if (local.userGuid.isEmpty()) return UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID)
         val outcome = try {
             guard {
                 val s = session()
@@ -860,20 +862,28 @@ class VaultManager(
         }
     }
 
-    override suspend fun awaitTransferIn() = guard {
+    override suspend fun awaitTransferIn(): Boolean = guard {
         val s = session()
         val started = transferStartedAt ?: Instant.now()
         val left = Duration.between(Instant.now(), started.plus(PAIRING_WINDOW)).coerceAtLeast(Duration.ofSeconds(1))
-        try {
+        val guid = try {
             s.device.awaitTransfer(left)
         } catch (e: TimeoutCancellationException) {
             s.device.abandonTransfer()
             throw e
         }
         transferStartedAt = null
+        // §6.7.1 (0.17.0): the member's user_guid from device.paired, kept as an enrolled phone keeps the redeem's, so
+        // that this phone unlocks later (§11.4). A vault release before 0.17.0 sends none: the transfer is still
+        // complete, and the unlock screen says why this phone cannot unlock.
+        if (guid != null) {
+            gateway.memberChanged(guid)
+            io { saveLocal(local.copy(userGuid = guid, vaultId = s.device.vaultId ?: local.vaultId)) }
+        }
         // §6.7.1 step 5: the blob the vault kept, confirmed, and a UTK pool.
         s.api.credentialTakeOver()
         phaseFlow.value = AppPhase.Setup(SetupStage.FINISHING)
+        guid != null
     }
 
     override suspend fun abandonTransferIn() = guard {

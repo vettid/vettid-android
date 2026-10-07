@@ -211,9 +211,11 @@ interface MoveRepository {
     /**
      * Waits for the old phone's approval, then takes the credential over (`credential.get`,
      * `credential.ack`, `credential.utk.get`). [FailureKind.REJECTED] when the owner rejected it;
-     * [FailureKind.NO_RESPONSE] after 10 minutes.
+     * [FailureKind.NO_RESPONSE] after 10 minutes. True when the vault gave this phone the member's
+     * `user_guid` (VAULT-MESSAGING 0.17.0 §6.7.1), which its unlocks need; false from a vault release
+     * before 0.17.0: the transfer is complete, but this phone cannot unlock the vault once it locks.
      */
-    suspend fun awaitTransferIn()
+    suspend fun awaitTransferIn(): Boolean
 
     /** Drops a transfer this phone started and has not completed. */
     suspend fun abandonTransferIn()
