@@ -12,6 +12,7 @@ import com.vettid.core.data.lock.FileWrappedKeyFile
 import com.vettid.core.data.lock.KeystoreAppLockKeys
 import com.vettid.core.data.prefs.DataStorePreferencesRepository
 import com.vettid.core.data.prefs.PreferencesRepository
+import com.vettid.core.data.items.ItemsRepository
 import com.vettid.core.data.social.ApprovalsRepository
 import com.vettid.core.data.social.ConnectionsRepository
 import com.vettid.core.data.social.MessagesRepository
@@ -138,6 +139,9 @@ object AppModule {
 
     @Provides
     fun historyRepository(m: VaultManager): HistoryRepository = m.history
+
+    @Provides
+    fun itemsRepository(m: VaultManager): ItemsRepository = m.items
 
     @Provides
     fun canaryManifestRepository(m: VaultManager): CanaryManifestRepository = m.canary

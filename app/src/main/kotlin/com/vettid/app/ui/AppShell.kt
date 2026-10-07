@@ -48,6 +48,7 @@ import com.vettid.feature.credential.credentialDestination
 import com.vettid.feature.history.ConnectionHistoryRoute
 import com.vettid.feature.history.HistoryHost
 import com.vettid.feature.history.historyDestination
+import com.vettid.feature.items.ItemsHost
 import com.vettid.feature.items.itemsDestination
 import com.vettid.feature.connections.AcceptRoute
 import com.vettid.feature.connections.ConnectionDetailRoute
@@ -215,7 +216,17 @@ fun AppShell(
                             ),
                         )
                         approvalsDestination(chrome, navigate = navigate, onBack = back)
-                        itemsDestination(chrome)
+                        itemsDestination(
+                            chrome,
+                            ItemsHost(
+                                navigate = navigate,
+                                onBack = back,
+                                replace = { route ->
+                                    navController.popBackStack()
+                                    navController.navigate(route)
+                                },
+                            ),
+                        )
                         historyDestination(
                             chrome,
                             HistoryHost(

@@ -32,11 +32,15 @@ import com.vettid.core.data.prefs.AppPreferences
 import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.data.prefs.ThemePreference
 import com.vettid.core.keystore.KeystoreException
+import com.vettid.core.ui.components.LocalUserPresence
+import com.vettid.core.ui.components.UserPresence
 import com.vettid.core.ui.theme.ThemeMode
 import com.vettid.core.ui.theme.VettIdTheme
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
 import kotlinx.coroutines.withContext
 import java.security.GeneralSecurityException
 import javax.crypto.Cipher
@@ -61,6 +65,9 @@ class MainActivity : ComponentActivity() {
     lateinit var canaryManifests: CanaryManifestInbox
 
     private var prompting = false
+
+    /** Secret items are revealed after the phone's biometric or screen lock (ANDROID-PLAN D6; [UserPresence]). */
+    private val presence = UserPresence { title, subtitle -> confirmPresence(title, subtitle) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -90,7 +97,7 @@ class MainActivity : ComponentActivity() {
             val controller = remember(themeMode) {
                 ThemeController(themeMode) { m -> lifecycleScope.launch { prefs.setTheme(m.toPreference()) } }
             }
-            CompositionLocalProvider(LocalThemeController provides controller) {
+            CompositionLocalProvider(LocalThemeController provides controller, LocalUserPresence provides presence) {
                 VettIdTheme(themeMode = themeMode) {
                     if (catalog != null) {
                         catalog()
@@ -177,6 +184,43 @@ class MainActivity : ComponentActivity() {
             return
         }
         authenticate(cipher) { c -> lifecycleScope.launch { appLock.completeEnable(c) } }
+    }
+
+    /**
+     * BiometricPrompt without a key (nothing is decrypted: it only confirms the holder), class 3 or the device
+     * credential. A phone with neither confirms at once: the vault PIN opened the app, and nothing else could ask.
+     */
+    @Suppress("ReturnCount")
+    private suspend fun confirmPresence(title: String, subtitle: String?): Boolean {
+        val allowed = Authenticators.BIOMETRIC_STRONG or Authenticators.DEVICE_CREDENTIAL
+        val bm = getSystemService(android.hardware.biometrics.BiometricManager::class.java)
+        if (bm == null || bm.canAuthenticate(allowed) != android.hardware.biometrics.BiometricManager.BIOMETRIC_SUCCESS) return true
+        if (prompting) return false
+        return suspendCancellableCoroutine { cont ->
+            prompting = true
+            appLock.authenticating = true
+            val cancel = CancellationSignal()
+            val prompt = BiometricPrompt.Builder(this)
+                .setTitle(title)
+                .apply { subtitle?.let { setSubtitle(it) } }
+                .setAllowedAuthenticators(allowed)
+                .build()
+            fun done(ok: Boolean) {
+                prompting = false
+                appLock.authenticating = false
+                if (cont.isActive) cont.resume(ok)
+            }
+            cont.invokeOnCancellation { cancel.cancel() }
+            prompt.authenticate(
+                cancel,
+                mainExecutor,
+                object : BiometricPrompt.AuthenticationCallback() {
+                    override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = done(true)
+
+                    override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) = done(false)
+                },
+            )
+        }
     }
 
     private fun enableFailed() {
