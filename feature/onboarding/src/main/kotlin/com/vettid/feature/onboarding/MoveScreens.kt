@@ -342,7 +342,7 @@ fun MovedScreen(body: String, onGo: () -> Unit) {
         modifier = Modifier.testTag("moved"),
         header = {
             Spacer(Modifier.height(Spacing.xl))
-            RookLogo(height = 72.dp)
+            RookLogo(Modifier.align(Alignment.CenterHorizontally), height = 72.dp)
             Spacer(Modifier.height(Spacing.l))
         },
     ) {}
