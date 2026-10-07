@@ -20,6 +20,8 @@ import com.vettid.core.data.KeystoreFileStore
 import com.vettid.core.data.account.MemberGateway
 import com.vettid.core.data.social.InviteLinks
 import com.vettid.core.data.social.SocialManager
+import com.vettid.core.data.items.ItemsManager
+import com.vettid.core.data.items.VaultItemsOps
 import com.vettid.core.data.env.AppEnvironment
 import com.vettid.core.data.wipe.LocalWipe
 import com.vettid.core.keystore.AndroidKeys
@@ -164,6 +166,9 @@ class VaultManager(
     /** The member's audit log (VAULT-MESSAGING §10.9), read-only: the History screen. */
     val history = HistoryManager(ops = { VaultAuditOps(session().api) })
 
+    /** The member's items (VAULT-MESSAGING §10.7): the Vault screens. The list is read while the vault is open. */
+    val items = ItemsManager(scope, ops = { VaultItemsOps(session().api) })
+
     /** The daily owner check (VAULT-MESSAGING 0.13.0 §3.6): its state, the check, the interval and the hold. */
     val ownerCheck: OwnerCheckManager = KeystoreFileStore(File(app.noBackupFilesDir, OWNER_CHECK_FILE), "owner-check").let { f ->
         OwnerCheckManager(
@@ -185,8 +190,12 @@ class VaultManager(
             phaseFlow.collect {
                 if (it == AppPhase.Unlocked) {
                     social.refreshAllQuietly()
+                    items.refreshQuietly()
                     launch { refreshAccount() }
                     launch { runCatching { profile.refreshProfile() } }
+                } else if (it != AppPhase.Starting) {
+                    // Locked or signed out: no item metadata is kept outside an open vault.
+                    items.clear()
                 }
             }
         }
@@ -277,6 +286,7 @@ class VaultManager(
             alarmFlow.value = null
             windowFlow.value = null
             social.clear()
+            items.clear()
             ownerCheck.clear()
             saveLocal(local.copy(setupComplete = false, snapshot = null))
         }
@@ -297,6 +307,7 @@ class VaultManager(
             s.device.events.collect { m ->
                 onEvent(m)
                 try {
+                    items.onEvent(m)
                     social.onEvent(m)
                 } catch (e: CancellationException) {
                     throw e
@@ -1008,6 +1019,7 @@ class VaultManager(
         ownerCheck.clear()
         profile.clear()
         history.clear()
+        items.clear()
         canary.removeCanaryManifest()
         transferStartedAt = null
         openTransferId = null
