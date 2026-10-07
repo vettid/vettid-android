@@ -251,7 +251,7 @@ fun AppLockScreen(onUnlock: () -> Unit) {
         onPrimary = onUnlock,
         header = {
             Spacer(Modifier.height(Spacing.xxl))
-            com.vettid.core.ui.components.RookLogo(height = 72.dp)
+            com.vettid.core.ui.components.RookLogo(Modifier.align(Alignment.CenterHorizontally), height = 72.dp)
             Spacer(Modifier.height(Spacing.l))
         },
     ) {}
