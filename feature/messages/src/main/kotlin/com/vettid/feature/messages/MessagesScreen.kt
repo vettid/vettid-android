@@ -196,7 +196,7 @@ fun MessagesScreen(
 
 @Composable
 private fun ConversationRow(c: ConversationSummary, onClick: () -> Unit) {
-    val name = c.connection.displayName.ifBlank { stringResource(R.string.messages_unnamed) }
+    val name = c.connection.displayName.ifBlank { stringResource(R.string.messages_name_not_shared) }
     val preview = c.last?.let { m ->
         if (m.outgoing) stringResource(R.string.messages_preview_you, m.text) else m.text
     } ?: stringResource(R.string.messages_preview_none)
@@ -250,7 +250,7 @@ data class ConversationActions(
 /** A conversation (ANDROID-PLAN §4): bubbles by day, the reply field at the bottom. */
 @Composable
 fun ConversationScreen(state: ConversationUiState, actions: ConversationActions, modifier: Modifier = Modifier) {
-    val name = state.connection?.displayName?.ifBlank { null } ?: stringResource(R.string.messages_unnamed)
+    val name = state.connection?.displayName?.ifBlank { null } ?: stringResource(R.string.messages_name_not_shared)
     val listState = rememberLazyListState()
     LaunchedEffect(state.messages.size) {
         val last = listState.layoutInfo.totalItemsCount - 1
@@ -417,7 +417,7 @@ fun NewMessageScreen(
 
 @Composable
 private fun PickRow(c: ConnectionInfo, onClick: () -> Unit) {
-    val name = c.displayName.ifBlank { stringResource(R.string.messages_unnamed) }
+    val name = c.displayName.ifBlank { stringResource(R.string.messages_name_not_shared) }
     VettIdListRow(
         title = name,
         supporting = c.alias?.let { a -> c.name.takeIf { it.isNotBlank() && it != a } },

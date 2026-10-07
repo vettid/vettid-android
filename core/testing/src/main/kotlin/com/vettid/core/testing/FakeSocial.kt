@@ -282,8 +282,25 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
     }
 
     companion object {
-        fun connection(id: String, name: String, favorite: Boolean = false, state: ConnectionState = ConnectionState.ACTIVE) =
-            ConnectionInfo(id = id, name = name, state = state, favorite = favorite, createdAt = Instant.parse("2026-10-01T09:00:00Z"))
+        /**
+         * A connection titled "[first] [last]" (the names on the peer's account, VAULT-MESSAGING 0.18.0 §10.8), with
+         * [first] also as its self-asserted display name.
+         */
+        fun connection(
+            id: String,
+            first: String,
+            favorite: Boolean = false,
+            state: ConnectionState = ConnectionState.ACTIVE,
+            last: String = "Doe",
+        ) = ConnectionInfo(
+            id = id,
+            name = first,
+            state = state,
+            favorite = favorite,
+            firstName = first,
+            lastName = last,
+            createdAt = Instant.parse("2026-10-01T09:00:00Z"),
+        )
 
         fun message(conn: String, id: String, text: String, outgoing: Boolean, read: Boolean = outgoing, minute: Long = 0) =
             MessageInfo(

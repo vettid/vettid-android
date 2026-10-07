@@ -6,8 +6,14 @@ import androidx.compose.material.icons.outlined.Badge
 import androidx.compose.material.icons.outlined.CardMembership
 import androidx.compose.material.icons.outlined.Gavel
 import androidx.compose.material.icons.outlined.HowToVote
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Person
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Storage
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
@@ -22,13 +28,17 @@ import com.vettid.core.ui.components.SettingsGroup
 import com.vettid.core.ui.components.SettingsInfoRow
 import com.vettid.core.ui.components.SettingsRow
 import com.vettid.core.ui.format.Times
+import com.vettid.core.ui.theme.Spacing
+import com.vettid.feature.settings.nameStatusText
 import java.time.Instant
 
 /**
- * Avatar sheet (ANDROID-PLAN §4): vault status, lock vault, the member's membership and subscription (read-only,
- * from the vault's account snapshot, VAULT-MESSAGING §11.13), and the account portal in the browser, where changes
- * are made. The app never signs in, so there is no sign-out.
+ * Avatar sheet (ANDROID-PLAN §4, 0.1.10): the name on the member's VettID account (read-only, from the vault's
+ * account snapshot: every connection sees it) with "Change name" (the only place it changes, VAULT-MESSAGING 0.18.0
+ * §10.8) and the shared profile; vault status, lock vault, the membership and subscription (read-only, §11.13), and
+ * the account portal in the browser, where the other changes are made. The app never signs in: no sign-out.
  */
+@Suppress("LongParameterList")
 @Composable
 fun AccountSheet(
     account: AccountInfo?,
@@ -36,14 +46,17 @@ fun AccountSheet(
     onDismiss: () -> Unit,
     onLockVault: () -> Unit,
     now: Instant = Instant.now(),
+    onChangeName: () -> Unit = {},
+    onSharedProfile: () -> Unit = {},
 ) {
     val uri = LocalUriHandler.current
     AvatarSheet(
-        name = account?.emailHint?.takeIf { it.isNotEmpty() } ?: stringResource(R.string.account_placeholder_name),
-        detail = membershipLine(account),
+        name = account?.fullName ?: account?.emailHint?.takeIf { it.isNotEmpty() } ?: stringResource(R.string.account_placeholder_name),
+        detail = account?.fullName?.let { account.emailHint.takeIf { h -> h.isNotEmpty() } } ?: membershipLine(account),
         onDismiss = onDismiss,
         optionsHeader = stringResource(R.string.account_options),
     ) {
+        AccountNamesGroup(account, now, onChangeName, onSharedProfile)
         AccountDetails(account, now)
         SettingsGroup {
             SettingsRow(
@@ -64,6 +77,45 @@ fun AccountSheet(
                 supporting = stringResource(R.string.account_portal_body),
             )
         }
+    }
+}
+
+/**
+ * The account's names (VAULT-MESSAGING 0.18.0 §10.8 "What the app shows"): read-only, "Your connections see this
+ * name", the state of a requested change, and "Change name".
+ */
+@Composable
+fun AccountNamesGroup(account: AccountInfo?, now: Instant, onChangeName: () -> Unit, onSharedProfile: () -> Unit) {
+    SettingsGroup(Modifier.testTag("account_names")) {
+        SettingsInfoRow(
+            stringResource(R.string.account_names),
+            account?.fullName ?: stringResource(R.string.account_names_none),
+            icon = Icons.Outlined.Person,
+        )
+        Text(
+            listOfNotNull(stringResource(R.string.account_names_note), nameStatusText(account, now)).joinToString("\n"),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier
+                .padding(horizontal = Spacing.gutter, vertical = Spacing.s)
+                .testTag("account_names_note"),
+        )
+        SettingsDivider()
+        SettingsRow(
+            stringResource(R.string.account_change_name),
+            onChangeName,
+            icon = Icons.Outlined.Edit,
+            supporting = stringResource(R.string.account_change_name_body),
+            modifier = Modifier.testTag("account_change_name"),
+        )
+        SettingsDivider()
+        SettingsRow(
+            stringResource(R.string.account_shared_profile),
+            onSharedProfile,
+            icon = Icons.Outlined.Share,
+            supporting = stringResource(R.string.account_shared_profile_body),
+            modifier = Modifier.testTag("account_shared_profile"),
+        )
     }
 }
 

@@ -13,6 +13,14 @@
 
     <string name="account_placeholder_name">VettID member</string>
     <string name="account_options">Options</string>
+    <!-- VAULT-MESSAGING 0.18.0 §10.8: the names on the VettID account, never "verified". -->
+    <string name="account_names">VettID account name</string>
+    <string name="account_names_note">Your connections see this name</string>
+    <string name="account_names_none">Shown once your vault has heard from your account</string>
+    <string name="account_change_name">Change name</string>
+    <string name="account_change_name_body">Only here, in the app, with your PIN and password</string>
+    <string name="account_shared_profile">Shared profile</string>
+    <string name="account_shared_profile_body">Display name and what your connections see</string>
     <string name="account_vault_status">Vault status</string>
     <string name="account_vault_status_value">Unlocked</string>
     <string name="account_lock_vault">Lock vault</string>

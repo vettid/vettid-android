@@ -136,6 +136,18 @@ import com.vettid.core.data.vault.TransferPendingView
 import com.vettid.feature.settings.AttestationContent
 import com.vettid.core.data.vault.CanaryManifestRepository
 import com.vettid.core.data.vault.CanaryManifestView
+import com.vettid.feature.settings.ChangeNameActions
+import com.vettid.feature.settings.ChangeNameContent
+import com.vettid.feature.settings.ChangeNameMessage
+import com.vettid.feature.settings.ChangeNameStep
+import com.vettid.feature.settings.ChangeNameUiState
+import com.vettid.feature.settings.SharedProfileActions
+import com.vettid.feature.settings.SharedProfileContent
+import com.vettid.feature.settings.SharedProfileUiState
+import com.vettid.core.data.vault.NameRequestState
+import com.vettid.core.data.vault.NameRequestView
+import com.vettid.core.data.vault.OwnProfile
+import com.vettid.core.data.social.SharedProfileItem
 import com.vettid.feature.settings.ChangePinContent
 import com.vettid.feature.settings.ChangePinUiState
 import com.vettid.feature.settings.DeleteVaultActions
@@ -255,9 +267,11 @@ object ScreenCatalog {
 
     private val onboarding = OnboardingUiState(email = EMAIL)
     private val sampleAccount = AccountInfo(
-        emailHint = "s***@example.org", state = "member", accountStatus = "active",
+        emailHint = "s***@example.org", state = "member", accountStatus = "active", firstName = "Sam", lastName = "Rivera",
         subscription = SubscriptionInfo("Annual", SubscriptionInfo.STATUS_ACTIVE, true, Instant.parse("2027-10-01T00:00:00Z")),
     )
+    private val namePending = NameRequestView(4, "Sam", "King", Instant.parse("2026-10-07T12:00:00Z"), NameRequestState.PENDING)
+    private val nameRefused = namePending.copy(state = NameRequestState.REFUSED, reason = NameRequestView.REASON_TOO_SOON)
     private val chrome = ShellChrome(accountName = "Sam Rivera", onMenuClick = {}, onAvatarClick = {})
     private val credential = CredentialStatus(true, 7, "Jk4m2Qx9TzA1", "2026-10-04T14:12:00Z", null, true, 300, 3)
     private val alarm = CredentialAlarm("01JABCDEF0123456789ABCDEFG", CredentialAlarm.STATE_FROZEN, "2026-10-04T14:20:00Z", "other")
@@ -265,11 +279,16 @@ object ScreenCatalog {
 
     // --- A4 sample data (made up) ---
     private val t0: Instant = Instant.parse("2026-10-04T09:00:00Z")
-    private val sam = ConnectionInfo("c1", "Sam Rivera", ConnectionState.ACTIVE, favorite = true, profile = listOf("name" to "Sam Rivera", "city" to "Lisbon"),
-        keyFingerprint = "4e8e e8f7 1c2d 3e4f", createdAt = t0.minusSeconds(86_400 * 30), lastActiveAt = t0.plusSeconds(600))
-    private val alex = ConnectionInfo("c2", "Alexandra Okafor", ConnectionState.ACTIVE, alias = "Alex (work)", createdAt = t0.minusSeconds(86_400 * 3), lastActiveAt = t0.minusSeconds(7200))
-    private val jo = ConnectionInfo("c3", "Jo Lindqvist", ConnectionState.STALE, createdAt = t0.minusSeconds(86_400 * 90))
-    private val connections = listOf(sam, alex, jo)
+    // VAULT-MESSAGING 0.18.0 §10.8: titled from the names on the peer's account; the display name is secondary.
+    private val sam = ConnectionInfo("c1", "Sam", ConnectionState.ACTIVE, favorite = true, firstName = "Samira", lastName = "Rivera",
+        sharedItems = listOf(SharedProfileItem("i1", "Where I live", listOf("City" to "Lisbon"))),
+        keyFingerprint = "9a1f bb7d 873e eafb 494b ef94 f072 7b25", createdAt = t0.minusSeconds(86_400 * 30), lastActiveAt = t0.plusSeconds(600))
+    private val alex = ConnectionInfo("c2", "", ConnectionState.ACTIVE, alias = "Alex (work)", firstName = "Alexandra", lastName = "Okafor",
+        keyFingerprint = "1c2d 3e4f 4e8e e8f7 0a0b 0c0d 0e0f 1011", createdAt = t0.minusSeconds(86_400 * 3), lastActiveAt = t0.minusSeconds(7200))
+    private val jo = ConnectionInfo("c3", "", ConnectionState.STALE, firstName = "Jo", lastName = "Lindqvist", createdAt = t0.minusSeconds(86_400 * 90))
+    /** Between activation and the first profile.update on the accepter's side: no names yet (§10.8). */
+    private val riley = ConnectionInfo("c4", "Riley", ConnectionState.ACTIVE, createdAt = t0, lastActiveAt = t0)
+    private val connections = listOf(sam, alex, jo, riley)
     private fun msg(id: String, conn: String, text: String, out: Boolean, min: Long, read: Boolean = true) =
         MessageInfo(conn, id, out, text, t0.plusSeconds(min * 60), delivered = true, read = read)
     private val thread = listOf(
@@ -290,7 +309,7 @@ object ScreenCatalog {
         Instant.now().plusSeconds(540),
         remote = false,
     )
-    private val request = Approval.ConnectionRequest("p1", invite.inviteId, "042817", false, "Morgan Lee", null, t0, t0.plusSeconds(604_800))
+    private val request = Approval.ConnectionRequest("p1", invite.inviteId, "042817", false, "Morgan Lee", null, t0, t0.plusSeconds(604_800), displayName = "Mo")
     private val outgoing = Approval.OutgoingRequest(
         "c9", "315904", remote = true, name = "Jordan Park", state = RequestState.PENDING, peerApproved = false,
         introducedBy = null, receivedAt = t0, exp = t0.plusSeconds(691_200),
@@ -639,6 +658,7 @@ object ScreenCatalog {
                 DetailActions(),
             )
         },
+        "connections.detail_not_shared" to { ConnectionDetailScreen(ConnectionDetailUiState("c4", riley, null, null, loading = false), DetailActions()) },
         "connections.detail_alias" to { ConnectionDetailScreen(ConnectionDetailUiState("c2", alex, null, null, loading = false), DetailActions()) },
         "connections.detail_edit" to {
             ConnectionDetailScreen(ConnectionDetailUiState("c2", alex, loading = false, editing = true, aliasInput = "Alex (work)", noteInput = "Met at the 2026 conference"), DetailActions())
@@ -706,6 +726,71 @@ object ScreenCatalog {
                 "https://account.vettid.org",
                 onDismiss = {},
                 onLockVault = {},
+            )
+        },
+        "account_sheet.name_pending" to {
+            AccountSheet(sampleAccount.copy(nameRequest = namePending), "https://account.vettid.org", onDismiss = {}, onLockVault = {})
+        },
+        "account_sheet.name_too_soon" to {
+            AccountSheet(
+                sampleAccount.copy(nameRequest = nameRefused, nameAllowedAfter = Instant.now().plusSeconds(86_400 * 20)),
+                "https://account.vettid.org",
+                onDismiss = {},
+                onLockVault = {},
+            )
+        },
+        // The shared profile and the name change (ANDROID-PLAN 0.1.10).
+        "settings.shared_profile" to {
+            SharedProfileContent(
+                SharedProfileUiState(sampleAccount, OwnProfile(3, "Sam", "Sam", "Rivera", "9a1f bb7d 873e eafb 494b ef94 f072 7b25"), displayName = "Sam"),
+                SharedProfileActions(),
+            )
+        },
+        "settings.shared_profile_pending" to {
+            SharedProfileContent(
+                SharedProfileUiState(
+                    sampleAccount.copy(nameRequest = namePending), OwnProfile(3, "", "Sam", "Rivera", "9a1f bb7d 873e eafb 494b ef94 f072 7b25"),
+                ),
+                SharedProfileActions(),
+            )
+        },
+        "settings.change_name" to { ChangeNameContent(ChangeNameUiState(account = sampleAccount, first = "Sam", last = "King"), ChangeNameActions()) },
+        "settings.change_name_invalid" to {
+            ChangeNameContent(ChangeNameUiState(account = sampleAccount, first = "Sam1", last = "", checked = true), ChangeNameActions())
+        },
+        "settings.change_name_too_soon" to {
+            ChangeNameContent(
+                ChangeNameUiState(
+                    account = sampleAccount.copy(nameAllowedAfter = Instant.now().plusSeconds(86_400 * 12)), first = "Sam", last = "Rivera",
+                ),
+                ChangeNameActions(),
+            )
+        },
+        "settings.change_name_confirm" to {
+            ChangeNameContent(ChangeNameUiState(ChangeNameStep.CONFIRM, sampleAccount, "Sam", "King", pin = "246810"), ChangeNameActions())
+        },
+        "settings.change_name_bad_pin" to {
+            ChangeNameContent(
+                ChangeNameUiState(ChangeNameStep.CONFIRM, sampleAccount, "Sam", "King", message = ChangeNameMessage.BadPin(7)),
+                ChangeNameActions(),
+            )
+        },
+        "settings.change_name_pending" to {
+            ChangeNameContent(ChangeNameUiState(ChangeNameStep.SENT, sampleAccount, "Sam", "King", request = namePending), ChangeNameActions())
+        },
+        "settings.change_name_applied" to {
+            ChangeNameContent(
+                ChangeNameUiState(ChangeNameStep.SENT, sampleAccount, "Sam", "King", request = namePending.copy(state = NameRequestState.APPLIED)),
+                ChangeNameActions(),
+            )
+        },
+        "settings.change_name_refused" to {
+            ChangeNameContent(
+                ChangeNameUiState(
+                    ChangeNameStep.SENT, sampleAccount.copy(nameAllowedAfter = Instant.now().plusSeconds(86_400 * 12)), "Sam", "King",
+                    request = nameRefused,
+                ),
+                ChangeNameActions(),
             )
         },
         "account_sheet.waiting" to { AccountSheet(AccountInfo("s***@example.org"), "https://account.vettid.org", onDismiss = {}, onLockVault = {}) },

@@ -64,8 +64,21 @@ data class AccountInfo(
     val subscription: SubscriptionInfo? = null,
     val votingRights: Boolean = false,
     val asOf: Instant? = null,
+    /** The account's names (VAULT-MESSAGING 0.18.0 §11.13): what every connection sees; null before a snapshot had them. */
+    val firstName: String? = null,
+    val lastName: String? = null,
+    /** `name_change.allowed_after`: the next name change is applied only after it; null: now. */
+    val nameAllowedAfter: Instant? = null,
+    /** The latest name change this app asked for (`account.get`'s `name_request`, §10.8). */
+    val nameRequest: NameRequestView? = null,
 ) {
     val hasSnapshot: Boolean get() = state != null
+
+    /** "First Last" (§10.8); null before the snapshot carried the names. */
+    val fullName: String? get() = com.vettid.core.data.account.AccountNames.full(firstName, lastName)
+
+    /** Whether a name change would be refused `too_soon` at [now] (the snapshot's `allowed_after` lies ahead). */
+    fun nameChangeTooSoon(now: Instant): Boolean = nameAllowedAfter?.isAfter(now) == true
     val canceled: Boolean get() = accountStatus == ACCOUNT_CANCELED
 
     companion object {

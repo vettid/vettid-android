@@ -695,7 +695,7 @@ class SocialManager(
     }
 
     private fun merge(stored: List<StoredEvent>, listed: List<Approval>, cs: List<ConnectionInfo>, now: Instant): List<Approval> {
-        val names = cs.associate { it.id to it.displayName }
+        val names = cs.filter { it.displayName.isNotBlank() }.associate { it.id to it.displayName }
         val fromEvents = stored.mapNotNull(::parsed)
         // Events carry what lists leave out (a critical request's payload): they win for the same key.
         val all = (fromEvents + listed.filter { l -> fromEvents.none { it.key == l.key } })

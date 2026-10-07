@@ -1,5 +1,6 @@
 package com.vettid.feature.settings
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -128,6 +129,7 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 accountSite = host.onOpenAccountSite,
                 deleteVault = { host.navigate(DeleteVaultRoute) },
                 dismissError = vm::dismissError,
+                sharedProfile = { host.navigate(SharedProfileRoute) },
             ),
             ownerCheck = ownerCheck,
             ownerCheckActions = OwnerCheckSettingsActions(
@@ -136,6 +138,43 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 checkNow = { host.onOwnerCheck(false) },
                 dismissOffer = ocVm::dismissOffer,
                 dismissError = ocVm::dismissError,
+            ),
+        )
+    }
+    composable<SharedProfileRoute> {
+        val vm: SharedProfileViewModel = hiltViewModel()
+        val state by vm.uiState.collectAsStateWithLifecycle()
+        SharedProfileContent(
+            state,
+            SharedProfileActions(
+                onBack = host.onBack,
+                onDisplayName = vm::setDisplayName,
+                onSave = vm::save,
+                onChangeName = { host.navigate(ChangeNameRoute) },
+                onDismiss = vm::dismiss,
+            ),
+        )
+    }
+    composable<ChangeNameRoute> {
+        val vm: ChangeNameViewModel = hiltViewModel()
+        val state by vm.uiState.collectAsStateWithLifecycle()
+        val close = {
+            vm.cancel()
+            host.onBack()
+        }
+        // Back from the PIN and password returns to the names; from the names (or the result) it leaves.
+        BackHandler { if (state.step == ChangeNameStep.CONFIRM) vm.back() else close() }
+        ChangeNameContent(
+            state,
+            ChangeNameActions(
+                onFirst = vm::setFirst,
+                onLast = vm::setLast,
+                onNext = vm::next,
+                onPin = vm::setPin,
+                onPassword = vm::setPassword,
+                onSubmit = vm::submit,
+                onBackToNames = vm::back,
+                onClose = close,
             ),
         )
     }
@@ -229,6 +268,7 @@ data class SettingsActions(
     val accountSite: () -> Unit = {},
     val deleteVault: () -> Unit = {},
     val dismissError: () -> Unit = {},
+    val sharedProfile: () -> Unit = {},
 )
 
 /**
@@ -246,7 +286,7 @@ fun SettingsContent(
     var confirmLock by rememberSaveable { mutableStateOf(false) }
     var themePicker by rememberSaveable { mutableStateOf(false) }
     var timeoutPicker by rememberSaveable { mutableStateOf(false) }
-    val name = state.account?.emailHint ?: ""
+    val name = state.account?.fullName ?: state.account?.emailHint ?: ""
     DetailScaffold(onBackClick = actions.back, background = VettIdTheme.colors.groupedBackground) {
         Column(Modifier.verticalScroll(rememberScrollState())) {
             LargeTitle(stringResource(R.string.settings_title))
@@ -321,10 +361,12 @@ fun SettingsContent(
 
             SettingsSectionHeader(stringResource(R.string.settings_section_privacy))
             SettingsGroup {
-                SettingsInfoRow(
+                SettingsRow(
                     stringResource(R.string.settings_privacy_profile),
-                    stringResource(R.string.settings_privacy_profile_body),
+                    actions.sharedProfile,
                     icon = Icons.Outlined.Person,
+                    supporting = state.account?.fullName ?: stringResource(R.string.settings_privacy_profile_body),
+                    modifier = Modifier.testTag("shared_profile_row"),
                 )
                 SettingsDivider()
                 SettingsInfoRow(

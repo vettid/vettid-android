@@ -192,7 +192,9 @@ class InviteViewModel @Inject constructor(
             connections.connections.collect { cs ->
                 if (state.value.step != InviteStep.CONNECTING && state.value.step != InviteStep.REQUEST) return@collect
                 val added = cs.firstOrNull { it.id !in before && it.state == ConnectionState.ACTIVE } ?: return@collect
-                state.update { it.copy(step = InviteStep.CONNECTED, connectionId = added.id, connectionName = added.displayName) }
+                state.update {
+                    it.copy(step = InviteStep.CONNECTED, connectionId = added.id, connectionName = added.displayName.ifBlank { null })
+                }
             }
         }
     }
@@ -351,7 +353,7 @@ class AcceptViewModel @Inject constructor(
                 }
                 state.update {
                     when {
-                        active != null -> it.copy(step = AcceptStep.CONNECTED, connectionName = active.displayName)
+                        active != null -> it.copy(step = AcceptStep.CONNECTED, connectionName = active.displayName.ifBlank { null })
                         end != null && req == null -> it.copy(step = AcceptStep.ENDED, end = end)
                         req == null -> it
                         else -> it.copy(
@@ -381,7 +383,9 @@ class AcceptViewModel @Inject constructor(
                 val r = repo.acceptInvite(text)
                 if (r.exists) {
                     val c = repo.connections.value.firstOrNull { it.id == r.connectionId }
-                    state.update { it.copy(step = AcceptStep.EXISTS, connectionId = r.connectionId, connectionName = c?.displayName) }
+                    state.update {
+                        it.copy(step = AcceptStep.EXISTS, connectionId = r.connectionId, connectionName = c?.displayName?.ifBlank { null })
+                    }
                     return@launch
                 }
                 state.update { it.copy(step = AcceptStep.WAITING, connectionId = r.connectionId, name = r.name) }

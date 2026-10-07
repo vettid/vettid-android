@@ -10,7 +10,7 @@
     <string name="connections_add_scan_body">Scan the code on their phone</string>
     <string name="connections_add_paste">Paste an invitation link</string>
     <string name="connections_add_paste_body">A link they sent you</string>
-    <string name="connections_unnamed">Unnamed connection</string>
+    <string name="connections_name_not_shared">Name not shared yet</string>
     <string name="connections_header">Connections</string>
     <string name="connections_invites_header">Open invitations</string>
     <string name="connections_invite_in_person">In-person invitation</string>
@@ -65,8 +65,11 @@
     <string name="connections_request_body_remote">%1$s used your invitation link. Anyone who saw the link could have used it: compare this code with %1$s over a call or another channel you trust.</string>
     <string name="connections_request_someone">Someone</string>
     <string name="connections_request_them">the other person</string>
-    <string name="connections_request_name_label">Name they gave</string>
-    <string name="connections_request_no_name">No name given</string>
+    <string name="connections_request_name_label">Name on their VettID account</string>
+    <string name="connections_request_display_name">Display name they chose: %1$s</string>
+    <!-- VAULT-MESSAGING 0.18.0 §10.8: never "verified", "real name" or "ID-checked". -->
+    <string name="connections_names_note">The name they gave VettID for their account. VettID does not check it against any ID.</string>
+    <string name="connections_request_no_name">Name not shared yet</string>
     <string name="connections_self_asserted">They chose this themselves; VettID has not checked it.</string>
     <string name="connections_safety_code">Safety code</string>
     <string name="connections_sas_hint">Compare it with them now. Approve only if the codes match.</string>
@@ -123,12 +126,14 @@
 
     <string name="connections_detail_message">Message %1$s</string>
     <string name="connections_detail_edit">Edit alias and note</string>
-    <string name="connections_detail_their_name">Their name: %1$s</string>
+    <string name="connections_detail_their_name">Name on their VettID account: %1$s</string>
     <string name="connections_detail_saved">Saved</string>
     <string name="connections_detail_saved_body">Your alias and note for %1$s are saved in your vault. They are never shared.</string>
     <string name="connections_detail_profile">Profile shared with you</string>
-    <string name="connections_detail_profile_name">Name</string>
-    <string name="connections_detail_profile_none">They have not shared a profile.</string>
+    <string name="connections_detail_profile_name">Display name</string>
+    <string name="connections_detail_account_name">VettID account name</string>
+    <string name="connections_detail_shared_items">Items they share</string>
+    <string name="connections_detail_profile_none">Their vault has not sent its profile yet.</string>
     <string name="connections_detail_sas_when">Shown when you connected, %1$s</string>
     <string name="connections_detail_sas_none">This phone has no safety code recorded for this connection: it was made on another device, or before this app recorded codes.</string>
     <string name="connections_auth_title">Member authentication</string>
@@ -150,7 +155,8 @@
     <string name="connections_detail_about">About this connection</string>
     <string name="connections_detail_since">Connected</string>
     <string name="connections_detail_last_active">Last active</string>
-    <string name="connections_detail_key">Vault key</string>
+    <string name="connections_detail_key">Vault key fingerprint</string>
+    <string name="connections_detail_key_note">Identifies their vault, the one you compared the safety code with, not a person. It changes only when their vault rotates its key.</string>
     <string name="connections_block">Block</string>
     <string name="connections_block_title">Block %1$s?</string>
     <string name="connections_block_body">The connection is removed and %1$s cannot connect again unless you unblock them. They are not told why.</string>

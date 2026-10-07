@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The shared profile and the account's names (VAULT-MESSAGING 0.18.0 §10.8, ANDROID-PLAN 0.1.10). The names are
+  the ones on the member's VettID account: never "verified", "real name" or "ID-checked".
+-->
+<resources>
+    <string name="settings_profile_title">Shared profile</string>
+    <string name="settings_profile_body">What every connection sees of you: the name on your VettID account and your vault key, always; a display name and the items you tag @profile, if you add them.</string>
+    <string name="settings_profile_names">VettID account name</string>
+    <string name="settings_profile_names_none">Not received from your vault yet</string>
+    <string name="settings_profile_names_note">Every connection sees this name. VettID does not check it against any ID.</string>
+    <string name="settings_profile_change_name">Change name</string>
+    <string name="settings_profile_display_name">Display name (optional)</string>
+    <string name="settings_profile_display_name_hint">Shown to your connections next to your name, for example a nickname. Leave it empty for none.</string>
+    <string name="settings_profile_display_name_too_long">At most 128 bytes.</string>
+    <string name="settings_profile_save">Save display name</string>
+    <string name="settings_profile_saved">Display name saved. Your connections get it with your profile.</string>
+    <string name="settings_profile_key">Your vault key fingerprint</string>
+    <string name="settings_profile_key_note">Your connections see this fingerprint for your vault. It changes only when your vault rotates its key.</string>
+    <string name="settings_profile_items">Items you tag @profile in Items are shared with every connection too.</string>
+    <string name="settings_profile_error">Could not save</string>
+
+    <string name="settings_name_title">Change your name</string>
+    <string name="settings_name_body">Every connection sees the name on your VettID account. You can change it once every 30 days; VettID applies the change, then your connections get the new name.</string>
+    <string name="settings_name_first">First name</string>
+    <string name="settings_name_last">Last name</string>
+    <string name="settings_name_rule">Letters, spaces and \' ’ . - only, at most 40 characters.</string>
+    <string name="settings_name_empty">Enter a name.</string>
+    <string name="settings_name_too_long">At most 40 characters.</string>
+    <string name="settings_name_invalid">Use letters, spaces and \' ’ . - only, starting with a letter.</string>
+    <string name="settings_name_same">This is already the name on your account.</string>
+    <string name="settings_name_continue">Continue</string>
+    <string name="settings_name_confirm_title">Confirm with your PIN and password</string>
+    <string name="settings_name_confirm_body">Your vault checks your PIN and your credential password, as in the daily check, then asks VettID to change your name to %1$s.</string>
+    <string name="settings_name_pin">Vault PIN</string>
+    <string name="settings_name_password">Credential password</string>
+    <string name="settings_name_submit">Change name</string>
+    <string name="settings_name_back">Back</string>
+    <string name="settings_name_bad_pin">That PIN is not correct.</string>
+    <string name="settings_name_bad_password">That password is not correct.</string>
+    <plurals name="settings_name_checks_left">
+        <item quantity="one">%1$d more wrong try locks your vault.</item>
+        <item quantity="other">%1$d more wrong tries lock your vault.</item>
+    </plurals>
+    <string name="settings_name_backoff">Too many wrong tries. Wait a moment, then try again.</string>
+    <string name="settings_name_wait">Too many wrong tries. Try again in %1$s.</string>
+    <string name="settings_name_refused_invalid">VettID did not accept the name. Use letters, spaces and \' ’ . - only, at most 40 characters each.</string>
+
+    <string name="settings_name_requested_title">Name change requested</string>
+    <string name="settings_name_requested_body">VettID changes the name on your account to %1$s. Your connections see the new name once it is applied; this can take a moment.</string>
+    <string name="settings_name_applied_title">Your name was changed</string>
+    <string name="settings_name_applied_body">Your account name is now %1$s. Your connections get the new name from your vault.</string>
+    <string name="settings_name_refused_title">Your name was not changed</string>
+    <string name="settings_name_done">Done</string>
+
+    <!-- Status lines (the account sheet and the shared profile). -->
+    <string name="settings_name_status_pending">Name change requested: %1$s</string>
+    <string name="settings_name_too_soon">You can change your name once every 30 days. You can change it again on %1$s.</string>
+    <string name="settings_name_too_soon_undated">You can change your name once every 30 days.</string>
+    <string name="settings_name_refused_account">Your account cannot change its name right now.</string>
+</resources>

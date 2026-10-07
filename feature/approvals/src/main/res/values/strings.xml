@@ -20,7 +20,7 @@
     <string name="approvals_type_share">Share with a connection?</string>
     <string name="approvals_type_device">Request from a device</string>
     <string name="approvals_type_session">Access session request</string>
-    <string name="approvals_no_name">No name given</string>
+    <string name="approvals_name_not_shared">Name not shared yet</string>
     <string name="approvals_a_connection">A connection</string>
     <string name="approvals_an_agent">An agent</string>
     <string name="approvals_summary_sas">code %1$s</string>
@@ -54,7 +54,10 @@
     <string name="approvals_connection_body">%1$s used your invitation. Compare this code with %1$s: it must match the code on their phone.</string>
     <string name="approvals_connection_body_remote">%1$s used your invitation link. Anyone who saw the link could have used it: compare this code with %1$s over a call or another channel you trust.</string>
     <string name="approvals_connection_approve">The codes match: connect</string>
-    <string name="approvals_name_given">Name they gave</string>
+    <string name="approvals_name_given">Name on their VettID account</string>
+    <!-- VAULT-MESSAGING 0.18.0 §10.8: never "verified", "real name" or "ID-checked". -->
+    <string name="approvals_names_note">The name they gave VettID for their account. VettID does not check it against any ID.</string>
+    <string name="approvals_display_name">Display name they chose: %1$s</string>
     <string name="approvals_self_asserted">They chose this themselves; VettID has not checked it.</string>
     <string name="approvals_introduced">Introduced by one of your connections.</string>
     <string name="approvals_safety_code">Safety code</string>
