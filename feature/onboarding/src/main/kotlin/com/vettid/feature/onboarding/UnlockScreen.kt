@@ -32,6 +32,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.PreflightInfo
+import com.vettid.core.data.vault.UnlockAttempt
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
@@ -186,8 +187,11 @@ fun UnlockContent(state: UnlockUiState, actions: UnlockActions) {
                             if (m.kind == FailureKind.SERVICE_PAUSED || m.kind == FailureKind.VAULT_UNAVAILABLE) NoticeKind.WARNING
                                 else NoticeKind.URGENT,
                             stringResource(R.string.unlock_title),
-                            if (m.code == UnlockViewModel.CODE_UNREADABLE) stringResource(R.string.unlock_unreadable)
-                                else stringResource(m.kind.messageRes()),
+                            when (m.code) {
+                                UnlockViewModel.CODE_UNREADABLE -> stringResource(R.string.unlock_unreadable)
+                                UnlockAttempt.CODE_NO_USER_GUID -> stringResource(R.string.unlock_no_user_guid)
+                                else -> stringResource(m.kind.messageRes())
+                            },
                             modifier = Modifier.testTag("unlock_failed"),
                         )
                     }

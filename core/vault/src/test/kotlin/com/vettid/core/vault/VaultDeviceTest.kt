@@ -670,13 +670,34 @@ class VaultDeviceTest {
             // Both sides show the same code.
             assertEquals(fr.sas, d.pairingSas.value)
             val paired = async(Dispatchers.IO) { d.awaitTransfer(java.time.Duration.ofSeconds(10)) }
-            d.handle(v.seal("device.paired", """{"device_id":"dev-2","role":"app","vault_id":"${v.vaultId}","release":"${"a3".repeat(48)}","release_number":3,"token":"${v.tokenFor(d)}","transfer":true,"credential_version":5}"""))
-            paired.await()
+            d.handle(v.seal("device.paired", """{"device_id":"dev-2","role":"app","vault_id":"${v.vaultId}","release":"${"a3".repeat(48)}","release_number":3,"token":"${v.tokenFor(d)}","transfer":true,"credential_version":5,"user_guid":"member-0017"}"""))
+            // §6.7.1 (0.17.0): the member's user_guid, which this phone's unlocks need.
+            assertEquals("member-0017", paired.await())
             assertEquals("dev-2", d.deviceId)
             assertEquals(v.vaultId, d.vaultId)
             assertTrue(d.paired.value)
             assertEquals(3, d.altState.releaseNumber)
         }
+    }
+
+    /** §6.7.1 (0.17.0): only a transfer's device.paired gives a user_guid, and only a well-formed one. */
+    @Test
+    fun aTransfersUserGuidIsCheckedBeforeItIsKept() {
+        fun guid(body: String) = VaultDevice.transferUserGuid(VaultJson.parseObject(body.toByteArray()))
+        assertEquals("u1", guid("""{"transfer":true,"user_guid":"u1"}"""))
+        assertEquals("a".repeat(128), guid("""{"transfer":true,"user_guid":"${"a".repeat(128)}"}"""))
+        // A vault release before 0.17.0 sends none; a plain pairing's is ignored.
+        assertNull(guid("""{"transfer":true}"""))
+        assertNull(guid("""{"user_guid":"u1"}"""))
+        assertNull(guid("""{"transfer":false,"user_guid":"u1"}"""))
+        assertNull(guid("""{"transfer":"true","user_guid":"u1"}"""))
+        // It must fit the unlock's signing string (§11.4): 1–128 printable ASCII, no spaces or line breaks.
+        assertNull(guid("""{"transfer":true,"user_guid":""}"""))
+        assertNull(guid("""{"transfer":true,"user_guid":"${"a".repeat(129)}"}"""))
+        assertNull(guid("""{"transfer":true,"user_guid":"a b"}"""))
+        assertNull(guid("""{"transfer":true,"user_guid":"a\nb"}"""))
+        assertNull(guid("""{"transfer":true,"user_guid":"é"}"""))
+        assertNull(guid("""{"transfer":true,"user_guid":7}"""))
     }
 
     /** 0.10.5: device.pair.rejected ends the new phone's wait; it can scan a new code afterwards. */

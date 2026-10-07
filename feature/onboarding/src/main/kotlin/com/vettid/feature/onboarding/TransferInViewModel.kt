@@ -64,8 +64,13 @@ data class TransferInUiState(
     val busy: Boolean = false,
     val error: FailureKind? = null,
     val errorCode: String? = null,
+    /**
+     * [TransferInStep.DONE]: the vault gave this phone the member's `user_guid` (VAULT-MESSAGING 0.17.0 §6.7.1), so it
+     * unlocks later. False after a transfer from a vault release before 0.17.0: the screen says it cannot unlock yet.
+     */
+    val canUnlockLater: Boolean = true,
 ) {
-    override fun toString(): String = "TransferInUiState(step=$step, busy=$busy, error=$error)"
+    override fun toString(): String = "TransferInUiState(step=$step, busy=$busy, error=$error, canUnlockLater=$canUnlockLater)"
 }
 
 /** What the transfer screens on the new phone can ask for. */
@@ -163,9 +168,9 @@ class TransferInViewModel @Inject constructor(
             state.update { it.copy(step = TransferInStep.COMPARE, busy = false, sas = sas, deadline = deadline) }
             startTicker(deadline)
             try {
-                move.awaitTransferIn()
+                val canUnlock = move.awaitTransferIn()
                 ticker?.cancel()
-                state.update { it.copy(step = TransferInStep.DONE, sas = null) }
+                state.update { it.copy(step = TransferInStep.DONE, sas = null, canUnlockLater = canUnlock) }
             } catch (e: VaultFailure) {
                 ticker?.cancel()
                 state.update {
