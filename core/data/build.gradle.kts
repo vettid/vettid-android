@@ -22,6 +22,8 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
 
     testImplementation(libs.kotlinx.coroutines.test)
+    // The A5 items scenario against the local dev stack (skipped without it).
+    testImplementation(projects.core.testing)
 
     // The A2 exit test runs on a phone against the local dev stack (devstack/README.md).
     androidTestImplementation(projects.core.testing)

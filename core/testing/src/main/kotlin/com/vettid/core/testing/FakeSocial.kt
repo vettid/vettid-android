@@ -7,6 +7,7 @@ import com.vettid.core.data.social.AuthenticationState
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConnectionState
 import com.vettid.core.data.social.ConnectionsRepository
+import com.vettid.core.data.social.GrantDecision
 import com.vettid.core.data.social.ConversationSummary
 import com.vettid.core.data.social.InviteInfo
 import com.vettid.core.data.social.InviteLinks
@@ -260,10 +261,21 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
         drop("grant:$requestId")
     }
 
-    override suspend fun approveCriticalUse(requestId: String, password: String) {
+    /** What [approveCriticalUse] answers (§10.13 status). */
+    var criticalStatus: String? = "ok"
+    var lastGrant: GrantDecision? = null
+
+    override suspend fun approveCriticalUse(requestId: String, password: String): String? {
         call("approveCriticalUse")
         lastPassword = password
         drop("critical:$requestId")
+        return criticalStatus
+    }
+
+    override suspend fun decideGrant(requestId: String, decision: GrantDecision) {
+        call("decideGrant")
+        lastGrant = decision
+        drop("grant:$requestId")
     }
 
     override suspend fun denyCriticalUse(requestId: String) {

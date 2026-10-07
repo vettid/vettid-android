@@ -113,6 +113,14 @@ class FakeSharing : SharingRepository {
         received = received.map { if (it.grantId == grantId) it.copy(state = "revoked") else it }.toMutableList()
     }
 
+    val requests = mutableListOf<List<String?>>()
+
+    override suspend fun requestGrant(connectionId: String, category: String, label: String?, reason: String?): String {
+        call("requestGrant")
+        requests += listOf(connectionId, category, label, reason)
+        return "01REQ${requests.size}"
+    }
+
     override suspend fun fetchShared(grantId: String): FetchOutcome {
         call("fetch:$grantId")
         refusals[grantId]?.let { return FetchOutcome.Refused(it) }

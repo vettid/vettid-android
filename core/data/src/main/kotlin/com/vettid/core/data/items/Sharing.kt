@@ -146,7 +146,10 @@ data class GrantView(
     }
 }
 
-data class GrantLists(val given: List<GrantView>, val received: List<GrantView>)
+data class GrantLists(val given: List<GrantView>, val received: List<GrantView>, val requested: List<GrantAsk> = emptyList())
+
+/** A request this vault made of a connection (`grant.list`'s `requested`): [state] as the vault reports it. */
+data class GrantAsk(val requestId: String, val connectionId: String, val labels: List<String>, val state: String)
 
 /** What a connection shared with the member, as fetched (§10.12): read-only, the connection's own data. */
 data class SharedContent(

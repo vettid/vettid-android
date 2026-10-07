@@ -79,8 +79,6 @@
         <item quantity="one">They can read it once.</item>
         <item quantity="other">They can read it %1$d times.</item>
     </plurals>
-    <string name="approvals_grant_partial_title">Some items are not shared here</string>
-    <string name="approvals_grant_partial_body">Choosing an item for a category, or answering items you do not have, comes with the Vault screens. Approving shares only the items listed as in your vault.</string>
     <string name="approvals_critical_body">%1$s asks your vault to use a critical item once. The value never leaves your vault; your password authorizes exactly this use.</string>
     <string name="approvals_critical_approve">Allow this one use</string>
     <string name="approvals_critical_item">Item</string>
@@ -101,4 +99,22 @@
     <string name="approvals_device">Device</string>
     <string name="approvals_request">Request</string>
     <string name="approvals_device_v1">This version of the app does not pair desktops or agents, so it can only decline.</string>
+    <string name="approvals_grant_their_words">They asked for: %1$s</string>
+    <string name="approvals_grant_answer">Choose one of your items</string>
+    <string name="approvals_grant_answer_chosen">%1$s (change)</string>
+    <string name="approvals_grant_answer_none">No standard or secret items in your vault</string>
+    <string name="approvals_grant_uses_label">How many times they can fetch it</string>
+    <string name="approvals_grant_expiry_label">For how long</string>
+    <plurals name="approvals_grant_days">
+        <item quantity="one">%1$d day</item>
+        <item quantity="other">%1$d days</item>
+    </plurals>
+    <string name="approvals_grant_note">They get the item\'s current values each time they fetch it, sealed to their phone. You can revoke it on their Sharing screen. Critical items are never shared.</string>
+    <string name="approvals_backoff">Too many wrong passwords. Try again in %1$d s</string>
+    <string name="approvals_backoff_over">You can try again now</string>
+    <string name="approvals_critical_done_title">Done</string>
+    <string name="approvals_critical_done_body">Your vault used the item once and sent %1$s only the result. Nothing else left your vault.</string>
+    <string name="approvals_critical_failed_title">Not used</string>
+    <string name="approvals_critical_unsuitable">This field cannot be used this way: it must hold an Ed25519 key (a base64 seed of 32 bytes). They were told it is unsuitable.</string>
+    <string name="approvals_critical_unavailable">The item or field is no longer available to them. They were told.</string>
 </resources>

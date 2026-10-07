@@ -216,6 +216,84 @@ internal object ItemsCatalog {
                 com.vettid.feature.settings.SharedProfileActions(),
             )
         },
+        // --- A5c: grants, critical-item uses, History item names ---
+        "approvals.grant_decide" to {
+            val g = com.vettid.core.data.social.Approval.GrantRequest(
+                "g9", "c1",
+                listOf(
+                    com.vettid.core.data.social.GrantEntry("item", passport.itemId, "Your passport", true),
+                    com.vettid.core.data.social.GrantEntry("category", "insurance", "Your insurance card", false),
+                    com.vettid.core.data.social.GrantEntry("item", "01JGONE", "Your visa", false),
+                ),
+                1, 604_800, "Booking the trip", t0, t0.plusSeconds(86_400 * 7), "Dana Lee",
+            )
+            val insurance = com.vettid.core.data.items.ItemSummary("i7", 1, "Health insurance card", "insurance", Sensitivity.DATA)
+            com.vettid.feature.approvals.ApprovalDetailScreen(
+                com.vettid.feature.approvals.ApprovalDetailUiState(
+                    g.key, g, items = listOf(passport.summary, insurance, login.summary), grantAnswers = mapOf(1 to "i7"), grantUses = 3,
+                ),
+                com.vettid.feature.approvals.DecisionActions(),
+            )
+        },
+        "approvals.critical_backoff" to {
+            val payload = "SGVsbG8sIFZldHRJRCE="
+            val c = com.vettid.core.data.social.Approval.CriticalUse(
+                "u2", "c1", "Signing key", "Key (Ed25519 seed, base64)", "sign", payload,
+                com.vettid.core.data.social.ApprovalParser.payloadSha256(payload)!!, "Sign the lease", t0, t0.plusSeconds(86_400), "Dana Lee",
+            )
+            com.vettid.feature.approvals.ApprovalDetailScreen(
+                com.vettid.feature.approvals.ApprovalDetailUiState(c.key, c, error = FailureKind.BACKOFF, retryUntil = Instant.now().plusSeconds(40)),
+                com.vettid.feature.approvals.DecisionActions(),
+            )
+        },
+        "approvals.critical_result" to {
+            val c = com.vettid.core.data.social.Approval.CriticalUse("u3", "c1", "Signing key", "Key", "sign", "", "x", null, t0, null, "Dana Lee")
+            com.vettid.feature.approvals.ApprovalDetailScreen(
+                com.vettid.feature.approvals.ApprovalDetailUiState(c.key, c, criticalResult = "ok"),
+                com.vettid.feature.approvals.DecisionActions(),
+            )
+        },
+        "approvals.critical_unsuitable" to {
+            val c = com.vettid.core.data.social.Approval.CriticalUse("u4", "c1", "Recovery phrase", "Words", "sign", "", "x", null, t0, null, "Dana Lee")
+            com.vettid.feature.approvals.ApprovalDetailScreen(
+                com.vettid.feature.approvals.ApprovalDetailUiState(c.key, c, criticalResult = "unsuitable"),
+                com.vettid.feature.approvals.DecisionActions(),
+            )
+        },
+        "history.items" to {
+            val entries = listOf(
+                com.vettid.core.data.vault.AuditRecord("e5", 5, Instant.now().minusSeconds(60), "item.revealed", ref = login.itemId),
+                com.vettid.core.data.vault.AuditRecord("e4", 4, Instant.now().minusSeconds(600), "share.included", connectionId = "c1", ref = passport.itemId),
+                com.vettid.core.data.vault.AuditRecord("e3", 3, Instant.now().minusSeconds(3_600), "item.updated", ref = phrase.itemId),
+                com.vettid.core.data.vault.AuditRecord("e2", 2, Instant.now().minusSeconds(7_200), "item.deleted", ref = "01JGONE"),
+            )
+            com.vettid.feature.history.HistoryScreen(
+                com.vettid.feature.history.HistoryUiState(
+                    entries, connectionNames = mapOf("c1" to "Dana Lee"), itemNames = list.associate { it.itemId to it.name }, loading = false, end = true,
+                ),
+                chrome,
+                com.vettid.feature.history.HistoryActions(),
+            )
+        },
+        "history.entry_item" to {
+            com.vettid.feature.history.HistoryEntryScreen(
+                com.vettid.feature.history.HistoryEntryUiState(
+                    com.vettid.core.data.vault.AuditRecord("e5", 5, Instant.now().minusSeconds(60), "item.revealed", ref = login.itemId, hash = "AAECAwQ="),
+                    loading = false, itemName = login.name, itemExists = true,
+                ),
+                onBack = {},
+            )
+        },
+        "items.shared_ask" to {
+            SharedWithYouScreen(
+                SharedWithYouUiState(
+                    "c1", "Dana Lee", received, loading = false,
+                    requested = listOf(com.vettid.core.data.items.GrantAsk("q1", "c1", listOf("Your vaccination record"), "pending")),
+                    ask = com.vettid.feature.items.GrantAskForm("medical", "Your vaccination record", "For school"),
+                ),
+                SharedWithYouActions(),
+            )
+        },
         "items.edit_critical_password" to {
             ItemEditScreen(edit(ItemDraft.of(phrase)).copy(prompt = PasswordPrompt(PasswordPurpose.SAVE)), ItemEditActions())
         },

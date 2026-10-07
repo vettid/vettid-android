@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.navigation.toRoute
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConnectionsRepository
+import com.vettid.core.data.items.ItemsRepository
+import com.vettid.core.data.items.ListLoad
 import com.vettid.core.data.vault.AuditCategory
 import com.vettid.core.data.vault.AuditFilter
 import com.vettid.core.data.vault.AuditRecord
@@ -48,6 +50,8 @@ data class HistoryUiState(
     val datePreset: DatePreset = DatePreset.ANY,
     /** id → title of the member's connections, for the rows and the connection filter. */
     val connectionNames: Map<String, String> = emptyMap(),
+    /** id → name of the member's items (the Vault list), for the rows of item entries (§10.9). */
+    val itemNames: Map<String, String> = emptyMap(),
     val loading: Boolean = true,
     val loadingMore: Boolean = false,
     val end: Boolean = false,
@@ -105,6 +109,7 @@ class HistoryViewModel @Inject constructor(
     private val history: HistoryRepository,
     private val connections: ConnectionsRepository,
     @param:ApplicationContext private val context: Context,
+    private val items: ItemsRepository,
 ) : ViewModel() {
     private val state = MutableStateFlow(HistoryUiState(filter = AuditFilter(connectionId = saved.get<String>("connectionId"))))
     val uiState: StateFlow<HistoryUiState> = state.asStateFlow()
@@ -121,6 +126,8 @@ class HistoryViewModel @Inject constructor(
             }
         }
         viewModelScope.launch { runCatching { connections.refresh() } }
+        viewModelScope.launch { items.items.collect { l -> state.update { it.copy(itemNames = l.associate { i -> i.itemId to i.name }) } } }
+        if (items.load.value == ListLoad.NOT_LOADED) viewModelScope.launch { runCatching { items.refresh() } }
         reload()
     }
 
@@ -136,6 +143,7 @@ class HistoryViewModel @Inject constructor(
         return AuditFilter.kindText(r.kind) + listOfNotNull(
             HistoryText.title(context, r.kind),
             c?.name, c?.alias, c?.firstName, c?.lastName, c?.accountName,
+            AuditKinds.itemOf(r.kind, r.ref)?.let { state.value.itemNames[it] },
         )
     }
 
@@ -220,6 +228,9 @@ data class HistoryEntryUiState(
     val connectionName: String? = null,
     /** The entry's connection is still in the vault's list (the detail opens it). */
     val connectionExists: Boolean = false,
+    /** The item the entry refers to (§10.9 item kinds): its current name, and whether it is still in the vault. */
+    val itemName: String? = null,
+    val itemExists: Boolean = false,
     val loading: Boolean = true,
     val missing: Boolean = false,
     val error: FailureKind? = null,
@@ -231,6 +242,7 @@ class HistoryEntryViewModel @Inject constructor(
     saved: SavedStateHandle,
     private val history: HistoryRepository,
     private val connections: ConnectionsRepository,
+    private val items: ItemsRepository,
 ) : ViewModel() {
     private val seq = saved.toRoute<HistoryEntryRoute>().seq
     private val state = MutableStateFlow(HistoryEntryUiState())
@@ -247,8 +259,12 @@ class HistoryEntryViewModel @Inject constructor(
                 val e = history.cached(seq)
                     ?: history.auditPage(AuditRequest(beforeSeq = seq + 1, limit = 1)).entries.firstOrNull { it.seq == seq }
                 val c = e?.connectionId?.let { id -> connections.connections.value.firstOrNull { it.id == id } }
+                val i = e?.let { AuditKinds.itemOf(it.kind, it.ref) }?.let { id -> items.items.value.firstOrNull { it.itemId == id } }
                 state.update {
-                    it.copy(entry = e, connectionName = c?.displayName, connectionExists = c != null, loading = false, missing = e == null)
+                    it.copy(
+                        entry = e, connectionName = c?.displayName, connectionExists = c != null, loading = false, missing = e == null,
+                        itemName = i?.name, itemExists = i != null,
+                    )
                 }
             } catch (f: VaultFailure) {
                 state.update { it.copy(loading = false, error = f.kind) }

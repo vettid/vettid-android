@@ -28,6 +28,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -99,6 +100,11 @@ fun NavGraphBuilder.approvalsDestination(chrome: ShellChrome, navigate: (Any) ->
                 onAskBlock = vm::askBlock,
                 onBlock = vm::block,
                 onToggleShareItem = vm::toggleShareItem,
+                onToggleGrant = vm::toggleGrantEntry,
+                onAnswerGrant = vm::answerGrantEntry,
+                onGrantUses = vm::setGrantUses,
+                onGrantExpiresIn = vm::setGrantExpiresIn,
+                onFinish = vm::finish,
             ),
         )
     }
@@ -218,6 +224,13 @@ data class DecisionActions(
     val onBlock: () -> Unit = {},
     /** Ticks or unticks an item of a share decision. */
     val onToggleShareItem: (String) -> Unit = {},
+    /** A grant request (§10.12): tick an entry, answer a category entry with an item, set uses and lifetime. */
+    val onToggleGrant: (Int) -> Unit = {},
+    val onAnswerGrant: (Int, String) -> Unit = { _, _ -> },
+    val onGrantUses: (Int?) -> Unit = {},
+    val onGrantExpiresIn: (Long?) -> Unit = {},
+    /** Leaves a critical use's result. */
+    val onFinish: () -> Unit = {},
 )
 
 /** One approval: what is asked and by whom, then approve or deny (the password when it is a critical action). */
@@ -236,6 +249,10 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
         ) {}
         return
     }
+    state.criticalResult?.let { status ->
+        CriticalResult(status, a, actions.onFinish, modifier)
+        return
+    }
     FormScaffold(
         title = titleOf(a),
         body = bodyOf(a),
@@ -248,7 +265,11 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
         onBack = actions.onBack,
         modifier = modifier.testTag("approval_detail"),
     ) {
-        if (a is Approval.ShareDecision) ShareFacts(a, state.shareExcluded, actions.onToggleShareItem) else Facts(a)
+        when (a) {
+            is Approval.ShareDecision -> ShareFacts(a, state.shareExcluded, actions.onToggleShareItem)
+            is Approval.GrantRequest -> GrantFacts(a, state, actions)
+            else -> Facts(a)
+        }
         if (state.needs == Needs.PASSWORD) {
             Spacer(Modifier.height(Spacing.l))
             SecretField(
@@ -270,7 +291,7 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
         }
         state.error?.let {
             Spacer(Modifier.height(Spacing.m))
-            Text(stringResource(it.messageRes()), color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("failure"))
+            Text(failureText(it, state.retryUntil), color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("failure"))
         }
     }
     if (state.confirmBlock) {
@@ -284,6 +305,155 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
         )
     }
 }
+
+/** A refusal in words; a password backoff counts down to its end. */
+@Composable
+private fun failureText(kind: com.vettid.core.data.vault.FailureKind, retryUntil: java.time.Instant?): String {
+    if (kind != com.vettid.core.data.vault.FailureKind.BACKOFF || retryUntil == null) return stringResource(kind.messageRes())
+    var now by androidx.compose.runtime.remember { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(retryUntil) {
+        while (now < retryUntil.toEpochMilli()) {
+            kotlinx.coroutines.delay(1_000)
+            now = System.currentTimeMillis()
+        }
+    }
+    val left = maxOf(0L, (retryUntil.toEpochMilli() - now + 999) / 1000)
+    return if (left > 0) stringResource(R.string.approvals_backoff, left) else stringResource(R.string.approvals_backoff_over)
+}
+
+/** What a critical-item use came to (§10.13 `status`), shown before the screen closes. */
+@Composable
+private fun CriticalResult(status: String, a: Approval, onFinish: () -> Unit, modifier: Modifier) {
+    val who = themOf(a.connectionName)
+    FormScaffold(
+        title = stringResource(if (status == "ok") R.string.approvals_critical_done_title else R.string.approvals_critical_failed_title),
+        body = when (status) {
+            "ok" -> stringResource(R.string.approvals_critical_done_body, who)
+            "unsuitable" -> stringResource(R.string.approvals_critical_unsuitable)
+            else -> stringResource(R.string.approvals_critical_unavailable)
+        },
+        primaryLabel = stringResource(R.string.approvals_back),
+        onPrimary = onFinish,
+        onBack = onFinish,
+        modifier = modifier.testTag("critical_result"),
+    ) {}
+}
+
+/**
+ * A grant request (§10.12): each entry ticked or not — a named item if it exists, a category ("your insurance card")
+ * once the member picks one of their items — and the uses and lifetime the grant gets.
+ */
+@Composable
+@Suppress("LongMethod", "CyclomaticComplexMethod")
+private fun GrantFacts(a: Approval.GrantRequest, state: ApprovalDetailUiState, actions: DecisionActions) {
+    Label(stringResource(R.string.approvals_from))
+    Value(a.connectionName ?: stringResource(R.string.approvals_a_connection))
+    a.reason?.let {
+        Label(stringResource(R.string.approvals_reason))
+        Value(it)
+    }
+    Label(stringResource(R.string.approvals_items_asked))
+    val chosen = state.grantIndexes
+    a.entries.forEachIndexed { i, e ->
+        val item = if (e.kind == "item") state.items.firstOrNull { it.itemId == e.ref } else null
+        val answer = state.grantAnswers[i]?.let { id -> state.items.firstOrNull { it.itemId == id } }
+        val grantable = (e.kind == "item" && e.available) || answer != null
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = Spacing.touchTarget)
+                .toggleable(value = i in chosen, enabled = grantable, role = Role.Checkbox, onValueChange = { actions.onToggleGrant(i) })
+                .testTag("grant_entry_$i"),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(checked = i in chosen, onCheckedChange = null, enabled = grantable)
+            Spacer(Modifier.width(Spacing.m))
+            Column(Modifier.weight(1f)) {
+                val title = when {
+                    e.kind == "category" -> stringResource(R.string.approvals_grant_category, e.label ?: e.ref)
+                    item != null -> item.name
+                    else -> stringResource(R.string.approvals_grant_item_missing, e.label ?: e.ref)
+                }
+                Text(title, style = MaterialTheme.typography.bodyLarge)
+                val theirs = e.label
+                if (e.kind == "item" && theirs != null && item != null) {
+                    Text(stringResource(R.string.approvals_grant_their_words, theirs), style = MaterialTheme.typography.bodySmall)
+                }
+                if (e.kind == "category") {
+                    AnswerPicker(i, e.ref, answer?.name, state, actions)
+                }
+            }
+        }
+    }
+    Spacer(Modifier.height(Spacing.s))
+    Label(stringResource(R.string.approvals_grant_uses_label))
+    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(Spacing.s)) {
+        val requested = a.uses ?: 1
+        listOf<Int?>(null, 1, 3, 10).distinctBy { it ?: requested }.forEach { u ->
+            androidx.compose.material3.FilterChip(
+                selected = state.grantUses == u || (u == null && state.grantUses == null),
+                onClick = { actions.onGrantUses(u) },
+                label = { Text(pluralStringResource(R.plurals.approvals_grant_uses, u ?: requested, u ?: requested)) },
+            )
+        }
+    }
+    Label(stringResource(R.string.approvals_grant_expiry_label))
+    androidx.compose.foundation.layout.FlowRow(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(Spacing.s)) {
+        val requested = a.expiresIn ?: DEFAULT_GRANT_SECONDS
+        listOf<Long?>(null, DAY_SECONDS, WEEK_SECONDS, MONTH_SECONDS).distinctBy { it ?: requested }.forEach { x ->
+            androidx.compose.material3.FilterChip(
+                selected = state.grantExpiresIn == x || (x == null && state.grantExpiresIn == null),
+                onClick = { actions.onGrantExpiresIn(x) },
+                label = {
+                    val days = ((x ?: requested) / DAY_SECONDS).toInt().coerceAtLeast(1)
+                    Text(pluralStringResource(R.plurals.approvals_grant_days, days, days))
+                },
+            )
+        }
+    }
+    Spacer(Modifier.height(Spacing.s))
+    Text(
+        stringResource(R.string.approvals_grant_note),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+private fun AnswerPicker(index: Int, category: String, chosen: String?, state: ApprovalDetailUiState, actions: DecisionActions) {
+    var open by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
+    // The asked category first, then the member's other items (§10.12: the member picks the item).
+    val options = state.answerable.sortedBy { if (it.category == category) 0 else 1 }
+    Box {
+        TextButton(onClick = { open = true }, modifier = Modifier.testTag("grant_answer_$index")) {
+            Text(
+                chosen?.let { stringResource(R.string.approvals_grant_answer_chosen, it) }
+                    ?: stringResource(R.string.approvals_grant_answer),
+            )
+        }
+        androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            if (options.isEmpty()) {
+                androidx.compose.material3.DropdownMenuItem(
+                    text = { Text(stringResource(R.string.approvals_grant_answer_none)) },
+                    onClick = { open = false },
+                )
+            }
+            options.forEach { i ->
+                androidx.compose.material3.DropdownMenuItem(text = { Text(i.name) }, onClick = {
+                    open = false
+                    actions.onAnswerGrant(index, i.itemId)
+                })
+            }
+        }
+    }
+}
+
+private const val DAY_SECONDS = 86_400L
+private const val WEEK_SECONDS = 7 * DAY_SECONDS
+private const val MONTH_SECONDS = 30 * DAY_SECONDS
+
+/** §10.12: a one-off grant lasts 7 days unless the request says otherwise. */
+private const val DEFAULT_GRANT_SECONDS = WEEK_SECONDS
 
 /**
  * A share rule's items waiting for the member (§10.12 `share.pending`): ticked items are shared, unticked ones
@@ -499,37 +669,8 @@ private fun Facts(a: Approval) {
             }
             a.exp?.let { Text(stringResource(R.string.approvals_expires, Times.full(it)), style = MaterialTheme.typography.bodySmall) }
         }
-        is Approval.GrantRequest -> {
-            Label(stringResource(R.string.approvals_from))
-            Value(a.connectionName ?: stringResource(R.string.approvals_a_connection))
-            a.reason?.let {
-                Label(stringResource(R.string.approvals_reason))
-                Value(it)
-            }
-            Label(stringResource(R.string.approvals_items_asked))
-            a.entries.forEach { e ->
-                val text = when {
-                    e.kind == "category" -> stringResource(R.string.approvals_grant_category, e.label ?: e.ref)
-                    e.available -> stringResource(R.string.approvals_grant_item, e.label ?: e.ref)
-                    else -> stringResource(R.string.approvals_grant_item_missing, e.label ?: e.ref)
-                }
-                Text("• $text", style = MaterialTheme.typography.bodyLarge)
-            }
-            Spacer(Modifier.height(Spacing.s))
-            Text(
-                pluralStringResource(R.plurals.approvals_grant_uses, a.uses ?: 1, a.uses ?: 1),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (a.grantable.size < a.entries.size) {
-                Spacer(Modifier.height(Spacing.m))
-                NoticeCard(
-                    kind = NoticeKind.INFO,
-                    title = stringResource(R.string.approvals_grant_partial_title),
-                    body = stringResource(R.string.approvals_grant_partial_body),
-                )
-            }
-        }
+        // Shown by GrantFacts.
+        is Approval.GrantRequest -> Unit
         is Approval.CriticalUse -> {
             Label(stringResource(R.string.approvals_from))
             Value(a.connectionName ?: stringResource(R.string.approvals_a_connection))

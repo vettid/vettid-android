@@ -291,7 +291,15 @@ data class SharedWithYouUiState(
     val loading: Boolean = true,
     val error: FailureKind? = null,
     val confirmGiveUp: GrantView? = null,
+    /** Requests this vault made of the connection (§10.12 `grant.list` `requested`). */
+    val requested: List<com.vettid.core.data.items.GrantAsk> = emptyList(),
+    /** The "ask for something" form, while open. */
+    val ask: GrantAskForm? = null,
+    val asked: Boolean = false,
 )
+
+/** Asking a connection for "your <category>" (§10.12 `grant.request`, a category entry they answer). */
+data class GrantAskForm(val category: String = "other", val label: String = "", val reason: String = "", val busy: Boolean = false)
 
 /**
  * What a connection shares with the member (§10.12 received grants): read-only and labelled as theirs. A value is
@@ -316,8 +324,9 @@ class SharedWithYouViewModel @Inject constructor(
         state.update { it.copy(loading = true, error = null) }
         viewModelScope.launch {
             try {
-                val r = sharing.grants().received.filter { it.connectionId == id }.sortedWith(GRANT_ORDER)
-                state.update { it.copy(received = r, loading = false) }
+                val g = sharing.grants()
+                val r = g.received.filter { it.connectionId == id }.sortedWith(GRANT_ORDER)
+                state.update { it.copy(received = r, requested = g.requested.filter { a -> a.connectionId == id }, loading = false) }
             } catch (e: VaultFailure) {
                 state.update { it.copy(loading = false, error = e.kind) }
             }
@@ -338,6 +347,24 @@ class SharedWithYouViewModel @Inject constructor(
                 state.update { it.copy(fetching = null) }
             } catch (e: VaultFailure) {
                 state.update { it.copy(fetching = null, error = e.kind) }
+            }
+        }
+    }
+
+    fun openAsk(show: Boolean) = state.update { it.copy(ask = if (show) GrantAskForm() else null, asked = false) }
+
+    fun setAsk(f: GrantAskForm) = state.update { it.copy(ask = f) }
+
+    fun sendAsk() {
+        val f = state.value.ask ?: return
+        state.update { it.copy(ask = f.copy(busy = true), error = null) }
+        viewModelScope.launch {
+            try {
+                sharing.requestGrant(id, f.category, f.label, f.reason)
+                state.update { it.copy(ask = null, asked = true) }
+                load()
+            } catch (e: VaultFailure) {
+                state.update { it.copy(ask = f.copy(busy = false), error = e.kind) }
             }
         }
     }

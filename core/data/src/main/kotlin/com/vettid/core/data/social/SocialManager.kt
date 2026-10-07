@@ -842,7 +842,29 @@ class SocialManager(
         decide("grant:$requestId") { it.grantDecide(requestId, approve, items = if (approve) req?.grantable else null) }
     }
 
-    override suspend fun approveCriticalUse(requestId: String, password: String) {
+    override suspend fun decideGrant(requestId: String, decision: GrantDecision) {
+        if (decision.items.isEmpty()) throw VaultFailure(FailureKind.OTHER, "bad_request")
+        val answers = kotlinx.serialization.json.buildJsonArray {
+            decision.answers.filterKeys { it in decision.items }.forEach { (i, id) ->
+                add(kotlinx.serialization.json.buildJsonObject {
+                    put("index", JsonPrimitive(i))
+                    put("item_id", JsonPrimitive(id))
+                })
+            }
+        }
+        decide("grant:$requestId") {
+            it.grantDecide(
+                requestId,
+                true,
+                items = decision.items,
+                answers = answers.takeIf { a -> a.isNotEmpty() },
+                uses = decision.uses,
+                expiresIn = decision.expiresInSeconds?.toInt(),
+            )
+        }
+    }
+
+    override suspend fun approveCriticalUse(requestId: String, password: String): String? {
         val req = find("critical:$requestId") as? Approval.CriticalUse ?: throw VaultFailure(FailureKind.NOT_FOUND)
         // §10.13: the approval is offered only for a payload the member saw and that matches payload_sha256;
         // the hash sealed with the password is the one computed from that payload.
@@ -852,7 +874,9 @@ class SocialManager(
         } catch (e: com.vettid.core.crypto.CryptoException) {
             throw VaultFailure(FailureKind.OTHER, "payload", cause = e)
         }
-        decide("critical:$requestId") { it.criticalUseApprove(password, requestId, sha) }
+        var status: String? = null
+        decide("critical:$requestId") { status = it.criticalUseApprove(password, requestId, sha) }
+        return status
     }
 
     override suspend fun loadCriticalUse(requestId: String) {

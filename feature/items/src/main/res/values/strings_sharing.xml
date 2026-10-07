@@ -147,4 +147,18 @@
     <string name="items_shared_refused_expired">The sharing ended.</string>
     <string name="items_shared_refused_exhausted">No fetches are left.</string>
     <string name="items_shared_refused_unavailable">It is not available any more.</string>
+
+    <!-- Asking a connection for something (§10.12 grant.request) -->
+    <string name="items_ask_title">Ask for something</string>
+    <string name="items_ask_button">Ask %1$s for something</string>
+    <string name="items_ask_category">Kind: %1$s</string>
+    <string name="items_ask_label">What you need (for example: your insurance card)</string>
+    <string name="items_ask_reason">Why (optional)</string>
+    <string name="items_ask_note">%1$s chooses which of their items to share, if any. You see it here once they agree.</string>
+    <string name="items_ask_send">Ask</string>
+    <string name="items_ask_sent">Asked. %1$s decides in their app.</string>
+    <string name="items_ask_row">%1$s: %2$s</string>
+    <string name="items_ask_state_pending">waiting</string>
+    <string name="items_ask_state_granted">shared</string>
+    <string name="items_ask_state_denied">declined</string>
 </resources>

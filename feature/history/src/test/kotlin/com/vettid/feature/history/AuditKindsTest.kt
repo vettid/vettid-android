@@ -101,4 +101,14 @@ class AuditKindsTest {
         val labels = AuditCategory.entries.map { AuditKinds.categoryLabel(it) }
         assertEquals(labels.size, labels.toSet().size)
     }
+
+    /** §10.9: the kinds whose `ref` names an item (rows show its name; the detail opens it). */
+    @Test
+    fun itemEntriesNameTheirItem() {
+        assertEquals("01ITEM", AuditKinds.itemOf("item.revealed", "01ITEM"))
+        assertEquals("01ITEM", AuditKinds.itemOf("share.withdrawn", "01ITEM"))
+        assertEquals(null, AuditKinds.itemOf("message.received", "m-1"))
+        assertEquals(null, AuditKinds.itemOf("item.added", null))
+        assertEquals(null, AuditKinds.itemOf("share.pending", "01RULE"))
+    }
 }

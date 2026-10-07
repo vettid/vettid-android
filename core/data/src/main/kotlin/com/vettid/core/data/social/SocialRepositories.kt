@@ -133,8 +133,17 @@ interface ApprovalsRepository {
     /** Approves the grantable entries ([Approval.GrantRequest.grantable]) or denies the request. */
     suspend fun decideGrant(requestId: String, approve: Boolean)
 
-    /** One use of a critical item, consented with the credential password (§10.13). */
-    suspend fun approveCriticalUse(requestId: String, password: String)
+    /**
+     * Decides a grant request entry by entry (§10.12 `grant.decide`): the [GrantDecision.items] indexes granted,
+     * category entries answered with the member's item, and the uses and lifetime the member chose.
+     */
+    suspend fun decideGrant(requestId: String, decision: GrantDecision)
+
+    /**
+     * One use of a critical item, consented with the credential password (§10.13). Returns the status the connection
+     * receives (`ok`, `unsuitable`, `unavailable`); a wrong password leaves the request pending (`bad_password`).
+     */
+    suspend fun approveCriticalUse(requestId: String, password: String): String?
 
     suspend fun denyCriticalUse(requestId: String)
 

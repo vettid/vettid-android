@@ -5,6 +5,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.ApprovalsRepository
+import com.vettid.core.data.social.GrantDecision
+import com.vettid.core.data.items.ItemSummary
+import com.vettid.core.data.items.ItemsRepository
+import com.vettid.core.data.items.ListLoad
+import com.vettid.core.data.items.Sensitivity
 import com.vettid.core.data.social.PeerDecline
 import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.vault.FailureKind
@@ -82,7 +87,32 @@ data class ApprovalDetailUiState(
     val error: FailureKind? = null,
     /** A share decision's items the member unticked: declined, the rest included (§10.12). */
     val shareExcluded: Set<String> = emptySet(),
+    /** The member's `data` and `secret` items (§10.12: only they are granted), to name and answer grant entries. */
+    val items: List<ItemSummary> = emptyList(),
+    /** A grant request's entries the member chose (indexes); null: the default (every named item that exists). */
+    val grantSelected: Set<Int>? = null,
+    /** A category entry's answer: index → the member's item id. */
+    val grantAnswers: Map<Int, String> = emptyMap(),
+    /** Uses and lifetime the member set (null: the request's). */
+    val grantUses: Int? = null,
+    val grantExpiresIn: Long? = null,
+    /** A critical-item use was approved: the status the connection received (`ok`, `unsuitable`, `unavailable`). */
+    val criticalResult: String? = null,
+    /** The end of a password backoff (`retry_after`, VAULT-MESSAGING 0.17.0). */
+    val retryUntil: java.time.Instant? = null,
 ) {
+    /** The grant entries that will be granted: chosen, and for a category answered. */
+    val grantIndexes: Set<Int>
+        get() {
+            val g = approval as? Approval.GrantRequest ?: return emptySet()
+            val chosen = grantSelected ?: g.grantable.toSet()
+            fun ok(i: Int) = g.entries.getOrNull(i)?.let { it.kind == "item" && it.available || grantAnswers[i] != null } == true
+            return chosen.filter(::ok).toSet()
+        }
+
+    /** Items the member may answer with: `data` and `secret` (never `critical`, §10.12). */
+    val answerable: List<ItemSummary> get() = items.filter { it.sensitivity != Sensitivity.CRITICAL }
+
     /** Critical actions ask for the credential password (ANDROID-PLAN §4). */
     val needs: Needs get() = when (approval) {
         is Approval.Authentication, is Approval.CriticalUse -> Needs.PASSWORD
@@ -91,12 +121,13 @@ data class ApprovalDetailUiState(
 
     val canApprove: Boolean get() = when (val a = approval) {
         null, is Approval.DeviceRequest -> false
-        is Approval.GrantRequest -> a.grantable.isNotEmpty()
+        is Approval.GrantRequest -> grantIndexes.isNotEmpty()
         // 0.10.3: only once the safety code is known, and only once per member.
         is Approval.ConnectionRequest -> a.state == RequestState.PENDING
         is Approval.OutgoingRequest -> a.state == RequestState.PENDING && a.sas != null
         // §10.13: only a payload that matches its hash, shown to the member, can be approved.
-        is Approval.CriticalUse -> a.payloadVerified && password.isNotEmpty()
+        is Approval.CriticalUse ->
+            a.payloadVerified && password.isNotEmpty() && (retryUntil == null || java.time.Instant.now().isAfter(retryUntil))
         is Approval.ShareDecision -> a.items.any { it.itemId !in shareExcluded }
         else -> needs == Needs.NOTHING || password.isNotEmpty()
     }
@@ -111,14 +142,18 @@ data class ApprovalDetailUiState(
  * blocked; a desktop's or agent's request can only be declined in v1.
  */
 @HiltViewModel
+@Suppress("TooManyFunctions")
 class ApprovalDetailViewModel @Inject constructor(
     savedState: SavedStateHandle,
     private val repo: ApprovalsRepository,
+    private val items: ItemsRepository,
 ) : ViewModel() {
     private val key: String = checkNotNull(savedState[ApprovalDetailRoute.ARG]) { "no approval" }
     private val local = MutableStateFlow(ApprovalDetailUiState(key, approval = repo.approvals.value.firstOrNull { it.key == key }))
 
     init {
+        viewModelScope.launch { items.items.collect { l -> local.update { it.copy(items = l.sortedBy { i -> i.name.lowercase() }) } } }
+        if (items.load.value == ListLoad.NOT_LOADED) viewModelScope.launch { runCatching { items.refresh() } }
         // A critical-item request from the list has only the payload's hash: fetch the payload (§10.13).
         val a = local.value.approval
         if (a is Approval.CriticalUse && a.payload.isEmpty()) {
@@ -134,12 +169,31 @@ class ApprovalDetailViewModel @Inject constructor(
 
     val uiState: StateFlow<ApprovalDetailUiState> = combine(local, repo.approvals) { s, list ->
         val a = list.firstOrNull { it.key == key }
-        s.copy(approval = a ?: s.approval, gone = a == null && s.approval != null && !s.done && !s.busy)
+        s.copy(approval = a ?: s.approval, gone = a == null && s.approval != null && !s.done && !s.busy && s.criticalResult == null)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, local.value)
 
     fun setPassword(v: String) = local.update { it.copy(password = v, error = null) }
 
     fun askBlock(show: Boolean) = local.update { it.copy(confirmBlock = show) }
+
+    /** Ticks or unticks one entry of a grant request. */
+    private fun chosen(s: ApprovalDetailUiState): Set<Int> =
+        s.grantSelected ?: (uiState.value.approval as? Approval.GrantRequest)?.grantable?.toSet() ?: emptySet()
+
+    fun toggleGrantEntry(index: Int) = local.update { s ->
+        val cur = chosen(s)
+        s.copy(grantSelected = if (index in cur) cur - index else cur + index)
+    }
+
+    /** Answers a category entry with one of the member's items (and ticks it). */
+    fun answerGrantEntry(index: Int, itemId: String) = local.update { s ->
+        val cur = chosen(s)
+        s.copy(grantAnswers = s.grantAnswers + (index to itemId), grantSelected = cur + index)
+    }
+
+    fun setGrantUses(uses: Int?) = local.update { it.copy(grantUses = uses) }
+
+    fun setGrantExpiresIn(seconds: Long?) = local.update { it.copy(grantExpiresIn = seconds) }
 
     /** Ticks or unticks one item of a share decision. */
     fun toggleShareItem(itemId: String) = local.update { s ->
@@ -156,8 +210,19 @@ class ApprovalDetailViewModel @Inject constructor(
                 is Approval.ConnectionRequest -> repo.approveConnection(a.pendingId)
                 is Approval.OutgoingRequest -> repo.approveOutgoing(a.connectionId)
                 is Approval.Authentication -> repo.approveAuthentication(a.requestId, pw)
-                is Approval.GrantRequest -> repo.decideGrant(a.requestId, approve = true)
-                is Approval.CriticalUse -> repo.approveCriticalUse(a.requestId, pw)
+                is Approval.GrantRequest -> repo.decideGrant(
+                    a.requestId,
+                    GrantDecision(
+                        s.grantIndexes.sorted(),
+                        s.grantAnswers.filterKeys { it in s.grantIndexes },
+                        s.grantUses,
+                        s.grantExpiresIn,
+                    ),
+                )
+                is Approval.CriticalUse -> {
+                    val status = repo.approveCriticalUse(a.requestId, pw)
+                    local.update { it.copy(criticalResult = status ?: "ok") }
+                }
                 is Approval.ShareDecision -> {
                     val ids = a.items.map { it.itemId }
                     repo.decideShare(a.ruleId, include = ids - s.shareExcluded, decline = ids.filter { it in s.shareExcluded })
@@ -193,10 +258,16 @@ class ApprovalDetailViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 block()
-                local.update { it.copy(busy = false, done = true, password = "") }
+                // A critical use stays on screen with its result; everything else closes.
+                local.update { it.copy(busy = false, done = it.criticalResult == null, password = "") }
             } catch (e: VaultFailure) {
-                local.update { it.copy(busy = false, error = e.kind, password = "") }
+                val backoff = e.kind == FailureKind.BACKOFF && e.retryAfterSeconds > 0
+                val until = if (backoff) java.time.Instant.now().plusSeconds(e.retryAfterSeconds) else null
+                local.update { it.copy(busy = false, error = e.kind, password = "", retryUntil = until) }
             }
         }
     }
+
+    /** The member read the critical-use result. */
+    fun finish() = local.update { it.copy(done = true) }
 }

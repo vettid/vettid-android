@@ -668,6 +668,28 @@ class VaultApi(val device: VaultDevice) {
     suspend fun grantList(): JsonObject = op("grant.list")
 
     /**
+     * Asks a connection for items (§10.12 `grant.request`): [items] are `{kind: "item", ref, label?}` or
+     * `{kind: "category", ref: <category>, label?}`; returns the `request_id`. The answer arrives as `grant.event`.
+     */
+    suspend fun grantRequest(
+        connectionId: String,
+        items: JsonArray,
+        uses: Int? = null,
+        expiresIn: Int? = null,
+        reason: String? = null,
+    ): String =
+        VaultJson.str(
+            op("grant.request") {
+                put("connection_id", connectionId)
+                put("items", items)
+                uses?.let { put("uses", it) }
+                expiresIn?.let { put("expires_in", it) }
+                reason?.let { put("reason", it) }
+            },
+            "request_id",
+        ) ?: throw VaultStateException("grant.request without request_id")
+
+    /**
      * Fetches a received grant's current content (§10.12): a one-time KEM key for this fetch only, `grant.fetch`,
      * then the connection's answer in `grant.value` (matched by `fetch_id`), opened and the key destroyed. The
      * plaintext is the item's content JSON; the caller wipes it. A refusal of the member's vault is [GrantFetched.error].

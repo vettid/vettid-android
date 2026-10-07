@@ -9,6 +9,14 @@ import com.vettid.core.data.vault.AuditCategory
  * (§10.11), and a generic title for a kind this app does not know (a newer vault's), which shows the kind itself.
  */
 object AuditKinds {
+    /** The kinds whose `ref` is an `item_id` (VAULT-MESSAGING §10.9: the vault's search reads the item's name for them). */
+    val ITEM_REF_KINDS = setOf(
+        "item.added", "item.updated", "item.deleted", "item.sensitivity_changed", "item.revealed",
+        "share.included", "share.declined", "share.withdrawn", "leash.item.read", "leash.item.used",
+    )
+
+    /** The item an entry refers to, if any. */
+    fun itemOf(kind: String, ref: String?): String? = ref?.takeIf { kind in ITEM_REF_KINDS && it.isNotEmpty() }
     /** How [kind] reads: a known title, a known title as an hourly summary, a dropped message, or unknown. */
     sealed interface Title {
         data class Known(@param:StringRes val res: Int) : Title

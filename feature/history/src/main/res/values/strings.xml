@@ -65,4 +65,7 @@
     <string name="history_detail_unknown_time">Unknown time</string>
     <string name="history_detail_note">Your vault keeps this log append-only and hash-chained: no one can change or delete an entry. It holds no message text, item values or keys.</string>
     <string name="history_detail_missing">This entry is no longer in your history.</string>
+    <string name="history_item_deleted">Deleted item</string>
+    <string name="history_detail_item">Item</string>
+    <string name="history_detail_open_item">Open the item</string>
 </resources>
