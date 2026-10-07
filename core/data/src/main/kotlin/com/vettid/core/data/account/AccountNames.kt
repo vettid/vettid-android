@@ -71,5 +71,13 @@ object AccountNames {
         if (isValidCore(first) && isValidCore(last)) "$first $last" else null
 
     /** [s] in Unicode bidirectional isolation (FSI … PDI), for names shown next to other text (§10.8). */
-    fun isolate(s: String): String = "⁨$s⁩"
+    fun isolate(s: String): String = buildString {
+        append(FSI)
+        append(s)
+        append(PDI)
+    }
+
+    /** FIRST STRONG ISOLATE and POP DIRECTIONAL ISOLATE, by code point: lint rightly flags them as literals. */
+    private val FSI = Char(0x2068)
+    private val PDI = Char(0x2069)
 }

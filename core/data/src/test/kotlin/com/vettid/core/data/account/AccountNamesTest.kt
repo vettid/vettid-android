@@ -48,7 +48,7 @@ class AccountNamesTest {
         assertFalse(AccountNames.isValidCore("é".repeat(80) + "a"))
         assertFalse(AccountNames.isValidCore(""))
         assertFalse(AccountNames.isValidCore(null))
-        for (bad in listOf("\u0000", "\u001f", "\u0080", "\u009f", " ", " ", "\uD800")) {
+        for (bad in listOf("\u0000", "\u001f", "\u0080", "\u009f", "\u2028", "\u2029", "\uD800")) {
             assertFalse(bad, AccountNames.isValidCore("Ada$bad"))
         }
         // Not the registration rule: the receiver takes what the snapshot carries.
@@ -61,6 +61,6 @@ class AccountNamesTest {
         assertEquals("Ada King", AccountNames.full("Ada", "King"))
         assertNull(AccountNames.full("Ada", null))
         assertNull(AccountNames.full("", "King"))
-        assertEquals("⁨Ada King⁩", AccountNames.isolate("Ada King"))
+        assertEquals("\u2068Ada King\u2069", AccountNames.isolate("Ada King"))
     }
 }
