@@ -165,6 +165,8 @@ private const val SEGMENTS = 4
  * A step of a form flow (onboarding, unlock, credential and settings forms):
  * optional back arrow, a heading and body, the [content], and the primary
  * (and optional secondary) action pinned to the bottom above the keyboard.
+ * The [header] (the hero glyph above the title: rook, lock, check mark) is
+ * centred horizontally; the title, body and [content] stay start-aligned.
  */
 @Composable
 fun FormScaffold(
@@ -199,7 +201,11 @@ fun FormScaffold(
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = Spacing.xl),
             ) {
-                header()
+                Column(
+                    Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    content = header,
+                )
                 Text(
                     text = title,
                     style = MaterialTheme.typography.headlineSmall,

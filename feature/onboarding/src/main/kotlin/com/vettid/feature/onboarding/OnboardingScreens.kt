@@ -161,7 +161,7 @@ fun WelcomeScreen(onStart: () -> Unit, onTransfer: () -> Unit, onRecover: () -> 
         onSecondary = onTransfer,
         header = {
             Spacer(Modifier.height(Spacing.xxl))
-            RookLogo(Modifier.align(Alignment.CenterHorizontally), height = 88.dp)
+            RookLogo(height = 88.dp)
             Spacer(Modifier.height(Spacing.xl))
         },
     ) {
@@ -577,7 +577,7 @@ fun DoneScreen(actions: OnboardingActions) {
         onPrimary = actions::finish,
         header = {
             Spacer(Modifier.height(Spacing.xl))
-            RookLogo(Modifier.align(Alignment.CenterHorizontally), height = 72.dp)
+            RookLogo(height = 72.dp)
             Spacer(Modifier.height(Spacing.l))
         },
     ) {
