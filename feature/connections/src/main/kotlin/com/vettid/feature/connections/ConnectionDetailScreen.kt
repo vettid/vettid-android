@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.outlined.Block
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.PersonRemove
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.StarOutline
@@ -70,6 +71,8 @@ data class DetailActions(
     val onAsk: (DetailConfirm?) -> Unit = {},
     val onConfirm: () -> Unit = {},
     val onDismissNotice: () -> Unit = {},
+    /** The connection's History (ANDROID-PLAN 0.1.11: History with the connection preset). */
+    val onHistory: () -> Unit = {},
 )
 
 /**
@@ -107,6 +110,7 @@ fun ConnectionDetailScreen(state: ConnectionDetailUiState, actions: DetailAction
                             actions.onFavorite,
                         ),
                         PillAction(Icons.Outlined.Edit, stringResource(R.string.connections_detail_edit), { actions.onEdit(true) }),
+                        PillAction(Icons.Outlined.History, stringResource(R.string.connections_detail_history), actions.onHistory),
                         PillAction(
                             Icons.Outlined.Block,
                             stringResource(R.string.connections_block),
@@ -145,7 +149,12 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
         verticalArrangement = Arrangement.spacedBy(Spacing.m),
     ) {
         Column(Modifier.fillMaxWidth().padding(top = Spacing.s), horizontalAlignment = Alignment.CenterHorizontally) {
-            InitialTile(name = title, size = 72, style = if (c.favorite) TileStyle.Favorite else TileStyle.Connection)
+            InitialTile(
+                name = title,
+                size = 72,
+                style = if (c.favorite) TileStyle.Favorite else TileStyle.Connection,
+                photo = com.vettid.core.ui.components.rememberProfilePhoto(c.photo),
+            )
             Spacer(Modifier.height(Spacing.m))
             Text(
                 title,

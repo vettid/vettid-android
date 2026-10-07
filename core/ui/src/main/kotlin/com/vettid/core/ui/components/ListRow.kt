@@ -16,6 +16,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -46,6 +47,8 @@ fun VettIdListRow(
     emphasized: Boolean = false,
     action: RowAction? = null,
     onClick: (() -> Unit)? = null,
+    tilePhoto: ImageBitmap? = null,
+    tileIcon: ImageVector? = null,
 ) {
     val colors = MaterialTheme.colorScheme
     val lineColor = if (emphasized) colors.onSurface else colors.onSurfaceVariant
@@ -57,7 +60,7 @@ fun VettIdListRow(
             .padding(start = Spacing.gutter, end = Spacing.xs, top = Spacing.m, bottom = Spacing.m),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        InitialTile(name = tileName, size = 40, style = tileStyle)
+        InitialTile(name = tileName, size = 40, style = tileStyle, photo = tilePhoto, icon = tileIcon)
         Spacer(Modifier.width(Spacing.l))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {

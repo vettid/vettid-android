@@ -68,6 +68,8 @@ data class OwnProfile(
     val firstName: String?,
     val lastName: String?,
     val fingerprint: String?,
+    /** The profile photo (§10.8): base64 of a JPEG or PNG of at most 65,536 bytes; null for none. */
+    val photo: String? = null,
 ) {
     val fullName: String? get() = AccountNames.full(firstName, lastName)
 }
@@ -105,6 +107,9 @@ interface ProfileRepository {
     /** `profile.set{name}`: the display name ("" removes it). Never the core, which is read-only. */
     suspend fun setDisplayName(name: String)
 
+    /** `profile.set{photo}`: [photo] the base64 JPEG or PNG (at most 65,536 bytes of image); "" removes it. */
+    suspend fun setPhoto(photo: String)
+
     /**
      * `account.name.set` with the PIN, the credential password and the two names, which the caller has checked
      * with [AccountNames.check] (they are sent normalised). The account's names change only once VettID applied the
@@ -118,6 +123,8 @@ interface ProfileOps {
     suspend fun profileGet(): Profile
 
     suspend fun profileSet(version: Long, name: String): Long
+
+    suspend fun profileSetPhoto(version: Long, photo: String): Long
 
     suspend fun accountNameSet(pin: String, password: String, firstName: String, lastName: String): NameRequest
 }
@@ -147,7 +154,18 @@ class ProfileManager(
             firstName = p.firstName?.takeIf { AccountNames.isValidCore(it) },
             lastName = p.lastName?.takeIf { AccountNames.isValidCore(it) },
             fingerprint = p.ik?.let { IkFingerprint.formatB64(it) },
+            photo = p.photo?.takeIf { it.isNotEmpty() },
         )
+    }
+
+    override suspend fun setPhoto(photo: String) {
+        val version = vaultGuard {
+            val o = ops()
+            val current = state.value?.version ?: o.profileGet().version
+            o.profileSetPhoto(current, photo)
+        }
+        state.value = state.value?.copy(version = version, photo = photo.takeIf { it.isNotEmpty() })
+        runCatching { refreshProfile() }
     }
 
     override suspend fun setDisplayName(name: String) {

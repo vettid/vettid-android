@@ -5,6 +5,7 @@ import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.res.stringResource
 import com.vettid.core.ui.R
 
@@ -23,6 +24,7 @@ fun ConnectionRow(
     meta: String? = null,
     emphasized: Boolean = false,
     onClick: (() -> Unit)? = null,
+    photo: ImageBitmap? = null,
 ) {
     VettIdListRow(
         title = name,
@@ -32,6 +34,7 @@ fun ConnectionRow(
         tileStyle = if (favorite) TileStyle.Favorite else TileStyle.Connection,
         emphasized = emphasized,
         onClick = onClick,
+        tilePhoto = photo,
         action = RowAction(
             icon = if (favorite) Icons.Outlined.Star else Icons.Outlined.StarOutline,
             contentDescription = stringResource(

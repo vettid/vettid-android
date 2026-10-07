@@ -67,6 +67,8 @@ internal val debugTools: DebugTools = object : DebugTools {
             start == null -> null
             start.startsWith(CATALOG_PREFIX) -> null
             start == "gallery" -> GalleryRoute
+            // No longer in the drawer (Settings → Security → Credential), still a launch extra.
+            start == "credential" -> com.vettid.feature.credential.CredentialRoute
             else -> TopLevelDestination.entries.firstOrNull { it.name.equals(start, ignoreCase = true) }?.route
         }
     }

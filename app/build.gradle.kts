@@ -171,6 +171,7 @@ dependencies {
     implementation(projects.feature.connections)
     implementation(projects.feature.approvals)
     implementation(projects.feature.items)
+    implementation(projects.feature.history)
     implementation(projects.feature.credential)
     implementation(projects.feature.settings)
     implementation(projects.feature.onboarding)

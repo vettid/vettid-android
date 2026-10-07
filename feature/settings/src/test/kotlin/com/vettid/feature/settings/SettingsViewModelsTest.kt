@@ -44,7 +44,7 @@ class SettingsViewModelsTest {
 
     @Test
     fun themeIsPersistedAndLockWorks() = runTest {
-        val vm = SettingsViewModel(vault, vault, prefs, AppLock(prefs, noKeys, noFile))
+        val vm = SettingsViewModel(vault, vault, prefs, AppLock(prefs, noKeys, noFile), vault)
         vm.setTheme(ThemePreference.DARK)
         advanceUntilIdle()
         assertEquals(ThemePreference.DARK, prefs.current.value.theme)

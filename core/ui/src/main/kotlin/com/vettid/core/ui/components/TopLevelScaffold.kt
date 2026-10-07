@@ -18,6 +18,8 @@ data class ShellChrome(
     val accountName: String,
     val onMenuClick: () -> Unit,
     val onAvatarClick: () -> Unit,
+    /** The member's own profile photo (§10.8), shown in the avatar tile when set. */
+    val accountPhoto: androidx.compose.ui.graphics.ImageBitmap? = null,
 )
 
 /**
@@ -40,6 +42,7 @@ fun TopLevelScaffold(
             accountName = chrome.accountName,
             onAvatarClick = chrome.onAvatarClick,
             onSearchClick = onSearchClick,
+            accountPhoto = chrome.accountPhoto,
         )
         Box(Modifier.weight(1f).fillMaxSize(), content = content)
     }

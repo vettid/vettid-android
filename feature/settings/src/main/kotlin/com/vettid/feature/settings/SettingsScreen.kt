@@ -66,6 +66,7 @@ import com.vettid.core.ui.components.SettingsSwitchRow
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.ThemeMode
 import com.vettid.core.ui.theme.VettIdTheme
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -144,6 +145,23 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
     composable<SharedProfileRoute> {
         val vm: SharedProfileViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
+        val context = androidx.compose.ui.platform.LocalContext.current
+        val scope = androidx.compose.runtime.rememberCoroutineScope()
+        // The Photo Picker: no storage permission; the chosen picture is cropped, scaled and re-encoded off the
+        // main thread, then previewed (VAULT-MESSAGING §10.8: at most 65,536 bytes).
+        val picker = androidx.activity.compose.rememberLauncherForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia(),
+        ) { uri ->
+            if (uri != null) {
+                vm.photoEncoding()
+                scope.launch {
+                    val encoded = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                        PhotoPicking.encode(context, uri)
+                    }
+                    vm.photoPicked(encoded)
+                }
+            }
+        }
         SharedProfileContent(
             state,
             SharedProfileActions(
@@ -152,6 +170,16 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 onSave = vm::save,
                 onChangeName = { host.navigate(ChangeNameRoute) },
                 onDismiss = vm::dismiss,
+                onChoosePhoto = {
+                    picker.launch(
+                        androidx.activity.result.PickVisualMediaRequest(
+                            androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly,
+                        ),
+                    )
+                },
+                onSavePhoto = vm::savePhoto,
+                onDiscardPhoto = vm::discardPhoto,
+                onRemovePhoto = vm::removePhoto,
             ),
         )
     }
@@ -272,6 +300,34 @@ data class SettingsActions(
 )
 
 /**
+ * The account card (ANDROID-PLAN 0.1.11): the first and last name, the full address (VAULT-MESSAGING 0.20.0
+ * `email`, the masked hint from an older vault) and the membership state; it opens the avatar sheet.
+ */
+@Composable
+private fun AccountCard(state: SettingsUiState, onClick: () -> Unit) {
+    val a = state.account
+    val membership = a?.takeIf { it.hasSnapshot }?.let {
+        stringResource(
+            when {
+                it.canceled -> R.string.settings_account_canceled
+                it.state == "member" -> R.string.settings_account_member
+                else -> R.string.settings_account_registered
+            },
+        )
+    }
+    val detail = listOfNotNull(a?.fullName?.let { a.displayEmail }, membership)
+        .joinToString("\n")
+        .ifEmpty { stringResource(R.string.settings_account_detail) }
+    SettingsAccountRow(
+        name = a?.fullName ?: a?.displayEmail ?: "",
+        detail = detail,
+        onClick = onClick,
+        modifier = Modifier.testTag("account_card"),
+        photo = com.vettid.core.ui.components.rememberProfilePhoto(state.photo),
+    )
+}
+
+/**
  * Settings (ANDROID-PLAN §4): Vault, Security, Privacy, App, Account. Grouped
  * cards (Proton); every destructive action confirms first.
  */
@@ -286,13 +342,10 @@ fun SettingsContent(
     var confirmLock by rememberSaveable { mutableStateOf(false) }
     var themePicker by rememberSaveable { mutableStateOf(false) }
     var timeoutPicker by rememberSaveable { mutableStateOf(false) }
-    val name = state.account?.fullName ?: state.account?.emailHint ?: ""
     DetailScaffold(onBackClick = actions.back, background = VettIdTheme.colors.groupedBackground) {
         Column(Modifier.verticalScroll(rememberScrollState())) {
             LargeTitle(stringResource(R.string.settings_title))
-            SettingsGroup {
-                SettingsAccountRow(name = name, detail = stringResource(R.string.settings_account_detail), onClick = actions.account)
-            }
+            SettingsGroup { AccountCard(state, actions.account) }
             state.error?.let {
                 NoticeCard(
                     NoticeKind.URGENT, stringResource(R.string.settings_title), stringResource(it.messageRes()),

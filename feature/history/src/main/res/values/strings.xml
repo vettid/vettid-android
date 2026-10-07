@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="history_title">History</string>
+    <string name="history_search">Search by name or event</string>
+    <string name="history_search_clear">Clear search</string>
+    <string name="history_search_local">Your vault does not search its history yet: this phone searches the entries it loads, by event and connection name.</string>
+    <string name="history_searching_older">Searching older entries…</string>
+    <string name="history_chain_broken">Your vault\'s history does not match what this phone saw before</string>
+    <string name="history_empty_title">No history yet</string>
+    <string name="history_empty_body">What happens in your vault is recorded here: unlocks, connections, messages, items and more</string>
+    <string name="history_no_match_title">Nothing matches</string>
+    <string name="history_no_match_body">Try fewer filters or other words</string>
+    <string name="history_error_title">History could not be loaded</string>
+    <string name="history_retry">Try again</string>
+    <string name="history_loading_more">Loading older entries</string>
+    <string name="history_end">Start of your history</string>
+    <string name="history_filters_clear">Clear filters</string>
+
+    <string name="history_category_all">All</string>
+    <string name="history_category_vault_access">Unlocks and owner checks</string>
+    <string name="history_category_security">Security</string>
+    <string name="history_category_devices">Devices</string>
+    <string name="history_category_connections">Connections</string>
+    <string name="history_category_messages">Messages and calls</string>
+    <string name="history_category_items">Vault (items, sharing, wallet)</string>
+    <string name="history_category_agents">Agents</string>
+    <string name="history_category_location">Location</string>
+    <string name="history_category_account">Account and settings</string>
+    <string name="history_category_dropped">Blocked and dropped</string>
+    <string name="history_category_other">Other</string>
+
+    <string name="history_connection_any">All connections</string>
+    <string name="history_connection_pick">Connection</string>
+    <string name="history_connection_removed">Removed connection</string>
+    <string name="history_connection_unnamed">Name not shared yet</string>
+
+    <string name="history_date_any">Any time</string>
+    <string name="history_date_day">Today</string>
+    <string name="history_date_week">Last 7 days</string>
+    <string name="history_date_month">Last 30 days</string>
+    <string name="history_date_custom">Choose dates…</string>
+    <string name="history_date_range">%1$s – %2$s</string>
+    <string name="history_date_pick">Dates</string>
+    <string name="history_ok">OK</string>
+    <string name="history_cancel">Cancel</string>
+
+    <string name="history_kind_summary">%1$s (hourly summary)</string>
+    <string name="history_kind_dropped">Message blocked: %1$s</string>
+    <string name="history_kind_unknown">Vault event: %1$s</string>
+
+    <string name="history_detail_when">When</string>
+    <string name="history_detail_category">Category</string>
+    <string name="history_detail_kind">Event type</string>
+    <string name="history_detail_connection">Connection</string>
+    <string name="history_detail_device">Device</string>
+    <string name="history_detail_ref">Reference</string>
+    <string name="history_detail_direction">Direction</string>
+    <string name="history_detail_direction_in">Incoming</string>
+    <string name="history_detail_direction_out">Outgoing</string>
+    <string name="history_detail_seq">Entry number</string>
+    <string name="history_detail_id">Entry ID</string>
+    <string name="history_detail_hash">Entry hash</string>
+    <string name="history_detail_copy">Copy %1$s</string>
+    <string name="history_detail_open_connection">Open connection</string>
+    <string name="history_detail_unknown_time">Unknown time</string>
+    <string name="history_detail_note">Your vault keeps this log append-only and hash-chained: no one can change or delete an entry. It holds no message text, item values or keys.</string>
+    <string name="history_detail_missing">This entry is no longer in your history.</string>
+</resources>

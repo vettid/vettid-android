@@ -26,6 +26,7 @@ import com.vettid.app.debug.DebugHost
 import com.vettid.app.debug.debugTools
 import com.vettid.core.ui.components.DrawerItem
 import com.vettid.core.ui.components.ShellChrome
+import com.vettid.core.ui.components.rememberProfilePhoto
 import com.vettid.core.ui.components.VettIdDrawerSheet
 import com.vettid.core.data.vault.AccountInfo
 import com.vettid.core.data.vault.CredentialAlarm
@@ -44,6 +45,9 @@ import androidx.compose.ui.platform.testTag
 import com.vettid.feature.approvals.approvalsDestination
 import com.vettid.feature.connections.connectionsDestination
 import com.vettid.feature.credential.credentialDestination
+import com.vettid.feature.history.ConnectionHistoryRoute
+import com.vettid.feature.history.HistoryHost
+import com.vettid.feature.history.historyDestination
 import com.vettid.feature.items.itemsDestination
 import com.vettid.feature.connections.AcceptRoute
 import com.vettid.feature.connections.ConnectionDetailRoute
@@ -90,17 +94,20 @@ fun AppShell(
     val theme = LocalThemeController.current
     val uri = LocalUriHandler.current
     val portal = portalUrl
-    val chrome = remember(accountName) {
+    val shell: ShellViewModel = hiltViewModel()
+    val ownPhoto by shell.photo.collectAsStateWithLifecycle()
+    val photo = rememberProfilePhoto(ownPhoto)
+    val chrome = remember(accountName, photo) {
         ShellChrome(
             accountName = accountName,
             onMenuClick = { scope.launch { drawerState.open() } },
             onAvatarClick = { showAccount = true },
+            accountPhoto = photo,
         )
     }
 
     val backStackEntry by navController.currentBackStackEntryAsState()
     val current = backStackEntry?.destination
-    val shell: ShellViewModel = hiltViewModel()
     val badges by shell.badges.collectAsStateWithLifecycle()
     val debugItems = debugTools.drawerItems()
     val sections = drawerSections(badges) + listOfNotNull(debugItems.takeIf { it.isNotEmpty() })
@@ -204,10 +211,19 @@ fun AppShell(
                                 onOpenConversation = { id ->
                                     navController.navigate(ConversationRoute(id)) { launchSingleTop = true }
                                 },
+                                onOpenHistory = { id -> navController.navigate(ConnectionHistoryRoute(id)) { launchSingleTop = true } },
                             ),
                         )
                         approvalsDestination(chrome, navigate = navigate, onBack = back)
                         itemsDestination(chrome)
+                        historyDestination(
+                            chrome,
+                            HistoryHost(
+                                navigate = navigate,
+                                onBack = back,
+                                onOpenConnection = { navController.navigate(ConnectionDetailRoute(it)) { launchSingleTop = true } },
+                            ),
+                        )
                         credentialDestination(
                             chrome,
                             navigate = { navController.navigate(it) },
@@ -218,7 +234,8 @@ fun AppShell(
                             SettingsHost(
                                 onBack = { navController.popBackStack() },
                                 navigate = { navController.navigate(it) },
-                                onOpenCredential = { navController.navigateTopLevel(CredentialRoute) },
+                                // Not a drawer destination any more: Settings → Security → Credential, and back to Settings.
+                                onOpenCredential = { navController.navigate(CredentialRoute) { launchSingleTop = true } },
                                 onEnableAppLock = onEnableAppLock,
                                 onAccountClick = { showAccount = true },
                                 onOpenAccountSite = { uri.openUri(portal) },
@@ -263,6 +280,7 @@ fun AppShell(
         AccountSheet(
             account = account,
             portalUrl = portal,
+            photo = photo,
             onDismiss = { showAccount = false },
             onLockVault = {
                 showAccount = false

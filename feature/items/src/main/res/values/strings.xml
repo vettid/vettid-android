@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="items_title">Items</string>
-    <string name="items_empty_title">No items yet</string>
+    <string name="items_title">Vault</string>
+    <string name="items_empty_title">Your vault is empty</string>
     <string name="items_empty_body">Keep documents, logins and secrets in your vault, organised by tags</string>
     <string name="items_filter">Shared</string>
-    <string name="items_add">Add an item</string>
+    <string name="items_add">Add to vault</string>
 </resources>

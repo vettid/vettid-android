@@ -17,7 +17,7 @@
     <string name="settings_profile_saved">Display name saved. Your connections get it with your profile.</string>
     <string name="settings_profile_key">Your vault key fingerprint</string>
     <string name="settings_profile_key_note">Your connections see this fingerprint for your vault. It changes only when your vault rotates its key.</string>
-    <string name="settings_profile_items">Items you tag @profile in Items are shared with every connection too.</string>
+    <string name="settings_profile_items">Items you tag @profile in your Vault are shared with every connection too.</string>
     <string name="settings_profile_error">Could not save</string>
 
     <string name="settings_name_title">Change your name</string>
@@ -58,4 +58,18 @@
     <string name="settings_name_too_soon">You can change your name once every 30 days. You can change it again on %1$s.</string>
     <string name="settings_name_too_soon_undated">You can change your name once every 30 days.</string>
     <string name="settings_name_refused_account">Your account cannot change its name right now.</string>
+    <string name="settings_profile_photo">Profile photo</string>
+    <string name="settings_profile_photo_none">No photo. Connections see your initial.</string>
+    <string name="settings_profile_photo_shared">Every connection sees this photo.</string>
+    <string name="settings_profile_photo_preview">Preview: save it to share it with every connection.</string>
+    <string name="settings_profile_photo_working">Working…</string>
+    <string name="settings_profile_photo_choose">Choose photo</string>
+    <string name="settings_profile_photo_save">Save photo</string>
+    <string name="settings_profile_photo_discard">Cancel</string>
+    <string name="settings_profile_photo_remove">Remove photo</string>
+    <string name="settings_profile_photo_remove_title">Remove your photo?</string>
+    <string name="settings_profile_photo_remove_body">Your connections see your initial instead.</string>
+    <string name="settings_profile_photo_unreadable">That picture could not be read. Choose another one.</string>
+    <string name="settings_profile_photo_saved">Photo saved. Your connections receive it.</string>
+    <string name="settings_profile_photo_note">Cropped to a square and made smaller on this phone. The picture\'s location and camera details are not sent.</string>
 </resources>

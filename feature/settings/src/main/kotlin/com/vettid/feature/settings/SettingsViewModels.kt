@@ -20,6 +20,7 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.RecoveryView
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultOverview
+import com.vettid.core.data.vault.ProfileRepository
 import com.vettid.core.data.vault.VaultRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,6 +41,8 @@ data class SettingsUiState(
     val appLockInvalidated: Boolean = false,
     val busy: Boolean = false,
     val error: FailureKind? = null,
+    /** The member's profile photo (§10.8) for the account card; null for none. */
+    val photo: String? = null,
 )
 
 /** Settings (ANDROID-PLAN §4): theme (DataStore), app lock and its timeout (D6), lock vault; the account read-only. */
@@ -49,8 +52,14 @@ class SettingsViewModel @Inject constructor(
     private val vault: VaultRepository,
     private val prefs: PreferencesRepository,
     private val appLock: AppLock,
+    private val profiles: ProfileRepository,
 ) : ViewModel() {
     private val local = MutableStateFlow(SettingsUiState())
+
+    init {
+        viewModelScope.launch { profiles.profile.collect { p -> local.update { it.copy(photo = p?.photo) } } }
+        viewModelScope.launch { runCatching { profiles.refreshProfile() } }
+    }
     val uiState: StateFlow<SettingsUiState> = combine(local, account.account, prefs.preferences, appLock.state, appLock.invalidated) {
         s, a, p, l, inv ->
         s.copy(account = a, preferences = p, appLockOn = l == AppLockState.UNLOCKED || l == AppLockState.LOCKED, appLockInvalidated = inv)

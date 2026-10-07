@@ -71,8 +71,13 @@ data class AccountInfo(
     val nameAllowedAfter: Instant? = null,
     /** The latest name change this app asked for (`account.get`'s `name_request`, §10.8). */
     val nameRequest: NameRequestView? = null,
+    /** The member's full address from the snapshot (VAULT-MESSAGING 0.20.0 `email`); null from an older vault. */
+    val email: String? = null,
 ) {
     val hasSnapshot: Boolean get() = state != null
+
+    /** The address to show: the full [email] when the snapshot carries it, else the masked [emailHint] (S4 vaults). */
+    val displayEmail: String? get() = email?.takeIf { it.isNotBlank() } ?: emailHint.takeIf { it.isNotEmpty() }
 
     /** "First Last" (§10.8); null before the snapshot carried the names. */
     val fullName: String? get() = com.vettid.core.data.account.AccountNames.full(firstName, lastName)

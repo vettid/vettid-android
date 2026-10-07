@@ -430,6 +430,15 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
         profile.value = profile.value?.let { it.copy(displayName = name, version = it.version + 1) }
     }
 
+    /** The last photo [setPhoto] was given ("" for a removal). */
+    var lastPhoto: String? = null
+
+    override suspend fun setPhoto(photo: String) {
+        call("setPhoto")
+        lastPhoto = photo
+        profile.value = profile.value?.let { it.copy(photo = photo.takeIf { p -> p.isNotEmpty() }, version = it.version + 1) }
+    }
+
     override suspend fun changeName(pin: String, password: String, firstName: String, lastName: String): NameChangeOutcome {
         call("changeName")
         lastPin = pin

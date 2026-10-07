@@ -14,6 +14,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -32,6 +33,7 @@ fun AvatarSheet(
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
     optionsHeader: String? = null,
+    photo: ImageBitmap? = null,
     content: @Composable () -> Unit,
 ) {
     ModalBottomSheet(
@@ -40,7 +42,7 @@ fun AvatarSheet(
         containerColor = com.vettid.core.ui.theme.VettIdTheme.colors.groupedBackground,
         modifier = modifier,
     ) {
-        AvatarSheetContent(name = name, detail = detail, optionsHeader = optionsHeader, content = content)
+        AvatarSheetContent(name = name, detail = detail, optionsHeader = optionsHeader, photo = photo, content = content)
     }
 }
 
@@ -50,6 +52,7 @@ fun AvatarSheetContent(
     name: String,
     detail: String,
     optionsHeader: String?,
+    photo: ImageBitmap? = null,
     content: @Composable () -> Unit,
 ) {
     Column(
@@ -59,7 +62,7 @@ fun AvatarSheetContent(
             .padding(bottom = Spacing.l),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        InitialTile(name = name, size = 88, style = TileStyle.Self)
+        InitialTile(name = name, size = 88, style = TileStyle.Self, photo = photo)
         Spacer(Modifier.height(Spacing.l))
         Text(
             text = name,

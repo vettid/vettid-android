@@ -21,7 +21,7 @@
     <string name="settings_privacy_profile">Shared profile</string>
     <string name="settings_privacy_profile_body">Your account name, display name and the items you tag @profile</string>
     <string name="settings_privacy_sharing">Sharing rules</string>
-    <string name="settings_privacy_sharing_body">Set by tag in Items. Nothing is shared without a rule.</string>
+    <string name="settings_privacy_sharing_body">Set by tag in your Vault. Nothing is shared without a rule.</string>
     <string name="settings_section_app">App</string>
     <string name="settings_app_theme">Theme</string>
     <string name="settings_app_notifications">Notifications</string>
@@ -37,6 +37,9 @@
     <string name="settings_section_account">Account</string>
     <string name="settings_account_site">Account site</string>
     <string name="settings_account_detail">Membership and subscription</string>
+    <string name="settings_account_member">Member</string>
+    <string name="settings_account_registered">Registered, not yet a member</string>
+    <string name="settings_account_canceled">Account cancelled</string>
     <string name="settings_delete_vault">Delete vault</string>
     <string name="settings_delete_vault_body">Erase your vault and everything in it</string>
     <string name="settings_cancel">Cancel</string>

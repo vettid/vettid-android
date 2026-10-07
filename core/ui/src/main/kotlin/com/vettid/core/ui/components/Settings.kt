@@ -145,10 +145,11 @@ fun SettingsAccountRow(
     detail: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    photo: androidx.compose.ui.graphics.ImageBitmap? = null,
 ) {
     SettingsRowLayout(
         modifier = modifier.clickable(role = Role.Button, onClick = onClick),
-        leading = { InitialTile(name = name, size = 40, style = TileStyle.Self) },
+        leading = { InitialTile(name = name, size = 40, style = TileStyle.Self, photo = photo) },
         label = name,
         supporting = detail,
         tag = null,

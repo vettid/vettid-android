@@ -214,6 +214,7 @@ private fun ConversationRow(c: ConversationSummary, onClick: () -> Unit) {
         emphasized = unread,
         onClick = onClick,
         modifier = Modifier.testTag("conversation_${c.connection.id}"),
+        tilePhoto = com.vettid.core.ui.components.rememberProfilePhoto(c.connection.photo),
     )
 }
 
@@ -424,6 +425,7 @@ private fun PickRow(c: ConnectionInfo, onClick: () -> Unit) {
         tileName = name,
         tileStyle = if (c.favorite) TileStyle.Favorite else TileStyle.Connection,
         onClick = onClick,
+        tilePhoto = com.vettid.core.ui.components.rememberProfilePhoto(c.photo),
     )
 }
 

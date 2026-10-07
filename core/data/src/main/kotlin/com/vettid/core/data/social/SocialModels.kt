@@ -46,8 +46,10 @@ data class ConnectionInfo(
     val lastName: String? = null,
     /** The `@profile` items the peer shares, as the peer presents them. */
     val sharedItems: List<SharedProfileItem> = emptyList(),
-    /** Whether the peer shares a photo (not shown yet). */
+    /** Whether the peer shares a photo. */
     val hasPhoto: Boolean = false,
+    /** The peer's shared photo (§10.8, base64 JPEG or PNG, self-asserted); decoded defensively by the UI. */
+    val photo: String? = null,
     /** The fingerprint of the peer vault's pinned identity key (§10.8: 8 groups of 4 hex digits). */
     val keyFingerprint: String? = null,
     val createdAt: Instant? = null,

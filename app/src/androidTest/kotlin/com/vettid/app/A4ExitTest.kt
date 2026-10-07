@@ -135,7 +135,12 @@ class A4ExitTest {
             screenshot("messages-empty")
 
             // --- 1. Invite (in person, 10 minutes): QR code and link; the peer accepts; SAS; approve. ---
-            drawer("Invite a connection")
+            // Inviting starts from the Connections screen's add button (no drawer entry since 2026-10-07).
+            drawer("Connections")
+            waitTag("add_connection")
+            tag("add_connection").performClick()
+            waitTag("add_invite")
+            tag("add_invite").performClick()
             waitTag("ttl_600")
             screenshot("invite-choose")
             primary()

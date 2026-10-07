@@ -47,6 +47,7 @@ fun VettIdTopAppBar(
     onAvatarClick: () -> Unit,
     modifier: Modifier = Modifier,
     onSearchClick: (() -> Unit)? = null,
+    accountPhoto: androidx.compose.ui.graphics.ImageBitmap? = null,
 ) {
     Row(
         modifier = modifier
@@ -85,7 +86,7 @@ fun VettIdTopAppBar(
                 .semantics { this.contentDescription = avatarLabel },
             contentAlignment = Alignment.Center,
         ) {
-            InitialTile(name = accountName, size = 36, style = TileStyle.Self)
+            InitialTile(name = accountName, size = 36, style = TileStyle.Self, photo = accountPhoto)
         }
     }
 }

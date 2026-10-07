@@ -32,7 +32,17 @@ data class SharedProfileUiState(
     val busy: Boolean = false,
     val saved: Boolean = false,
     val error: FailureKind? = null,
+    /** A photo chosen and encoded (base64 JPEG, at most 65,536 bytes), shown as a preview until saved or dropped. */
+    val pendingPhoto: String? = null,
+    /** The chosen picture is being read and encoded, or the photo is being saved. */
+    val photoBusy: Boolean = false,
+    /** The chosen picture could not be read as an image. */
+    val photoUnreadable: Boolean = false,
+    val photoSaved: Boolean = false,
 ) {
+    /** The photo to show: the one being previewed, else the vault's. */
+    val shownPhoto: String? get() = pendingPhoto ?: profile?.photo
+
     /** The display name's limit (§10.8: at most 128 bytes). */
     val tooLong: Boolean get() = displayName.trim().toByteArray(Charsets.UTF_8).size > MAX_DISPLAY_NAME_BYTES
 
@@ -92,7 +102,39 @@ class SharedProfileViewModel @Inject constructor(
         }
     }
 
-    fun dismiss() = state.update { it.copy(saved = false, error = null) }
+    fun dismiss() = state.update { it.copy(saved = false, error = null, photoUnreadable = false, photoSaved = false) }
+
+    /** The picture is being read and encoded (off the main thread, by the screen). */
+    fun photoEncoding() = state.update { it.copy(photoBusy = true, photoUnreadable = false, photoSaved = false, error = null) }
+
+    /** The chosen picture, encoded (`ProfilePhotos.encodeBase64`), to preview; null when it could not be read. */
+    fun photoPicked(base64: String?) = state.update {
+        it.copy(pendingPhoto = base64, photoBusy = false, photoUnreadable = base64 == null)
+    }
+
+    fun discardPhoto() = state.update { it.copy(pendingPhoto = null, photoUnreadable = false) }
+
+    /** `profile.set{photo}` with the previewed photo. */
+    fun savePhoto() {
+        val photo = state.value.pendingPhoto ?: return
+        sendPhoto(photo)
+    }
+
+    /** `profile.set{photo: ""}`: no photo. */
+    fun removePhoto() = sendPhoto("")
+
+    private fun sendPhoto(photo: String) {
+        if (state.value.photoBusy) return
+        state.update { it.copy(photoBusy = true, error = null, photoSaved = false) }
+        viewModelScope.launch {
+            try {
+                profiles.setPhoto(photo)
+                state.update { it.copy(photoBusy = false, pendingPhoto = null, photoSaved = true) }
+            } catch (e: VaultFailure) {
+                state.update { it.copy(photoBusy = false, error = e.kind) }
+            }
+        }
+    }
 }
 
 /** The steps of a name change (ANDROID-PLAN 0.1.10 "Change name"). */

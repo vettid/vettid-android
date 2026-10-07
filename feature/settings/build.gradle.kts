@@ -7,6 +7,8 @@ dependencies {
     implementation(projects.core.data)
     implementation(libs.androidx.hilt.navigation.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    // The Photo Picker (PickVisualMedia) for the profile photo.
+    implementation(libs.androidx.activity.compose)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
