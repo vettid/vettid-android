@@ -35,6 +35,48 @@ class ProfileViewModelsTest {
     // --- the shared profile ---
 
     @Test
+    fun aChosenPhotoIsPreviewedThenSaved() = runTest {
+        val vm = SharedProfileViewModel(vault, vault)
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.shownPhoto)
+        vm.photoEncoding()
+        assertTrue(vm.uiState.value.photoBusy)
+        vm.photoPicked("/9j/4AAQ")
+        assertEquals("/9j/4AAQ", vm.uiState.value.shownPhoto)
+        assertNull(vault.lastPhoto) // a preview only
+        vm.savePhoto()
+        advanceUntilIdle()
+        assertEquals("/9j/4AAQ", vault.lastPhoto)
+        assertEquals("/9j/4AAQ", vault.profile.value!!.photo)
+        assertTrue(vm.uiState.value.photoSaved)
+        assertNull(vm.uiState.value.pendingPhoto)
+    }
+
+    @Test
+    fun anUnreadablePictureIsSaidAndNothingSent() = runTest {
+        val vm = SharedProfileViewModel(vault, vault)
+        advanceUntilIdle()
+        vm.photoEncoding()
+        vm.photoPicked(null)
+        assertTrue(vm.uiState.value.photoUnreadable)
+        vm.savePhoto()
+        advanceUntilIdle()
+        assertNull(vault.lastPhoto)
+    }
+
+    @Test
+    fun removingThePhotoSendsEmpty() = runTest {
+        vault.profile.value = vault.profile.value!!.copy(photo = "/9j/old")
+        val vm = SharedProfileViewModel(vault, vault)
+        advanceUntilIdle()
+        assertEquals("/9j/old", vm.uiState.value.shownPhoto)
+        vm.removePhoto()
+        advanceUntilIdle()
+        assertEquals("", vault.lastPhoto)
+        assertNull(vault.profile.value!!.photo)
+    }
+
+    @Test
     fun theDisplayNameIsEditedAndSaved() = runTest {
         val vm = SharedProfileViewModel(vault, vault)
         advanceUntilIdle()

@@ -23,6 +23,7 @@ import androidx.compose.material.icons.automirrored.outlined.Reply
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Lock
@@ -30,7 +31,6 @@ import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.QrCode2
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.StarOutline
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.TaskAlt
@@ -163,8 +163,8 @@ fun GalleryScreen(
                             DrawerItem("a", "Approvals", Icons.Outlined.TaskAlt, badge = 3),
                         ),
                         listOf(
-                            DrawerItem("i", "Items", Icons.Outlined.Inventory2),
-                            DrawerItem("k", "Credential", Icons.Outlined.Shield),
+                            DrawerItem("i", "Vault", Icons.Outlined.Inventory2),
+                            DrawerItem("h", "History", Icons.Outlined.History),
                         ),
                         listOf(DrawerItem("s", "Settings", Icons.Outlined.Settings)),
                     ),
@@ -320,6 +320,13 @@ fun GalleryScreen(
                 InitialTile("Alice", size = 40)
                 InitialTile("Bob", size = 40, style = TileStyle.Favorite)
                 InitialTile("Mesmer", size = 40, style = TileStyle.Self)
+                // A non-person row (History) and a shared profile photo (§10.8; an unreadable one shows the initial).
+                InitialTile("History", size = 40, icon = Icons.Outlined.History)
+                InitialTile(
+                    "Photo", size = 40, style = TileStyle.Self,
+                    photo = com.vettid.core.ui.components.rememberProfilePhoto(GALLERY_PHOTO),
+                )
+                InitialTile("Broken", size = 40, photo = com.vettid.core.ui.components.rememberProfilePhoto("bm90IGFuIGltYWdl"))
             }
             Spacer(Modifier.height(Spacing.l))
             Row(Modifier.padding(horizontal = Spacing.gutter), horizontalArrangement = Arrangement.spacedBy(Spacing.m)) {
@@ -494,3 +501,7 @@ private fun NoticesGallery() {
         }
     }
 }
+
+/** An 8×8 PNG in four colour blocks. */
+private const val GALLERY_PHOTO =
+    "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAH0lEQVR4nGP4f1AVjrz9TsARAxUl5Of1wdF/JEBFCQCiLXjhwCs13wAAAABJRU5ErkJggg=="

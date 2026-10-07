@@ -138,8 +138,10 @@ class A3ExitTest {
             waitText("Messages", LONG_WAIT_MS)
             screenshot("unlocked")
 
-            // The credential exists after the unlock.
+            // The credential exists after the unlock: Settings → Security → Credential (not in the drawer since 2026-10-07).
             rule.onAllNodes(androidx.compose.ui.test.hasContentDescription("Open navigation menu")).onFirst().performClick()
+            waitText("Settings")
+            text("Settings").performClick()
             waitText("Credential")
             text("Credential").performClick()
             waitText("Version", LONG_WAIT_MS)

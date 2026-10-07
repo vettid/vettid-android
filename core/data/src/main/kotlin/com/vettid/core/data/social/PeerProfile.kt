@@ -24,12 +24,17 @@ data class PeerProfile(
     val displayName: String?,
     val hasPhoto: Boolean,
     val items: List<SharedProfileItem>,
+    /** The peer's photo as sent (base64; the UI decodes it defensively and falls back to the initial). */
+    val photo: String? = null,
 ) {
     val accountName: String? get() = AccountNames.full(firstName, lastName)
 
     companion object {
         /** The display name's limit (§10.8: at most 128 bytes). */
         private const val MAX_DISPLAY_NAME_BYTES = 128
+
+        /** Base64 of the photo limit (§10.8: 65,536 bytes of image); a longer one is not kept. */
+        private const val MAX_PHOTO_CHARS = 87_384
 
         /** Null for an absent profile. */
         fun parse(p: JsonObject?): PeerProfile? {
@@ -41,6 +46,7 @@ data class PeerProfile(
                 displayName = displayNameOf(p),
                 hasPhoto = VaultJson.str(p, "photo")?.isNotEmpty() == true,
                 items = itemsOf(p),
+                photo = VaultJson.str(p, "photo")?.takeIf { it.isNotEmpty() && it.length <= MAX_PHOTO_CHARS },
             )
         }
 

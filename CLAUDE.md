@@ -75,7 +75,7 @@ The A2 exit test:
 
 Debug builds use application id `com.vettid.app.dev` (`devStack`:
 `com.vettid.app.devstack`); never install over `com.vettid.app`. Screenshot launch extras (debug only):
-`adb shell am start -S -n com.vettid.app.dev/com.vettid.app.MainActivity --es vettid.theme dark|light --es vettid.start gallery|messages|connections|approvals|items|credential|settings|help --ez vettid.screenshot true`
+`adb shell am start -S -n com.vettid.app.dev/com.vettid.app.MainActivity --es vettid.theme dark|light --es vettid.start gallery|messages|connections|approvals|items|history|credential|settings|help --ez vettid.screenshot true`
 (`vettid.screenshot` lets the debug app draw over the keyguard of a locked test phone; the phone stays locked).
 Every A3 and A4 screen with sample state, no vault needed: `--es vettid.start screen:<name>` (names in
 `app/src/debugTools/.../ScreenCatalog.kt`, e.g. `onboarding.backup_off`, `onboarding.setup_scan`, `onboarding.setup_type`, `onboarding.confirm_account`, `account_sheet`, `unlock.updated`,
@@ -88,7 +88,7 @@ repeated relay refusals, `unlock.refused`; the transfer's 60 s wait for `hs.resp
 `canary.confirm`, `canary.refused`, `settings.attestation_canary`; the daily owner check (VAULT-MESSAGING 0.13.0 §3.6),
 `owner_check.held`, `owner_check.due`, `owner_check.unknown`, `owner_check.bad_password`, `owner_check.backoff`, `owner_check.voluntary`,
 `owner_check.hold_off`, `unlock.owner_check`, `unlock.owner_check_locked`, `settings.owner_check_hold_off`,
-`settings.owner_check_offer`, `shell.owner_check_banners`; a new credential (0.15.2), `credential.new`, `credential.new_confirm`; a start-over pending on the portal (0.16.0), `shell.deletion`; the account names and the shared profile (0.18.0, ANDROID-PLAN 0.1.10), `connections.detail_not_shared`, `account_sheet.name_pending`, `settings.shared_profile`, `settings.change_name`, `settings.change_name_confirm`, `settings.change_name_pending`, `settings.change_name_refused`). Debug builds expose Compose test tags as resource
+`settings.owner_check_offer`, `shell.owner_check_banners`; a new credential (0.15.2), `credential.new`, `credential.new_confirm`; a start-over pending on the portal (0.16.0), `shell.deletion`; the account names and the shared profile (0.18.0, ANDROID-PLAN 0.1.10), `connections.detail_not_shared`, `account_sheet.name_pending`, `settings.shared_profile`, `settings.change_name`, `settings.change_name_confirm`, `settings.change_name_pending`, `settings.change_name_refused`; History and the profile photo (ANDROID-PLAN 0.1.11), `history`, `history.filtered`, `history.search_local`, `history.empty`, `history.no_match`, `history.chain_broken`, `history.entry`, `history.entry_unknown`, `settings.shared_profile_photo`, `settings.shared_profile_photo_preview`). Debug builds expose Compose test tags as resource
 ids, so `uiautomator dump` / `adb shell input` can drive two phones at once (`adb -s <serial>`).
 Screenshots and the Proton reference images stay out of git (`local/`, or the
 vettid.org repo's `local/android-ui/`).

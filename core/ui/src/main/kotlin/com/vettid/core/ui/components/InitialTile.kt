@@ -1,6 +1,12 @@
 package com.vettid.core.ui.components
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Icon
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.MaterialTheme
@@ -26,7 +32,9 @@ enum class TileStyle { Connection, Favorite, Self }
 
 /**
  * Rounded-square tile with an initial (Proton's avatar tile). Decorative by
- * default: the row or button around it carries the accessible label.
+ * default: the row or button around it carries the accessible label. A [photo]
+ * (a shared profile photo, VAULT-MESSAGING §10.8) fills the tile instead of the
+ * initial; an [icon] replaces the initial on non-person rows (History).
  */
 @Composable
 fun InitialTile(
@@ -34,6 +42,8 @@ fun InitialTile(
     modifier: Modifier = Modifier,
     size: Int = 40,
     style: TileStyle = TileStyle.Connection,
+    photo: ImageBitmap? = null,
+    icon: ImageVector? = null,
 ) {
     val colors = VettIdTheme.colors
     val (bg: Color, fg: Color) = when (style) {
@@ -49,6 +59,14 @@ fun InitialTile(
             .clearAndSetSemantics {},
         contentAlignment = Alignment.Center,
     ) {
+        if (photo != null) {
+            Image(photo, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            return@Box
+        }
+        if (icon != null) {
+            Icon(icon, contentDescription = null, tint = fg, modifier = Modifier.size((size * 0.5f).dp))
+            return@Box
+        }
         Text(
             text = initialOf(name),
             color = fg,

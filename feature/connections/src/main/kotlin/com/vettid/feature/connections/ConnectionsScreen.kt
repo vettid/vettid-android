@@ -105,6 +105,8 @@ data class ConnectionsHost(
     val replace: (Any) -> Unit,
     /** The conversation with a connection (messages feature). */
     val onOpenConversation: (String) -> Unit,
+    /** The connection's History (history feature). */
+    val onOpenHistory: (String) -> Unit = {},
 )
 
 /** Registers the Connections destinations. */
@@ -158,6 +160,7 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
                 onAsk = vm::ask,
                 onConfirm = vm::confirm,
                 onDismissNotice = vm::dismissNotice,
+                onHistory = { host.onOpenHistory(state.connectionId) },
             ),
         )
     }
@@ -246,7 +249,8 @@ fun ConnectionsScreen(state: ConnectionsUiState, chrome: ShellChrome, actions: C
                 end = {
                     VettIdFab(
                         icon = Icons.Outlined.PersonAdd,
-                        contentDescription = stringResource(R.string.connections_add),
+                        // ANDROID-PLAN 0.1.11: the button invites (QR or link, or scan the other's QR).
+                        contentDescription = stringResource(R.string.connections_invite_title),
                         onClick = actions.onAdd,
                         modifier = Modifier.testTag("add_connection"),
                     )
@@ -336,6 +340,7 @@ private fun ConnectionItem(c: ConnectionInfo, actions: ConnectionsActions) {
         meta = c.lastActiveAt?.let { Times.short(it) },
         onClick = { actions.onOpen(c.id) },
         modifier = Modifier.testTag("connection_${c.id}"),
+        photo = com.vettid.core.ui.components.rememberProfilePhoto(c.photo),
     )
 }
 
@@ -412,7 +417,7 @@ private fun AddSheet(actions: ConnectionsActions) {
     ModalBottomSheet(onDismissRequest = actions.onDismissAdd) {
         Column(Modifier.navigationBarsPadding().padding(bottom = Spacing.l)) {
             Text(
-                stringResource(R.string.connections_add),
+                stringResource(R.string.connections_invite_title),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(horizontal = Spacing.xl, vertical = Spacing.s).semantics { heading() },

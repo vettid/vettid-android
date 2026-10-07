@@ -4,18 +4,16 @@ import androidx.annotation.StringRes
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.People
-import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.TaskAlt
 import androidx.compose.ui.graphics.vector.ImageVector
 import com.vettid.app.R
 import com.vettid.feature.approvals.ApprovalsRoute
 import com.vettid.feature.connections.ConnectionsRoute
-import com.vettid.feature.connections.InviteRoute
-import com.vettid.feature.credential.CredentialRoute
+import com.vettid.feature.history.HistoryRoute
 import com.vettid.feature.items.ItemsRoute
 import com.vettid.feature.messages.MessagesRoute
 import com.vettid.feature.settings.HelpRoute
@@ -32,10 +30,11 @@ enum class TopLevelDestination(
     Messages(MessagesRoute, Icons.Outlined.ChatBubbleOutline, R.string.nav_messages, group = 0),
     Connections(ConnectionsRoute, Icons.Outlined.People, R.string.nav_connections, group = 0),
     Approvals(ApprovalsRoute, Icons.Outlined.TaskAlt, R.string.nav_approvals, group = 0),
+    // "Vault" in the UI (owner feedback 2026-10-07); the code keeps the Items names.
     Items(ItemsRoute, Icons.Outlined.Inventory2, R.string.nav_items, group = 1),
-    Credential(CredentialRoute, Icons.Outlined.Shield, R.string.nav_credential, group = 1),
-    // The "create" group (ANDROID-PLAN §4): New item joins it with A5.
-    Invite(InviteRoute, Icons.Outlined.PersonAdd, R.string.nav_invite, group = 2),
+    // The member's audit log (VAULT-MESSAGING §10.9). The credential is reached through Settings → Security, and
+    // inviting through the Connections screen's add button (owner feedback 2026-10-07).
+    History(HistoryRoute, Icons.Outlined.History, R.string.nav_history, group = 1),
     Settings(SettingsRoute, Icons.Outlined.Settings, R.string.nav_settings, group = 3),
     Help(HelpRoute, Icons.AutoMirrored.Outlined.HelpOutline, R.string.nav_help, group = 3),
     ;

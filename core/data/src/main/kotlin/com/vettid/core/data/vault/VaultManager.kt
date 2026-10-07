@@ -161,6 +161,9 @@ class VaultManager(
         },
     )
 
+    /** The member's audit log (VAULT-MESSAGING §10.9), read-only: the History screen. */
+    val history = HistoryManager(ops = { VaultAuditOps(session().api) })
+
     /** The daily owner check (VAULT-MESSAGING 0.13.0 §3.6): its state, the check, the interval and the hold. */
     val ownerCheck: OwnerCheckManager = KeystoreFileStore(File(app.noBackupFilesDir, OWNER_CHECK_FILE), "owner-check").let { f ->
         OwnerCheckManager(
@@ -1004,6 +1007,7 @@ class VaultManager(
         social.clear()
         ownerCheck.clear()
         profile.clear()
+        history.clear()
         canary.removeCanaryManifest()
         transferStartedAt = null
         openTransferId = null
@@ -1180,7 +1184,7 @@ private fun newer(a: String?, b: String?): Boolean {
 }
 
 /** The snapshot for display (§11.13). */
-private fun com.vettid.core.vault.AccountSnapshot.toInfo(fallbackHint: String): AccountInfo {
+internal fun com.vettid.core.vault.AccountSnapshot.toInfo(fallbackHint: String): AccountInfo {
     fun t(s: String?): Instant? = s?.let { runCatching { Instant.parse(it) }.getOrNull() }
     return AccountInfo(
         emailHint = emailHint ?: fallbackHint,
@@ -1194,8 +1198,16 @@ private fun com.vettid.core.vault.AccountSnapshot.toInfo(fallbackHint: String): 
         firstName = firstName?.takeIf { com.vettid.core.data.account.AccountNames.isValidCore(it) },
         lastName = lastName?.takeIf { com.vettid.core.data.account.AccountNames.isValidCore(it) },
         nameAllowedAfter = t(nameChange?.allowedAfter),
+        email = email?.takeIf { validEmail(it) },
     )
 }
+
+/** §11.13 (0.20.0): 3–1,016 bytes of UTF-8 with an `@` and no control characters. */
+internal fun validEmail(e: String): Boolean =
+    e.toByteArray(Charsets.UTF_8).size in EMAIL_MIN_BYTES..EMAIL_MAX_BYTES && '@' in e && e.none { it.isISOControl() }
+
+private const val EMAIL_MIN_BYTES = 3
+private const val EMAIL_MAX_BYTES = 1_016
 
 /** A name request as the account record keeps it. */
 private fun NameRequestView.toWire() = com.vettid.core.vault.NameRequest(

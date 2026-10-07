@@ -120,7 +120,7 @@ fun VettIdApp(
                     composable<MainDest> {
                         AppShell(
                             launchRoute = launchRoute,
-                            accountName = account?.fullName ?: account?.emailHint?.takeIf { it.isNotEmpty() }
+                            accountName = account?.fullName ?: account?.displayEmail
                                 ?: stringResource(R.string.account_placeholder_name),
                             account = account,
                             portalUrl = portal,

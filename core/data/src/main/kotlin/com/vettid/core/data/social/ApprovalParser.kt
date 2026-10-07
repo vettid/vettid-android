@@ -194,6 +194,7 @@ object ApprovalParser {
             lastName = p?.lastName,
             sharedItems = p?.items ?: emptyList(),
             hasPhoto = p?.hasPhoto ?: false,
+            photo = p?.photo,
             keyFingerprint = IkFingerprint.formatB64(c.ik),
             createdAt = instant(c.createdAt),
             lastActiveAt = instant(c.lastActiveAt),

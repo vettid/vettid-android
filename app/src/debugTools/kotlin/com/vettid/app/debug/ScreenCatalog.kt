@@ -12,6 +12,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import com.vettid.app.ui.AccountSheet
+import com.vettid.core.data.vault.AuditCategory
+import com.vettid.core.data.vault.AuditFilter
+import com.vettid.core.data.vault.AuditRecord
+import com.vettid.feature.history.DatePreset
+import com.vettid.feature.history.HistoryActions
+import com.vettid.feature.history.HistoryEntryScreen
+import com.vettid.feature.history.HistoryEntryUiState
+import com.vettid.feature.history.HistoryScreen
+import com.vettid.feature.history.HistoryUiState
 import com.vettid.app.ui.OwnerCheckBanners
 import com.vettid.app.ui.PendingDeletionBanner
 import com.vettid.core.data.vault.DeletionView
@@ -269,6 +278,21 @@ object ScreenCatalog {
     private val sampleAccount = AccountInfo(
         emailHint = "s***@example.org", state = "member", accountStatus = "active", firstName = "Sam", lastName = "Rivera",
         subscription = SubscriptionInfo("Annual", SubscriptionInfo.STATUS_ACTIVE, true, Instant.parse("2027-10-01T00:00:00Z")),
+        email = "sam.rivera@example.org",
+    )
+
+    /** History samples (ANDROID-PLAN 0.1.11). */
+    private val historyNames = mapOf("c1" to "Alice Moreau", "c2" to "Bob Okafor")
+    private val historyEntries = listOf(
+        AuditRecord("e9", 9, Instant.now().minusSeconds(120), "message.received", connectionId = "c1", ref = "m-01J9", direction = "in"),
+        AuditRecord("e8", 8, Instant.now().minusSeconds(900), "vault.unlocked"),
+        AuditRecord("e7", 7, Instant.now().minusSeconds(3_600), "connection.added", connectionId = "c2"),
+        AuditRecord("e6", 6, Instant.now().minusSeconds(86_400), "credential.password_changed"),
+        AuditRecord("e5", 5, Instant.now().minusSeconds(90_000), "item.revealed", ref = "it-01J8"),
+        AuditRecord("e4", 4, Instant.now().minusSeconds(200_000), "owner_check.passed"),
+        AuditRecord("e3", 3, Instant.now().minusSeconds(300_000), "drop.rate_limited", connectionId = "c3"),
+        AuditRecord("e2", 2, Instant.now().minusSeconds(400_000), "leash.item.read.summary", deviceId = "agent-1", ref = "12"),
+        AuditRecord("e1", 1, Instant.now().minusSeconds(500_000), "zebra.future_kind"),
     )
     private val namePending = NameRequestView(4, "Sam", "King", Instant.parse("2026-10-07T12:00:00Z"), NameRequestState.PENDING)
     private val nameRefused = namePending.copy(state = NameRequestState.REFUSED, reason = NameRequestView.REASON_TOO_SOON)
@@ -793,8 +817,74 @@ object ScreenCatalog {
                 ChangeNameActions(),
             )
         },
+        // History (ANDROID-PLAN 0.1.11).
+        "history" to {
+            HistoryScreen(HistoryUiState(historyEntries, connectionNames = historyNames, loading = false, end = true), chrome, HistoryActions())
+        },
+        "history.filtered" to {
+            HistoryScreen(
+                HistoryUiState(
+                    historyEntries.filter { it.connectionId == "c1" },
+                    filter = AuditFilter(category = AuditCategory.MESSAGES, connectionId = "c1", query = "alice"),
+                    datePreset = DatePreset.WEEK, connectionNames = historyNames, loading = false, loadingMore = true, partial = true,
+                ),
+                chrome,
+                HistoryActions(),
+            )
+        },
+        "history.search_local" to {
+            HistoryScreen(
+                HistoryUiState(
+                    historyEntries.take(2), filter = AuditFilter(query = "unlocked"), connectionNames = historyNames, loading = false,
+                    end = true, localSearch = true,
+                ),
+                chrome,
+                HistoryActions(),
+            )
+        },
+        "history.empty" to { HistoryScreen(HistoryUiState(loading = false, end = true), chrome, HistoryActions()) },
+        "history.no_match" to {
+            HistoryScreen(HistoryUiState(filter = AuditFilter(query = "zzz"), loading = false, end = true), chrome, HistoryActions())
+        },
+        "history.chain_broken" to {
+            HistoryScreen(HistoryUiState(historyEntries, connectionNames = historyNames, loading = false, chainBroken = true), chrome, HistoryActions())
+        },
+        "history.entry" to {
+            HistoryEntryScreen(
+                HistoryEntryUiState(
+                    historyEntries.first().copy(hash = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="),
+                    connectionName = "Alice Moreau", connectionExists = true, loading = false,
+                ),
+                onBack = {},
+            )
+        },
+        "history.entry_unknown" to {
+            HistoryEntryScreen(HistoryEntryUiState(historyEntries.last(), loading = false), onBack = {})
+        },
+        // The profile photo (owner request 2026-10-07).
+        "settings.shared_profile_photo_preview" to {
+            SharedProfileContent(
+                SharedProfileUiState(
+                    sampleAccount, OwnProfile(3, "Sam", "Sam", "Rivera", "9a1f bb7d 873e eafb 494b ef94 f072 7b25"), displayName = "Sam",
+                    pendingPhoto = SAMPLE_PHOTO,
+                ),
+                SharedProfileActions(),
+            )
+        },
+        "settings.shared_profile_photo" to {
+            SharedProfileContent(
+                SharedProfileUiState(
+                    sampleAccount, OwnProfile(3, "Sam", "Sam", "Rivera", "9a1f bb7d 873e eafb 494b ef94 f072 7b25", photo = SAMPLE_PHOTO),
+                    displayName = "Sam",
+                ),
+                SharedProfileActions(),
+            )
+        },
         "account_sheet.waiting" to { AccountSheet(AccountInfo("s***@example.org"), "https://account.vettid.org", onDismiss = {}, onLockVault = {}) },
     )
 }
 
 private const val CRITICAL_PAYLOAD = "SGVsbG8sIFZldHRJRCE="
+
+/** An 8×8 PNG in four colour blocks, drawn as a photo tile. */
+private const val SAMPLE_PHOTO = "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAH0lEQVR4nGP4f1AVjrz9TsARAxUl5Of1wdF/JEBFCQCiLXjhwCs13wAAAABJRU5ErkJggg=="

@@ -284,6 +284,8 @@ data class AuditPage(
     val seq: Long = 0,
     @SerialName("next_before_seq") val nextBeforeSeq: Long? = null,
     @SerialName("next_after_seq") val nextAfterSeq: Long? = null,
+    /** A search that ran out of its 2,000-entry scan budget (0.20.0): continue with the cursor. */
+    val partial: Boolean = false,
 )
 
 /** `sync.event` (§10.1): [kind] and its members; devices fetch what changed. */
@@ -297,13 +299,18 @@ data class TransferPending(val transferId: String, val name: String, val sas: St
 
 /**
  * The member's account snapshot from the member API (§11.13, 0.15.0): display only, never a security signal.
- * `email_hint` is the masked address (`m***@example.com`); nothing else about the member is sent.
+ * `email` (VAULT-MESSAGING 0.20.0 / MEMBER-API 2.3.0) is the member's full verified address, shown only to the member;
+ * it replaces the masked `email_hint` (`m***@example.com`) of 0.15.0. Both are optional here so that a snapshot of
+ * either shape reads (a staging S4 vault stores what the member API sent); the app shows [email] and falls back to
+ * [emailHint].
  */
 @Serializable
 data class AccountSnapshot(
     val v: Int = 1,
     @SerialName("as_of") val asOf: String? = null,
     @SerialName("email_hint") val emailHint: String? = null,
+    /** The full address (0.20.0); absent from a vault before it. */
+    val email: String? = null,
     /** `member` (or another account state). */
     val state: String? = null,
     /** `active` or `canceled`. */

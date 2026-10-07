@@ -80,7 +80,7 @@
         <item quantity="other">They can read it %1$d times.</item>
     </plurals>
     <string name="approvals_grant_partial_title">Some items are not shared here</string>
-    <string name="approvals_grant_partial_body">Choosing an item for a category, or answering items you do not have, comes with the Items screens. Approving shares only the items listed as in your vault.</string>
+    <string name="approvals_grant_partial_body">Choosing an item for a category, or answering items you do not have, comes with the Vault screens. Approving shares only the items listed as in your vault.</string>
     <string name="approvals_critical_body">%1$s asks your vault to use a critical item once. The value never leaves your vault; your password authorizes exactly this use.</string>
     <string name="approvals_critical_approve">Allow this one use</string>
     <string name="approvals_critical_item">Item</string>

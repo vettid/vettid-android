@@ -3,7 +3,7 @@
     <string name="connections_title">Connections</string>
     <string name="connections_empty_title">No connections yet</string>
     <string name="connections_empty_body">Invite someone or scan their code to connect</string>
-    <string name="connections_add">Add a connection</string>
+    <string name="connections_detail_history">History</string>
     <string name="connections_add_invite">Invite with a QR code or link</string>
     <string name="connections_add_invite_body">Show your code in person, or send a link</string>
     <string name="connections_add_scan">Scan a QR code</string>
@@ -43,9 +43,9 @@
     <string name="connections_remote_title">You approve every link connection</string>
     <string name="connections_remote_body">Anyone who sees the link could use it, so the connection waits until you approve it. Compare the safety code with them over a call you trust first.</string>
     <string name="connections_show_title">Let them scan this code</string>
-    <string name="connections_show_body">Open VettID on their phone, choose Add a connection, then Scan a QR code.</string>
+    <string name="connections_show_body">Open VettID on their phone, tap Invite a connection on Connections, then Scan a QR code.</string>
     <string name="connections_show_remote_title">Send this link</string>
-    <string name="connections_show_remote_body">Send it through an app you trust. They paste it in VettID under Add a connection.</string>
+    <string name="connections_show_remote_body">Send it through an app you trust. They paste it in VettID under Invite a connection on Connections.</string>
     <string name="connections_qr_cd">Invitation QR code</string>
     <string name="connections_expires_in">Expires in %1$d min, at %2$s</string>
     <string name="connections_link_label">Invitation link</string>
@@ -53,7 +53,7 @@
     <string name="connections_copied">Copied</string>
     <string name="connections_share">Share link</string>
     <string name="connections_share_title">VettID invitation</string>
-    <string name="connections_share_text">Connect with me on VettID: open this link on a phone with VettID (or paste it under Add a connection, Paste an invitation link):\n\n%1$s</string>
+    <string name="connections_share_text">Connect with me on VettID: open this link on a phone with VettID (or paste it under Invite a connection, Paste an invitation link):\n\n%1$s</string>
     <string name="connections_waiting_scan">Waiting for them to use it…</string>
     <string name="connections_invite_cancel">Cancel invitation</string>
     <string name="connections_invite_expired_title">The invitation expired</string>

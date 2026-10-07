@@ -34,6 +34,14 @@ class ProfileManagerTest {
             return version + 1
         }
 
+        val photoSets = mutableListOf<Pair<Long, String>>()
+
+        override suspend fun profileSetPhoto(version: Long, photo: String): Long {
+            photoSets += version to photo
+            profile = profile.copy(version = version + 1, photo = photo.ifEmpty { null })
+            return version + 1
+        }
+
         override suspend fun accountNameSet(pin: String, password: String, firstName: String, lastName: String): NameRequest {
             nameSets += listOf(pin, password, firstName, lastName)
             error?.let { throw VaultOpException("account.name.set", it, body = errorBody) }
@@ -143,6 +151,17 @@ class ProfileManagerTest {
         // reason only with refused (0.19.0).
         assertNull(NameRequestView.of(NameRequest(3, "A", "B", null, "applied", "too_soon"))!!.reason)
         assertNull(NameRequestView.of(NameRequest(3, "A", "B", null, "lost")))
+    }
+
+    @Test
+    fun aPhotoIsSetWithTheVersionAndRemovedWithEmpty() = runTest {
+        m.refreshProfile()
+        m.setPhoto("/9j/AAAA")
+        assertEquals(4L to "/9j/AAAA", ops.photoSets.single())
+        assertEquals("/9j/AAAA", m.profile.value!!.photo)
+        m.setPhoto("")
+        assertEquals(5L to "", ops.photoSets.last())
+        assertNull(m.profile.value!!.photo)
     }
 }
 

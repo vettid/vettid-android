@@ -7,6 +7,7 @@ import androidx.compose.material.icons.outlined.CardMembership
 import androidx.compose.material.icons.outlined.Gavel
 import androidx.compose.material.icons.outlined.HowToVote
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Share
@@ -48,15 +49,20 @@ fun AccountSheet(
     now: Instant = Instant.now(),
     onChangeName: () -> Unit = {},
     onSharedProfile: () -> Unit = {},
+    photo: androidx.compose.ui.graphics.ImageBitmap? = null,
 ) {
     val uri = LocalUriHandler.current
     AvatarSheet(
-        name = account?.fullName ?: account?.emailHint?.takeIf { it.isNotEmpty() } ?: stringResource(R.string.account_placeholder_name),
-        detail = account?.fullName?.let { account.emailHint.takeIf { h -> h.isNotEmpty() } } ?: membershipLine(account),
+        photo = photo,
+        // First and last name and the full address (owner feedback 2026-10-07; `email` from VAULT-MESSAGING 0.20.0,
+        // the masked `email_hint` from an older vault).
+        name = account?.fullName ?: account?.displayEmail ?: stringResource(R.string.account_placeholder_name),
+        detail = account?.fullName?.let { account.displayEmail } ?: membershipLine(account),
         onDismiss = onDismiss,
         optionsHeader = stringResource(R.string.account_options),
     ) {
         AccountNamesGroup(account, now, onChangeName, onSharedProfile)
+        AccountEmailGroup(account)
         AccountDetails(account, now)
         SettingsGroup {
             SettingsRow(
@@ -119,7 +125,25 @@ fun AccountNamesGroup(account: AccountInfo?, now: Instant, onChangeName: () -> U
     }
 }
 
-/** The membership in one line, under the masked email. */
+/**
+ * The account's address (VAULT-MESSAGING 0.20.0 §11.13: the snapshot's full `email`, shown to the member only; the
+ * masked `email_hint` from an older vault), labelled "Only you see this address" (ANDROID-PLAN 0.1.11).
+ */
+@Composable
+fun AccountEmailGroup(account: AccountInfo?) {
+    val email = account?.displayEmail ?: return
+    SettingsGroup(Modifier.testTag("account_email")) {
+        SettingsInfoRow(stringResource(R.string.account_email), email, icon = Icons.Outlined.Email)
+        Text(
+            stringResource(R.string.account_email_note),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s),
+        )
+    }
+}
+
+/** The membership in one line, under the address when there are no names to show. */
 @Composable
 private fun membershipLine(account: AccountInfo?): String = when {
     account == null || !account.hasSnapshot -> stringResource(R.string.account_membership_unknown)

@@ -1,6 +1,17 @@
 package com.vettid.feature.settings
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import com.vettid.core.ui.components.ConfirmDialog
+import com.vettid.core.ui.components.InitialTile
+import com.vettid.core.ui.components.TileStyle
+import com.vettid.core.ui.components.rememberProfilePhoto
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -101,6 +112,11 @@ data class SharedProfileActions(
     val onSave: () -> Unit = {},
     val onChangeName: () -> Unit = {},
     val onDismiss: () -> Unit = {},
+    /** Opens the Photo Picker; the picture comes back as a preview. */
+    val onChoosePhoto: () -> Unit = {},
+    val onSavePhoto: () -> Unit = {},
+    val onDiscardPhoto: () -> Unit = {},
+    val onRemovePhoto: () -> Unit = {},
 )
 
 /**
@@ -165,6 +181,7 @@ fun SharedProfileContent(state: SharedProfileUiState, actions: SharedProfileActi
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done),
                 modifier = Modifier.fillMaxWidth().testTag("display_name"),
             )
+            PhotoCard(state, actions)
             if (state.saved) {
                 NoticeCard(
                     NoticeKind.SUCCESS,
@@ -407,3 +424,90 @@ private fun waitText(seconds: Long): String = "%d:%02d".format(seconds / SECONDS
 
 private const val SECONDS_PER_MINUTE = 60L
 private const val WARN_LEFT = 3
+
+/**
+ * The profile photo (§10.8): the vault's, or the chosen one as a preview until it is saved; "Choose photo" opens
+ * the Photo Picker, "Remove photo" (confirmed) sends `photo: ""`.
+ */
+@Composable
+private fun PhotoCard(state: SharedProfileUiState, actions: SharedProfileActions) {
+    var confirmRemove by rememberSaveable { mutableStateOf(false) }
+    val photo = rememberProfilePhoto(state.shownPhoto)
+    val enabled = state.profile != null && !state.photoBusy && !state.busy
+    val buttonModifier = Modifier.heightIn(min = Spacing.touchTarget)
+    DetailCard(Modifier.testTag("profile_photo")) {
+        Text(stringResource(R.string.settings_profile_photo), style = MaterialTheme.typography.labelLarge)
+        Spacer(Modifier.height(Spacing.s))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            InitialTile(name = state.fullName ?: "", size = 72, style = TileStyle.Self, photo = photo)
+            Spacer(Modifier.width(Spacing.l))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    stringResource(
+                        when {
+                            state.photoBusy -> R.string.settings_profile_photo_working
+                            state.pendingPhoto != null -> R.string.settings_profile_photo_preview
+                            state.profile?.photo != null -> R.string.settings_profile_photo_shared
+                            else -> R.string.settings_profile_photo_none
+                        },
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("profile_photo_status"),
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
+            if (state.pendingPhoto != null) {
+                TextButton(onClick = actions.onSavePhoto, enabled = enabled, modifier = buttonModifier.testTag("photo_save")) {
+                    Text(stringResource(R.string.settings_profile_photo_save))
+                }
+                TextButton(onClick = actions.onDiscardPhoto, enabled = enabled, modifier = buttonModifier) {
+                    Text(stringResource(R.string.settings_profile_photo_discard))
+                }
+            } else {
+                TextButton(onClick = actions.onChoosePhoto, enabled = enabled, modifier = buttonModifier.testTag("photo_choose")) {
+                    Text(stringResource(R.string.settings_profile_photo_choose))
+                }
+                if (state.profile?.photo != null) {
+                    TextButton(onClick = { confirmRemove = true }, enabled = enabled, modifier = buttonModifier.testTag("photo_remove")) {
+                        Text(stringResource(R.string.settings_profile_photo_remove))
+                    }
+                }
+            }
+        }
+        if (state.photoUnreadable) {
+            Text(
+                stringResource(R.string.settings_profile_photo_unreadable),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.testTag("photo_unreadable"),
+            )
+        }
+        if (state.photoSaved) {
+            Text(
+                stringResource(R.string.settings_profile_photo_saved),
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.testTag("photo_saved"),
+            )
+        }
+        Text(
+            stringResource(R.string.settings_profile_photo_note),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+    if (confirmRemove) {
+        ConfirmDialog(
+            title = stringResource(R.string.settings_profile_photo_remove_title),
+            text = stringResource(R.string.settings_profile_photo_remove_body),
+            confirmLabel = stringResource(R.string.settings_profile_photo_remove),
+            onConfirm = {
+                confirmRemove = false
+                actions.onRemovePhoto()
+            },
+            onDismiss = { confirmRemove = false },
+            destructive = true,
+        )
+    }
+}

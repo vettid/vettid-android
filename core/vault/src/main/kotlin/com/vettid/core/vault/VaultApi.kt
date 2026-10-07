@@ -702,12 +702,21 @@ class VaultApi(val device: VaultDevice) {
 
     // --- audit and feed (§10.9) ---
 
+    /**
+     * [q], [since] (inclusive) and [until] (exclusive, RFC 3339) are the search of VAULT-MESSAGING 0.20.0 §10.9, sent
+     * only when given; a search answers `partial` when its scan budget ran out. A vault before 0.20.0 ignores them
+     * (§10.1: unknown members are ignored), so a caller checks what comes back.
+     */
+    @Suppress("LongParameterList")
     suspend fun auditList(
         connectionId: String? = null,
         kinds: List<String>? = null,
         beforeSeq: Long? = null,
         afterSeq: Long? = null,
         limit: Int? = null,
+        q: String? = null,
+        since: String? = null,
+        until: String? = null,
     ): AuditPage {
         val type = if (connectionId != null && afterSeq == null) "connection.audit.list" else "audit.list"
         return op(type) {
@@ -716,6 +725,9 @@ class VaultApi(val device: VaultDevice) {
             beforeSeq?.let { put("before_seq", it) }
             afterSeq?.let { put("after_seq", it) }
             limit?.let { put("limit", it) }
+            q?.let { put("q", it) }
+            since?.let { put("since", it) }
+            until?.let { put("until", it) }
         }.decode(AuditPage.serializer())
     }
 

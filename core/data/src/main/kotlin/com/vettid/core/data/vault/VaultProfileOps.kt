@@ -10,6 +10,8 @@ internal class VaultProfileOps(private val api: VaultApi) : ProfileOps {
 
     override suspend fun profileSet(version: Long, name: String): Long = api.profileSet(version, name = name)
 
+    override suspend fun profileSetPhoto(version: Long, photo: String): Long = api.profileSet(version, photo = photo)
+
     override suspend fun accountNameSet(pin: String, password: String, firstName: String, lastName: String): NameRequest =
         api.accountNameSet(pin, password, firstName, lastName)
 }
