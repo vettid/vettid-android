@@ -110,4 +110,7 @@ object Labels {
     const val UTK = "vettid/vms/2/utk"
     const val REPLY = "vettid/vms/2/reply"
     const val CRITICAL_ITEM = "vettid/vms/2/critical-item"
+
+    /** The identity-key fingerprint apps show for a connection (VAULT-MESSAGING 0.18.0 §10.8). */
+    const val IK_FP = "vettid/vms/2/ik-fp"
 }

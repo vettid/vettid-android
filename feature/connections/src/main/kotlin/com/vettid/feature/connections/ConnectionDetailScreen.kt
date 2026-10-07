@@ -33,9 +33,11 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.social.AuthenticationState
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConnectionState
@@ -71,15 +73,18 @@ data class DetailActions(
 )
 
 /**
- * A connection (ANDROID-PLAN §4): profile shared with you (self-asserted),
- * safety code, member authentication, alias and note; the pill holds message,
- * favourite, edit, block and remove (both confirmed).
+ * A connection (ANDROID-PLAN §4, 0.1.10): titled "First Last" from the names on the peer's VettID account (the
+ * owner's alias may replace it), the display name secondary; the profile shared with you (the names labelled as the
+ * account's, never verified; the extras as self-asserted), the vault key fingerprint, safety code, member
+ * authentication, alias and note; the pill holds message, favourite, edit, block and remove (both confirmed).
  */
 @Composable
 fun ConnectionDetailScreen(state: ConnectionDetailUiState, actions: DetailActions, modifier: Modifier = Modifier) {
     LaunchedEffect(state.gone) { if (state.gone) actions.onBack() }
     val c = state.connection
-    val name = c?.displayName?.ifBlank { null } ?: stringResource(R.string.connections_unnamed)
+    val title = c?.displayName?.ifBlank { null } ?: stringResource(R.string.connections_name_not_shared)
+    // In sentences the name is bidi-isolated (§10.8); the heading and the tile take it as is.
+    val name = AccountNames.isolate(title)
     DetailScaffold(
         onBackClick = actions.onBack,
         modifier = modifier,
@@ -124,14 +129,14 @@ fun ConnectionDetailScreen(state: ConnectionDetailUiState, actions: DetailAction
                 if (state.loading) CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
             }
         } else {
-            DetailContent(state, c, name, actions)
+            DetailContent(state, c, title, name, actions)
         }
     }
     DetailDialogs(state, name, actions)
 }
 
 @Composable
-private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, name: String, actions: DetailActions) {
+private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, title: String, name: String, actions: DetailActions) {
     Column(
         Modifier
             .fillMaxSize()
@@ -140,18 +145,30 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, nam
         verticalArrangement = Arrangement.spacedBy(Spacing.m),
     ) {
         Column(Modifier.fillMaxWidth().padding(top = Spacing.s), horizontalAlignment = Alignment.CenterHorizontally) {
-            InitialTile(name = name, size = 72, style = if (c.favorite) TileStyle.Favorite else TileStyle.Connection)
+            InitialTile(name = title, size = 72, style = if (c.favorite) TileStyle.Favorite else TileStyle.Connection)
             Spacer(Modifier.height(Spacing.m))
             Text(
-                name,
+                title,
                 style = MaterialTheme.typography.headlineSmall,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.semantics { heading() }.testTag("detail_name"),
             )
-            c.alias?.let { a ->
-                c.name.takeIf { it.isNotBlank() && it != a }?.let {
-                    Text(stringResource(R.string.connections_detail_their_name, it), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
+            // Under the owner's alias the names on the peer's account are still shown (§10.8).
+            c.accountName?.takeIf { c.alias != null && it != title }?.let {
+                Text(
+                    stringResource(R.string.connections_detail_their_name, AccountNames.isolate(it)),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.testTag("detail_account_name"),
+                )
+            }
+            c.secondaryName?.let {
+                Text(
+                    it,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.testTag("detail_display_name"),
+                )
             }
             Text(
                 stateLabel(c.state) ?: stringResource(R.string.connections_state_active),
@@ -190,8 +207,8 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, nam
             CardTitle(stringResource(R.string.connections_detail_about))
             c.createdAt?.let { InfoLine(stringResource(R.string.connections_detail_since), Times.full(it)) }
             c.lastActiveAt?.let { InfoLine(stringResource(R.string.connections_detail_last_active), Times.full(it)) }
-            c.keyFingerprint?.let { InfoLine(stringResource(R.string.connections_detail_key), it) }
         }
+        c.keyFingerprint?.let { FingerprintCard(it) }
     }
 }
 
@@ -214,20 +231,55 @@ private fun InfoLine(label: String, value: String) {
 
 @Composable
 private fun ProfileCard(c: ConnectionInfo) {
-    DetailCard {
+    DetailCard(Modifier.testTag("profile_card")) {
         CardTitle(stringResource(R.string.connections_detail_profile))
-        if (c.profile.isEmpty() && c.name.isBlank()) {
+        val account = c.accountName
+        if (account == null && c.name.isBlank() && c.sharedItems.isEmpty()) {
             Text(stringResource(R.string.connections_detail_profile_none), color = MaterialTheme.colorScheme.onSurfaceVariant)
-        } else {
-            if (c.profile.none { it.first == "name" } && c.name.isNotBlank()) InfoLine(
-                stringResource(R.string.connections_detail_profile_name),
-                c.name,
-            )
-            c.profile.forEach { (k, v) -> InfoLine(if (k == "name") stringResource(R.string.connections_detail_profile_name) else k, v) }
         }
-        Spacer(Modifier.height(Spacing.s))
+        if (account != null) {
+            InfoLine(stringResource(R.string.connections_detail_account_name), account)
+            Text(
+                stringResource(R.string.connections_names_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(Spacing.s))
+        }
+        if (c.name.isNotBlank() || c.sharedItems.isNotEmpty()) {
+            if (c.name.isNotBlank()) InfoLine(stringResource(R.string.connections_detail_profile_name), c.name)
+            if (c.sharedItems.isNotEmpty()) {
+                Spacer(Modifier.height(Spacing.s))
+                Text(stringResource(R.string.connections_detail_shared_items), style = MaterialTheme.typography.labelLarge)
+                c.sharedItems.forEach { item ->
+                    Text(item.name, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = Spacing.xs))
+                    item.fields.forEach { (label, value) -> InfoLine(label, value) }
+                }
+            }
+            Spacer(Modifier.height(Spacing.s))
+            Text(
+                stringResource(R.string.connections_self_asserted),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** The fingerprint of the peer vault's pinned identity key (§10.8): identifies the vault, not a person. */
+@Composable
+private fun FingerprintCard(fingerprint: String) {
+    DetailCard(Modifier.testTag("fingerprint_card")) {
+        CardTitle(stringResource(R.string.connections_detail_key))
         Text(
-            stringResource(R.string.connections_self_asserted),
+            fingerprint,
+            style = MaterialTheme.typography.bodyLarge,
+            fontFamily = FontFamily.Monospace,
+            modifier = Modifier.testTag("detail_fingerprint"),
+        )
+        Spacer(Modifier.height(Spacing.xs))
+        Text(
+            stringResource(R.string.connections_detail_key_note),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

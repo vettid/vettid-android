@@ -19,7 +19,7 @@
     <string name="settings_security_lock_timeout">Lock after</string>
     <string name="settings_section_privacy">Privacy</string>
     <string name="settings_privacy_profile">Shared profile</string>
-    <string name="settings_privacy_profile_body">Your name and the items you tag @profile</string>
+    <string name="settings_privacy_profile_body">Your account name, display name and the items you tag @profile</string>
     <string name="settings_privacy_sharing">Sharing rules</string>
     <string name="settings_privacy_sharing_body">Set by tag in Items. Nothing is shared without a rule.</string>
     <string name="settings_section_app">App</string>

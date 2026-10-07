@@ -146,7 +146,7 @@ class ConnectionsViewModelsTest {
         social.seed(listOf(FakeSocial.connection("c5", "Inviter", state = ConnectionState.ACTIVE)))
         advanceUntilIdle()
         assertEquals(AcceptStep.CONNECTED, vm.uiState.value.step)
-        assertEquals("Inviter", vm.uiState.value.connectionName)
+        assertEquals("Inviter Doe", vm.uiState.value.connectionName)
     }
 
     @Test
@@ -175,7 +175,7 @@ class ConnectionsViewModelsTest {
         vm.accept()
         advanceUntilIdle()
         assertEquals(AcceptStep.EXISTS, vm.uiState.value.step)
-        assertEquals("Sam", vm.uiState.value.connectionName)
+        assertEquals("Sam Doe", vm.uiState.value.connectionName)
 
         // Declining the outgoing request (codes differ): the screen says it ended, as before 0.10.5 (the vault
         // now tells the inviter's vault; nothing changes here, and it is not a peer's decline).

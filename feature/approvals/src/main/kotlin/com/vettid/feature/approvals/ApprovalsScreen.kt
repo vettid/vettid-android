@@ -36,6 +36,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.social.needsDecision
@@ -173,8 +174,8 @@ fun titleOf(a: Approval): String = stringResource(
 
 @Composable
 private fun whoOf(a: Approval): String? = when (a) {
-    is Approval.ConnectionRequest -> a.name ?: stringResource(R.string.approvals_no_name)
-    is Approval.OutgoingRequest -> a.name ?: stringResource(R.string.approvals_no_name)
+    is Approval.ConnectionRequest -> a.name ?: stringResource(R.string.approvals_name_not_shared)
+    is Approval.OutgoingRequest -> a.name ?: stringResource(R.string.approvals_name_not_shared)
     is Approval.DeviceRequest -> a.deviceName
     is Approval.ShareDecision -> a.connectionName ?: a.subjectAgentId?.let { stringResource(R.string.approvals_an_agent) }
     else -> a.connectionName ?: stringResource(R.string.approvals_a_connection)
@@ -333,6 +334,10 @@ private fun Label(text: String) {
     Text(text, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 
+/** A requester's name inside a sentence (bidi-isolated, §10.8), or "them". */
+@Composable
+private fun themOf(name: String?): String = name?.let { AccountNames.isolate(it) } ?: stringResource(R.string.approvals_them)
+
 @Composable
 private fun Value(text: String, modifier: Modifier = Modifier) {
     Text(text, style = MaterialTheme.typography.bodyLarge, modifier = modifier.padding(bottom = Spacing.m))
@@ -345,15 +350,27 @@ private fun Facts(a: Approval) {
         is Approval.ConnectionRequest -> {
             Label(stringResource(R.string.approvals_name_given))
             Text(
-                a.name ?: stringResource(R.string.approvals_no_name),
+                a.name ?: stringResource(R.string.approvals_name_not_shared),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.testTag("request_name"),
             )
-            Text(
-                stringResource(R.string.approvals_self_asserted),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (a.name != null) {
+                Text(
+                    stringResource(R.string.approvals_names_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            a.displayName?.let {
+                Spacer(Modifier.height(Spacing.s))
+                Text(stringResource(R.string.approvals_display_name, AccountNames.isolate(it)), style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    stringResource(R.string.approvals_self_asserted),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             a.introducedBy?.let {
                 Spacer(Modifier.height(Spacing.s))
                 Text(stringResource(R.string.approvals_introduced), style = MaterialTheme.typography.bodyMedium)
@@ -378,7 +395,7 @@ private fun Facts(a: Approval) {
             if (a.state == RequestState.APPROVED) {
                 Spacer(Modifier.height(Spacing.m))
                 Text(
-                    stringResource(R.string.approvals_waiting_peer, a.name ?: stringResource(R.string.approvals_them)),
+                    stringResource(R.string.approvals_waiting_peer, themOf(a.name)),
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.testTag("waiting_peer"),
                 )
@@ -388,7 +405,7 @@ private fun Facts(a: Approval) {
         is Approval.OutgoingRequest -> {
             Label(stringResource(R.string.approvals_outgoing_name))
             Text(
-                a.name ?: stringResource(R.string.approvals_no_name),
+                a.name ?: stringResource(R.string.approvals_name_not_shared),
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -408,7 +425,7 @@ private fun Facts(a: Approval) {
             if (a.state == RequestState.APPROVED) {
                 Spacer(Modifier.height(Spacing.m))
                 Text(
-                    stringResource(R.string.approvals_waiting_peer, a.name ?: stringResource(R.string.approvals_them)),
+                    stringResource(R.string.approvals_waiting_peer, themOf(a.name)),
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.testTag("waiting_peer"),
                 )

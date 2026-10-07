@@ -108,6 +108,23 @@ class VaultApi(val device: VaultDevice) {
             holdOffUntil?.let { put("hold_off_until", it) }
         }).first.decode(OwnerCheckPassed.serializer())
 
+    /**
+     * Changes the account's first and last name (§10.8, 0.18.0): the PIN, the credential password and the two names
+     * sealed together to one UTK, with the blob, checked as an owner check is (the CEK rotates; the deadline does
+     * not move). Returns the stored request (`pending`); the member API's outcome arrives in the account snapshot.
+     * `too_soon` carries `{allowed_after}` in the error body; the other refusals are the owner check's.
+     */
+    suspend fun accountNameSet(pin: String, password: String, firstName: String, lastName: String): NameRequest {
+        val o = cred.credOp(TYPE_ACCOUNT_NAME_SET, {
+            put("pin", pin)
+            put("password", password)
+            put("first_name", firstName)
+            put("last_name", lastName)
+        }).first
+        val r = o["request"] as? JsonObject ?: throw VaultStateException("account.name.set without request")
+        return r.decode(NameRequest.serializer())
+    }
+
     // --- credential (§10.6) ---
 
     /** Creates the Protean Credential under [password] and keeps the blob (enrollment, §3.5.7). */
@@ -407,7 +424,7 @@ class VaultApi(val device: VaultDevice) {
 
     suspend fun profileGet(): Profile = op("profile.get").decode(Profile.serializer())
 
-    /** [photo] "" removes it. */
+    /** [name] or [photo] "" removes it. Never names the core (`first_name`, `last_name`, `ik`): it is read-only (§10.8). */
     suspend fun profileSet(version: Long, name: String? = null, photo: String? = null): Long = VaultJson.long(
         op("profile.set") {
             put("version", version)
@@ -737,6 +754,7 @@ class VaultApi(val device: VaultDevice) {
          * their underscores.
          */
         const val TYPE_OWNER_CHECK = "vault.owner-check"
+        const val TYPE_ACCOUNT_NAME_SET = "account.name.set"
         private const val AWAIT_S = 90L
         val APPROVAL_TYPES = setOf(
             "connection.request.pending", "connection.request.outgoing", "grant.pending", "critical-secret-use.pending",

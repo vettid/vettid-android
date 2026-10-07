@@ -327,7 +327,7 @@ private fun ConnectionList(state: ConnectionsUiState, actions: ConnectionsAction
 
 @Composable
 private fun ConnectionItem(c: ConnectionInfo, actions: ConnectionsActions) {
-    val name = c.displayName.ifBlank { stringResource(R.string.connections_unnamed) }
+    val name = c.displayName.ifBlank { stringResource(R.string.connections_name_not_shared) }
     ConnectionRow(
         name = name,
         favorite = c.favorite,
@@ -340,11 +340,18 @@ private fun ConnectionItem(c: ConnectionInfo, actions: ConnectionsActions) {
 }
 
 @Composable
-private fun supportingLine(c: ConnectionInfo): String {
-    val state = stateLabel(c.state)
-    val realName = c.alias?.let { a -> c.name.takeIf { it.isNotBlank() && it != a } }
-    return listOfNotNull(state, realName).joinToString(" · ").ifEmpty { stringResource(R.string.connections_state_active) }
-}
+private fun supportingLine(c: ConnectionInfo): String = (listOfNotNull(stateLabel(c.state)) + secondaryNames(c))
+    .joinToString(" · ")
+    .ifEmpty { stringResource(R.string.connections_state_active) }
+
+/**
+ * What a connection's secondary text adds to its title (VAULT-MESSAGING 0.18.0 §10.8): under an alias, the names on
+ * the peer's account; and the display name, if any, when it differs from the title.
+ */
+internal fun secondaryNames(c: ConnectionInfo): List<String> = listOfNotNull(
+    c.accountName?.takeIf { c.alias != null && it != c.displayName },
+    c.secondaryName,
+)
 
 /** The state as a short label; null for active (the usual case, left unsaid in rows). */
 @Composable

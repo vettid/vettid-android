@@ -24,6 +24,11 @@ import com.vettid.core.data.vault.HoldOff
 import com.vettid.core.data.vault.OwnerCheckNotice
 import com.vettid.core.data.vault.OwnerCheckOutcome
 import com.vettid.core.data.vault.OwnerCheckRepository
+import com.vettid.core.data.vault.ProfileRepository
+import com.vettid.core.data.vault.OwnProfile
+import com.vettid.core.data.vault.NameRequestView
+import com.vettid.core.data.vault.NameRequestState
+import com.vettid.core.data.vault.NameChangeOutcome
 import com.vettid.core.data.vault.OwnerCheckState
 import com.vettid.core.data.vault.OwnerCheckView
 import com.vettid.core.data.vault.RecoverOutcome
@@ -43,7 +48,7 @@ import java.time.Instant
  */
 @Suppress("TooManyFunctions")
 class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
-    AccountRepository, VaultRepository, CredentialRepository, MoveRepository, OwnerCheckRepository {
+    AccountRepository, VaultRepository, CredentialRepository, MoveRepository, OwnerCheckRepository, ProfileRepository {
     val calls = mutableListOf<String>()
 
     /** MEMBER-API 1.2.0: the vault service paused (the banner). */
@@ -407,6 +412,33 @@ class FakeVault(initial: AppPhase = AppPhase.SignedOut) :
     override suspend fun dismissNotices() {
         call("dismissNotices")
         notices.value = emptyList()
+    }
+
+    // --- the shared profile and the account's names (ProfileRepository) ---
+
+    override val profile = MutableStateFlow<OwnProfile?>(null)
+
+    /** Scripted answers to [changeName] (default: a pending request with the next seq). */
+    val nameResults = ArrayDeque<NameChangeOutcome>()
+    var lastNames: Pair<String, String>? = null
+    private var nameSeq = 0L
+
+    override suspend fun refreshProfile() = call("refreshProfile")
+
+    override suspend fun setDisplayName(name: String) {
+        call("setDisplayName")
+        profile.value = profile.value?.let { it.copy(displayName = name, version = it.version + 1) }
+    }
+
+    override suspend fun changeName(pin: String, password: String, firstName: String, lastName: String): NameChangeOutcome {
+        call("changeName")
+        lastPin = pin
+        lastPassword = password
+        lastNames = firstName to lastName
+        val r = nameResults.removeFirstOrNull()
+            ?: NameChangeOutcome.Requested(NameRequestView(++nameSeq, firstName, lastName, Instant.now(), NameRequestState.PENDING))
+        if (r is NameChangeOutcome.Requested) account.value = account.value?.copy(nameRequest = r.request)
+        return r
     }
 
     companion object {

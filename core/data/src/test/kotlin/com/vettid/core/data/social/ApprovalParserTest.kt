@@ -22,17 +22,19 @@ class ApprovalParserTest {
     private fun o(s: String): JsonObject = VaultJson.json.parseToJsonElement(s).jsonObject
 
     @Test
-    fun connectionRequestKeepsTheSafetyCodeAndTheSelfAssertedName() {
+    fun connectionRequestKeepsTheSafetyCodeAndTheRequestersNames() {
+        // 0.18.0 §6.2: the hs.init profile is {first_name, last_name, name?}.
         val a = ApprovalParser.parse(
             "connection.request.pending",
-            o("""{"pending_id":"P1","invite_id":"I1","sas":"042817","remote":true,"profile":{"name":"Morgan"},"extra":1}"""),
+            o("""{"pending_id":"P1","invite_id":"I1","sas":"042817","remote":true,"profile":{"first_name":"Morgan","last_name":"Lee","name":"Mo"},"extra":1}"""),
             at,
         ) as Approval.ConnectionRequest
         assertEquals("P1", a.pendingId)
         assertEquals("I1", a.inviteId)
         assertEquals("042817", a.sas)
         assertTrue(a.remote)
-        assertEquals("Morgan", a.name)
+        assertEquals("Morgan Lee", a.name)
+        assertEquals("Mo", a.displayName)
         assertEquals("connection:P1", a.key)
         // §6.4: an undecided request is dropped after 7 days.
         assertEquals(at.plus(CONNECTION_REQUEST_TTL), a.exp)
@@ -125,20 +127,88 @@ class ApprovalParserTest {
     }
 
     @Test
-    fun connectionsShowOnlyTextProfileMembersAndAKeyFingerprint() {
+    fun aRequestWithoutNamesHasNoTitleAndADisplayNameAloneIsNeverOne() {
+        val a = ApprovalParser.incoming(o("""{"pending_id":"P1","sas":"042817","profile":{"name":"Morgan"}}"""), at)!!
+        assertNull(a.name)
+        assertEquals("Morgan", a.displayName)
+        // A display name equal to the title is not repeated.
+        val b = ApprovalParser.incoming(
+            o("""{"pending_id":"P2","sas":"042817","profile":{"first_name":"Ada","last_name":"King","name":"Ada King"}}"""), at,
+        )!!
+        assertEquals("Ada King", b.name)
+        assertNull(b.displayName)
+    }
+
+    @Test
+    fun connectionsAreTitledFromTheProfileCore() {
+        val ik = Base64s.encodeStd(ByteArray(32) { 0x11 })
         val c = ApprovalParser.connection(
             Connection(
-                id = "C1", state = "stale", name = "Sam", ik = Base64s.encodeStd(ByteArray(32) { 0x11 }),
-                profile = o("""{"name":"Sam","photo":"data","city":"Lisbon","nested":{"a":1}}"""),
+                id = "C1", state = "stale", name = "Sam", ik = ik,
+                profile = o(
+                    """{"version":3,"first_name":"Samira","last_name":"Rivera","ik":"$ik","name":"Sam","photo":"data",""" +
+                        """"items":[{"item_id":"I1","name":"City","category":"other","fields":[{"field_id":"F1","label":"City","kind":"text","value":"Lisbon"},""" +
+                        """{"field_id":"F2","label":"Home","kind":"address","value":{"street":"Rua A","city":"Lisboa"}}]}]}""",
+                ),
                 alias = "", favorite = true, createdAt = "2026-10-01T09:00:00.000Z",
             ),
         )
         assertEquals(ConnectionState.STALE, c.state)
         assertNull(c.alias)
-        assertEquals("Sam", c.displayName)
-        assertEquals(listOf("name" to "Sam", "city" to "Lisbon"), c.profile)
-        assertEquals("1111 1111 1111 1111", c.keyFingerprint)
+        assertEquals("Samira Rivera", c.accountName)
+        assertEquals("Samira Rivera", c.displayName)
+        assertEquals("Sam", c.name)
+        assertEquals("Sam", c.secondaryName)
+        assertTrue(c.hasPhoto)
+        assertEquals(listOf(SharedProfileItem("I1", "City", listOf("City" to "Lisbon", "Home" to "Rua A, Lisboa"))), c.sharedItems)
+        // §10.8: SHA-256("vettid/vms/2/ik-fp" || ik), first 16 bytes, 8 groups of 4.
+        assertEquals(com.vettid.core.crypto.IkFingerprint.format(ByteArray(32) { 0x11 }), c.keyFingerprint)
+        assertEquals(39, c.keyFingerprint!!.length)
         assertTrue(c.favorite)
+    }
+
+    @Test
+    fun theAliasTitlesAndTheNamesStayAvailable() {
+        val c = ApprovalParser.connection(
+            Connection(id = "C1", state = "active", profile = o("""{"first_name":"Ada","last_name":"King"}"""), alias = "Mum"),
+        )
+        assertEquals("Mum", c.displayName)
+        assertEquals("Ada King", c.accountName)
+        assertNull(c.secondaryName)
+    }
+
+    @Test
+    fun beforeTheFirstProfileThereIsNoTitle() {
+        // The accepter's side between activation and the first profile.update: only the invitation's name.
+        val c = ApprovalParser.connection(Connection(id = "C1", state = "active", name = "Jo"))
+        assertNull(c.accountName)
+        assertEquals("", c.displayName) // the UI shows "Name not shared yet"
+        assertEquals("Jo", c.secondaryName)
+        assertNull(c.keyFingerprint)
+    }
+
+    @Test
+    fun aProfileWhoseCoreBreaksTheRulesGivesNoNames() {
+        val bad = listOf(
+            """{"first_name":"","last_name":"King"}""",
+            """{"first_name":"Ada"}""",
+            """{"first_name":"Ada","last_name":1}""",
+            """{"first_name":"Ada\u0000","last_name":"King"}""",
+            """{"first_name":"Ada","last_name":"Ki\u0085ng"}""",
+            """{"first_name":"Ada\u2028","last_name":"King"}""",
+            """{"first_name":"${"a".repeat(161)}","last_name":"King"}""",
+            """{"first_name":"Ada","last_name":"King","ik":"AAAA"}""",
+            """{"first_name":"Ada","last_name":"King","ik":7}""",
+        )
+        for (p in bad) {
+            val c = ApprovalParser.connection(Connection(id = "C1", state = "active", profile = o(p)))
+            assertNull(p, c.accountName)
+            assertEquals(p, "", c.displayName)
+        }
+        // 160 bytes is still a name (3-byte characters: 53 × 3 = 159, plus one).
+        val ok = "\u20ac".repeat(53) + "a"
+        val c = ApprovalParser.connection(Connection(id = "C1", state = "active", profile = o("""{"first_name":"$ok","last_name":"K"}""")))
+        assertEquals("${"\u20ac".repeat(53)}a K", c.accountName)
     }
 
     @Test

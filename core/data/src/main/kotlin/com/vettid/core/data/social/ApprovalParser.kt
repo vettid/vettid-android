@@ -3,15 +3,14 @@ package com.vettid.core.data.social
 import com.vettid.core.crypto.Base64s
 import com.vettid.core.crypto.Bytes
 import com.vettid.core.crypto.CryptoException
+import com.vettid.core.crypto.IkFingerprint
 import com.vettid.core.vault.Connection
 import com.vettid.core.vault.Message
 import com.vettid.core.vault.VaultJson
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.contentOrNull
 import java.time.Instant
 import java.time.format.DateTimeParseException
 
@@ -99,12 +98,13 @@ object ApprovalParser {
             inviteId = body.s("invite_id"),
             sas = sas,
             remote = body.b("remote") ?: false,
-            name = body.o("profile")?.s("name")?.takeIf { it.isNotBlank() },
+            name = PeerProfile.accountName(body.o("profile")),
             introducedBy = body.s("introduced_by"),
             receivedAt = instant(body.s("created_at")) ?: at,
             exp = instant(body.s("exp")) ?: at.plus(CONNECTION_REQUEST_TTL),
             state = RequestState.of(body.s("state")),
             peerApproved = body.b("peer_approved") ?: false,
+            displayName = PeerProfile.displayName(body.o("profile"))?.takeIf { it != PeerProfile.accountName(body.o("profile")) },
         )
     }
 
@@ -178,21 +178,27 @@ object ApprovalParser {
         null
     }
 
-    fun connection(c: Connection): ConnectionInfo = ConnectionInfo(
-        id = c.id,
-        name = c.name,
-        state = ConnectionState.of(c.state),
-        alias = c.alias?.takeIf { it.isNotEmpty() },
-        note = c.note?.takeIf { it.isNotEmpty() },
-        favorite = c.favorite,
-        archived = c.archived,
-        tags = c.tags,
-        version = c.version,
-        profile = profileLines(c.profile),
-        keyFingerprint = fingerprint(c.ik),
-        createdAt = instant(c.createdAt),
-        lastActiveAt = instant(c.lastActiveAt),
-    )
+    fun connection(c: Connection): ConnectionInfo {
+        val p = PeerProfile.parse(c.profile)
+        return ConnectionInfo(
+            id = c.id,
+            name = p?.displayName ?: c.name,
+            state = ConnectionState.of(c.state),
+            alias = c.alias?.takeIf { it.isNotEmpty() },
+            note = c.note?.takeIf { it.isNotEmpty() },
+            favorite = c.favorite,
+            archived = c.archived,
+            tags = c.tags,
+            version = c.version,
+            firstName = p?.firstName,
+            lastName = p?.lastName,
+            sharedItems = p?.items ?: emptyList(),
+            hasPhoto = p?.hasPhoto ?: false,
+            keyFingerprint = IkFingerprint.formatB64(c.ik),
+            createdAt = instant(c.createdAt),
+            lastActiveAt = instant(c.lastActiveAt),
+        )
+    }
 
     fun message(m: Message): MessageInfo = MessageInfo(
         connectionId = m.connectionId,
@@ -203,21 +209,6 @@ object ApprovalParser {
         delivered = m.delivered,
         read = m.read,
     )
-
-    /** The text members of a shared profile (photo and nested values left out), for display as self-asserted. */
-    fun profileLines(p: JsonObject?): List<Pair<String, String>> = p?.entries
-        ?.filter { (k, _) -> k != "photo" }
-        ?.mapNotNull { (k, v: JsonElement) -> (v as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull?.let { k to it } }
-        ?: emptyList()
-
-    /** The first 16 hex digits of a standard-base64 key, in groups of four. */
-    fun fingerprint(b64: String): String? = try {
-        if (b64.isEmpty()) null else Bytes.hex(Base64s.decodeStd(b64)).take(FINGERPRINT_HEX).chunked(GROUP).joinToString(" ")
-    } catch (_: CryptoException) {
-        null
-    } catch (_: IllegalArgumentException) {
-        null
-    }
 
     /** `connection.authenticate.list` states and `.result` events. */
     fun authState(o: JsonObject): AuthenticationState? {
@@ -239,6 +230,4 @@ object ApprovalParser {
     }
 
     private val SAS = Regex("[0-9]{6}")
-    private const val FINGERPRINT_HEX = 16
-    private const val GROUP = 4
 }

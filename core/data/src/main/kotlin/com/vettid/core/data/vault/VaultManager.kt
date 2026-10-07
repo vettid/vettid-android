@@ -148,6 +148,19 @@ class VaultManager(
         store = KeystoreFileStore(File(app.noBackupFilesDir, SOCIAL_FILE), "social"),
     )
 
+    /**
+     * The member's shared profile and the account's names (VAULT-MESSAGING 0.18.0 §10.8): the display name, and the
+     * name change, which counts as an owner check for its PIN and password (§3.6.4).
+     */
+    val profile = ProfileManager(
+        ops = { VaultProfileOps(session().api) },
+        onRequest = { r -> io { saveLocal(local.copy(nameRequest = r.toWire())) } },
+        checksLeft = {
+            ownerCheck.refreshOwnerCheck()
+            ownerCheck.ownerCheck.value?.checksLeft
+        },
+    )
+
     /** The daily owner check (VAULT-MESSAGING 0.13.0 §3.6): its state, the check, the interval and the hold. */
     val ownerCheck: OwnerCheckManager = KeystoreFileStore(File(app.noBackupFilesDir, OWNER_CHECK_FILE), "owner-check").let { f ->
         OwnerCheckManager(
@@ -170,6 +183,7 @@ class VaultManager(
                 if (it == AppPhase.Unlocked) {
                     social.refreshAllQuietly()
                     launch { refreshAccount() }
+                    launch { runCatching { profile.refreshProfile() } }
                 }
             }
         }
@@ -188,6 +202,8 @@ class VaultManager(
         val vaultId: String = "",
         val emailHint: String = "",
         val snapshot: com.vettid.core.vault.AccountSnapshot? = null,
+        /** The latest name request (`account.get`'s `name_request`, VAULT-MESSAGING 0.18.0 §10.8). */
+        val nameRequest: com.vettid.core.vault.NameRequest? = null,
         /** A direct transfer to this phone started (§6.7.1): it has a vault to come without a redeem. */
         val transferIn: Boolean = false,
         val setupComplete: Boolean = false,
@@ -201,7 +217,7 @@ class VaultManager(
             snapshot != null -> snapshot.toInfo(emailHint)
             emailHint.isNotEmpty() -> AccountInfo(emailHint)
             else -> null
-        }
+        }?.copy(nameRequest = nameRequest?.let { NameRequestView.of(it) })
     }
 
     private fun loadLocal(): LocalAccount = try {
@@ -307,8 +323,11 @@ class VaultManager(
                 alarmFlow.value = CredentialAlarm(id, VaultJson.str(b, "state") ?: CredentialAlarm.STATE_FROZEN, VaultJson.str(b, "at"),
                     VaultJson.str(b, "presenter"))
             }
+            // 0.19.0: a change of the name request alone repeats the snapshot's version; never skip one.
             "sync.event" -> if (VaultJson.str(m.body, "kind") == SYNC_ACCOUNT_CHANGED) {
                 scope.launch { refreshAccount() }
+            } else if (VaultJson.str(m.body, "kind") == SYNC_PROFILE_CHANGED) {
+                scope.launch { runCatching { profile.refreshProfile() } }
             } else if (VaultJson.str(m.body, "kind") == "credential.alarm") {
                 val state = VaultJson.str(m.body, "state")
                 val id = VaultJson.str(m.body, "alarm_id")
@@ -436,10 +455,14 @@ class VaultManager(
     override suspend fun refreshAccount() {
         try {
             val v = guard { session().api.accountGet() }
-            val snap = v.account ?: return
             val stored = local.snapshot
-            if (stored != null && !newer(snap.asOf, stored.asOf)) return
-            io { saveLocal(local.copy(snapshot = snap, emailHint = snap.emailHint ?: local.emailHint)) }
+            val u = accountUpdate(stored, local.nameRequest, v) ?: return
+            val hint = u.snapshot?.emailHint ?: local.emailHint
+            io { saveLocal(local.copy(snapshot = u.snapshot, emailHint = hint, nameRequest = u.nameRequest)) }
+            // An applied name change brings new names to the shared profile's core too.
+            if (u.snapshot?.firstName != stored?.firstName || u.snapshot?.lastName != stored?.lastName) {
+                runCatching { profile.refreshProfile() }
+            }
         } catch (_: VaultFailure) {
             // display only: the last snapshot stays
         }
@@ -980,6 +1003,7 @@ class VaultManager(
         }
         social.clear()
         ownerCheck.clear()
+        profile.clear()
         canary.removeCanaryManifest()
         transferStartedAt = null
         openTransferId = null
@@ -1045,6 +1069,7 @@ class VaultManager(
         private const val HTTP_OK = 200
         private const val LEGACY_SESSION_FILE = "member-session.bin"
         private const val SYNC_ACCOUNT_CHANGED = "account.changed"
+        private const val SYNC_PROFILE_CHANGED = "profile.changed"
         private const val CODE_NO_RECOVERY = "no_recovery"
         private const val UPDATE_MOVED = "moved"
         private const val KEY_BACKUP = "credential.backup"
@@ -1123,6 +1148,26 @@ class VaultManager(
     }
 }
 
+/** What [VaultManager.refreshAccount] keeps from an `account.get`. */
+internal data class AccountUpdate(val snapshot: com.vettid.core.vault.AccountSnapshot?, val nameRequest: com.vettid.core.vault.NameRequest?)
+
+/**
+ * The account record after `account.get` [v] (§10.2, §11.13): the snapshot only when it is newer (`as_of`), and the
+ * name request whenever it changed, whatever the snapshot's version (0.19.0: a change of the request alone repeats
+ * the version, so an `account.changed` is never skipped). Null when nothing changed.
+ */
+internal fun accountUpdate(
+    stored: com.vettid.core.vault.AccountSnapshot?,
+    storedRequest: com.vettid.core.vault.NameRequest?,
+    v: com.vettid.core.vault.AccountView,
+): AccountUpdate? {
+    val snap = v.account
+    val newSnapshot = snap != null && (stored == null || newer(snap.asOf, stored.asOf))
+    val request = v.nameRequest ?: storedRequest
+    if (!newSnapshot && request == storedRequest) return null
+    return AccountUpdate(if (newSnapshot) snap else stored, request)
+}
+
 /** Whether RFC 3339 [a] is later than [b] (a snapshot without a parsable `as_of` replaces one only when none is stored). */
 private fun newer(a: String?, b: String?): Boolean {
     val ia = a?.let { runCatching { Instant.parse(it) }.getOrNull() }
@@ -1146,5 +1191,18 @@ private fun com.vettid.core.vault.AccountSnapshot.toInfo(fallbackHint: String): 
         subscription = subscription?.let { SubscriptionInfo(it.typeName, it.status, it.paid, t(it.expiresAt)) },
         votingRights = votingRights,
         asOf = t(asOf),
+        firstName = firstName?.takeIf { com.vettid.core.data.account.AccountNames.isValidCore(it) },
+        lastName = lastName?.takeIf { com.vettid.core.data.account.AccountNames.isValidCore(it) },
+        nameAllowedAfter = t(nameChange?.allowedAfter),
     )
 }
+
+/** A name request as the account record keeps it. */
+private fun NameRequestView.toWire() = com.vettid.core.vault.NameRequest(
+    seq = seq,
+    firstName = firstName,
+    lastName = lastName,
+    requestedAt = requestedAt?.toString(),
+    state = state.name.lowercase(),
+    reason = reason,
+)

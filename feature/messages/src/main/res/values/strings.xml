@@ -9,7 +9,7 @@
     <string name="messages_filter">Unread</string>
     <string name="messages_add">New message</string>
     <string name="messages_invite">Invite a connection</string>
-    <string name="messages_unnamed">Unnamed connection</string>
+    <string name="messages_name_not_shared">Name not shared yet</string>
     <string name="messages_preview_you">You: %1$s</string>
     <string name="messages_preview_none">No messages yet</string>
     <plurals name="messages_row_unread">

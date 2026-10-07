@@ -55,6 +55,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.social.InviteTtl
 import com.vettid.core.data.social.RequestEnd
 import com.vettid.core.ui.components.ConfirmDialog
@@ -290,6 +291,7 @@ private fun Request(state: InviteUiState, actions: InviteActions, modifier: Modi
     val req = state.request ?: return
     ConnectionRequestContent(
         name = req.name,
+        displayName = req.displayName,
         sas = req.sas,
         remote = req.remote,
         approved = state.step == InviteStep.CONNECTING,
@@ -330,8 +332,9 @@ private fun WaitingRow(text: String) {
 }
 
 /**
- * A connection request at the inviter (§6.4, 0.10.3): the name the requester
- * gave (self-asserted, labelled so), the safety code to compare with them, and
+ * A connection request at the inviter (§6.4, 0.10.3): the requester's "First Last" from its `hs.init` profile (the
+ * names on its VettID account, never called verified, 0.18.0 §6.2, §10.8) and its display name, if any
+ * (self-asserted, labelled so), the safety code to compare with them, and
  * approve / decline / block. After this member's approval ([approved]) the code
  * stays on screen while the other member approves on their phone.
  */
@@ -350,13 +353,14 @@ fun ConnectionRequestContent(
     modifier: Modifier = Modifier,
     approved: Boolean = false,
     autoApproved: Boolean = false,
+    displayName: String? = null,
 ) {
-    val who = name ?: stringResource(R.string.connections_request_them)
+    val who = name?.let { AccountNames.isolate(it) } ?: stringResource(R.string.connections_request_them)
     FormScaffold(
         title = stringResource(R.string.connections_request_title),
         body = stringResource(
             if (remote) R.string.connections_request_body_remote else R.string.connections_request_body,
-            name ?: stringResource(R.string.connections_request_someone),
+            name?.let { AccountNames.isolate(it) } ?: stringResource(R.string.connections_request_someone),
         ),
         primaryLabel = if (approved) null else stringResource(R.string.connections_request_approve),
         onPrimary = onApprove,
@@ -371,12 +375,27 @@ fun ConnectionRequestContent(
             name ?: stringResource(R.string.connections_request_no_name),
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.testTag("request_name"),
         )
-        Text(
-            stringResource(R.string.connections_self_asserted),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        if (name != null) {
+            Text(
+                stringResource(R.string.connections_names_note),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        displayName?.let {
+            Spacer(Modifier.height(Spacing.s))
+            Text(
+                stringResource(R.string.connections_request_display_name, AccountNames.isolate(it)),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Text(
+                stringResource(R.string.connections_self_asserted),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         Spacer(Modifier.height(Spacing.xl))
         Text(stringResource(R.string.connections_safety_code), style = MaterialTheme.typography.labelLarge)
         Spacer(Modifier.height(Spacing.s))

@@ -55,7 +55,9 @@ import com.vettid.feature.messages.MessagesRoute
 import com.vettid.feature.messages.messagesDestination
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.vettid.feature.settings.ChangeNameRoute
 import com.vettid.feature.settings.SettingsHost
+import com.vettid.feature.settings.SharedProfileRoute
 import com.vettid.feature.settings.helpDestination
 import com.vettid.feature.settings.settingsDestination
 import kotlinx.coroutines.launch
@@ -265,6 +267,14 @@ fun AppShell(
             onLockVault = {
                 showAccount = false
                 onLockVault()
+            },
+            onChangeName = {
+                showAccount = false
+                navController.navigate(ChangeNameRoute) { launchSingleTop = true }
+            },
+            onSharedProfile = {
+                showAccount = false
+                navController.navigate(SharedProfileRoute) { launchSingleTop = true }
             },
         )
     }

@@ -224,9 +224,20 @@ data class TagInfo(
 @Serializable
 data class TagPage(val version: Long = 0, val tags: List<TagInfo> = emptyList(), val next: String? = null)
 
-/** `profile.get` (§10.8). */
+/**
+ * `profile.get` (§10.8): the profile object (the display [name], absent as "", and the photo) and, since 0.18.0,
+ * the shared profile's read-only core: the account's [firstName] and [lastName] from the vault's snapshot and the
+ * vault's [ik]. The core is null from a vault before 0.18.0.
+ */
 @Serializable
-data class Profile(val version: Long = 0, val name: String = "", val photo: String? = null)
+data class Profile(
+    val version: Long = 0,
+    val name: String = "",
+    val photo: String? = null,
+    @SerialName("first_name") val firstName: String? = null,
+    @SerialName("last_name") val lastName: String? = null,
+    val ik: String? = null,
+)
 
 /** `settings.get` (§10.8). */
 @Serializable
@@ -301,6 +312,39 @@ data class AccountSnapshot(
     val terms: AccountTerms? = null,
     val subscription: AccountSubscription? = null,
     @SerialName("voting_rights") val votingRights: Boolean = false,
+    /** The account's names (0.18.0): what every connection sees in the shared profile's core (§10.8). */
+    @SerialName("first_name") val firstName: String? = null,
+    @SerialName("last_name") val lastName: String? = null,
+    /** The member API's state of the name changes (0.18.0, §11.13). */
+    @SerialName("name_change") val nameChange: AccountNameChange? = null,
+)
+
+/**
+ * The snapshot's `name_change` (§11.13): [allowedAfter], when the next change may be applied (null: now), and
+ * [last], the outcome of this vault's latest `account.name.set` the member API processed.
+ */
+@Serializable
+data class AccountNameChange(
+    @SerialName("allowed_after") val allowedAfter: String? = null,
+    val last: AccountNameResult? = null,
+)
+
+/** `name_change.last` (§11.13, 0.19.0): [status] `applied` or `refused`; [reason] only with `refused`. */
+@Serializable
+data class AccountNameResult(val seq: Long, val status: String, val reason: String? = null)
+
+/**
+ * A name request (§10.8, 0.18.0): the latest `account.name.set`, as `account.name.set` and `account.get` answer it.
+ * [state] is `pending`, `applied` or `refused`; [reason] (`too_soon`, `invalid`, `account`) only with `refused`.
+ */
+@Serializable
+data class NameRequest(
+    val seq: Long,
+    @SerialName("first_name") val firstName: String,
+    @SerialName("last_name") val lastName: String,
+    @SerialName("requested_at") val requestedAt: String? = null,
+    val state: String,
+    val reason: String? = null,
 )
 
 @Serializable
@@ -315,10 +359,15 @@ data class AccountSubscription(
     @SerialName("expires_at") val expiresAt: String? = null,
 )
 
-/** `account.get` (§10.2, 0.15.0): `account` null (and `version` 0) before any snapshot arrived. */
+/**
+ * `account.get` (§10.2, 0.15.0): `account` null (and `version` 0) before any snapshot arrived. A change of
+ * `name_request` alone repeats the stored `version` in `sync.event{account.changed}` (0.19.0): never skip one.
+ */
 @Serializable
 data class AccountView(
     val account: AccountSnapshot? = null,
     val version: Long = 0,
     @SerialName("received_at") val receivedAt: String? = null,
+    /** The latest `account.name.set` request (0.18.0, §10.8); absent before the first. */
+    @SerialName("name_request") val nameRequest: NameRequest? = null,
 )

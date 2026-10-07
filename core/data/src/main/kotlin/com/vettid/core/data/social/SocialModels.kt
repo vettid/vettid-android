@@ -1,5 +1,6 @@
 package com.vettid.core.data.social
 
+import com.vettid.core.data.account.AccountNames
 import java.time.Duration
 import java.time.Instant
 
@@ -24,12 +25,15 @@ enum class ConnectionState {
 }
 
 /**
- * A connection (§10.4). [name] and [profile] are the peer's self-asserted
- * values; [alias], [note], [favorite] and [archived] are the owner's own
- * metadata, never sent to the peer.
+ * A connection (§10.4). [firstName] and [lastName] are the names on the peer's VettID account, from the shared
+ * profile's core (VAULT-MESSAGING 0.18.0 §10.8; on the inviter's side, before the first `profile.update`, from the
+ * request): null before they arrived, never verified. [name] (the display name), [photo] and [sharedItems] are
+ * the peer's self-asserted extras; [alias], [note], [favorite] and [archived] are the owner's own metadata, never
+ * sent to the peer.
  */
 data class ConnectionInfo(
     val id: String,
+    /** The peer's display name (optional); "" without one. Never the title on its own (§10.8). */
     val name: String,
     val state: ConnectionState,
     val alias: String? = null,
@@ -38,16 +42,32 @@ data class ConnectionInfo(
     val archived: Boolean = false,
     val tags: List<String> = emptyList(),
     val version: Long = 0,
-    /** The shared profile's text members (photo left out), as the peer presents them. */
-    val profile: List<Pair<String, String>> = emptyList(),
-    /** The first hex digits of the peer vault's identity key, grouped, for display. */
+    val firstName: String? = null,
+    val lastName: String? = null,
+    /** The `@profile` items the peer shares, as the peer presents them. */
+    val sharedItems: List<SharedProfileItem> = emptyList(),
+    /** Whether the peer shares a photo (not shown yet). */
+    val hasPhoto: Boolean = false,
+    /** The fingerprint of the peer vault's pinned identity key (§10.8: 8 groups of 4 hex digits). */
     val keyFingerprint: String? = null,
     val createdAt: Instant? = null,
     val lastActiveAt: Instant? = null,
 ) {
-    /** The owner's alias, else the peer's name, else a fallback the UI supplies. */
-    val displayName: String get() = alias?.takeIf { it.isNotBlank() } ?: name
+    /** "First Last" from the names on the peer's account; null before they arrived (§10.8). */
+    val accountName: String? get() = AccountNames.full(firstName, lastName)
+
+    /**
+     * The title (§10.8): the owner's alias, else "First Last"; "" before the names arrived, for which the UI shows
+     * "Name not shared yet". Never the display name alone.
+     */
+    val displayName: String get() = alias?.takeIf { it.isNotBlank() } ?: accountName ?: ""
+
+    /** The peer's display name when it adds something to the title (non-empty and different), for secondary text. */
+    val secondaryName: String? get() = name.takeIf { it.isNotBlank() && it != displayName && it != accountName }
 }
+
+/** One `@profile` item of a peer's shared profile (§10.8): self-asserted. */
+data class SharedProfileItem(val itemId: String, val name: String, val fields: List<Pair<String, String>>)
 
 /** The invite lifetimes of §6.4: 10 minutes in person (default), longer for remote invites. */
 @Suppress("MagicNumber") // the spec's values
@@ -192,7 +212,10 @@ sealed interface Approval {
         val inviteId: String?,
         val sas: String,
         val remote: Boolean,
-        /** The requester's self-asserted name (`profile.name`). */
+        /**
+         * The requester's "First Last" from its `hs.init` profile (VAULT-MESSAGING 0.18.0 §6.2, §10.8): the names on
+         * its VettID account, not verified; null when the profile carries none.
+         */
         val name: String?,
         val introducedBy: String?,
         override val receivedAt: Instant,
@@ -202,6 +225,8 @@ sealed interface Approval {
         val state: RequestState = RequestState.PENDING,
         /** The other member approved too (their vault's `connection.approved` arrived). */
         val peerApproved: Boolean = false,
+        /** The requester's self-asserted display name (`profile.name`), if any and different from [name]. */
+        val displayName: String? = null,
     ) : Approval {
         override val key: String get() = "connection:$pendingId"
     }

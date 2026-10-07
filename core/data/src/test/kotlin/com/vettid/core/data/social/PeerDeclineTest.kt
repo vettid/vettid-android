@@ -57,7 +57,7 @@ class PeerDeclineTest {
         onEvent(event("connection.request.outgoing", """{"connection_id":"$id","sas":"123456","name":"$name","state":"approved","remote":false}"""))
 
     private suspend fun SocialManager.incoming(id: String, name: String) =
-        onEvent(event("connection.request.pending", """{"pending_id":"$id","invite_id":"i1","sas":"042817","profile":{"name":"$name"},"remote":true}"""))
+        onEvent(event("connection.request.pending", """{"pending_id":"$id","invite_id":"i1","sas":"042817","profile":{"first_name":"${name.substringBefore(' ')}","last_name":"${name.substringAfter(' ')}"},"remote":true}"""))
 
     private suspend fun SocialManager.failed(id: String, reason: String?) =
         onEvent(event("connection.event", """{"connection_id":"$id","event":"failed"${reason?.let { ""","reason":"$it"""" } ?: ""}}"""))
@@ -90,16 +90,16 @@ class PeerDeclineTest {
     @Test
     fun theInviterIsToldWithTheRequestsNameUntilDismissedAndItSurvivesARestart() = runTest {
         val m = setup()
-        m.incoming("p1", "Alex")
+        m.incoming("p1", "Alex Kim")
         runCurrent()
         m.sync("pending_id", "p1", "peer_declined")
         runCurrent()
         assertTrue(m.approvals.value.isEmpty())
-        assertEquals(listOf(PeerDecline("p1", "Alex", false, now)), m.peerDeclines.value)
+        assertEquals(listOf(PeerDecline("p1", "Alex Kim", false, now)), m.peerDeclines.value)
 
         // Kept (encrypted file) until the member dismisses it.
         val again = manager(backgroundScope)
-        assertEquals(listOf(PeerDecline("p1", "Alex", false, now)), again.peerDeclines.value)
+        assertEquals(listOf(PeerDecline("p1", "Alex Kim", false, now)), again.peerDeclines.value)
         again.dismissPeerDecline("p1")
         assertTrue(again.peerDeclines.value.isEmpty())
         assertTrue(manager(backgroundScope).peerDeclines.value.isEmpty())
@@ -128,7 +128,7 @@ class PeerDeclineTest {
     fun theMembersOwnDeclineAndOtherEndsAreUnchanged() = runTest {
         val m = setup()
         m.outgoing("c4", "Morgan")
-        m.incoming("p4", "Alex")
+        m.incoming("p4", "Alex Kim")
         m.outgoing("c5", "Sam")
         runCurrent()
         // Declined on another of this member's devices (0.10.4), an expiry and a failure: no peer decline.
