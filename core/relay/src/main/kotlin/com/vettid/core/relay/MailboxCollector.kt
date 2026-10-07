@@ -19,10 +19,15 @@ import kotlin.random.Random
  * every response. In [Mode.WEBSOCKET] the collector streams and falls back
  * to long-poll for [fallback] after a socket failure.
  *
- * Transport errors and 429/5xx back off with full jitter (0.25 s × 2ⁿ,
- * capped at 30 s). Terminal relay errors end [run]: `mailbox_unknown` (the
- * mailbox is gone), `timestamp_stale` (fix the clock rather than loop) and
- * every other client error.
+ * A handler that throws [LeaveUnacked] leaves that message unacked: the relay
+ * delivers it again after its lease (§6.3), and the next ones are handled.
+ *
+ * Transport errors, 429/5xx and a stale or replayed signature
+ * (`timestamp_stale`, `replay_detected`: a request signed before the phone
+ * froze in the background; every attempt is signed afresh) back off with full
+ * jitter (0.25 s × 2ⁿ, capped at 30 s). Terminal relay errors end [run]:
+ * `mailbox_unknown` (the mailbox is gone) and every other client error. The
+ * owner of the collector restarts it ([run] ended is not the end of the app).
  */
 class MailboxCollector(
     private val client: RelayClient,
@@ -67,8 +72,7 @@ class MailboxCollector(
     suspend fun pollOnce(handle: suspend (RelayMessage) -> Unit): Int {
         val msgs = client.collect(wait)
         for (m in msgs) {
-            handle(m)
-            client.ack(m.msgId)
+            if (handled(m, handle)) client.ack(m.msgId)
         }
         return msgs.size
     }
@@ -82,12 +86,19 @@ class MailboxCollector(
                 } catch (_: ClosedReceiveChannelException) {
                     return // closed normally: reconnect
                 }
-                handle(m)
-                if (!s.ack(m.msgId)) client.ack(m.msgId)
+                if (handled(m, handle) && !s.ack(m.msgId)) client.ack(m.msgId)
             }
         } finally {
             s.close()
         }
+    }
+
+    /** Hands [m] to [handle]; false when the handler left it for redelivery ([LeaveUnacked]). */
+    private suspend fun handled(m: RelayMessage, handle: suspend (RelayMessage) -> Unit): Boolean = try {
+        handle(m)
+        true
+    } catch (_: LeaveUnacked) {
+        false
     }
 
     private fun retryDelay(failures: Int, retryAfterSeconds: Int): Long {
@@ -104,3 +115,10 @@ class MailboxCollector(
         const val MS_PER_S = 1000L
     }
 }
+
+/**
+ * Thrown by a [MailboxCollector] handler for a message it cannot process yet but must not lose (a message of an
+ * epoch whose `hs.fin` has not arrived, VAULT-MESSAGING §6.3): the collector does not ack it, so the relay delivers
+ * it again after its lease.
+ */
+class LeaveUnacked(reason: String) : Exception(reason)

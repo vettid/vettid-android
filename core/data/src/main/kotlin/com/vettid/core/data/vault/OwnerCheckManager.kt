@@ -1,6 +1,7 @@
 package com.vettid.core.data.vault
 
 import com.vettid.core.vault.FeedItem
+import com.vettid.core.vault.HeldCounts
 import com.vettid.core.vault.HeldNotice
 import com.vettid.core.vault.OwnerCheckPassed
 import com.vettid.core.vault.OwnerCheckStatus
@@ -56,11 +57,14 @@ class OwnerCheckManager(
     private val onPassed: () -> Unit,
     private val now: () -> Instant = Instant::now,
 ) : OwnerCheckRepository {
-    private val view = MutableStateFlow(restore())
+    private val saved = restore()
+    private val view = MutableStateFlow(saved?.toView())
     private val locked = MutableStateFlow(false)
     private val unlockOutcome = MutableStateFlow<OwnerCheckOutcome?>(null)
     private val noticeFlow = MutableStateFlow<List<OwnerCheckNotice>>(emptyList())
-    private var heldTs: Instant? = null
+
+    /** The `ts` of the newest `vault.held` applied (kept with the view: an older one never overwrites newer counts). */
+    private var heldTs: Instant? = instant(saved?.heldTs)
 
     override val ownerCheck: StateFlow<OwnerCheckView?> = view.asStateFlow()
     override val lockedByOwnerCheck: StateFlow<Boolean> = locked.asStateFlow()
@@ -92,7 +96,7 @@ class OwnerCheckManager(
         val prev = heldTs
         if (prev != null && m.ts.isBefore(prev)) return
         heldTs = m.ts
-        val counts = WaitingCounts(n.waiting.messages, n.waiting.requests, n.waiting.calls, n.waiting.other)
+        val counts = n.waiting.toCounts()
         val base = view.value ?: unknownHeld()
         val state = if (base.holdOff(now())) OwnerCheckState.DUE else OwnerCheckState.HELD
         set(base.copy(state = state, deadline = instant(n.deadline) ?: base.deadline, waiting = counts))
@@ -151,7 +155,8 @@ class OwnerCheckManager(
             failures = st.failures,
             hold = st.hold,
             holdOffUntil = instant(st.holdOffUntil),
-            waiting = if (state == OwnerCheckState.OK) null else prev?.waiting,
+            // 0.19.0: the status says what is waiting; from an older vault only `vault.held` does.
+            waiting = if (state == OwnerCheckState.OK) null else st.waiting?.toCounts() ?: prev?.waiting,
         )
         set(v)
         return v
@@ -162,6 +167,7 @@ class OwnerCheckManager(
         val outcome = try {
             val r = vaultGuard { ops().check(pin, password, if (holdOff != null) false else null, until?.toString()) }
             locked.value = false
+            heldTs = null
             set(
                 OwnerCheckView(
                     state = OwnerCheckState.OK,
@@ -172,7 +178,6 @@ class OwnerCheckManager(
                     holdOffUntil = instant(r.holdOffUntil),
                 ),
             )
-            heldTs = null
             onPassed()
             scope.launch { runCatching { loadNotices() } }
             OwnerCheckOutcome.Passed
@@ -278,11 +283,11 @@ class OwnerCheckManager(
 
     private fun set(v: OwnerCheckView) {
         view.value = v
-        runCatching { persist(json.encodeToString(Saved.serializer(), Saved.of(v)).toByteArray()) }
+        runCatching { persist(json.encodeToString(Saved.serializer(), Saved.of(v, heldTs)).toByteArray()) }
     }
 
-    private fun restore(): OwnerCheckView? = try {
-        load()?.takeIf { it.isNotEmpty() }?.let { json.decodeFromString(Saved.serializer(), String(it)).toView() }
+    private fun restore(): Saved? = try {
+        load()?.takeIf { it.isNotEmpty() }?.let { json.decodeFromString(Saved.serializer(), String(it)) }
     } catch (_: IllegalArgumentException) {
         null
     } catch (_: java.io.IOException) {
@@ -291,6 +296,10 @@ class OwnerCheckManager(
         null
     }
 
+    /**
+     * What is kept on the phone. [waiting] null: the vault has not said what is waiting (never zero for unknown);
+     * [heldTs]: the `ts` of the `vault.held` the counts came from.
+     */
     @Serializable
     private data class Saved(
         val state: String,
@@ -299,17 +308,26 @@ class OwnerCheckManager(
         val failures: Int = 0,
         val hold: Boolean = true,
         val holdOffUntil: String? = null,
+        val waiting: SavedCounts? = null,
+        val heldTs: String? = null,
     ) {
         fun toView() = OwnerCheckView(
             runCatching { OwnerCheckState.valueOf(state) }.getOrDefault(OwnerCheckState.OK),
             instant(deadline), interval, failures, hold, instant(holdOffUntil),
+            waiting = waiting?.let { WaitingCounts(it.messages, it.requests, it.calls, it.other) },
         )
 
         companion object {
-            fun of(v: OwnerCheckView) =
-                Saved(v.state.name, v.deadline?.toString(), v.intervalSeconds, v.failures, v.hold, v.holdOffUntil?.toString())
+            fun of(v: OwnerCheckView, heldTs: Instant?) = Saved(
+                v.state.name, v.deadline?.toString(), v.intervalSeconds, v.failures, v.hold, v.holdOffUntil?.toString(),
+                waiting = v.waiting?.let { SavedCounts(it.messages, it.requests, it.calls, it.other) },
+                heldTs = heldTs?.toString(),
+            )
         }
     }
+
+    @Serializable
+    private data class SavedCounts(val messages: Int = 0, val requests: Int = 0, val calls: Int = 0, val other: Int = 0)
 
     companion object {
         const val REASON_OWNER_CHECK = "owner_check"
@@ -324,6 +342,8 @@ class OwnerCheckManager(
         private const val HOLD_OFF_MARGIN_MIN = 10L
         val NOTICE_KINDS = setOf("owner_check.failed", "owner_check.locked", "owner_check.hold_changed")
         private val json = Json { ignoreUnknownKeys = true }
+
+        private fun HeldCounts.toCounts() = WaitingCounts(messages, requests, calls, other)
 
         private fun instant(s: String?): Instant? = s?.let {
             try {

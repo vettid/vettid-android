@@ -16,6 +16,10 @@ import com.vettid.core.crypto.envelope.Sealer
 import com.vettid.core.crypto.envelope.Ulid
 import com.vettid.core.crypto.hpke.KemPrivateKey
 import com.vettid.core.crypto.hpke.KemPublicKey
+import com.vettid.core.crypto.json.JsonBuilder
+import com.vettid.core.crypto.json.JsonObject
+import com.vettid.core.crypto.json.StrictJson
+import java.time.Duration
 import java.time.Instant
 
 /** Configuration of an hs.init (§6.1, §6.2). */
@@ -404,6 +408,26 @@ class Responder internal constructor(
     }
 
     /**
+     * The persistent form, so that a restart between hs.resp and hs.fin does not lose the handshake (as the
+     * vault keeps `st.Awaiting`, vettid-vault `ResponderState`). Contains secrets: store it only where the
+     * session keys are stored (device storage, encrypted under a Keystore key).
+     */
+    @Synchronized
+    fun export(): ByteArray {
+        if (done) throw CryptoException.Used("handshake")
+        val b = sched.export(JsonBuilder())
+            .base64("verify_ik", verifyIk)
+            .base64("sender", sender)
+            .uint("suite", suite.toLong())
+            .uint("max_age_s", policy.maxAge.seconds)
+            .uint("max_messages", policy.maxMessages)
+            .string("purpose", purpose.wire)
+        commit?.let { b.base64("sas_commit", it) }
+        nR?.let { b.base64("n_r", it) }
+        return b.bytes()
+    }
+
+    /**
      * Opens hs.fin with the pending epoch's i2r key, verifies sig_I and, for a
      * purpose with a SAS, the commitment to n_I; only then is the epoch
      * established (§6.3). A message that does not decrypt, is malformed or
@@ -421,7 +445,8 @@ class Responder internal constructor(
         val pending = Epoch.from(sched, Role.RESPONDER, suite, policy, now)
         try {
             val inner = pending.open(e)
-            if (inner.type != HsTypes.FIN) throw CryptoException.Protocol("type")
+            // It opened under the pending epoch, so the initiator sent it after its hs.fin: keep it for later (§6.3).
+            if (inner.type != HsTypes.FIN) throw CryptoException.Early("hs.fin")
             inner.checkTime(now, true)
             val fin = HsFin.parse(inner.body, purpose)
             if (!Schedule.verifyFin(verifyIk, sched.th, fin.sig())) throw CryptoException.Signature("sig_I")
@@ -442,5 +467,44 @@ class Responder internal constructor(
             pending.destroy()
             throw ex
         }
+    }
+
+    companion object {
+        /** Restores a responder from [export]. */
+        fun import(state: ByteArray): Responder {
+            val o = StrictJson.parseObject(state)
+            val purpose = Purpose.of(o.string("purpose"))
+            val commit = if (o.has("sas_commit")) o.base64("sas_commit", Suite.HASH_SIZE) else null
+            val nR = if (o.has("n_r")) o.base64("n_r", HsLimits.SAS_NONCE_SIZE) else null
+            if (purpose.hasSas && (commit == null || nR == null)) throw CryptoException.Format("responder state")
+            val suite = o.uint("suite", 0, MAX_SUITE).toInt()
+            Suite.check(suite, 0)
+            val max = StrictJson.MAX_SAFE_INTEGER
+            return Responder(
+                sched = schedule(o),
+                verifyIk = o.base64("verify_ik", Suite.ED25519_PUBLIC_SIZE),
+                sender = o.base64("sender", Suite.ED25519_PUBLIC_SIZE),
+                suite = suite,
+                policy = Policy(Duration.ofSeconds(o.uint("max_age_s", 0, max)), o.uint("max_messages", 0, max)),
+                purpose = purpose,
+                commit = commit,
+                nR = nR,
+            )
+        }
+
+        /** The schedule from the fields of [Schedule.export]. */
+        private fun schedule(o: JsonObject): Schedule = Schedule(
+            th1 = o.base64("th1", Suite.HASH_SIZE),
+            th = o.base64("th", Suite.HASH_SIZE),
+            prk = o.base64("prk", Suite.KEY_SIZE),
+            kI2R = o.base64("k_i2r", Suite.KEY_SIZE),
+            kR2I = o.base64("k_r2i", Suite.KEY_SIZE),
+            kidI2R = Kid(o.base64("kid_i2r", Suite.KID_SIZE)),
+            kidR2I = Kid(o.base64("kid_r2i", Suite.KID_SIZE)),
+            rk = o.base64("rk", Suite.KEY_SIZE),
+            epochId = o.base64("epoch_id", Suite.EPOCH_ID_SIZE),
+        )
+
+        private const val MAX_SUITE = 255L
     }
 }

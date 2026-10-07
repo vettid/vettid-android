@@ -276,4 +276,54 @@ class RelayClientTest {
         assertEquals(3, waits.size)
         assertTrue(waits.all { it <= 30_000 })
     }
+
+    /** A stale or replayed signature (§4.1) is retried, signed afresh; the relay applied nothing. */
+    @Test
+    fun aStaleSignatureIsRetriedWithAFreshOne() = runBlocking<Unit> {
+        server.enqueue(json(401, """{"code":"timestamp_stale","message":"stale"}"""))
+        server.enqueue(json(401, """{"code":"replay_detected","message":""}"""))
+        server.enqueue(json(201, """{"msg_id":"01M"}"""))
+        assertEquals("01M", client.deposit("mbx", "tok", ByteArray(4)))
+        val sigs = (1..3).map { server.takeRequest().also { r -> verifySigned(r) }.headers[RelayAuth.HEADER_SIG] }
+        assertEquals(3, sigs.toSet().size)
+        assertTrue(RelayException(401, RelayException.TIMESTAMP_STALE, "").retryable)
+        assertTrue(RelayException(401, RelayException.REPLAY_DETECTED, "").staleSignature)
+        assertFalse(RelayException(401, RelayException.SIGNATURE_INVALID, "").retryable)
+        assertFalse(RelayException(403, RelayException.TOKEN_REVOKED, "").retryable)
+    }
+
+    /** The collector backs off and goes on after `timestamp_stale` (a request signed before the phone froze). */
+    @Test
+    fun theCollectorGoesOnAfterAStaleSignature() = runBlocking<Unit> {
+        server.enqueue(json(401, """{"code":"timestamp_stale","message":""}"""))
+        server.enqueue(json(200, """{"messages":[{"msg_id":"01S","deposited_at":"x","sender":"${VectorsTest.SENDER_PUB}","payload":"AQ=="}]}"""))
+        server.enqueue(MockResponse.Builder().code(204).build())
+        server.enqueue(json(404, """{"code":"mailbox_unknown","message":""}"""))
+        val waits = mutableListOf<Long>()
+        val got = mutableListOf<String>()
+        val c = RelayClient(server.url("/").toString(), key, OkHttpClient(), maxAttempts = 1)
+        val e = assertThrows(RelayException::class.java) { runBlocking { MailboxCollector(c, sleep = { waits.add(it) }).run { got.add(it.msgId) } } }
+        assertEquals(RelayException.MAILBOX_UNKNOWN, e.code)
+        assertEquals(listOf("01S"), got)
+        assertEquals(1, waits.size)
+    }
+
+    /** A message the handler leaves for redelivery ([LeaveUnacked]) is not acked; the next one is. */
+    @Test
+    fun aMessageLeftForRedeliveryIsNotAcked() = runBlocking<Unit> {
+        server.enqueue(
+            json(
+                200,
+                """{"messages":[{"msg_id":"01E","deposited_at":"x","sender":"${VectorsTest.SENDER_PUB}","payload":"AQ=="},""" +
+                    """{"msg_id":"01F","deposited_at":"x","sender":"${VectorsTest.SENDER_PUB}","payload":"AQ=="}]}""",
+            ),
+        )
+        server.enqueue(MockResponse.Builder().code(204).build())
+        val n = MailboxCollector(client).pollOnce { if (it.msgId == "01E") throw LeaveUnacked("early") }
+        assertEquals(2, n)
+        assertEquals("GET", server.takeRequest().method)
+        val ack = server.takeRequest()
+        assertEquals("/v1/mailbox/01F", ack.url.encodedPath)
+        assertNull(server.takeRequest(200, TimeUnit.MILLISECONDS))
+    }
 }

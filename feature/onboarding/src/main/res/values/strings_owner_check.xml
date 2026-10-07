@@ -33,6 +33,7 @@
         <item quantity="other">%d other updates</item>
     </plurals>
     <string name="ownercheck_waiting_none">Nothing new has arrived since your check was due.</string>
+    <string name="ownercheck_waiting_unknown">Checking what is waiting… Something may have arrived since your check was due; your vault has not said yet.</string>
     <string name="ownercheck_held_note">Your vault is held: it keeps receiving for you, but your desktops and agents wait for your check and calls do not ring.</string>
     <string name="ownercheck_due_note">The hold is off: your desktops and agents keep running. This phone needs the check first.</string>
     <string name="ownercheck_pin_label">Vault PIN</string>

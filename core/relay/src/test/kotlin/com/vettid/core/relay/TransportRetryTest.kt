@@ -1,5 +1,7 @@
 package com.vettid.core.relay
 
+import com.vettid.core.crypto.Base64s
+import com.vettid.core.crypto.Ed25519
 import com.vettid.core.crypto.Ed25519PrivateKey
 import kotlinx.coroutines.runBlocking
 import mockwebserver3.MockResponse
@@ -21,6 +23,10 @@ import java.io.IOException
 import java.net.InetAddress
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.time.Clock
+import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -163,6 +169,51 @@ class TransportRetryTest {
         server.enqueue(MockResponse.Builder().code(204).build())
         relay(WakingDns(failures = 1)).ack("01J0000000000000000000000A")
         assertEquals(2, server.requestCount)
+    }
+
+    /** A clock that the interceptor's waits move forward, as time passes for a phone frozen in the background. */
+    private class FrozenPhoneClock(var now: Instant) : Clock() {
+        override fun getZone(): ZoneId = ZoneOffset.UTC
+
+        override fun withZone(zone: ZoneId?): Clock = this
+
+        override fun instant(): Instant = now
+    }
+
+    /**
+     * Pixel 10, 2026-10-07: the app's network is blocked ~5 s after it leaves the screen and the process freezes
+     * soon after; a relay request signed before the wait reached the relay minutes later (`timestamp_stale`). The
+     * interceptor signs each attempt right before it goes out, after the wait.
+     */
+    @Test
+    fun aSignedRelayRequestIsSignedAgainAfterWaitingForTheNetwork() = runBlocking<Unit> {
+        val start = Instant.parse("2026-10-07T10:00:00Z")
+        val clock = FrozenPhoneClock(start)
+        val checks = AtomicInteger()
+        val gate = NetworkGate { checks.incrementAndGet() > 3 } // blocked for three looks
+        val http = OkHttpClient.Builder()
+            .addInterceptor(TransportRetry(gate, sleep = { clock.now = clock.now.plusSeconds(60) })) // each look: a minute frozen
+            .dns(WakingDns())
+            .build()
+        val key = Ed25519PrivateKey.generate()
+        server.enqueue(MockResponse.Builder().code(204).build())
+        RelayClient(url().toString(), key, http, clock = clock, maxAttempts = 1).ack("01J0000000000000000000000A")
+        val r = server.takeRequest()
+        val ts = r.headers[RelayAuth.HEADER_TIMESTAMP]!!
+        assertEquals(RelayAuth.timestamp(start.plusSeconds(180)), ts) // signed after the wait, not before it
+        val d = RelayAuth.digest("DELETE", r.url.encodedPath, ts, RelayAuth.bodyHash(null))
+        assertTrue(Ed25519.verifyRaw(key.publicKey, d, Base64s.decodeStd(r.headers[RelayAuth.HEADER_SIG]!!)))
+    }
+
+    @Test
+    fun theSignerReplacesOnlyTheSignatureHeaders() {
+        val req = Request.Builder().url(url()).header("Authorization", "VettID-Deposit t").header(RelayAuth.HEADER_SIG, "old")
+            .tag(RequestSigner::class.java, RequestSigner { mapOf(RelayAuth.HEADER_SIG to "new") }).build()
+        val again = RequestSigner.resign(req)
+        assertEquals("new", again.header(RelayAuth.HEADER_SIG))
+        assertEquals("VettID-Deposit t", again.header("Authorization"))
+        val plain = Request.Builder().url(url()).build()
+        assertTrue(RequestSigner.resign(plain) === plain)
     }
 
     @Test

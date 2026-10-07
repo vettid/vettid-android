@@ -39,6 +39,7 @@ import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SecretField
 import com.vettid.core.ui.theme.Spacing
+import java.time.Instant
 
 /**
  * The owner-check screen for [mode], driven by [OwnerCheckViewModel]. [onDone] after a passed check; [onCancel]
@@ -112,9 +113,7 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
         },
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
-            if (state.mode == OwnerCheckMode.GATED && v != null && v.state != OwnerCheckState.OK) {
-                WaitingCard(v.waiting ?: WaitingCounts(), held = v.state == OwnerCheckState.HELD)
-            }
+            waitingCardOf(state.mode, v, Instant.now())?.let { WaitingCard(it) }
             if (state.mode == OwnerCheckMode.HOLD_OFF) {
                 NoticeCard(
                     NoticeKind.WARNING,
@@ -179,21 +178,48 @@ fun OwnerCheckContent(state: OwnerCheckUiState, actions: OwnerCheckActions, onCa
 
 private const val WARN_LEFT = 3
 
-/** `vault.held`'s counts (§3.6.5: "3 new messages waiting"): no names, no content. */
-@Composable
-private fun WaitingCard(w: WaitingCounts, held: Boolean) {
-    val lines = buildList {
-        if (w.messages > 0) add(pluralStringResource(R.plurals.ownercheck_waiting_messages, w.messages, w.messages))
-        if (w.requests > 0) add(pluralStringResource(R.plurals.ownercheck_waiting_requests, w.requests, w.requests))
-        if (w.calls > 0) add(pluralStringResource(R.plurals.ownercheck_waiting_calls, w.calls, w.calls))
-        if (w.other > 0) add(pluralStringResource(R.plurals.ownercheck_waiting_other, w.other, w.other))
+/**
+ * What the gated check shows of what is waiting (§3.6.5). [counts] null: the vault has not said yet (no `vault.held`
+ * and no `owner_check.waiting` in `vault.status` so far), which is never shown as zero. [held] null: the hold is not
+ * known either.
+ */
+data class WaitingCardModel(val counts: WaitingCounts?, val held: Boolean?)
+
+/**
+ * The waiting card whenever the check gates the app ([OwnerCheckMode.GATED]), also while the phone's clock has passed
+ * the deadline before the vault said so (`state` still `ok`); never for a voluntary check or the hold-off.
+ */
+fun waitingCardOf(mode: OwnerCheckMode, v: OwnerCheckView?, now: Instant): WaitingCardModel? {
+    if (mode != OwnerCheckMode.GATED) return null
+    val held = when (v?.state) {
+        null -> null
+        OwnerCheckState.HELD -> true
+        OwnerCheckState.DUE -> false
+        OwnerCheckState.OK -> v?.holdOff(now) == false
     }
-    val counts = if (lines.isEmpty()) stringResource(R.string.ownercheck_waiting_none) else lines.joinToString("\n")
-    val note = stringResource(if (held) R.string.ownercheck_held_note else R.string.ownercheck_due_note)
+    return WaitingCardModel(v?.waiting, held)
+}
+
+/** `vault.held`'s counts (§3.6.5: "3 new messages waiting"): no names, no content; or that they are not known yet. */
+@Composable
+private fun WaitingCard(m: WaitingCardModel) {
+    val w = m.counts
+    val counts = if (w == null) {
+        stringResource(R.string.ownercheck_waiting_unknown)
+    } else {
+        val lines = buildList {
+            if (w.messages > 0) add(pluralStringResource(R.plurals.ownercheck_waiting_messages, w.messages, w.messages))
+            if (w.requests > 0) add(pluralStringResource(R.plurals.ownercheck_waiting_requests, w.requests, w.requests))
+            if (w.calls > 0) add(pluralStringResource(R.plurals.ownercheck_waiting_calls, w.calls, w.calls))
+            if (w.other > 0) add(pluralStringResource(R.plurals.ownercheck_waiting_other, w.other, w.other))
+        }
+        if (lines.isEmpty()) stringResource(R.string.ownercheck_waiting_none) else lines.joinToString("\n")
+    }
+    val note = m.held?.let { stringResource(if (it) R.string.ownercheck_held_note else R.string.ownercheck_due_note) }
     NoticeCard(
         NoticeKind.INFO,
         stringResource(R.string.ownercheck_waiting_title),
-        "$counts\n\n$note",
+        if (note == null) counts else "$counts\n\n$note",
         modifier = Modifier.testTag("owner_check_waiting"),
     )
 }

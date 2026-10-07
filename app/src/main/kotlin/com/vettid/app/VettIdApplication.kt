@@ -45,10 +45,13 @@ class VettIdApplication : Application() {
 
     /**
      * Back from the background (after Doze, say): connections pooled before may be dead, so none is reused; a phase
-     * read that failed meanwhile ("cannot connect") is read again rather than waiting for "Try again".
+     * read that failed meanwhile ("cannot connect") is read again rather than waiting for "Try again"; the mailbox
+     * collection runs again if it ended while the app was frozen, and a due owner check is re-read
+     * ([AccountRepository.onForeground]).
      */
     private fun onForeground() {
         connections.evictAll()
+        account.onForeground()
         if (account.phase.value is AppPhase.Unreachable) scope.launch { account.refresh() }
     }
 

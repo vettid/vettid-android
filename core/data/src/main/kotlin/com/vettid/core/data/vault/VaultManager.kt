@@ -267,6 +267,12 @@ class VaultManager(
     private fun observe(s: Session) {
         observer?.cancel()
         observer = scope.launch {
+            // A collection that ended (a terminal relay error) is started again, with backoff: without it nothing
+            // from the vault arrives until the next cold start.
+            CollectorSupervisor(this, restart = {
+                android.util.Log.i("VaultManager", "restarting the mailbox collector after ${s.device.collectionEnded.value}")
+                s.device.start(scope)
+            }).watch(s.device.collectionEnded)
             launch { s.device.vaultRefusals.collect { n -> refusals.onRefusals(n, phaseFlow.value) } }
             launch { s.device.ownerCheckRequired.collect { ownerCheck.onRequired() } }
             s.device.events.collect { m ->
@@ -321,6 +327,20 @@ class VaultManager(
     }
 
     // --- AccountRepository ---
+
+    /**
+     * Back in the foreground (after the phone froze the app in the background, say): the mailbox collection runs
+     * again if it ended, the outbox is flushed, and a vault past its owner-check deadline is re-read, so that the
+     * check screen shows what is waiting (`vault.status`'s `owner_check`, §3.6.5).
+     */
+    override fun onForeground() {
+        val d = session?.device ?: return
+        if (d.ensureCollecting()) android.util.Log.i("VaultManager", "mailbox collector restarted on return to the foreground")
+        scope.launch { runCatching { d.flushOutbox() } }
+        val t = Instant.now()
+        val due = ownerCheck.ownerCheck.value?.let { it.gated(t) || it.warning(t) } == true
+        if (due && phaseFlow.value is AppPhase.Unlocked) ownerCheck.onOpened()
+    }
 
     override suspend fun refresh() {
         val gen = generation

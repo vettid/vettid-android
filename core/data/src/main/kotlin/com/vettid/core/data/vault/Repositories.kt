@@ -35,6 +35,9 @@ interface AccountRepository {
     /** Re-reads the vault's state and sets [phase]. */
     suspend fun refresh()
 
+    /** The app came back to the foreground: whatever stopped while it was in the background is checked again. */
+    fun onForeground() {}
+
     /**
      * Redeems the portal's setup code with this phone's app key (§11.12.1) and returns the account's masked email
      * (`email_hint`) for the member to confirm before a PIN is asked for. [FailureKind.SETUP_CODE_INVALID] for any
