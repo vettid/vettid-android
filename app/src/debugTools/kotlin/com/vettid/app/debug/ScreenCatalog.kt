@@ -486,6 +486,10 @@ object ScreenCatalog {
             NewCredentialContent(NewCredentialUiState(pin = "975310", current = "pw", acknowledged = true, confirming = true), NewCredentialActions())
         },
         "owner_check.held" to { OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.GATED, heldView), NoOwnerCheck) {} },
+        // Past the deadline by the phone's clock, before the vault said what is waiting: never shown as zero.
+        "owner_check.unknown" to {
+            OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.GATED, okView.copy(deadline = Instant.now().minusSeconds(60))), NoOwnerCheck) {}
+        },
         "owner_check.due" to {
             OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.GATED, heldView.copy(state = OwnerCheckState.DUE, hold = false, waiting = WaitingCounts())), NoOwnerCheck) {}
         },

@@ -25,6 +25,25 @@ fun interface NetworkGate {
 }
 
 /**
+ * Signs a request afresh (RELAY-PROTOCOL §4.1: the relay accepts a signature within 90 s of its timestamp, and only
+ * once), set as the request's tag ([Request.Builder.tag]) by the relay client. [TransportRetry] asks it for new
+ * headers right before every attempt, after any wait for the network, so that a request held while the phone was
+ * frozen in the background goes out with a signature made now rather than minutes ago (`timestamp_stale`).
+ */
+fun interface RequestSigner {
+    /** The signature headers for an attempt made now. */
+    fun headers(): Map<String, String>
+
+    companion object {
+        /** [r] with its signature headers replaced by fresh ones when it carries a [RequestSigner]; else [r]. */
+        fun resign(r: Request): Request {
+            val s = r.tag(RequestSigner::class.java) ?: return r
+            return r.newBuilder().apply { s.headers().forEach { (k, v) -> header(k, v) } }.build()
+        }
+    }
+}
+
+/**
  * Retries a call that failed in transport (no HTTP status: DNS, connect, reset, end of stream) while the device
  * wakes up: the first request after Doze races the system lifting the app's network restrictions and may meet a
  * pooled connection that died meanwhile. An answer with an HTTP status (4xx, 5xx: `token_revoked`, `unauthorized`,
@@ -40,7 +59,8 @@ fun interface NetworkGate {
  *
  * Before each attempt, while [gate] says no network is usable, it waits for one (at most [networkWaitMs] per call
  * in all); a retry waits [backoffMs] for its attempt first. At most [maxRetries] retries. A cancelled call stops
- * waiting at once.
+ * waiting at once. A request that carries a [RequestSigner] is signed again right before each attempt, so that no
+ * attempt sends a signature made before a wait.
  */
 class TransportRetry(
     private val gate: NetworkGate = NetworkGate.ALWAYS,
@@ -72,7 +92,7 @@ class TransportRetry(
             networkBudget -= awaitNetwork(call, networkBudget)
             sent.started = false
             try {
-                return chain.proceed(req)
+                return chain.proceed(RequestSigner.resign(req))
             } catch (e: IOException) {
                 if (call.isCanceled() || attempt >= maxRetries || !retryable(e, policy, sent.started)) throw e
             }

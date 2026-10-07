@@ -7,6 +7,7 @@ import com.vettid.core.crypto.Ed25519PrivateKey
 import com.vettid.core.crypto.Kid
 import com.vettid.core.crypto.Labels
 import com.vettid.core.crypto.Suite
+import com.vettid.core.crypto.json.JsonBuilder
 import com.vettid.core.crypto.kdf.Hkdf
 
 /**
@@ -23,7 +24,7 @@ import com.vettid.core.crypto.kdf.Hkdf
  *
  * Secret; [destroy] wipes it.
  */
-class Schedule private constructor(
+class Schedule internal constructor(
     val th1: ByteArray,
     val th: ByteArray,
     internal val prk: ByteArray,
@@ -37,6 +38,11 @@ class Schedule private constructor(
     fun destroy() = Bytes.wipe(prk, kI2R, kR2I, rk)
 
     override fun toString(): String = "Schedule[redacted]"
+
+    /** The persistent form of a responder awaiting hs.fin ([Responder.export]). Contains secrets. */
+    internal fun export(b: JsonBuilder): JsonBuilder = b
+        .base64("th1", th1).base64("th", th).base64("prk", prk).base64("k_i2r", kI2R).base64("k_r2i", kR2I)
+        .base64("kid_i2r", kidI2R.bytes()).base64("kid_r2i", kidR2I.bytes()).base64("rk", rk).base64("epoch_id", epochId)
 
     companion object {
         /** Runs §6.3 from K_s, K_e and the transcript hashes. */

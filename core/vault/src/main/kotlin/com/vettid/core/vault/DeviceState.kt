@@ -44,7 +44,17 @@ internal data class VaultRecord(
     /** The keyring's export (base64 of its JSON). */
     var sessions: String = "",
     var suite: Int = 0,
+    /**
+     * The vault's rekeys this device answered with `hs.resp` whose `hs.fin` has not arrived (§6.5): kept across a
+     * restart, as the vault keeps its `st.Awaiting`, so that the `hs.fin` still finds its handshake. Secret, like
+     * [sessions].
+     */
+    var awaiting: MutableList<AwaitingRekey> = mutableListOf(),
 )
+
+/** A responder awaiting `hs.fin` ([com.vettid.core.crypto.session.Responder.export], base64) and when it began. */
+@Serializable
+internal data class AwaitingRekey(val createdMs: Long, val state: String)
 
 /** This app's copy of the Protean Credential (§3.5): the sealed blob, useless without the vault's CEK and the password. */
 @Serializable

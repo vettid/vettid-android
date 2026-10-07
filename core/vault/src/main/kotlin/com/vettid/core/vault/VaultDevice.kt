@@ -52,6 +52,7 @@ import com.vettid.core.crypto.session.Responder
 import com.vettid.core.crypto.session.ResponderConfig
 import com.vettid.core.crypto.session.Rotation
 import com.vettid.core.relay.DepositTokens
+import com.vettid.core.relay.LeaveUnacked
 import com.vettid.core.relay.MailboxCollector
 import com.vettid.core.relay.RelayAuth
 import com.vettid.core.relay.RelayClient
@@ -59,6 +60,7 @@ import com.vettid.core.relay.RelayException
 import com.vettid.core.relay.RelayLimits
 import com.vettid.core.relay.RelayMessage
 import com.vettid.core.relay.TokenException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -189,8 +191,9 @@ class NotATransferCodeException(val expired: Boolean = false) :
  * - As an [AltParty] it builds and opens the alternate channel's sealed
  *   requests for `:core:altchan`'s [com.vettid.core.altchan.AltChannelFlow].
  *
- * Not persisted: an in-flight first handshake (a restart before device.paired
- * repeats [completeEnrollment]).
+ * Persisted with the device state: the keyring, the outbox and the vault's
+ * rekeys awaiting their `hs.fin`. Not persisted: an in-flight first handshake
+ * (a restart before device.paired repeats [completeEnrollment]).
  */
 @Suppress("TooManyFunctions", "LargeClass")
 class VaultDevice private constructor(
@@ -205,7 +208,11 @@ class VaultDevice private constructor(
     private var keyring: Keyring =
         st.vault?.sessions?.takeIf { it.isNotEmpty() }?.let { Keyring.import(Base64s.decodeStd(it)) } ?: Keyring()
     private var ini: Initiator? = null
-    private val awaiting = ArrayList<Responder>()
+
+    /** A vault rekey this device answered (`hs.resp` sent), awaiting its `hs.fin` (§6.5). */
+    private class Awaiting(val resp: Responder, val createdMs: Long)
+
+    private val awaiting = ArrayList<Awaiting>(restoreAwaiting())
     private var pendingUnlock: PendingUnlock? = null
     private val pending = ConcurrentHashMap<String, CompletableDeferred<Inner>>()
     private val inbox = ArrayList<VaultMessage>()
@@ -238,10 +245,19 @@ class VaultDevice private constructor(
         refusalCount.value = 0
     }
     private var collector: Job? = null
+
+    /** The scope of the last [start], until [stop]: where [ensureCollecting] starts the collection again. */
+    private var collectScope: CoroutineScope? = null
     private val collectorEnd = MutableStateFlow<String?>(null)
 
-    /** The relay error code that ended the last collection ([start]), or null while it runs or never ended. */
+    /**
+     * The relay error code that ended the last collection ([start]), or null while it runs or never ended. Whoever
+     * started the collection restarts it (the app's `CollectorSupervisor`): until then nothing from the vault arrives.
+     */
     val collectionEnded: StateFlow<String?> = collectorEnd.asStateFlow()
+
+    /** Whether the mailbox collector runs. */
+    val collecting: Boolean get() = collector?.isActive == true
 
     /** Every event from the vault (no responses), as it arrives. */
     val events: SharedFlow<VaultMessage> = eventFlow.asSharedFlow()
@@ -286,8 +302,34 @@ class VaultDevice private constructor(
     // --- persistence ---
 
     private fun save() {
-        st.vault?.let { it.sessions = Base64s.encodeStd(keyring.export()) }
+        st.vault?.let { v ->
+            v.sessions = Base64s.encodeStd(keyring.export())
+            v.awaiting = awaiting.mapNotNull { a ->
+                // A responder that is done (aborted) has nothing left to keep.
+                runCatching { AwaitingRekey(a.createdMs, Base64s.encodeStd(a.resp.export())) }.getOrNull()
+            }.toMutableList()
+        }
         cfg.store.save(stateJson.encodeToString(DeviceState.serializer(), st).toByteArray())
+    }
+
+    /** The persisted rekeys awaiting `hs.fin`; one that does not restore or is past [HANDSHAKE_TTL] is dropped. */
+    private fun restoreAwaiting(): List<Awaiting> {
+        val cutoff = now().minus(HANDSHAKE_TTL).toEpochMilli()
+        return st.vault?.awaiting.orEmpty().filter { it.createdMs >= cutoff }.mapNotNull { a ->
+            try {
+                Awaiting(Responder.import(Base64s.decodeStd(a.state)), a.createdMs)
+            } catch (_: CryptoException) {
+                null
+            }
+        }
+    }
+
+    /** Ends the rekeys awaiting `hs.fin` for longer than [HANDSHAKE_TTL], and all but the newest [MAX_AWAITING]. */
+    private fun pruneAwaiting(t: Instant) {
+        val cutoff = t.minus(HANDSHAKE_TTL).toEpochMilli()
+        val drop = awaiting.filter { it.createdMs < cutoff } + awaiting.sortedByDescending { it.createdMs }.drop(MAX_AWAITING)
+        drop.forEach { it.resp.abort() }
+        awaiting.removeAll(drop.toSet())
     }
 
     private fun alt(): AltState = st.alt?.let { AltState.parse(StrictJson.parseObject(it)) } ?: AltState()
@@ -298,8 +340,14 @@ class VaultDevice private constructor(
 
     // --- lifecycle ---
 
-    /** Starts collecting from the device's mailbox in [scope] and flushes the outbox. */
+    /**
+     * Starts collecting from the device's mailbox in [scope] and flushes the outbox; returns the running collection
+     * if there is one. A terminal relay error ends the collection ([collectionEnded]); start it again to go on.
+     */
+    @Synchronized
+    @Suppress("TooGenericExceptionCaught") // whatever ends the collection is reported in collectionEnded
     fun start(scope: CoroutineScope): Job {
+        collectScope = scope
         collector?.let { if (it.isActive) return it }
         collectorEnd.value = null
         val job = scope.launch {
@@ -310,6 +358,12 @@ class VaultDevice private constructor(
                 // A terminal relay error ends the collection (MailboxCollector); it must never end the process. The
                 // next start() collects again.
                 collectorEnd.value = e.code
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: RuntimeException) {
+                // Anything else that ends it (a message the handler did not expect) is reported the same way, so
+                // that the collection is started again rather than silently gone.
+                collectorEnd.value = e.javaClass.simpleName.ifEmpty { "error" }
             }
         }
         collector = job
@@ -322,8 +376,23 @@ class VaultDevice private constructor(
      */
     suspend fun relayLimits(): RelayLimits = own.register().limits
 
+    /**
+     * Starts the collection again in the scope of the last [start] if it is not running (it ended, or never ran),
+     * and flushes the outbox; nothing after [stop]. Returns whether it started one. For the app's return to the
+     * foreground and a request without an answer: a collection that ended is the usual reason for both.
+     */
+    @Synchronized
+    fun ensureCollecting(): Boolean {
+        val scope = collectScope ?: return false
+        if (collecting) return false
+        start(scope)
+        return true
+    }
+
     /** Stops collecting. */
+    @Synchronized
     fun stop() {
+        collectScope = null
         collector?.cancel()
         collector = null
     }
@@ -362,6 +431,8 @@ class VaultDevice private constructor(
             mailbox = pr.relay.mailbox, relayPk = Base64s.encodeStd(pr.relay.pk()),
         )
         keyring = Keyring()
+        awaiting.forEach { it.resp.abort() }
+        awaiting.clear()
     }
 
     // --- alternate channel (AltParty) ---
@@ -625,7 +696,11 @@ class VaultDevice private constructor(
         return iid
     }
 
-    /** Deposits an outbox entry; removes it once the relay accepted it, or on a terminal relay error (rethrown). */
+    /**
+     * Deposits an outbox entry; removes it once the relay accepted it, or on a terminal relay error (rethrown). A
+     * transport failure, 429, 5xx and a stale or replayed signature (`timestamp_stale`, `replay_detected`: the relay
+     * applied nothing, and every attempt is signed afresh, [RelayException.staleSignature]) keep it for the next flush.
+     */
     private suspend fun deliver(e: OutboxEntry) {
         try {
             relayFor(e.relayUrl).deposit(e.mailbox, e.token, Base64s.decodeStd(e.envelope))
@@ -689,6 +764,8 @@ class VaultDevice private constructor(
             lock.withLock { sendLocked(id, type, body, null, null, null) }
             repeat(APP_RETRIES + 1) { attempt ->
                 withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { return VaultMessage(it) }
+                // No answer: the collection may have ended (the answer would then wait in the mailbox unread).
+                ensureCollecting()
                 if (attempt < APP_RETRIES) lock.withLock { sendLocked(id, type, body, null, null, null) }
             }
             throw VaultStateException("$type: no response")
@@ -745,7 +822,11 @@ class VaultDevice private constructor(
         eventFlow.tryEmit(m)
     }
 
-    /** Processes one collected message. Classification is by sender and recipient kid only (§13.6). */
+    /**
+     * Processes one collected message. Classification is by sender and recipient kid only (§13.6). A message of a
+     * rekey's new epoch that arrived before the rekey's `hs.fin` is neither recorded as seen nor acked
+     * ([LeaveUnacked]): the relay delivers it again, and it is opened once `hs.fin` has arrived (§6.3, §8.4).
+     */
     internal suspend fun handle(m: RelayMessage) = lock.withLock {
         val t = now()
         if (st.seen.containsKey(m.msgId)) return@withLock
@@ -753,6 +834,10 @@ class VaultDevice private constructor(
         prune(st.seen, t)
         try {
             process(m, t)
+        } catch (e: CryptoException.Early) {
+            st.seen.remove(m.msgId)
+            save()
+            throw LeaveUnacked(e.message ?: "early").apply { initCause(e) }
         } catch (_: CryptoException) {
             // dropped (§13.6: a message that does not verify changes nothing)
         } catch (_: AttestationException) {
@@ -789,8 +874,10 @@ class VaultDevice private constructor(
             null
         }
         if (opened == null) {
-            val r = awaiting.firstOrNull { it.kids.first == env.recipientKid && it.kids.second == env.senderKid } ?: return
-            val fr = r.handleFin(raw, sender, t)
+            pruneAwaiting(t)
+            val r = awaiting.firstOrNull { it.resp.kids.first == env.recipientKid && it.resp.kids.second == env.senderKid } ?: return
+            // CryptoException.Early: a message of the new epoch ahead of its hs.fin (handle leaves it for redelivery).
+            val fr = r.resp.handleFin(raw, sender, t)
             keyring.activate(fr.epoch, t)
             awaiting.remove(r)
             return
@@ -839,7 +926,7 @@ class VaultDevice private constructor(
         sasState.value = null
         ini?.abort()
         ini = null
-        awaiting.forEach { it.abort() }
+        awaiting.forEach { it.resp.abort() }
         awaiting.clear()
         keyring.destroy()
         keyring = Keyring()
@@ -921,7 +1008,11 @@ class VaultDevice private constructor(
         res.sas?.let { sasState.value = it }
     }
 
-    /** Answers a vault-initiated rekey (§6.5). */
+    /**
+     * Answers a vault-initiated rekey (§6.5). The responder is persisted before `hs.resp` goes out (as the vault
+     * persists before it deposits, §8.3): the vault switches to the new epoch on `hs.resp`, so a restart that lost
+     * it would leave this device unable to read anything the vault sends from then on.
+     */
     private suspend fun handleRekey(raw: ByteArray, ep: Epoch, sender: ByteArray, t: Instant) {
         if (keyring.current() !== ep) return
         val pi = PendingInit.openRekey(raw, ep, t)
@@ -932,13 +1023,21 @@ class VaultDevice private constructor(
                 recordRelayKey = Base64s.decodeStd(v.relayPk), knownInitiatorIk = Base64s.decodeStd(v.ik), now = t,
             ),
         )
+        val a = Awaiting(resp, t.toEpochMilli())
+        awaiting.add(a)
+        pruneAwaiting(t)
+        save()
         try {
             depositToVault(v, env)
-        } catch (e: IOException) {
-            resp.abort()
+        } catch (e: RelayException) {
+            // Refused: the vault never sees this hs.resp. Otherwise it may have arrived (a lost answer, a retryable
+            // error): the responder stays for its hs.fin, and expires if none comes.
+            if (!e.retryable) {
+                awaiting.remove(a)
+                resp.abort()
+            }
             throw e
         }
-        awaiting.add(resp)
     }
 
     private fun storeVaultToken(o: JsonObject) {
@@ -1036,6 +1135,8 @@ class VaultDevice private constructor(
             lock.withLock { sendLocked(id, type, body, null, null, null) }
             repeat(APP_RETRIES + 1) { attempt ->
                 withTimeoutOrNull(timeout.toMillis()) { d.await() }?.let { return VaultMessage(it) }
+                // No answer: the collection may have ended (the answer would then wait in the mailbox unread).
+                ensureCollecting()
                 if (attempt < APP_RETRIES) lock.withLock { sendLocked(id, type, body, null, null, null) }
             }
             throw VaultStateException("$type: no response")
@@ -1075,6 +1176,10 @@ class VaultDevice private constructor(
         private const val AWAIT_DEFAULT_S = 90L
         private const val SECONDS_PER_MINUTE = 60L
         private val SEEN_RETENTION: Duration = Duration.ofDays(16)
+
+        /** How long a rekey waits for its hs.fin (vettid-vault `HandshakeTTL`). */
+        private val HANDSHAKE_TTL: Duration = Duration.ofDays(16)
+        private const val MAX_AWAITING = 8
         private val ISSUE_BEFORE: Duration = Duration.ofDays(10)
         private val REFRESH_BEFORE: Duration = Duration.ofDays(3)
         internal val EMPTY = JsonObject(emptyMap())

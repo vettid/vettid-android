@@ -3,9 +3,11 @@ package com.vettid.core.data.vault
 import com.vettid.core.crypto.envelope.Inner
 import com.vettid.core.crypto.envelope.Ulid
 import com.vettid.core.vault.FeedItem
+import com.vettid.core.vault.HeldCounts
 import com.vettid.core.vault.OwnerCheckPassed
 import com.vettid.core.vault.OwnerCheckStatus
 import com.vettid.core.vault.Settings
+import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
 import com.vettid.core.vault.VaultOpException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -99,6 +101,55 @@ class OwnerCheckManagerTest {
         val again = manager(Ops())
         assertTrue(again.ownerCheck.value!!.gated(now))
         assertEquals(3, again.ownerCheck.value!!.failures)
+    }
+
+    /**
+     * What is waiting survives a restart, and so does the `ts` of the `vault.held` it came from (an older one
+     * redelivered after the restart does not overwrite it); unknown stays unknown, never zero.
+     */
+    @Test
+    fun waitingCountsAndTheirTimeSurviveARestart() = runTest {
+        val ops = Ops().apply { status = OwnerCheckStatus("held", "2026-10-06T11:00:00Z", 86_400, hold = true) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        assertNull(m.ownerCheck.value!!.waiting) // the vault has not said yet
+        assertNull(manager(Ops()).ownerCheck.value!!.waiting)
+        m.onEvent(event("vault.held", """{"deadline":"2026-10-06T11:00:00Z","waiting":{"messages":2,"requests":0,"calls":1,"other":0}}"""))
+        val again = manager(Ops())
+        assertEquals(WaitingCounts(2, 0, 1, 0), again.ownerCheck.value!!.waiting)
+        again.onEvent(event("vault.held", """{"waiting":{"messages":0}}""", ts = now.minusSeconds(60)))
+        assertEquals(WaitingCounts(2, 0, 1, 0), again.ownerCheck.value!!.waiting)
+        again.onEvent(event("vault.held", """{"waiting":{"messages":5}}""", ts = now.plusSeconds(60)))
+        assertEquals(WaitingCounts(5, 0, 0, 0), manager(Ops()).ownerCheck.value!!.waiting)
+    }
+
+    /** VAULT-MESSAGING 0.19.0: `vault.status`'s `owner_check.waiting`, while due or held; optional (S4 sends none). */
+    @Test
+    fun theStatusSaysWhatIsWaitingWhenTheVaultSendsIt() = runTest {
+        val counts = HeldCounts(messages = 4, requests = 1, calls = 0, other = 0)
+        val ops = Ops().apply { status = OwnerCheckStatus("due", "2026-10-06T11:00:00Z", 86_400, hold = false, waiting = counts) }
+        val m = manager(ops)
+        m.refreshOwnerCheck()
+        assertEquals(WaitingCounts(4, 1, 0, 0), m.ownerCheck.value!!.waiting)
+        // An older vault: what vault.held said stays.
+        ops.status = OwnerCheckStatus("due", "2026-10-06T11:00:00Z", 86_400, hold = false)
+        m.refreshOwnerCheck()
+        assertEquals(WaitingCounts(4, 1, 0, 0), m.ownerCheck.value!!.waiting)
+        // Zero is zero when the vault says so.
+        ops.status = OwnerCheckStatus("due", "2026-10-06T11:00:00Z", 86_400, hold = false, waiting = HeldCounts())
+        m.refreshOwnerCheck()
+        assertEquals(WaitingCounts(), m.ownerCheck.value!!.waiting)
+        // Parsed from the wire as optional.
+        val withField = VaultJson.decode(
+            OwnerCheckStatus.serializer(),
+            VaultJson.parseObject("""{"state":"held","waiting":{"messages":1,"requests":2,"calls":3,"other":4}}""".toByteArray()),
+        )
+        assertEquals(HeldCounts(1, 2, 3, 4), withField.waiting)
+        val without = VaultJson.decode(
+            OwnerCheckStatus.serializer(),
+            VaultJson.parseObject("""{"state":"held"}""".toByteArray()),
+        )
+        assertNull(without.waiting)
     }
 
     @Test

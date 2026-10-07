@@ -28,4 +28,11 @@ sealed class CryptoException(message: String) : Exception(message) {
 
     /** An HPKE context or handshake was used after it was spent. */
     class Used(what: String) : CryptoException("already used: $what")
+
+    /**
+     * A genuine message of an epoch that is not established yet (§6.3): it opened under the pending epoch of a
+     * handshake that still awaits its `hs.fin`. Not a failure of the message: leave it for redelivery, to be
+     * opened once `hs.fin` has arrived (vettid-vault's `noAck` on `ErrType`).
+     */
+    class Early(what: String) : CryptoException("not yet: $what")
 }

@@ -23,7 +23,8 @@ data class VaultStatusInfo(
 
 /**
  * `vault.status`'s `owner_check` (§3.6, §3.6.7): `state` is `ok`, `due` (past the deadline with the hold off: the
- * app is gated) or `held` (past the deadline with the hold on).
+ * app is gated) or `held` (past the deadline with the hold on). [waiting] (VAULT-MESSAGING 0.19.0, while `due` or
+ * `held`): what arrived since the deadline, as `vault.held` counts it; null from a vault that does not send it.
  */
 @Serializable
 data class OwnerCheckStatus(
@@ -33,6 +34,7 @@ data class OwnerCheckStatus(
     val failures: Int = 0,
     val hold: Boolean = true,
     @SerialName("hold_off_until") val holdOffUntil: String? = null,
+    val waiting: HeldCounts? = null,
 )
 
 /** `vault.owner_check`'s answer (§3.6.1), less the blob and UTKs the credential layer keeps. */

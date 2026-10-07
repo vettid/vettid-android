@@ -18,6 +18,7 @@ import com.vettid.core.crypto.session.Policy
 import com.vettid.core.crypto.session.Purpose
 import com.vettid.core.crypto.session.RelayAddr
 import com.vettid.core.crypto.session.Relay
+import com.vettid.core.crypto.session.Responder
 import com.vettid.core.crypto.session.ResponderConfig
 import com.vettid.core.crypto.session.Rotation
 import com.vettid.core.crypto.session.Schedule
@@ -243,6 +244,41 @@ class SessionTest {
         assertThrows(CryptoException.Protocol::class.java) { keyringA.open(Envelope.parse(late), now.plus(Duration.ofDays(17))) }
         // A rekey hs.init is accepted only under the current epoch.
         assertThrows(CryptoException.Protocol::class.java) { PendingInit.openRekey(i.envelope(), v2, now) }
+    }
+
+    /**
+     * The responder of a rekey survives a restart between hs.resp and hs.fin (as the vault's st.Awaiting): its
+     * export restores to a responder that completes the handshake. A message of the new epoch that comes before
+     * hs.fin is [CryptoException.Early] (keep it for later) and leaves the handshake pending.
+     */
+    @Test
+    fun aRekeyResponderExportsAndAMessageAheadOfHsFinIsEarly() {
+        val (a, v) = pair()
+        val i = Initiator.create(
+            InitiatorConfig(
+                purpose = Purpose.REKEY, ctx = "", identity = app.ik, staticKem = app.kem.publicKey, relay = app.relay,
+                responderIk = vault.ik.publicKey, responderEk = null, responderRelayKey = vault.relayKey.publicKey,
+                current = a, policy = Policy.VAULT_TO_DEVICE, now = now,
+            ),
+        )
+        val (r, resp) = PendingInit.openRekey(i.envelope(), v, now).respond(
+            ResponderConfig(
+                identity = vault.ik, policy = Policy.VAULT_TO_DEVICE, collectSender = app.relayKey.publicKey,
+                recordRelayKey = app.relayKey.publicKey, knownInitiatorIk = app.ik.publicKey, now = now,
+            ),
+        )
+        val state = r.export()
+        r.abort() // the process ends; only the export is left
+        val restored = Responder.import(state)
+        val res = i.handleResp(resp, vault.relayKey.publicKey, now)
+        val early = res.epoch.seal(Inner(id = "01JB2Z6V9K3M4N5P6Q7R8S9T0X", type = "message.new", ts = now))
+        assertThrows(CryptoException.Early::class.java) { restored.handleFin(early, app.relayKey.publicKey, now) }
+        val v2 = restored.handleFin(res.fin, app.relayKey.publicKey, now).epoch
+        assertEquals(Bytes.hex(res.epoch.id), Bytes.hex(v2.id))
+        assertEquals("message.new", v2.open(Envelope.parse(early)).type)
+        // Done: nothing to export any more; a damaged export does not restore.
+        assertThrows(CryptoException.Used::class.java) { restored.export() }
+        assertThrows(CryptoException::class.java) { Responder.import("{}".toByteArray()) }
     }
 
     @Test

@@ -26,10 +26,22 @@ import kotlin.random.Random
 /** A relay error response (RELAY-PROTOCOL §7.1). [code] is `http_<status>` when the body carried none. */
 class RelayException(val status: Int, val code: String, message: String, val retryAfterSeconds: Int = 0) :
     IOException("relay: $status $code${if (message.isEmpty()) "" else ": $message"}") {
-    /** 429 and 5xx are retried with backoff (§7.2); other client errors never are. */
-    val retryable: Boolean get() = status == HTTP_TOO_MANY || status >= HTTP_SERVER_ERROR
+    /**
+     * 429 and 5xx are retried with backoff (§7.2), and so is a signature the relay found stale or already seen
+     * ([staleSignature]); other client errors never are.
+     */
+    val retryable: Boolean get() = status == HTTP_TOO_MANY || status >= HTTP_SERVER_ERROR || staleSignature
+
+    /**
+     * `timestamp_stale` or `replay_detected` (§4.1): the request's signature was made too long before it reached the
+     * relay (a phone frozen in the background with the request in hand) or was sent twice. Nothing of the request
+     * was applied; the same request signed afresh is accepted. Only a clock that is really wrong keeps failing, and
+     * the backoff bounds that.
+     */
+    val staleSignature: Boolean get() = status == HTTP_UNAUTHORIZED && (code == TIMESTAMP_STALE || code == REPLAY_DETECTED)
 
     companion object {
+        const val HTTP_UNAUTHORIZED = 401
         const val HTTP_TOO_MANY = 429
         const val HTTP_SERVER_ERROR = 500
 
@@ -102,11 +114,14 @@ data class StoredRef(val id: String, val expiresAt: Instant?)
 
 /**
  * The relay client for one principal (one relay keypair), as vettid-relay's
- * `relayclient`. Every request is signed afresh per attempt (§4.1);
- * 429, 5xx and transport errors are retried with exponential backoff and
- * jitter, honouring `retry_after` (§7.2, CLIENT-NOTES §6); other client
- * errors are not retried, and a claim GET is never retried (it may already
- * have consumed the claim).
+ * `relayclient`. Every request is signed afresh per attempt (§4.1), and again
+ * by [TransportRetry] right before each attempt it makes after waiting for the
+ * network ([RequestSigner]): a signature never waits in a frozen process and
+ * then reaches the relay stale. 429, 5xx, `timestamp_stale`, `replay_detected`
+ * and transport errors are retried with exponential backoff and jitter,
+ * honouring `retry_after` (§7.2, CLIENT-NOTES §6); other client errors are not
+ * retried, and a claim GET is never retried (it may already have consumed the
+ * claim).
  *
  * [baseUrl] is the relay's base URL as tokens name it (`aud`). Transport
  * concerns (TLS trust, a development address mapping) belong to [http]'s
@@ -182,7 +197,9 @@ class RelayClient(
         val url = baseUrl + c.path + (c.query?.let { "?$it" } ?: "")
         val rb = Request.Builder().url(url)
         if (!c.unsigned) {
-            RelayAuth.headers(key, c.method, c.path, Instant.now(clock), RelayAuth.bodyHash(c.body)).forEach { (k, v) -> rb.header(k, v) }
+            val signer = signer(c.method, c.path, RelayAuth.bodyHash(c.body))
+            signer.headers().forEach { (k, v) -> rb.header(k, v) }
+            rb.tag(RequestSigner::class.java, signer)
         }
         c.token?.let { rb.header("Authorization", "VettID-Deposit $it") }
         val ct = c.contentType ?: if (c.body != null) JSON else null
@@ -199,6 +216,10 @@ class RelayClient(
             return read(resp)
         }
     }
+
+    /** Signs [method] [path] with this principal's key at the moment it is asked to (§4.1). */
+    private fun signer(method: String, path: String, bodyHash: ByteArray) =
+        RequestSigner { RelayAuth.headers(key, method, path, Instant.now(clock), bodyHash) }
 
     private fun errorOf(resp: Response): RelayException {
         val text = resp.body.bytesAtMost(ERROR_BODY_LIMIT.toLong())
@@ -340,8 +361,10 @@ class RelayClient(
     /** Opens a WebSocket collect session (§6.4), owner-signed at the upgrade. */
     fun openStream(): RelayStream {
         val path = "/v1/mailbox/ws"
+        val signer = signer("GET", path, RelayAuth.bodyHash(null))
         val rb = Request.Builder().url(baseUrl + path).tag(TransportRetry.Policy::class.java, TransportRetry.Policy.UNSENT_ONLY)
-        RelayAuth.headers(key, "GET", path, Instant.now(clock), RelayAuth.bodyHash(null)).forEach { (k, v) -> rb.header(k, v) }
+            .tag(RequestSigner::class.java, signer)
+        signer.headers().forEach { (k, v) -> rb.header(k, v) }
         return RelayStream.open(http, rb.build())
     }
 

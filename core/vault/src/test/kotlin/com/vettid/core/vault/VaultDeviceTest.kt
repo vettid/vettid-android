@@ -28,7 +28,9 @@ import com.vettid.core.crypto.session.RelayAddr
 import com.vettid.core.crypto.session.Responder
 import com.vettid.core.crypto.session.ResponderConfig
 import com.vettid.core.relay.DepositTokens
+import com.vettid.core.relay.LeaveUnacked
 import com.vettid.core.relay.RelayAuth
+import com.vettid.core.relay.RelayClient
 import com.vettid.core.relay.RelayException
 import com.vettid.core.relay.RelayMessage
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -36,6 +38,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -70,9 +73,12 @@ class VaultDeviceTest {
     private val deposits = LinkedBlockingQueue<Pair<String, ByteArray>>() // mailbox, payload
     private val claims = java.util.concurrent.ConcurrentHashMap<String, ByteArray>()
 
-    /** When set, the relay refuses every deposit with this code (403). */
+    /** When set, the relay refuses every deposit with this code ([refuseStatus], 403 by default). */
     @Volatile
     private var refuseDeposits: String? = null
+
+    @Volatile
+    private var refuseStatus = 403
 
     /** Deposits the relay refused (any code). */
     private val refused = java.util.concurrent.atomic.AtomicInteger()
@@ -157,7 +163,7 @@ class VaultDeviceTest {
                     ).build()
                     path.startsWith("/v1/mailbox/") && request.method == "POST" && refuseDeposits != null -> {
                         refused.incrementAndGet()
-                        MockResponse.Builder().code(403).body("""{"code":"$refuseDeposits","message":""}""").build()
+                        MockResponse.Builder().code(refuseStatus).body("""{"code":"$refuseDeposits","message":""}""").build()
                     }
                     path == "/v1/mailbox" && request.method == "GET" && refuseCollect != null ->
                         MockResponse.Builder().code(403).body("""{"code":"$refuseCollect","message":""}""").build()
@@ -481,6 +487,103 @@ class VaultDeviceTest {
             assertTrue(job.isActive)
             job.cancel()
             serveMailbox = false
+        }
+    }
+
+    private fun savedState(store: DeviceStateStore) = stateJson.decodeFromString(DeviceState.serializer(), String(store.load()!!))
+
+    /**
+     * A deposit refused with a stale or replayed signature (a request signed before the phone froze) stays in the
+     * outbox and goes out at the next flush, signed afresh; a terminal refusal drops it (§8.6).
+     */
+    @Test
+    fun aDepositRefusedForAStaleSignatureStaysInTheOutbox() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val (d, v) = pairedDevice(this, store)
+            refuseStatus = 401
+            refuseDeposits = RelayException.TIMESTAMP_STALE
+            val e = runCatching { d.send("message.send", buildJsonObject { put("text", "hi") }) }.exceptionOrNull()
+            assertTrue(e is RelayException && e.code == RelayException.TIMESTAMP_STALE)
+            assertEquals(RelayClient.DEFAULT_ATTEMPTS, refused.get()) // each attempt signed afresh, then kept
+            assertEquals(1, savedState(store).outbox.size)
+            refuseDeposits = null
+            d.flushOutbox()
+            assertEquals("message.send", v.open(nextDeposit().second).type)
+            assertEquals(0, savedState(store).outbox.size)
+            // A terminal refusal drops the entry.
+            refuseStatus = 403
+            refuseDeposits = RelayException.TOKEN_INVALID
+            runCatching { d.send("message.send", buildJsonObject { put("text", "again") }) }
+            assertEquals(0, savedState(store).outbox.size)
+            refuseDeposits = null
+        }
+    }
+
+    /**
+     * The vault rekeys at every unlock and switches to the new epoch on hs.resp (vettid-vault inbound.go, §6.5).
+     * An app that ends between its hs.resp and the vault's hs.fin keeps the handshake (persisted), so the hs.fin
+     * after the restart completes it. A message of the new epoch ahead of hs.fin is neither recorded as seen nor
+     * acked (LeaveUnacked), and its redelivery opens after hs.fin.
+     */
+    @Test
+    fun aRekeySurvivesARestartAndAMessageAheadOfItsFinWaits() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val store = InMemoryDeviceStateStore()
+            val secrets = DeviceSecrets.generate()
+            val (d, v) = pairedDevice(this, store, secrets)
+            val ini = Initiator.create(
+                InitiatorConfig(
+                    purpose = Purpose.REKEY, ctx = "", identity = v.ik, staticKem = v.kem.publicKey, relay = v.principal().relay,
+                    responderIk = d.identityKey, responderEk = null, responderRelayKey = d.relayAddr.pk(), current = v.keyring.current(),
+                    policy = Policy.VAULT_TO_DEVICE,
+                ),
+            )
+            d.handle(v.msg(ini.envelope()))
+            val res = ini.handleResp(nextDeposit().second, d.relayAddr.pk(), Instant.now())
+            v.keyring.activate(res.epoch, Instant.now())
+            d.stop() // the process ends before hs.fin arrives
+            val again = VaultDevice.load(config(store), secrets)!!
+            val early = v.seal("message.new", """{"connection_id":"c1","message_id":"m9","direction":"in","text":"early","sent_at":"x"}""")
+            assertThrows(LeaveUnacked::class.java) { runBlocking { again.handle(early) } }
+            assertTrue(savedState(store).seen[early.msgId] == null)
+            again.handle(v.msg(res.fin))
+            assertTrue(savedState(store).vault!!.awaiting.isEmpty())
+            again.handle(early) // the relay's redelivery: same msg_id
+            assertEquals("early", VaultJson.str(again.awaitEvent("message.new", java.time.Duration.ofSeconds(2)).body, "text"))
+            // The device now answers in the new epoch.
+            val status = async(Dispatchers.IO) { again.op("vault.status") }
+            val raw = nextDeposit().second
+            assertEquals(res.epoch.recvKid, Envelope.parse(raw).recipientKid)
+            again.handle(v.seal("vault.status", """{"vault_id":"x"}""", re = v.open(raw).id, status = Inner.STATUS_OK))
+            assertEquals("x", VaultJson.str(status.await(), "vault_id"))
+        }
+    }
+
+    /** A collection that ended starts again with [VaultDevice.ensureCollecting]; never after stop(). */
+    @Test
+    fun anEndedCollectionStartsAgain() = runBlocking<Unit> {
+        withTimeout(30_000) {
+            val (d, v) = pairedDevice(this)
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            refuseCollect = RelayException.SIGNATURE_INVALID
+            d.start(scope).join()
+            assertEquals(RelayException.SIGNATURE_INVALID, d.collectionEnded.value)
+            assertTrue(!d.collecting)
+            refuseCollect = null
+            serveMailbox = true
+            val m = v.seal("message.new", """{"connection_id":"c1","message_id":"m3","direction":"in","text":"after","sent_at":"x"}""")
+            queued.add(m)
+            assertTrue(d.ensureCollecting())
+            assertTrue(d.collecting)
+            assertNull(d.collectionEnded.value)
+            assertTrue(!d.ensureCollecting()) // already running
+            assertEquals("after", VaultJson.str(d.awaitEvent("message.new", java.time.Duration.ofSeconds(10)).body, "text"))
+            assertEquals(m.msgId, acked.poll(10, TimeUnit.SECONDS))
+            d.stop()
+            assertTrue(!d.ensureCollecting())
+            serveMailbox = false
+            scope.cancel()
         }
     }
 
