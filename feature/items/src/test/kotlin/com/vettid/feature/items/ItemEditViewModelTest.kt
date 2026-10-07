@@ -33,12 +33,16 @@ class ItemEditViewModelTest {
     val main = MainDispatcherRule()
 
     private val items = FakeItems()
+    private val sharing = com.vettid.core.testing.FakeSharing()
+    private val social = com.vettid.core.testing.FakeSocial()
     private val context = RuntimeEnvironment.getApplication()
 
     private fun vm(itemId: String? = null, template: String? = null) = ItemEditViewModel(
         SavedStateHandle(listOfNotNull(itemId?.let { ItemEditRoute.ARG_ITEM to it }, template?.let { ItemEditRoute.ARG_TEMPLATE to it }).toMap()),
         items,
         context,
+        sharing,
+        social,
     )
 
     @Test
@@ -192,6 +196,27 @@ class ItemEditViewModelTest {
         vm.setFieldKind(0, FieldKinds.EMAIL)
         assertEquals(FieldKinds.EMAIL, vm.uiState.value.draft.fields[0].kind)
         assertTrue(vm.uiState.value.dirty)
+    }
+
+    @Test
+    fun tagsShowWhatSavingWouldShare() = runTest {
+        social.connections.value = listOf(
+            com.vettid.core.data.social.ConnectionInfo("c1", "", com.vettid.core.data.social.ConnectionState.ACTIVE, firstName = "Dana", lastName = "Lee"),
+        )
+        sharing.rulesStored += com.vettid.core.data.items.ShareRule("r1", 1, "c1", tags = listOf("medical"))
+        sharing.rulesStored += com.vettid.core.data.items.ShareRule(
+            "r2", 1, "c1", tags = listOf("medical", "travel"), match = com.vettid.core.data.items.TagMatch.ALL,
+            mode = com.vettid.core.data.items.ShareMode.AUTO,
+        )
+        val vm = vm(template = "allergies")
+        advanceUntilIdle()
+        assertEquals(listOf("Dana Lee"), vm.uiState.value.shareImpact.map { it.connectionName })
+        assertEquals(com.vettid.core.data.items.ShareMode.ASK, vm.uiState.value.shareImpact.single().mode)
+        vm.setTagInput("travel")
+        vm.addTag()
+        assertEquals(2, vm.uiState.value.shareImpact.size)
+        vm.removeTag("medical")
+        assertTrue(vm.uiState.value.shareImpact.isEmpty())
     }
 
     @Test

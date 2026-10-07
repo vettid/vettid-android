@@ -1,5 +1,10 @@
 package com.vettid.feature.settings
 
+import com.vettid.core.data.items.ItemChecks
+import com.vettid.core.data.items.ItemSummary
+import com.vettid.core.data.items.ItemsRepository
+import com.vettid.core.data.items.ListLoad
+import com.vettid.core.data.items.Sensitivity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.account.AccountNames
@@ -39,6 +44,12 @@ data class SharedProfileUiState(
     /** The chosen picture could not be read as an image. */
     val photoUnreadable: Boolean = false,
     val photoSaved: Boolean = false,
+    /** The member's items tagged `@profile` (§10.8): every connection sees them in the shared profile. */
+    val profileItems: List<ItemSummary> = emptyList(),
+    /** Standard items that could join the profile (`@profile` is only on `data` items). */
+    val candidates: List<ItemSummary> = emptyList(),
+    val pickingItem: Boolean = false,
+    val itemsBusy: Boolean = false,
 ) {
     /** The photo to show: the one being previewed, else the vault's. */
     val shownPhoto: String? get() = pendingPhoto ?: profile?.photo
@@ -62,9 +73,11 @@ data class SharedProfileUiState(
  * [ChangeNameViewModel]), the display name edited with `profile.set`, which never names the core.
  */
 @HiltViewModel
+@Suppress("TooManyFunctions")
 class SharedProfileViewModel @Inject constructor(
     private val profiles: ProfileRepository,
     private val accounts: AccountRepository,
+    private val items: ItemsRepository,
 ) : ViewModel() {
     private val state = MutableStateFlow(SharedProfileUiState(account = accounts.account.value, profile = profiles.profile.value))
     val uiState: StateFlow<SharedProfileUiState> = state.asStateFlow()
@@ -84,6 +97,37 @@ class SharedProfileViewModel @Inject constructor(
             }
         }
         viewModelScope.launch { accounts.refreshAccount() }
+        viewModelScope.launch {
+            items.items.collect { l ->
+                val sorted = l.sortedBy { it.name.lowercase() }
+                state.update { s ->
+                    s.copy(
+                        profileItems = sorted.filter { ItemChecks.PROFILE_TAG in it.tags },
+                        candidates = sorted.filter { it.sensitivity == Sensitivity.DATA && ItemChecks.PROFILE_TAG !in it.tags },
+                    )
+                }
+            }
+        }
+        if (items.load.value == ListLoad.NOT_LOADED) viewModelScope.launch { runCatching { items.refresh() } }
+    }
+
+    fun pickItem(show: Boolean) = state.update { it.copy(pickingItem = show) }
+
+    /** Tags a standard item `@profile` (§10.8: at most 32; the vault answers `limit` beyond). */
+    fun addToProfile(i: ItemSummary) = retag(i, i.tags + ItemChecks.PROFILE_TAG)
+
+    fun removeFromProfile(i: ItemSummary) = retag(i, i.tags - ItemChecks.PROFILE_TAG)
+
+    private fun retag(i: ItemSummary, tags: List<String>) {
+        state.update { it.copy(itemsBusy = true, pickingItem = false, error = null) }
+        viewModelScope.launch {
+            try {
+                items.setTags(i.itemId, i.version, tags)
+                state.update { it.copy(itemsBusy = false) }
+            } catch (e: VaultFailure) {
+                state.update { it.copy(itemsBusy = false, error = e.kind) }
+            }
+        }
     }
 
     fun setDisplayName(v: String) = state.update { it.copy(displayName = v, edited = true, saved = false, error = null) }

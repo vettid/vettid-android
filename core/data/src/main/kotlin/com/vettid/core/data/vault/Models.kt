@@ -296,6 +296,9 @@ enum class FailureKind {
     CONFLICT,
     LIMIT,
 
+    /** A tag a share rule names cannot be deleted or merged (`in_use`, §10.8). */
+    IN_USE,
+
     /**
      * The vault is past its owner-check deadline (`owner_check_required`, VAULT-MESSAGING §3.6.3): nothing but
      * the check until it passes. What the member entered stays; the check follows when they leave the screen.

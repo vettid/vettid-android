@@ -185,4 +185,29 @@ class ApprovalsViewModelsTest {
         advanceUntilIdle()
         assertTrue(vm.uiState.value.gone)
     }
+
+    /** §10.12: ticked items are shared, unticked ones declined, in one decision. */
+    @Test
+    fun aShareDecisionIncludesTheTickedItemsAndDeclinesTheRest() = runTest {
+        val share = Approval.ShareDecision(
+            "r1", "c1", null,
+            listOf(com.vettid.core.data.social.ShareItem("i1", "Allergies", "medical", "data"), com.vettid.core.data.social.ShareItem("i2", "Blood type", "medical", "data")),
+            "tagged", now, tags = listOf("medical"),
+        )
+        social.approvals.value = listOf(share)
+        val vm = detail(share)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.canApprove)
+        vm.toggleShareItem("i2")
+        advanceUntilIdle()
+        vm.approve()
+        advanceUntilIdle()
+        assertEquals(listOf("i1") to listOf("i2"), social.lastShare)
+        val all = detail(share)
+        social.approvals.value = listOf(share)
+        all.toggleShareItem("i1")
+        all.toggleShareItem("i2")
+        advanceUntilIdle()
+        assertFalse(all.uiState.value.canApprove)
+    }
 }

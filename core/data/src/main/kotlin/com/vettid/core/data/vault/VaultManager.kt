@@ -22,6 +22,8 @@ import com.vettid.core.data.social.InviteLinks
 import com.vettid.core.data.social.SocialManager
 import com.vettid.core.data.items.ItemsManager
 import com.vettid.core.data.items.VaultItemsOps
+import com.vettid.core.data.items.SharingManager
+import com.vettid.core.data.items.VaultSharingOps
 import com.vettid.core.data.env.AppEnvironment
 import com.vettid.core.data.wipe.LocalWipe
 import com.vettid.core.keystore.AndroidKeys
@@ -148,6 +150,11 @@ class VaultManager(
         api = { session().api },
         credential = this,
         store = KeystoreFileStore(File(app.noBackupFilesDir, SOCIAL_FILE), "social"),
+        itemNames = {
+            items.items.value.associate { i ->
+                i.itemId to com.vettid.core.data.social.ShareItem(i.itemId, i.name, i.category, i.sensitivity.wire)
+            }
+        },
     )
 
     /**
@@ -168,6 +175,9 @@ class VaultManager(
 
     /** The member's items (VAULT-MESSAGING §10.7): the Vault screens. The list is read while the vault is open. */
     val items = ItemsManager(scope, ops = { VaultItemsOps(session().api) })
+
+    /** Tags, share rules and grants (VAULT-MESSAGING §10.8, §10.12): a tag change re-reads the items' tags. */
+    val sharing = SharingManager(ops = { VaultSharingOps(session().api) }, onItemsChanged = { items.refresh() })
 
     /** The daily owner check (VAULT-MESSAGING 0.13.0 §3.6): its state, the check, the interval and the hold. */
     val ownerCheck: OwnerCheckManager = KeystoreFileStore(File(app.noBackupFilesDir, OWNER_CHECK_FILE), "owner-check").let { f ->
@@ -196,6 +206,7 @@ class VaultManager(
                 } else if (it != AppPhase.Starting) {
                     // Locked or signed out: no item metadata is kept outside an open vault.
                     items.clear()
+                    sharing.clear()
                 }
             }
         }
@@ -308,6 +319,7 @@ class VaultManager(
                 onEvent(m)
                 try {
                     items.onEvent(m)
+                    sharing.onEvent(m)
                     social.onEvent(m)
                 } catch (e: CancellationException) {
                     throw e
@@ -1020,6 +1032,7 @@ class VaultManager(
         profile.clear()
         history.clear()
         items.clear()
+        sharing.clear()
         canary.removeCanaryManifest()
         transferStartedAt = null
         openTransferId = null
@@ -1156,6 +1169,7 @@ class VaultManager(
             "credential_locked" -> FailureKind.CREDENTIAL_LOCKED
             "conflict" -> FailureKind.CONFLICT
             "limit" -> FailureKind.LIMIT
+            "in_use" -> FailureKind.IN_USE
             "ttl_not_allowed" -> FailureKind.NOT_SUPPORTED
             "stale_credential", "utk_invalid" -> FailureKind.NO_RESPONSE
             "owner_check_required" -> FailureKind.OWNER_CHECK_REQUIRED

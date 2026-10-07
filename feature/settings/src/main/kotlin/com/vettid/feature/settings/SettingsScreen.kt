@@ -101,6 +101,8 @@ data class SettingsHost(
     val onOpenAccountSite: () -> Unit,
     /** Opens the owner check (VAULT-MESSAGING §3.6.5): [holdOff] true turns the hold off with it (§3.6.7). */
     val onOwnerCheck: (holdOff: Boolean) -> Unit = {},
+    /** Opens an item of the Vault (items feature): the shared profile's `@profile` items. */
+    val onOpenItem: (String) -> Unit = {},
 )
 
 /** Registers Settings and its sub-screens. */
@@ -180,6 +182,10 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 onSavePhoto = vm::savePhoto,
                 onDiscardPhoto = vm::discardPhoto,
                 onRemovePhoto = vm::removePhoto,
+                onPickItem = vm::pickItem,
+                onAddItem = vm::addToProfile,
+                onRemoveItem = vm::removeFromProfile,
+                onOpenItem = host.onOpenItem,
             ),
         )
     }

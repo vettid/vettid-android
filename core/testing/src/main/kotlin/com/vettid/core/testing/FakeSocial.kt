@@ -276,6 +276,15 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
         drop("share:$ruleId")
     }
 
+    /** The last split share decision: (included, declined). */
+    var lastShare: Pair<List<String>, List<String>>? = null
+
+    override suspend fun decideShare(ruleId: String, include: List<String>, decline: List<String>) {
+        call("decideShare")
+        lastShare = include to decline
+        drop("share:$ruleId")
+    }
+
     override suspend fun declineDeviceRequest(key: String) {
         call("declineDeviceRequest")
         drop(key)

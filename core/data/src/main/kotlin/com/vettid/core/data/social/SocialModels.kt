@@ -320,6 +320,8 @@ sealed interface Approval {
         override val receivedAt: Instant,
         override val exp: Instant? = null,
         override val connectionName: String? = null,
+        /** The rule's tags (from `share.rule.list`; the event does not carry them). */
+        val tags: List<String> = emptyList(),
     ) : Approval {
         override val key: String get() = "share:$ruleId"
     }

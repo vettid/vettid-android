@@ -109,6 +109,7 @@ fun NavGraphBuilder.itemsDestination(chrome: ShellChrome, host: ItemsHost) {
                 onSensitivity = vm::setSensitivity,
                 onClearFilters = vm::clearFilters,
                 onRetry = vm::refresh,
+                onTags = { host.navigate(TagsRoute) },
             ),
         )
     }
@@ -120,6 +121,10 @@ fun NavGraphBuilder.itemsDestination(chrome: ShellChrome, host: ItemsHost) {
     }
     composable<ItemDetailRoute> { ItemDetailRouteContent(host) }
     composable<ItemEditRoute> { ItemEditRouteContent(host) }
+    composable<TagsRoute> { TagsRouteContent(host) }
+    composable<ConnectionSharingRoute> { ConnectionSharingRouteContent(host) }
+    composable<RuleEditRoute> { RuleEditRouteContent(host) }
+    composable<SharedWithYouRoute> { SharedWithYouRouteContent(host) }
 }
 
 /** What the Vault list can ask for. */
@@ -132,6 +137,8 @@ data class ItemsActions(
     val onSensitivity: (Sensitivity?) -> Unit = {},
     val onClearFilters: () -> Unit = {},
     val onRetry: () -> Unit = {},
+    /** The tags screen (create, rename, delete). */
+    val onTags: () -> Unit = {},
 )
 
 /**
@@ -283,6 +290,9 @@ private fun FilterRow(state: ItemsUiState, actions: ItemsActions) {
         }
         if (!state.filter.isEmpty) {
             TextButton(onClick = actions.onClearFilters) { Text(stringResource(R.string.items_filters_clear)) }
+        }
+        TextButton(onClick = actions.onTags, modifier = Modifier.testTag("items_manage_tags")) {
+            Text(stringResource(R.string.items_tags_manage))
         }
     }
 }

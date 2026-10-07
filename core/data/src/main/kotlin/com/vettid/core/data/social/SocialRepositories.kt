@@ -141,6 +141,9 @@ interface ApprovalsRepository {
     /** Includes or declines every listed item of a share rule (§10.12). */
     suspend fun decideShare(ruleId: String, approve: Boolean)
 
+    /** Includes [include] and declines [decline], items of one share rule's decision (§10.12). */
+    suspend fun decideShare(ruleId: String, include: List<String>, decline: List<String>)
+
     /** Declines a desktop's or agent's request (§6.8). */
     suspend fun declineDeviceRequest(key: String)
 }

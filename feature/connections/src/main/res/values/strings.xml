@@ -163,4 +163,7 @@
     <string name="connections_remove">Remove</string>
     <string name="connections_remove_title">Remove %1$s?</string>
     <string name="connections_remove_body">The connection with %1$s ends and they are told it was removed. Connecting again needs a new invitation.</string>
+    <string name="connections_detail_sharing">Sharing</string>
+    <string name="connections_detail_sharing_mine">What %1$s can see in your vault</string>
+    <string name="connections_detail_sharing_theirs">What %1$s shares with you</string>
 </resources>

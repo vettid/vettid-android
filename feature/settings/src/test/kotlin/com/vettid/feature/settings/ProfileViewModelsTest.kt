@@ -32,11 +32,13 @@ class ProfileViewModelsTest {
         profile.value = OwnProfile(2, "", "Ada", "Lovelace", "9a1f bb7d 873e eafb 494b ef94 f072 7b25")
     }
 
+    private val items = com.vettid.core.testing.FakeItems()
+
     // --- the shared profile ---
 
     @Test
     fun aChosenPhotoIsPreviewedThenSaved() = runTest {
-        val vm = SharedProfileViewModel(vault, vault)
+        val vm = SharedProfileViewModel(vault, vault, items)
         advanceUntilIdle()
         assertNull(vm.uiState.value.shownPhoto)
         vm.photoEncoding()
@@ -54,7 +56,7 @@ class ProfileViewModelsTest {
 
     @Test
     fun anUnreadablePictureIsSaidAndNothingSent() = runTest {
-        val vm = SharedProfileViewModel(vault, vault)
+        val vm = SharedProfileViewModel(vault, vault, items)
         advanceUntilIdle()
         vm.photoEncoding()
         vm.photoPicked(null)
@@ -67,7 +69,7 @@ class ProfileViewModelsTest {
     @Test
     fun removingThePhotoSendsEmpty() = runTest {
         vault.profile.value = vault.profile.value!!.copy(photo = "/9j/old")
-        val vm = SharedProfileViewModel(vault, vault)
+        val vm = SharedProfileViewModel(vault, vault, items)
         advanceUntilIdle()
         assertEquals("/9j/old", vm.uiState.value.shownPhoto)
         vm.removePhoto()
@@ -78,7 +80,7 @@ class ProfileViewModelsTest {
 
     @Test
     fun theDisplayNameIsEditedAndSaved() = runTest {
-        val vm = SharedProfileViewModel(vault, vault)
+        val vm = SharedProfileViewModel(vault, vault, items)
         advanceUntilIdle()
         assertEquals("Ada Lovelace", vm.uiState.value.fullName)
         assertFalse(vm.uiState.value.saveAllowed) // nothing changed yet
@@ -93,7 +95,7 @@ class ProfileViewModelsTest {
 
     @Test
     fun aDisplayNameOverTheLimitIsNotSent() = runTest {
-        val vm = SharedProfileViewModel(vault, vault)
+        val vm = SharedProfileViewModel(vault, vault, items)
         advanceUntilIdle()
         vm.setDisplayName("é".repeat(65)) // 130 bytes
         assertTrue(vm.uiState.value.tooLong)
@@ -106,7 +108,7 @@ class ProfileViewModelsTest {
     @Test
     fun aRefusedSaveShowsWhy() = runTest {
         vault.fail["setDisplayName"] = FakeVault.failure(FailureKind.CONFLICT, "conflict")
-        val vm = SharedProfileViewModel(vault, vault)
+        val vm = SharedProfileViewModel(vault, vault, items)
         advanceUntilIdle()
         vm.setDisplayName("Countess")
         vm.save()

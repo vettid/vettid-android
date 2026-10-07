@@ -378,3 +378,12 @@ data class AccountView(
     /** The latest `account.name.set` request (0.18.0, §10.8); absent before the first. */
     @SerialName("name_request") val nameRequest: NameRequest? = null,
 )
+
+/**
+ * A received grant's fetch (§10.12): the opened content (`{item_id, version, name, category, fields, notes?}`, wipe it
+ * after use) and the uses left, or the member's vault's refusal [error] (`not_found`, `revoked`, `expired`,
+ * `exhausted`, `unavailable`).
+ */
+class GrantFetched(val grantId: String, val content: ByteArray?, val usesLeft: Long?, val error: String?) {
+    override fun toString(): String = "GrantFetched($grantId, error=$error)"
+}

@@ -322,6 +322,14 @@ private fun TagsSection(state: ItemEditUiState, actions: ItemEditActions) {
         keyboardActions = KeyboardActions(onDone = { actions.onAddTag() }),
         modifier = Modifier.fillMaxWidth().testTag("item_edit_tag_input"),
     )
+    if (state.shareImpact.isNotEmpty()) {
+        NoticeCard(
+            NoticeKind.INFO,
+            stringResource(R.string.items_impact_title),
+            state.shareImpact.map { impactText(it) }.joinToString("\n"),
+            modifier = Modifier.testTag("item_edit_share_impact"),
+        )
+    }
     if (state.inProfile) {
         NoticeCard(
             NoticeKind.INFO,
@@ -329,6 +337,17 @@ private fun TagsSection(state: ItemEditUiState, actions: ItemEditActions) {
             stringResource(R.string.items_profile_body),
             modifier = Modifier.testTag("item_edit_profile_note"),
         )
+    }
+}
+
+@Composable
+private fun impactText(i: ShareImpact): String {
+    val who = i.connectionName.ifBlank { stringResource(R.string.items_sharing_this_connection) }
+        .let { com.vettid.core.data.account.AccountNames.isolate(it) }
+    return when {
+        i.usableOnly -> stringResource(R.string.items_impact_usable, who)
+        i.mode == com.vettid.core.data.items.ShareMode.AUTO -> stringResource(R.string.items_impact_auto, who)
+        else -> stringResource(R.string.items_impact_ask, who)
     }
 }
 
