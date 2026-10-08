@@ -16,6 +16,11 @@ data class DraftField(
     val text: String = "",
     val address: AddressValue = AddressValue(),
     val kept: Boolean = false,
+    /**
+     * How a `date` is entered, never sent: as a month and year (`YYYY-MM`, which §10.7 allows), e.g. a card's expiry,
+     * instead of a day (`YYYY-MM-DD`).
+     */
+    val monthYear: Boolean = false,
 ) {
     val value: FieldValue get() = if (kind == FieldKinds.ADDRESS) FieldValue.Address(address) else FieldValue.Text(text)
 
@@ -24,9 +29,15 @@ data class DraftField(
     companion object {
         fun of(f: ItemFieldView): DraftField = when (val v = f.value) {
             is FieldValue.Address -> DraftField(f.fieldId, f.label, f.kind, address = v.address)
-            is FieldValue.Text -> DraftField(f.fieldId, f.label, f.kind, text = v.text)
+            is FieldValue.Text -> DraftField(
+                f.fieldId, f.label, f.kind, text = v.text,
+                monthYear = f.kind == FieldKinds.DATE && v.text.length == YEAR_MONTH_LENGTH,
+            )
             null -> DraftField(f.fieldId, f.label, f.kind, kept = f.fieldId != null)
         }
+
+        /** `YYYY-MM`. */
+        private const val YEAR_MONTH_LENGTH = 7
     }
 }
 

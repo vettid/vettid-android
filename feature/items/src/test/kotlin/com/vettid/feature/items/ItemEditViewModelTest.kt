@@ -1,5 +1,5 @@
 // Test data: long literal rows are clearer than wrapped ones.
-@file:Suppress("MaxLineLength", "DestructuringDeclarationWithTooManyEntries")
+@file:Suppress("MaxLineLength", "DestructuringDeclarationWithTooManyEntries", "LargeClass")
 
 package com.vettid.feature.items
 
@@ -48,7 +48,9 @@ class ItemEditViewModelTest {
     @Test
     fun aTemplatePrefillsTheDraft() {
         val s = vm(template = "passport").uiState.value
-        assertEquals("Passport", s.draft.name)
+        // Owner request 2026-10-08: the template's name is the placeholder, never pre-typed.
+        assertEquals("", s.draft.name)
+        assertEquals("Passport", s.nameHint)
         assertEquals("identity_document", s.draft.category)
         assertEquals("passport", s.draft.template)
         assertEquals(listOf("identity", "travel"), s.draft.tags)
@@ -68,7 +70,7 @@ class ItemEditViewModelTest {
     @Test
     fun everyRegistryTemplatePassesTheChecksOnceNamed() {
         ItemTemplates.all.forEach { t ->
-            val d = t.draft(context)
+            val d = t.draft(context).copy(name = context.getString(t.name))
             assertTrue(t.id, com.vettid.core.data.items.ItemChecks.check(d).ok)
             assertTrue(t.id, d.fields.size <= 16 || t.sensitivity != Sensitivity.CRITICAL)
         }
@@ -76,16 +78,17 @@ class ItemEditViewModelTest {
 
     @Test
     fun problemsShowOnlyAfterTheFirstSaveAndNothingIsSent() = runTest {
-        val vm = vm(template = "passport")
-        vm.setName("")
+        // A blank item (no template) still needs a name.
+        val vm = vm()
+        vm.addField("Expires", FieldKinds.DATE)
         assertFalse(vm.uiState.value.showErrors)
-        vm.setFieldText(3, "1st of May")
+        vm.setFieldText(0, "1st of May")
         vm.save()
         advanceUntilIdle()
         val s = vm.uiState.value
         assertTrue(s.showErrors)
         assertTrue(DraftProblem.NAME_EMPTY in s.check.problems)
-        assertTrue(DraftProblem.VALUE_INVALID in s.check.fieldProblems.getValue(3))
+        assertTrue(DraftProblem.VALUE_INVALID in s.check.fieldProblems.getValue(0))
         assertFalse("create" in items.calls)
     }
 
@@ -224,8 +227,6 @@ class ItemEditViewModelTest {
         assertFalse("reveal" in items.calls)
         assertTrue(vm.uiState.value.draft.fields.single().kept)
         assertEquals("", vm.uiState.value.draft.fields.single().text)
-        vm.setSensitivity(Sensitivity.DATA) // only for a new item
-        assertEquals(Sensitivity.SECRET, vm.uiState.value.draft.sensitivity)
         vm.setFieldText(0, "hunter3")
         assertFalse(vm.uiState.value.draft.fields.single().kept)
         vm.save()
@@ -503,5 +504,234 @@ class ItemEditViewModelTest {
         items.add(FakeItems.item("01T", "Ticket", category = "tickets"))
         advanceUntilIdle()
         assertEquals(listOf("gym", "loyalty_cards", "tickets"), vm.uiState.value.pickerCustoms)
+    }
+
+    // --- owner requests 2026-10-08: no pre-typed example text; the protection changes in the editor ---
+
+    @Test
+    fun anEmptyNameSavesUnderTheTemplatesName() = runTest {
+        val vm = vm(template = "payment_card")
+        val s = vm.uiState.value
+        assertEquals("", s.draft.name)
+        assertEquals("Payment card", s.nameHint)
+        assertTrue(s.check.ok) // the default name counts: no NAME_EMPTY
+        vm.save()
+        advanceUntilIdle()
+        assertEquals("Payment card", items.stored.getValue(vm.uiState.value.savedId!!).name)
+    }
+
+    @Test
+    fun aTypedNameWins() = runTest {
+        val vm = vm(template = "payment_card")
+        vm.setName("Visa")
+        vm.save()
+        advanceUntilIdle()
+        assertEquals("Visa", items.stored.getValue(vm.uiState.value.savedId!!).name)
+    }
+
+    @Test
+    fun aBlankItemStillNeedsAName() = runTest {
+        val vm = vm()
+        assertNull(vm.uiState.value.nameHint)
+        vm.save()
+        advanceUntilIdle()
+        assertTrue(DraftProblem.NAME_EMPTY in vm.uiState.value.check.problems)
+        assertFalse("create" in items.calls)
+    }
+
+    @Test
+    fun noTemplatePreTypesAnything() {
+        ItemTemplates.all.forEach { t ->
+            val s = vm(template = t.id).uiState.value
+            assertEquals(t.id, "", s.draft.name)
+            assertEquals(t.id, "", s.draft.notes)
+            assertTrue(t.id, s.draft.fields.all { it.text.isEmpty() && it.address == AddressValue() && !it.kept })
+            assertEquals(t.id, "", s.tagInput)
+        }
+        val vm = vm(template = "login")
+        vm.askAddField()
+        assertEquals(EditDialog.AddField(), vm.uiState.value.dialog)
+        assertEquals("", (vm.uiState.value.dialog as EditDialog.AddField).label)
+        vm.dismissDialog()
+        vm.askNewCategory()
+        assertEquals("", (vm.uiState.value.dialog as EditDialog.NewCategory).name)
+    }
+
+    @Test
+    fun aCardsExpiryIsAMonthAndYear() = runTest {
+        // §10.7 allows `YYYY-MM`: a card's expiry is entered and stored so.
+        val vm = vm(template = "payment_card")
+        val i = vm.uiState.value.draft.fields.indexOfFirst { it.label == "Expires" }
+        assertTrue(vm.uiState.value.draft.fields[i].monthYear)
+        assertFalse(vm(template = "passport").uiState.value.draft.fields.any { it.monthYear })
+        vm.setFieldText(i, "2031-04")
+        vm.save()
+        advanceUntilIdle()
+        val id = vm.uiState.value.savedId!!
+        assertEquals(FieldValue.Text("2031-04"), items.stored.getValue(id).fields[i].value)
+        // Edited again (its values kept: a secret item), it is still a month and year.
+        val again = vm(itemId = id)
+        advanceUntilIdle()
+        assertTrue(again.uiState.value.draft.fields[i].kept)
+        assertTrue(again.uiState.value.draft.fields[i].monthYear)
+    }
+
+    private fun editing(id: String, sensitivity: Sensitivity, tags: List<String> = emptyList()): ItemEditViewModel {
+        items.add(FakeItems.item(id, "Item", sensitivity, tags = tags))
+        return vm(itemId = id)
+    }
+
+    @Test
+    fun standardToSecretNeedsNothingMore() = runTest {
+        val vm = editing("01A", Sensitivity.DATA)
+        advanceUntilIdle()
+        vm.setSensitivity(Sensitivity.SECRET)
+        assertEquals(Sensitivity.SECRET, vm.uiState.value.protection)
+        assertEquals(Sensitivity.DATA, vm.uiState.value.draft.sensitivity)
+        assertTrue(vm.uiState.value.dirty)
+        vm.save()
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.prompt)
+        assertEquals("01A", vm.uiState.value.savedId)
+        // Only the protection changed: no content is sent.
+        assertEquals(listOf("get", "setSensitivity"), items.calls.filter { it != "refresh" && it != "shareEffect" })
+        assertEquals(Sensitivity.SECRET, items.stored.getValue("01A").sensitivity)
+    }
+
+    @Test
+    fun theContentIsSavedBeforeTheProtection() = runTest {
+        val vm = editing("01A", Sensitivity.SECRET)
+        advanceUntilIdle()
+        vm.setName("Renamed")
+        vm.setSensitivity(Sensitivity.DATA)
+        vm.save()
+        advanceUntilIdle()
+        assertEquals(listOf("get", "update", "setSensitivity"), items.calls.filter { it != "refresh" && it != "shareEffect" })
+        val stored = items.stored.getValue("01A")
+        assertEquals("Renamed", stored.name)
+        assertEquals(Sensitivity.DATA, stored.sensitivity)
+    }
+
+    @Test
+    fun movingToCriticalAsksForThePasswordOnce() = runTest {
+        val vm = editing("01A", Sensitivity.DATA)
+        advanceUntilIdle()
+        vm.setName("Seed")
+        vm.setSensitivity(Sensitivity.CRITICAL)
+        vm.save()
+        assertEquals(PasswordPurpose.SAVE, vm.uiState.value.prompt?.purpose)
+        assertFalse("update" in items.calls)
+        vm.setPassword("correct horse")
+        vm.submitPassword()
+        advanceUntilIdle()
+        assertEquals("01A", vm.uiState.value.savedId)
+        assertEquals(listOf("update", "setSensitivity"), items.calls.filter { it == "update" || it == "setSensitivity" })
+        assertEquals(Sensitivity.CRITICAL, items.stored.getValue("01A").sensitivity)
+        assertEquals("Seed", items.stored.getValue("01A").name)
+    }
+
+    @Test
+    fun leavingCriticalWarnsFirst() = runTest {
+        val vm = editing("01C", Sensitivity.CRITICAL)
+        advanceUntilIdle()
+        vm.setSensitivity(Sensitivity.SECRET)
+        vm.save()
+        assertTrue(vm.uiState.value.confirmLeaveCritical)
+        assertNull(vm.uiState.value.prompt)
+        vm.dismissLeaveCritical()
+        assertFalse(vm.uiState.value.confirmLeaveCritical)
+        vm.save()
+        vm.confirmLeaveCritical()
+        assertEquals(PasswordPurpose.SAVE, vm.uiState.value.prompt?.purpose)
+        vm.setPassword("correct horse")
+        vm.submitPassword()
+        advanceUntilIdle()
+        assertEquals(Sensitivity.SECRET, items.stored.getValue("01C").sensitivity)
+        // Nothing typed: only the protection operation.
+        assertFalse("updateCritical" in items.calls)
+    }
+
+    @Test
+    fun aRefusedProtectionChangeKeepsTheSavedContentAndRetriesOnlyIt() = runTest {
+        val vm = editing("01A", Sensitivity.DATA)
+        advanceUntilIdle()
+        vm.setName("Renamed")
+        vm.addField("Code", FieldKinds.TEXT)
+        vm.setFieldText(1, "1234")
+        vm.setSensitivity(Sensitivity.CRITICAL)
+        val limit = com.vettid.core.data.vault.VaultLimit("critical_items", 1_000)
+        items.fail["setSensitivity"] = VaultFailure(FailureKind.LIMIT, "limit", limit = limit)
+        vm.save()
+        vm.setPassword("correct horse")
+        vm.submitPassword()
+        advanceUntilIdle()
+        var s = vm.uiState.value
+        // The content is stored; the editor shows it as stored, with the new protection still picked.
+        assertEquals("Renamed", items.stored.getValue("01A").name)
+        assertEquals(Sensitivity.DATA, items.stored.getValue("01A").sensitivity)
+        assertNull(s.savedId)
+        assertEquals(FailureKind.LIMIT, s.error)
+        assertEquals(limit, s.limit)
+        assertTrue(s.savedButProtection)
+        assertEquals(Sensitivity.CRITICAL, s.protectionTo)
+        assertTrue(s.draft.fields.all { it.fieldId != null })
+        // Saving again only retries the protection (no duplicate fields).
+        val updates = items.calls.count { it == "update" }
+        vm.save()
+        vm.setPassword("correct horse")
+        vm.submitPassword()
+        advanceUntilIdle()
+        s = vm.uiState.value
+        assertEquals("01A", s.savedId)
+        assertEquals(updates, items.calls.count { it == "update" })
+        assertEquals(2, items.stored.getValue("01A").fields.size)
+        assertEquals(Sensitivity.CRITICAL, items.stored.getValue("01A").sensitivity)
+    }
+
+    @Test
+    fun aWrongPasswordForACriticalContentSaveSavesNothing() = runTest {
+        val vm = editing("01C", Sensitivity.CRITICAL)
+        advanceUntilIdle()
+        vm.setName("Renamed")
+        vm.setSensitivity(Sensitivity.SECRET)
+        vm.save()
+        vm.confirmLeaveCritical()
+        vm.setPassword("wrong")
+        vm.submitPassword()
+        advanceUntilIdle()
+        assertEquals(FailureKind.BAD_PASSWORD, vm.uiState.value.prompt?.error)
+        assertFalse(vm.uiState.value.savedButProtection)
+        assertEquals(Sensitivity.CRITICAL, items.stored.getValue("01C").sensitivity)
+        assertFalse("setSensitivity" in items.calls)
+        vm.setPassword("correct horse")
+        vm.submitPassword()
+        advanceUntilIdle()
+        assertEquals("Renamed", items.stored.getValue("01C").name)
+        assertEquals(Sensitivity.SECRET, items.stored.getValue("01C").sensitivity)
+    }
+
+    @Test
+    fun aSharedProfileItemStaysStandard() = runTest {
+        val vm = editing("01P", Sensitivity.DATA, tags = listOf("@profile"))
+        advanceUntilIdle()
+        vm.setSensitivity(Sensitivity.SECRET)
+        assertNull(vm.uiState.value.protectionTo)
+        vm.setInProfile(false)
+        vm.setSensitivity(Sensitivity.SECRET)
+        assertEquals(Sensitivity.SECRET, vm.uiState.value.protectionTo)
+        vm.setSensitivity(Sensitivity.DATA) // back to what it is: no change
+        assertNull(vm.uiState.value.protectionTo)
+    }
+
+    @Test
+    fun aCriticalTargetChecksTheCriticalSizeLimit() = runTest {
+        items.add(FakeItems.item("01B", "Big", fields = listOf("Text" to "x".repeat(13_000))))
+        val vm = vm(itemId = "01B")
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.check.ok)
+        vm.setSensitivity(Sensitivity.CRITICAL)
+        assertTrue(DraftProblem.TOO_LARGE in vm.uiState.value.check.problems)
+        vm.save()
+        assertNull(vm.uiState.value.prompt)
     }
 }

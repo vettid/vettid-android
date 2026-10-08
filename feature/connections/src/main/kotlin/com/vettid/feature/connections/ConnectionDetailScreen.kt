@@ -64,16 +64,22 @@ data class DetailActions(
     val onDismissNotice: () -> Unit = {},
     /** The connection's History (ANDROID-PLAN 0.1.11: History with the connection preset). */
     val onHistory: () -> Unit = {},
-    /** What this connection can see: share rules and grants (VAULT-ITEMS §6). */
+    /** What this connection can see: share rules and grants (VAULT-ITEMS §6), to manage or revoke. */
     val onSharing: () -> Unit = {},
-    /** What this connection shares with the member (received grants, §10.12). */
+    /** What this connection shares with the member (received grants, §10.12), to fetch. */
     val onSharedWithYou: () -> Unit = {},
+    /** "Share items…": a new share rule for this connection (§10.12). */
+    val onShareItems: () -> Unit = {},
+    /** A share rule of this connection's, to change. */
+    val onOpenRule: (String) -> Unit = {},
+    /** "Ask for something": a `grant.request` of this connection (§10.12). */
+    val onAskForSomething: () -> Unit = {},
 )
 
 /**
  * A connection (ANDROID-PLAN §4, 0.1.10): titled "First Last" from the names on the peer's VettID account, the
  * display name secondary; the profile shared with you (the names labelled as the account's, never verified; the
- * extras as self-asserted), sharing, member authentication and the vault key fingerprint, the lasting identity
+ * extras as self-asserted), sharing both ways (two cards), member authentication and the vault key fingerprint, the lasting identity
  * check. The safety code belongs to the moment of connecting and is not shown here; the owner's alias and note, if a
  * vault holds any, are not shown either (owner decision 2026-10-08). The pill holds message, favourite, History and
  * remove (confirmed).
@@ -185,7 +191,12 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
             )
         }
         ProfileCard(c)
-        if (c.state == ConnectionState.ACTIVE) SharingCard(name, actions)
+        if (c.state == ConnectionState.ACTIVE) {
+            // Two directions, two cards (owner request 2026-10-08): what goes out of the vault, what comes in.
+            val first = sharingName(c)
+            OutgoingSharingCard(state.sharing, first, actions.onShareItems, actions.onOpenRule, actions.onSharing)
+            IncomingSharingCard(state.sharing, first, actions.onAskForSomething, actions.onSharedWithYou)
+        }
         AuthCard(state.auth, name, state.busy, c.state == ConnectionState.ACTIVE, actions.onAuthenticate)
         DetailCard {
             CardTitle(stringResource(R.string.connections_detail_about))
@@ -246,20 +257,6 @@ private fun ProfileCard(c: ConnectionInfo) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-        }
-    }
-}
-
-/** Sharing with this connection (VAULT-ITEMS §6): what it can see of the vault, and what it shares with the member. */
-@Composable
-private fun SharingCard(name: String, actions: DetailActions) {
-    DetailCard(Modifier.testTag("sharing_card")) {
-        CardTitle(stringResource(R.string.connections_detail_sharing))
-        TextButton(onClick = actions.onSharing, modifier = Modifier.heightIn(min = Spacing.touchTarget).testTag("open_sharing")) {
-            Text(stringResource(R.string.connections_detail_sharing_mine, name))
-        }
-        TextButton(onClick = actions.onSharedWithYou, modifier = Modifier.heightIn(min = Spacing.touchTarget).testTag("open_shared")) {
-            Text(stringResource(R.string.connections_detail_sharing_theirs, name))
         }
     }
 }

@@ -16,6 +16,20 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.outlined.CalendarMonth
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.text.style.TextAlign
+import java.time.Month
+import java.time.YearMonth
+import java.time.format.TextStyle
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowDropDown
@@ -114,6 +128,8 @@ internal fun ItemEditRouteContent(host: ItemsHost) {
             onPassword = vm::setPassword,
             onSubmitPassword = vm::submitPassword,
             onCancelPassword = vm::cancelPassword,
+            onConfirmLeaveCritical = vm::confirmLeaveCritical,
+            onDismissLeaveCritical = vm::dismissLeaveCritical,
         ),
     )
 }
@@ -150,6 +166,8 @@ data class ItemEditActions(
     val onPassword: (String) -> Unit = {},
     val onSubmitPassword: () -> Unit = {},
     val onCancelPassword: () -> Unit = {},
+    val onConfirmLeaveCritical: () -> Unit = {},
+    val onDismissLeaveCritical: () -> Unit = {},
 )
 
 /**
@@ -166,7 +184,7 @@ fun ItemEditScreen(state: ItemEditUiState, actions: ItemEditActions, modifier: M
     if (prompt != null) {
         return CredentialPasswordContent(
             prompt,
-            state.draft.name.ifBlank { stringResource(R.string.items_unnamed) },
+            state.draft.name.ifBlank { state.nameHint ?: stringResource(R.string.items_unnamed) },
             actions.onPassword,
             actions.onSubmitPassword,
             actions.onCancelPassword,
@@ -206,17 +224,32 @@ fun ItemEditScreen(state: ItemEditUiState, actions: ItemEditActions, modifier: M
                     actions = { TextButton(onClick = actions.onDismissError) { Text(stringResource(R.string.items_ok)) } },
                 )
             }
+            if (state.savedButProtection) {
+                NoticeCard(
+                    NoticeKind.INFO,
+                    stringResource(R.string.items_saved_protection_not_title),
+                    stringResource(R.string.items_saved_protection_not_body),
+                    modifier = Modifier.testTag("item_edit_saved_protection_not"),
+                )
+            }
             val nameProblem = listOf(DraftProblem.NAME_EMPTY, DraftProblem.NAME_TOO_LONG).firstOrNull { it in problems }
+            // A template's name is the placeholder, never pre-typed (owner request 2026-10-08): left empty, it is used.
+            val hint = state.nameHint
             OutlinedTextField(
                 value = d.name,
-                onValueChange = actions.onName,
+                onValueChange = { actions.onName(it.replace("\n", "")) },
                 label = { Text(stringResource(R.string.items_name)) },
+                placeholder = hint?.let { h -> { Text(h) } },
                 singleLine = true,
                 isError = show && nameProblem != null,
-                supportingText = if (show && nameProblem != null) {
-                    { Text(ItemsText.problem(nameProblem)) }
-                } else {
-                    null
+                supportingText = when {
+                    show && nameProblem != null -> {
+                        { Text(ItemsText.problem(nameProblem)) }
+                    }
+                    hint != null && d.name.isBlank() -> {
+                        { Text(stringResource(R.string.items_name_default, hint)) }
+                    }
+                    else -> null
                 },
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Next),
                 modifier = Modifier.fillMaxWidth().testTag("item_edit_name"),
@@ -279,6 +312,17 @@ fun ItemEditScreen(state: ItemEditUiState, actions: ItemEditActions, modifier: M
         }
     }
     EditDialogs(state, actions)
+    if (state.confirmLeaveCritical) {
+        ConfirmDialog(
+            title = stringResource(R.string.items_leave_critical_title),
+            text = stringResource(R.string.items_leave_critical_body),
+            confirmLabel = stringResource(R.string.items_leave_critical_confirm),
+            onConfirm = actions.onConfirmLeaveCritical,
+            onDismiss = actions.onDismissLeaveCritical,
+            destructive = true,
+            modifier = Modifier.testTag("item_edit_leave_critical"),
+        )
+    }
     if (state.confirmDiscard) {
         ConfirmDialog(
             title = stringResource(R.string.items_discard_title),
@@ -346,22 +390,35 @@ private fun CategoryPicker(category: String, customs: List<String>, actions: Ite
     }
 }
 
+/**
+ * The protection, for a new item and an existing one alike (owner request 2026-10-08). An existing item's change is
+ * applied after its content when saved (`item.sensitivity`, §10.7): critical either way with the credential password,
+ * leaving critical after the warning. `@profile` items stay standard (§10.8): the other choices are off, with the reason.
+ */
 @Composable
 private fun SensitivitySection(state: ItemEditUiState, actions: ItemEditActions) {
-    val s = state.draft.sensitivity
+    val s = state.protection
     Text(stringResource(R.string.items_protection), style = MaterialTheme.typography.titleSmall)
-    if (state.isNew) {
-        Column(Modifier.testTag("item_edit_sensitivity")) {
-            Sensitivity.entries.forEach { x ->
-                // @profile items stay data (§10.8): the other choices are off while the item carries it.
-                SensitivityChoice(x, x == s, enabled = !state.inProfile || x == Sensitivity.DATA) { actions.onSensitivity(x) }
-            }
+    Column(Modifier.testTag("item_edit_sensitivity")) {
+        Sensitivity.entries.forEach { x ->
+            SensitivityChoice(x, x == s, enabled = !state.inProfile || x == Sensitivity.DATA) { actions.onSensitivity(x) }
         }
-    } else {
+    }
+    val note = when {
+        state.inProfile && s == Sensitivity.DATA -> stringResource(R.string.items_protection_profile)
+        state.protectionTo != null -> stringResource(
+            R.string.items_protection_change,
+            stringResource(ItemsText.sensitivity(state.draft.sensitivity)),
+            stringResource(ItemsText.sensitivity(s)),
+        )
+        else -> null
+    }
+    note?.let {
         Text(
-            stringResource(R.string.items_protection_existing, stringResource(ItemsText.sensitivity(s))),
-            style = MaterialTheme.typography.bodyMedium,
+            it,
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("item_edit_protection_note"),
         )
     }
 }
@@ -475,14 +532,21 @@ private data class FieldSlot(val index: Int, val count: Int, val focus: Boolean)
  * it the kind as a hint (a problem replaces it). The label and kind change from the field's menu, never inline.
  */
 @Composable
+@Suppress("CyclomaticComplexMethod")
 private fun FieldEditor(slot: FieldSlot, f: DraftField, problems: Set<DraftProblem>, actions: ItemEditActions) {
     val i = slot.index
-    val kindName = stringResource(ItemsText.kind(f.kind))
+    val kindName = if (f.kind == FieldKinds.DATE && f.monthYear) {
+        stringResource(R.string.items_kind_month_year)
+    } else {
+        stringResource(ItemsText.kind(f.kind))
+    }
     val caption = f.label.trim().ifEmpty { kindName }
     val labelProblem = listOf(DraftProblem.LABEL_EMPTY, DraftProblem.LABEL_TOO_LONG).firstOrNull { it in problems }
         ?: DraftProblem.BAD_CHARACTER.takeIf { it in problems && ItemChecks.labelProblems(f.label.trim()).isNotEmpty() }
     val valueProblem = (problems - setOfNotNull(DraftProblem.LABEL_EMPTY, DraftProblem.LABEL_TOO_LONG, labelProblem)).firstOrNull()
-    val error = labelProblem?.let { ItemsText.problem(it) } ?: valueProblem?.let { ItemsText.problem(it, f.kind) }
+    // A value that is not (yet) one of its kind says its rule while the member types (owner request 2026-10-08).
+    val live = DraftProblem.VALUE_INVALID.takeIf { !f.kept && FieldInput.incomplete(f.kind, f.text) }
+    val error = labelProblem?.let { ItemsText.problem(it) } ?: (valueProblem ?: live)?.let { ItemsText.problem(it, f.kind) }
     // A kept value is not at hand (§10.7 Kept values): the field stays empty until the member types a new one.
     val hint = if (f.kept) stringResource(R.string.items_field_kind_kept, kindName) else kindName
     val focus = remember { FocusRequester() }
@@ -575,6 +639,11 @@ private fun FieldMenu(slot: FieldSlot, f: DraftField, caption: String, actions: 
     }
 }
 
+/**
+ * One value's input, with the keyboard of its kind and its format enforced while typing and on paste (§10.7,
+ * [FieldInput]): characters the kind cannot hold never get in, and a `date` is typed as digits with the dashes drawn
+ * in, or picked from a calendar (a month-and-year field from a month picker).
+ */
 @Composable
 @Suppress("CyclomaticComplexMethod", "LongParameterList")
 private fun ValueEditor(
@@ -598,23 +667,28 @@ private fun ValueEditor(
             modifier = tag,
         )
     }
+    if (f.kind == FieldKinds.DATE) return DateEditor(i, f, caption, supporting, isError, tag, onValue)
     val keyboard = when (f.kind) {
         FieldKinds.NUMBER -> KeyboardType.Decimal
         FieldKinds.EMAIL -> KeyboardType.Email
         FieldKinds.PHONE -> KeyboardType.Phone
         FieldKinds.URL -> KeyboardType.Uri
+        FieldKinds.OTP -> KeyboardType.Ascii
         else -> KeyboardType.Text
     }
     val placeholder = when (f.kind) {
-        FieldKinds.DATE -> stringResource(R.string.items_placeholder_date)
         FieldKinds.URL -> stringResource(R.string.items_placeholder_url)
         FieldKinds.OTP -> stringResource(R.string.items_placeholder_otp)
+        FieldKinds.EMAIL -> stringResource(R.string.items_placeholder_email)
+        FieldKinds.PHONE -> stringResource(R.string.items_placeholder_phone)
+        FieldKinds.NUMBER -> stringResource(R.string.items_placeholder_number)
         else -> null
     }
     val multi = f.kind == FieldKinds.MULTILINE
+    val free = f.kind == FieldKinds.TEXT || multi
     OutlinedTextField(
         value = f.text,
-        onValueChange = { v -> onValue(if (multi) v else v.replace("\n", "")) },
+        onValueChange = { v -> onValue(FieldInput.accept(f.kind, v)) },
         label = { Text(caption) },
         placeholder = (if (f.kept) stringResource(R.string.items_field_kept_placeholder) else placeholder)?.let { p -> { Text(p) } },
         singleLine = !multi,
@@ -626,13 +700,155 @@ private fun ValueEditor(
         },
         keyboardOptions = KeyboardOptions(
             keyboardType = keyboard,
-            autoCorrectEnabled = f.kind == FieldKinds.TEXT || multi,
-            capitalization = if (f.kind == FieldKinds.TEXT || multi) KeyboardCapitalization.Sentences else KeyboardCapitalization.None,
+            autoCorrectEnabled = free,
+            capitalization = when {
+                free -> KeyboardCapitalization.Sentences
+                f.kind == FieldKinds.OTP -> KeyboardCapitalization.Characters
+                else -> KeyboardCapitalization.None
+            },
             imeAction = if (multi) ImeAction.Default else ImeAction.Next,
         ),
         modifier = tag,
     )
 }
+
+/**
+ * A `date` (§10.7): digits on a number keyboard with the dashes drawn in (`YYYY-MM-DD`, or `YYYY-MM` for a
+ * month-and-year field), a digit no date can continue with refused, and a calendar button (Material3 date picker; a
+ * month picker for month and year). What is stored is always the spec's format.
+ */
+@Composable
+@Suppress("LongParameterList")
+private fun DateEditor(
+    i: Int,
+    f: DraftField,
+    caption: String,
+    supporting: String,
+    isError: Boolean,
+    modifier: Modifier,
+    onValue: (String) -> Unit,
+) {
+    var picking by rememberSaveable { mutableStateOf(false) }
+    val month = f.monthYear
+    OutlinedTextField(
+        value = DateInput.digits(f.text),
+        onValueChange = { v -> DateInput.accept(f.text, v, month)?.let(onValue) },
+        label = { Text(caption) },
+        placeholder = {
+            Text(
+                if (f.kept) {
+                    stringResource(R.string.items_field_kept_placeholder)
+                } else {
+                    stringResource(if (month) R.string.items_placeholder_month else R.string.items_placeholder_date)
+                },
+            )
+        },
+        singleLine = true,
+        isError = isError,
+        supportingText = { Text(supporting) },
+        visualTransformation = DateInput.Mask,
+        trailingIcon = {
+            IconButton(onClick = { picking = true }, modifier = Modifier.testTag("item_edit_field_pick_$i")) {
+                Icon(
+                    Icons.Outlined.CalendarMonth,
+                    contentDescription = stringResource(
+                        if (month) R.string.items_cd_pick_month else R.string.items_cd_pick_date,
+                        caption,
+                    ),
+                )
+            }
+        },
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+        modifier = modifier,
+    )
+    if (picking) {
+        val done: (String?) -> Unit = { v ->
+            picking = false
+            if (v != null) onValue(v)
+        }
+        if (month) MonthPickerDialog(f.text, done) else DatePickerDialogFor(f.text, done)
+    }
+}
+
+/** The Material3 calendar; the day picked is stored as `YYYY-MM-DD` (§10.7). */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DatePickerDialogFor(stored: String, onDone: (String?) -> Unit) {
+    val picker = rememberDatePickerState(initialSelectedDateMillis = DateInput.toPicker(stored))
+    DatePickerDialog(
+        onDismissRequest = { onDone(null) },
+        confirmButton = {
+            TextButton(
+                onClick = { onDone(picker.selectedDateMillis?.let { DateInput.fromPicker(it) }) },
+                enabled = picker.selectedDateMillis != null,
+                modifier = Modifier.testTag("item_date_pick_ok"),
+            ) { Text(stringResource(R.string.items_ok)) }
+        },
+        dismissButton = { TextButton(onClick = { onDone(null) }) { Text(stringResource(R.string.items_cancel)) } },
+    ) {
+        DatePicker(state = picker, modifier = Modifier.testTag("item_date_picker"))
+    }
+}
+
+/** A month and year (a card's expiry): the year with arrows, the twelve months; stored as `YYYY-MM` (§10.7). */
+@Composable
+private fun MonthPickerDialog(stored: String, onDone: (String?) -> Unit) {
+    val initial = DateInput.yearMonth(stored) ?: DateInput.day(stored)?.let { YearMonth.from(it) } ?: YearMonth.now()
+    var year by rememberSaveable { mutableIntStateOf(initial.year) }
+    var month by rememberSaveable { mutableIntStateOf(initial.monthValue) }
+    val locale = LocalConfiguration.current.locales[0]
+    AlertDialog(
+        onDismissRequest = { onDone(null) },
+        title = { Text(stringResource(R.string.items_month_picker_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { year = (year - 1).coerceAtLeast(1) }, modifier = Modifier.testTag("item_month_prev_year")) {
+                        Icon(
+                            Icons.AutoMirrored.Outlined.KeyboardArrowLeft,
+                            contentDescription = stringResource(R.string.items_cd_previous_year),
+                        )
+                    }
+                    Text(
+                        year.toString(),
+                        style = MaterialTheme.typography.titleMedium,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.weight(1f).testTag("item_month_year"),
+                    )
+                    IconButton(
+                        onClick = { year = (year + 1).coerceAtMost(MAX_YEAR) },
+                        modifier = Modifier.testTag("item_month_next_year"),
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Outlined.KeyboardArrowRight,
+                            contentDescription = stringResource(R.string.items_cd_next_year),
+                        )
+                    }
+                }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+                    for (m in 1..MONTHS) {
+                        FilterChip(
+                            selected = m == month,
+                            onClick = { month = m },
+                            label = { Text(Month.of(m).getDisplayName(TextStyle.SHORT, locale)) },
+                            modifier = Modifier.testTag("item_month_$m"),
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = { onDone(DateInput.month(YearMonth.of(year, month))) }, modifier = Modifier.testTag("item_month_ok")) {
+                Text(stringResource(R.string.items_ok))
+            }
+        },
+        dismissButton = { TextButton(onClick = { onDone(null) }) { Text(stringResource(R.string.items_cancel)) } },
+        modifier = Modifier.testTag("item_month_picker"),
+    )
+}
+
+private const val MONTHS = 12
+private const val MAX_YEAR = 9999
 
 @Composable
 private fun AddressEditor(a: AddressValue, first: Modifier, onValue: (AddressValue) -> Unit) {
@@ -643,7 +859,7 @@ private fun AddressEditor(a: AddressValue, first: Modifier, onValue: (AddressVal
         AddressPart(a.city, R.string.items_address_city) { onValue(a.copy(city = it)) }
         AddressPart(a.region, R.string.items_address_region) { onValue(a.copy(region = it)) }
         // ISO 3166-1 alpha-2, upper case (§10.7).
-        AddressPart(a.country, R.string.items_address_country, caps = true) { onValue(a.copy(country = it.uppercase().take(2))) }
+        AddressPart(a.country, R.string.items_address_country, caps = true) { onValue(a.copy(country = FieldInput.country(it))) }
     }
 }
 

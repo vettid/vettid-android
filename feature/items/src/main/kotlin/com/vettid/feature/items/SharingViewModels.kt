@@ -324,6 +324,7 @@ class SharedWithYouViewModel @Inject constructor(
 
     init {
         load()
+        if (saved.get<Boolean>(SharedWithYouRoute.ARG_ASK) == true) openAsk(true)
     }
 
     fun load() {

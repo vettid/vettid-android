@@ -45,6 +45,27 @@ class MessagesViewModelsTest {
     }
 
     @Test
+    fun theSearchFiltersByNameAndTheLatestMessage() = runTest {
+        // Owner request 2026-10-08: a local filter, by the connection's name and the latest message's text.
+        val vm = MessagesViewModel(social)
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.searchable)
+        vm.setQuery("sam")
+        advanceUntilIdle()
+        assertEquals(listOf("c1"), vm.uiState.value.conversations.map { it.connection.id })
+        vm.setQuery("UNREAD")
+        advanceUntilIdle()
+        assertEquals(listOf("c2"), vm.uiState.value.conversations.map { it.connection.id })
+        vm.setQuery("nobody")
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.conversations.isEmpty())
+        assertTrue(vm.uiState.value.searchable)
+        vm.setQuery("")
+        advanceUntilIdle()
+        assertEquals(2, vm.uiState.value.conversations.size)
+    }
+
+    @Test
     fun aFailedRefreshShowsTheError() = runTest {
         social.fail["refreshConversations"] = VaultFailure(FailureKind.NO_RESPONSE)
         val vm = MessagesViewModel(social)

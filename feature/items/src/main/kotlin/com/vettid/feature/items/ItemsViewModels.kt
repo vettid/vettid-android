@@ -344,8 +344,22 @@ data class ItemEditUiState(
     val focusField: Int? = null,
     /** The member's own categories in their vault (distinct, sorted), offered after the recommended ones. */
     val customCategories: List<String> = emptyList(),
+    /**
+     * The template's name, shown as the name's placeholder (owner request 2026-10-08: no pre-typed example text);
+     * the item is saved under it when the name is left empty. Null for a blank item and an existing one.
+     */
+    val nameHint: String? = null,
+    /** An existing item's new protection, picked here (`item.sensitivity` after the content is saved); null: unchanged. */
+    val protectionTo: Sensitivity? = null,
+    /** Leaving `critical` warns first (§10.7), as on the item's screen. */
+    val confirmLeaveCritical: Boolean = false,
+    /** The content was saved but the protection change was refused: the editor shows the item as saved. */
+    val savedButProtection: Boolean = false,
 ) {
     val isNew: Boolean get() = itemId == null
+
+    /** The protection the item will have once saved. */
+    val protection: Sensitivity get() = protectionTo ?: draft.sensitivity
 
     /** The custom categories the picker lists: the member's own, and this item's when it is a custom one. */
     val pickerCustoms: List<String>
@@ -381,6 +395,12 @@ class ItemEditViewModel @Inject constructor(
     private var impactJob: Job? = null
 
     private val route = ItemEditRoute(saved[ItemEditRoute.ARG_ITEM], saved[ItemEditRoute.ARG_TEMPLATE])
+
+    /** Whether the content differs from what is stored (a protection change alone saves no content). */
+    private var contentDirty = false
+
+    /** The member confirmed the warning for leaving `critical` (for this save). */
+    private var leaveConfirmed = false
     private val state = MutableStateFlow(ItemEditUiState(itemId = route.itemId))
     val uiState: StateFlow<ItemEditUiState> = state.asStateFlow()
 
@@ -389,8 +409,9 @@ class ItemEditViewModel @Inject constructor(
         items.items.onEach { l -> state.update { it.copy(customCategories = ItemCategories.customs(l.map { i -> i.category })) } }
             .launchIn(viewModelScope)
         if (route.itemId == null) {
-            val draft = route.template?.let { ItemTemplates.template(it)?.draft(context) } ?: ItemTemplates.blank()
-            setDraft(draft, dirty = false)
+            val template = route.template?.let { ItemTemplates.template(it) }
+            state.update { it.copy(nameHint = template?.let { t -> context.getString(t.name) }) }
+            setDraft(template?.draft(context) ?: ItemTemplates.blank(), dirty = false)
         } else {
             load(route.itemId)
         }
@@ -460,14 +481,29 @@ class ItemEditViewModel @Inject constructor(
 
     private fun edit(d: ItemDetail) {
         savedTags = d.tags
+        contentDirty = false
         state.update { it.copy(loading = false, version = d.version, prompt = null) }
-        setDraft(ItemDraft.of(d), dirty = false)
+        setDraft(ItemTemplates.withHints(ItemDraft.of(d), context), dirty = false)
     }
 
     private fun setDraft(d: ItemDraft, dirty: Boolean = true) {
-        state.update { it.copy(draft = d, check = ItemChecks.check(d), dirty = it.dirty || dirty, error = null, limit = null) }
+        if (dirty) contentDirty = true
+        state.update {
+            it.copy(draft = d, check = checkOf(d, it), dirty = it.dirty || dirty, error = null, limit = null, savedButProtection = false)
+        }
         impact()
     }
+
+    /**
+     * The checks of the draft as it would be saved: under the template's name when the name is left empty, and with
+     * the size limit of the protection it will have (12 KiB for critical, §10.7).
+     */
+    private fun checkOf(d: ItemDraft, s: ItemEditUiState): DraftCheck =
+        ItemChecks.check(named(d, s).copy(sensitivity = s.protectionTo ?: d.sensitivity))
+
+    /** The draft under the template's name when the member left the name empty. */
+    private fun named(d: ItemDraft, s: ItemEditUiState = state.value): ItemDraft =
+        if (d.name.isBlank() && s.nameHint != null) d.copy(name = s.nameHint) else d
 
     private fun change(f: (ItemDraft) -> ItemDraft) = setDraft(f(state.value.draft))
 
@@ -478,9 +514,21 @@ class ItemEditViewModel @Inject constructor(
 
     fun setCategory(v: String) = change { it.copy(category = v) }
 
-    /** Only for a new item; an existing one changes sensitivity on its detail screen. */
-    fun setSensitivity(s: Sensitivity) {
-        if (state.value.isNew) change { it.copy(sensitivity = s) }
+    /**
+     * A new item's sensitivity; for an existing one the protection it moves to when saved (`item.sensitivity`, §10.7,
+     * after the content): `data` ↔ `secret` needs nothing more, `critical` either way the credential password, and
+     * leaving `critical` the warning first. `@profile` items stay `data` (§10.8): the choice is off while it is on.
+     */
+    fun setSensitivity(to: Sensitivity) {
+        val s = state.value
+        if (s.isNew) return change { it.copy(sensitivity = to) }
+        if (s.inProfile && to != Sensitivity.DATA) return
+        leaveConfirmed = false
+        state.update {
+            val target = to.takeIf { t -> t != it.draft.sensitivity }
+            val next = it.copy(protectionTo = target, dirty = it.dirty || target != null, error = null, limit = null)
+            next.copy(check = checkOf(next.draft, next))
+        }
     }
 
     /** Typing replaces kept notes (§10.7: `notes` instead of `keep_notes`). */
@@ -520,7 +568,7 @@ class ItemEditViewModel @Inject constructor(
     fun setFieldAddress(i: Int, v: AddressValue) = changeField(i) { it.copy(address = v, kept = false) }
 
     /** The kind of a field not yet saved (a saved field keeps its kind: a kept value must keep it, §10.7). */
-    fun setFieldKind(i: Int, kind: String) = changeField(i) { if (it.fieldId == null) it.copy(kind = kind) else it }
+    fun setFieldKind(i: Int, kind: String) = changeField(i) { if (it.fieldId == null) it.copy(kind = kind, monthYear = false) else it }
 
     fun addField(label: String, kind: String) {
         if (kind !in FieldKinds.CHOOSABLE) return
@@ -608,17 +656,32 @@ class ItemEditViewModel @Inject constructor(
 
     fun dismissError() = state.update { it.copy(error = null, limit = null) }
 
+    @Suppress("ReturnCount")
     fun save() {
         val s = state.value
         if (s.busy || s.loading) return
-        val check = ItemChecks.check(s.draft)
+        val check = checkOf(s.draft, s)
         if (!check.ok) return state.update { it.copy(check = check, showErrors = true) }
-        if (s.draft.sensitivity == Sensitivity.CRITICAL) {
+        val to = s.protectionTo
+        if (to != null && s.draft.sensitivity == Sensitivity.CRITICAL && !leaveConfirmed) {
+            return state.update { it.copy(confirmLeaveCritical = true) }
+        }
+        // One password entry covers the save and the protection change (two credential operations, §10.7).
+        if (s.draft.sensitivity == Sensitivity.CRITICAL || to == Sensitivity.CRITICAL) {
             state.update { it.copy(prompt = PasswordPrompt(PasswordPurpose.SAVE), showErrors = true) }
         } else {
             send(null, "")
         }
     }
+
+    /** "Move it" after the warning for leaving `critical`: the save goes on (with the password). */
+    fun confirmLeaveCritical() {
+        leaveConfirmed = true
+        state.update { it.copy(confirmLeaveCritical = false) }
+        save()
+    }
+
+    fun dismissLeaveCritical() = state.update { it.copy(confirmLeaveCritical = false) }
 
     fun setPassword(v: String) = state.update { s -> s.copy(prompt = s.prompt?.copy(password = v, error = null)) }
 
@@ -632,23 +695,58 @@ class ItemEditViewModel @Inject constructor(
         send(p, pw)
     }
 
+    /**
+     * Saves: the content first (`item.put` in the item's current sensitivity, skipped when only the protection
+     * changed), then the protection (`item.sensitivity`), as two operations: `item.put` keeps an item's sensitivity
+     * (§10.7). In this order a refused protection change never loses what the member typed: the content is stored,
+     * the editor reloads it and says the protection did not change, and saving again retries only that.
+     */
+    @Suppress("CyclomaticComplexMethod") // create or replace, any sensitivity, then the protection
     private fun send(p: PasswordPrompt?, pw: String) {
         val s = state.value
+        val draft = named(s.draft, s)
+        val to = s.protectionTo
         state.update { it.copy(busy = true, error = null, limit = null) }
         viewModelScope.launch {
+            var stored = false
             try {
-                val critical = s.draft.sensitivity == Sensitivity.CRITICAL
+                val critical = draft.sensitivity == Sensitivity.CRITICAL
+                var version = s.version
                 val id = when {
-                    s.itemId == null && critical -> items.createCritical(s.draft, pw)
-                    s.itemId == null -> items.create(s.draft)
-                    critical -> s.itemId.also { items.updateCritical(it, s.version, s.draft, pw) }
-                    else -> s.itemId.also { items.update(it, s.version, s.draft) }
+                    s.itemId == null && critical -> items.createCritical(draft, pw)
+                    s.itemId == null -> items.create(draft)
+                    !contentDirty && to != null -> s.itemId
+                    critical -> s.itemId.also { version = items.updateCritical(it, s.version, draft, pw) }
+                    else -> s.itemId.also { version = items.update(it, s.version, draft) }
+                }
+                if (s.itemId != null && version != s.version) {
+                    stored = true
+                    contentDirty = false
+                    state.update { it.copy(version = version) }
+                }
+                if (to != null) {
+                    items.setSensitivity(id, version, draft.sensitivity, to, pw.takeIf { critical || to == Sensitivity.CRITICAL })
                 }
                 state.update { it.copy(busy = false, prompt = null, savedId = id, dirty = false) }
             } catch (e: VaultFailure) {
                 state.update { it.copy(busy = false) }
+                if (stored) reloadAfter(s.itemId!!, to)
                 if (p != null) refused(p, e) else state.update { it.copy(error = e.kind, limit = e.limit) }
+                if (stored) state.update { it.copy(savedButProtection = true) }
             }
+        }
+    }
+
+    /** After the content was saved and the protection change refused: the item as stored, the new protection still picked. */
+    private suspend fun reloadAfter(itemId: String, to: Sensitivity?) {
+        try {
+            edit(items.get(itemId))
+        } catch (_: VaultFailure) {
+            return
+        }
+        state.update {
+            val next = it.copy(protectionTo = to, dirty = to != null)
+            next.copy(check = checkOf(next.draft, next))
         }
     }
 

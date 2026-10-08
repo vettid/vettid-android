@@ -24,6 +24,7 @@ import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.PersonAdd
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
@@ -66,6 +67,7 @@ import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.core.ui.components.TileStyle
 import com.vettid.core.ui.components.TopLevelScaffold
+import com.vettid.core.ui.components.rememberTopBarSearch
 import com.vettid.core.ui.components.VettIdFab
 import com.vettid.core.ui.components.VettIdListRow
 import com.vettid.core.ui.format.Times
@@ -108,6 +110,7 @@ fun NavGraphBuilder.messagesDestination(chrome: ShellChrome, host: MessagesHost)
             state = state,
             chrome = chrome,
             onUnreadOnly = vm::setUnreadOnly,
+            onQuery = vm::setQuery,
             onOpen = { host.navigate(ConversationRoute(it)) },
             onCompose = { host.navigate(NewMessageRoute) },
             onInvite = host.onInvite,
@@ -139,6 +142,7 @@ fun NavGraphBuilder.messagesDestination(chrome: ShellChrome, host: MessagesHost)
 
 /** Messages (ANDROID-PLAN §4, Proton's inbox): one row per connection with its latest message. */
 @Composable
+@Suppress("CyclomaticComplexMethod") // one branch per list state
 fun MessagesScreen(
     state: MessagesUiState,
     chrome: ShellChrome,
@@ -148,11 +152,19 @@ fun MessagesScreen(
     onCompose: () -> Unit = {},
     onInvite: () -> Unit = {},
     onRetry: () -> Unit = {},
+    onQuery: (String) -> Unit = {},
 ) {
+    val search = rememberTopBarSearch(
+        state.query,
+        onQuery,
+        label = stringResource(R.string.messages_search_open),
+        placeholder = stringResource(R.string.messages_search),
+    )
     TopLevelScaffold(
         title = stringResource(R.string.messages_title),
         chrome = chrome,
         modifier = modifier,
+        search = search.takeIf { state.searchable },
         overlay = {
             BottomFloatingControls(
                 start = {
@@ -176,6 +188,12 @@ fun MessagesScreen(
         when {
             state.loading && state.conversations.isEmpty() -> Loading()
             error != null && state.conversations.isEmpty() -> ErrorState(error, onRetry)
+            state.conversations.isEmpty() && state.query.isNotBlank() -> EmptyState(
+                icon = Icons.Outlined.Search,
+                title = stringResource(R.string.messages_no_match_title),
+                body = stringResource(R.string.messages_no_match_body),
+                modifier = Modifier.testTag("messages_no_match"),
+            )
             state.conversations.isEmpty() -> EmptyState(
                 icon = Icons.Outlined.ChatBubbleOutline,
                 title = stringResource(if (state.unreadOnly) R.string.messages_empty_unread_title else R.string.messages_empty_title),

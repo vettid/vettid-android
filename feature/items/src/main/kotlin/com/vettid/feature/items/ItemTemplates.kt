@@ -23,12 +23,16 @@ import com.vettid.core.data.items.Sensitivity
 /** A recommended category (VAULT-MESSAGING §10.7): its label and icon (vettid-vault `docs/item-templates.json`). */
 data class ItemCategory(val id: String, @param:StringRes val label: Int, val icon: ImageVector)
 
-/** One field a template pre-fills: an English default label (translated in resources) and a kind. */
-data class TemplateField(@param:StringRes val label: Int, val kind: String)
+/**
+ * One field a template pre-fills: an English default label (translated in resources) and a kind; [monthYear] a
+ * `date` entered as a month and year (`YYYY-MM`, §10.7), such as a payment card's expiry.
+ */
+data class TemplateField(@param:StringRes val label: Int, val kind: String, val monthYear: Boolean = false)
 
 /**
- * A template (§10.7: templates live in the apps): it pre-fills the name, category, fields, suggested tags and a
- * suggested sensitivity; the member can add, remove or rename anything. [id] goes into `item.template`.
+ * A template (§10.7: templates live in the apps): it suggests the name (as the name's placeholder: nothing is pre-typed,
+ * owner request 2026-10-08), and pre-fills the category, the fields (labels and kinds, values empty), suggested tags
+ * and a suggested sensitivity; the member can add, remove or rename anything. [id] goes into `item.template`.
  */
 data class ItemTemplate(
     val id: String,
@@ -38,14 +42,17 @@ data class ItemTemplate(
     val tags: List<String>,
     val fields: List<TemplateField>,
 ) {
-    /** The draft this template starts, with its labels in the app's language. */
+    /**
+     * The draft this template starts, with its labels in the app's language and the name empty: the editor shows the
+     * template's name as the placeholder and saves under it when the member leaves the name empty.
+     */
     fun draft(context: Context): ItemDraft = ItemDraft(
-        name = context.getString(name),
+        name = "",
         category = category,
         template = id,
         sensitivity = sensitivity,
         tags = tags,
-        fields = fields.map { DraftField(label = context.getString(it.label), kind = it.kind) },
+        fields = fields.map { DraftField(label = context.getString(it.label), kind = it.kind, monthYear = it.monthYear) },
     )
 }
 
@@ -78,7 +85,7 @@ object ItemTemplates {
     /** A member-defined category, as shown: `home_lab` → "Home lab". */
     fun customLabel(id: String): String = com.vettid.core.data.items.ItemCategories.humanize(id)
 
-    private fun f(@StringRes label: Int, kind: String) = TemplateField(label, kind)
+    private fun f(@StringRes label: Int, kind: String, monthYear: Boolean = false) = TemplateField(label, kind, monthYear)
 
     val all: List<ItemTemplate> = listOf(
         ItemTemplate(
@@ -121,7 +128,9 @@ object ItemTemplates {
             "payment_card", R.string.items_template_payment_card, "payment_card", Sensitivity.SECRET, listOf("money"),
             listOf(
                 f(R.string.items_label_cardholder, FieldKinds.TEXT), f(R.string.items_label_number, FieldKinds.TEXT),
-                f(R.string.items_label_expires, FieldKinds.DATE), f(R.string.items_label_security_code, FieldKinds.PASSWORD),
+                // A card expires in a month: entered as month and year, stored `YYYY-MM` (§10.7 allows it).
+                f(R.string.items_label_expires, FieldKinds.DATE, monthYear = true),
+                f(R.string.items_label_security_code, FieldKinds.PASSWORD),
                 f(R.string.items_label_pin, FieldKinds.PASSWORD),
             ),
         ),
@@ -221,4 +230,21 @@ object ItemTemplates {
      * field", which asks what it is called (a pre-made "Text" field read as "Text" twice: caption and type).
      */
     fun blank(): ItemDraft = ItemDraft()
+
+    /**
+     * An item's draft with its template's entry hints: a month-and-year `date` of the template (matched by label) is
+     * entered so again when its value is kept or empty (a stored full date stays a day).
+     */
+    @Suppress("ReturnCount")
+    fun withHints(d: ItemDraft, context: Context): ItemDraft {
+        val t = d.template?.let { template(it) } ?: return d
+        val monthLabels = t.fields.filter { it.monthYear }.map { context.getString(it.label) }.toSet()
+        if (monthLabels.isEmpty()) return d
+        return d.copy(
+            fields = d.fields.map { f ->
+                val dayValue = f.text.isNotEmpty() && !f.monthYear
+                if (f.kind == FieldKinds.DATE && f.label in monthLabels && !dayValue) f.copy(monthYear = true) else f
+            },
+        )
+    }
 }

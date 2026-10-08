@@ -153,6 +153,14 @@ fun GalleryScreen(
                 )
             }
 
+            Section("Top bar search")
+            Frame {
+                com.vettid.core.ui.components.SearchTopBar(
+                    com.vettid.core.ui.components.rememberTopBarSearch("pass", {}, "Search your vault", "Search by name or tag"),
+                    autoFocus = false,
+                )
+            }
+
             Section("Navigation drawer")
             Box(Modifier.height(560.dp).padding(horizontal = Spacing.gutter).clip(RoundedCornerShape(16.dp))) {
                 VettIdDrawerSheet(

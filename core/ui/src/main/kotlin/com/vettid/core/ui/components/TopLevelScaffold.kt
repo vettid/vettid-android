@@ -24,7 +24,8 @@ data class ShellChrome(
 
 /**
  * Top-level (drawer) screen: [VettIdTopAppBar] over [content], with an overlay
- * slot for [BottomFloatingControls].
+ * slot for [BottomFloatingControls]. With [search], the bar has a search icon next to the avatar and becomes the
+ * search field while it is open ([TopBarSearch]).
  */
 @Composable
 fun TopLevelScaffold(
@@ -32,18 +33,24 @@ fun TopLevelScaffold(
     chrome: ShellChrome,
     modifier: Modifier = Modifier,
     onSearchClick: (() -> Unit)? = null,
+    search: TopBarSearch? = null,
     overlay: @Composable BoxScope.() -> Unit = {},
     content: @Composable BoxScope.() -> Unit,
 ) {
     ScreenSurface(modifier, MaterialTheme.colorScheme.background, overlay) {
-        VettIdTopAppBar(
-            title = title,
-            onMenuClick = chrome.onMenuClick,
-            accountName = chrome.accountName,
-            onAvatarClick = chrome.onAvatarClick,
-            onSearchClick = onSearchClick,
-            accountPhoto = chrome.accountPhoto,
-        )
+        if (search != null && search.active) {
+            SearchTopBar(search)
+        } else {
+            VettIdTopAppBar(
+                title = title,
+                onMenuClick = chrome.onMenuClick,
+                accountName = chrome.accountName,
+                onAvatarClick = chrome.onAvatarClick,
+                onSearchClick = search?.let { s -> s::open } ?: onSearchClick,
+                accountPhoto = chrome.accountPhoto,
+                searchLabel = search?.label,
+            )
+        }
         Box(Modifier.weight(1f).fillMaxSize(), content = content)
     }
 }

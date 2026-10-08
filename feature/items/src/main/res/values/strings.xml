@@ -6,7 +6,7 @@
     <string name="items_empty_body">Keep documents, logins and secrets in your vault, organised by tags</string>
     <string name="items_add">Add to vault</string>
     <string name="items_search">Search by name or tag</string>
-    <string name="items_search_clear">Clear search</string>
+    <string name="items_search_open">Search your vault</string>
     <string name="items_filter_category">Category</string>
     <string name="items_filter_category_any">Any category</string>
     <string name="items_filter_tag">Tag</string>
@@ -47,6 +47,7 @@
     <string name="items_kind_multiline">Long text</string>
     <string name="items_kind_number">Number</string>
     <string name="items_kind_date">Date</string>
+    <string name="items_kind_month_year">Month and year</string>
     <string name="items_kind_email">Email</string>
     <string name="items_kind_phone">Phone</string>
     <string name="items_kind_url">Web address</string>
@@ -63,6 +64,20 @@
     <string name="items_rule_otp">Enter the setup key (16 or more letters A–Z and digits 2–7) or an otpauth:// link</string>
     <string name="items_rule_address">The country is a two-letter code, such as DE or US</string>
     <string name="items_placeholder_date">YYYY-MM-DD</string>
+    <string name="items_placeholder_month">YYYY-MM</string>
+    <string name="items_placeholder_email">name@example.com</string>
+    <string name="items_placeholder_phone">+44 20 7946 0000</string>
+    <string name="items_placeholder_number">42</string>
+    <string name="items_cd_pick_date">Choose a date for %1$s</string>
+    <string name="items_cd_pick_month">Choose the month and year for %1$s</string>
+    <string name="items_month_picker_title">Month and year</string>
+    <string name="items_cd_previous_year">Previous year</string>
+    <string name="items_cd_next_year">Next year</string>
+    <string name="items_name_default">Left empty, it is saved as “%1$s”</string>
+    <string name="items_protection_profile">Only standard items can be in your shared profile: take it out of the shared profile to make it secret or critical.</string>
+    <string name="items_protection_change">Changes from %1$s to %2$s when you save.</string>
+    <string name="items_saved_protection_not_title">Your changes are saved</string>
+    <string name="items_saved_protection_not_body">The protection did not change. Save again to retry it.</string>
     <string name="items_placeholder_url">https://</string>
     <string name="items_placeholder_otp">Setup key or otpauth:// link</string>
 
@@ -201,7 +216,6 @@
     <string name="items_name">Name</string>
     <string name="items_category">Category</string>
     <string name="items_cd_choose_category">Choose a category</string>
-    <string name="items_protection_existing">%1$s. Change it on the item\'s screen.</string>
     <string name="items_tags">Tags</string>
     <string name="items_tags_note">Tags organise your vault and decide what you share. When you share a tag with a connection, items with that tag follow that sharing rule: you are asked first, or they are shared automatically.</string>
     <string name="items_tag_add">Add a tag</string>

@@ -23,6 +23,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -48,6 +49,8 @@ fun VettIdTopAppBar(
     modifier: Modifier = Modifier,
     onSearchClick: (() -> Unit)? = null,
     accountPhoto: androidx.compose.ui.graphics.ImageBitmap? = null,
+    /** The search icon's description (default "Search"). */
+    searchLabel: String? = null,
 ) {
     Row(
         modifier = modifier
@@ -71,8 +74,8 @@ fun VettIdTopAppBar(
                 .semantics { heading() },
         )
         if (onSearchClick != null) {
-            IconButton(onClick = onSearchClick) {
-                Icon(Icons.Outlined.Search, contentDescription = stringResource(R.string.core_ui_cd_search))
+            IconButton(onClick = onSearchClick, modifier = Modifier.testTag("top_bar_search_open")) {
+                Icon(Icons.Outlined.Search, contentDescription = searchLabel ?: stringResource(R.string.core_ui_cd_search))
             }
         }
         val avatarLabel = stringResource(R.string.core_ui_cd_account, accountName)

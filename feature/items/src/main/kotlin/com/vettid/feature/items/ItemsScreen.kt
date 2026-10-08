@@ -53,6 +53,7 @@ import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.core.ui.components.TopLevelScaffold
+import com.vettid.core.ui.components.rememberTopBarSearch
 import com.vettid.core.ui.components.VettIdFab
 import com.vettid.core.ui.components.VettIdListRow
 import com.vettid.core.ui.format.Times
@@ -143,14 +144,22 @@ data class ItemsActions(
 
 /**
  * The Vault (ANDROID-PLAN §4, 0.1.11): the member's items by name, with a search and filters by tag, category and
- * sensitivity; "Add to vault" is the floating button. Values are never in the list (`item.list` carries none).
+ * sensitivity; "Add to vault" is the floating button. Values are never in the list (`item.list` carries none). The
+ * search is behind the top bar's search icon (owner request 2026-10-08), open while it holds a query.
  */
 @Composable
 fun ItemsScreen(state: ItemsUiState, chrome: ShellChrome, actions: ItemsActions, modifier: Modifier = Modifier) {
+    val search = rememberTopBarSearch(
+        state.filter.query,
+        actions.onQuery,
+        label = stringResource(R.string.items_search_open),
+        placeholder = stringResource(R.string.items_search),
+    )
     TopLevelScaffold(
         title = stringResource(R.string.items_title),
         chrome = chrome,
         modifier = modifier,
+        search = search.takeIf { state.items.isNotEmpty() },
         overlay = {
             BottomFloatingControls(
                 end = {
@@ -185,7 +194,6 @@ fun ItemsScreen(state: ItemsUiState, chrome: ShellChrome, actions: ItemsActions,
                 modifier = Modifier.testTag("items_empty"),
             )
             else -> Column(Modifier.fillMaxSize()) {
-                SearchField(state.filter.query, actions.onQuery)
                 FilterRow(state, actions)
                 val visible = state.visible
                 if (visible.isEmpty()) {
@@ -223,31 +231,6 @@ private fun ItemRow(i: ItemSummary, onOpen: (String) -> Unit) {
         tileIcon = ItemTemplates.icon(i.category),
         onClick = { onOpen(i.itemId) },
         modifier = Modifier.testTag("items_row_${i.itemId}"),
-    )
-}
-
-@Composable
-private fun SearchField(query: String, onQuery: (String) -> Unit) {
-    OutlinedTextField(
-        value = query,
-        onValueChange = onQuery,
-        placeholder = { Text(stringResource(R.string.items_search)) },
-        leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-        trailingIcon = if (query.isNotEmpty()) {
-            {
-                IconButton(onClick = { onQuery("") }) {
-                    Icon(Icons.Outlined.Close, contentDescription = stringResource(R.string.items_search_clear))
-                }
-            }
-        } else {
-            null
-        },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = Spacing.gutter, vertical = Spacing.xs)
-            .testTag("items_search"),
     )
 }
 

@@ -298,7 +298,7 @@ class ConnectionsViewModelsTest {
     @Test
     fun detailFavouritesAuthenticatesAndRemoves() = runTest {
         social.seed(listOf(FakeSocial.connection("c1", "Sam")))
-        val vm = ConnectionDetailViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), social)
+        val vm = ConnectionDetailViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), social, com.vettid.core.testing.FakeSharing())
         advanceUntilIdle()
         vm.toggleFavorite()
         advanceUntilIdle()

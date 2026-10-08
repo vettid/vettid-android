@@ -10,4 +10,17 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(projects.core.testing)
+    // Screen rendering under Robolectric (the top bar's search, as :feature:connections' screen tests).
+    testImplementation(libs.robolectric)
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    testImplementation(libs.androidx.compose.ui.test.manifest)
+}
+
+android {
+    testOptions.unitTests {
+        isIncludeAndroidResources = true
+        // Robolectric's API 36 runtime reaches into the JDK's file descriptor internals.
+        all { it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED") }
+    }
 }
