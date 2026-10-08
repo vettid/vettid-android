@@ -155,17 +155,10 @@ class PhotoCameraHandle internal constructor() {
     }
 
     private companion object {
-        /** The shorter side a shot is kept at in memory (the photo is encoded at 512 px at most). */
-        const val KEEP_SIDE = 1_024
 
         fun upright(image: ImageProxy, mirror: Boolean): Bitmap? = try {
             val raw = image.toBitmap()
-            val scale = min(1f, KEEP_SIDE.toFloat() / min(raw.width, raw.height))
-            val m = Matrix().apply {
-                postScale(if (mirror) -scale else scale, scale)
-                postRotate(image.imageInfo.rotationDegrees.toFloat())
-            }
-            Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, m, true).also { if (it !== raw) raw.recycle() }
+            uprightShot(raw, image.imageInfo.rotationDegrees, mirror).also { if (it !== raw) raw.recycle() }
         } catch (_: OutOfMemoryError) {
             null
         } catch (_: IllegalArgumentException) {
@@ -174,6 +167,21 @@ class PhotoCameraHandle internal constructor() {
             null
         }
     }
+}
+
+/**
+ * Turns a sensor-frame shot upright and, for the front camera, mirrors it as previewed. The rotation comes
+ * first: a mirror applied in the sensor's frame becomes a top-bottom flip once a 90/270° rotation follows
+ * (front shots came out upside down on a Pixel 9 Pro, 2026-10-08). Scales the shorter side down to
+ * [keepSide] at most.
+ */
+internal fun uprightShot(raw: Bitmap, rotationDegrees: Int, mirror: Boolean, keepSide: Int = 1_024): Bitmap {
+    val scale = min(1f, keepSide.toFloat() / min(raw.width, raw.height))
+    val m = Matrix().apply {
+        postRotate(rotationDegrees.toFloat())
+        postScale(if (mirror) -scale else scale, scale)
+    }
+    return Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, m, true)
 }
 
 @Composable
