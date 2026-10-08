@@ -37,8 +37,6 @@ data class ConnectionInfo(
     /** The peer's display name (optional); "" without one. Never the title on its own (§10.8). */
     val name: String,
     val state: ConnectionState,
-    /** Always null: the app no longer reads the owner's alias (2026-10-08); kept until History stops matching it. */
-    val alias: String? = null,
     val favorite: Boolean = false,
     val archived: Boolean = false,
     val tags: List<String> = emptyList(),

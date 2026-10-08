@@ -185,7 +185,6 @@ class ApprovalParserTest {
             ),
         )
         assertEquals(ConnectionState.STALE, c.state)
-        assertNull(c.alias)
         assertEquals("Samira Rivera", c.accountName)
         assertEquals("Samira Rivera", c.displayName)
         assertEquals("Sam", c.name)
@@ -209,7 +208,6 @@ class ApprovalParserTest {
         )
         assertEquals("Ada King", c.displayName)
         assertEquals("Ada King", c.accountName)
-        assertNull(c.alias)
         assertNull(c.secondaryName)
     }
 
