@@ -25,6 +25,7 @@
     <string name="account_vault_status">Vault status</string>
     <string name="account_vault_status_value">Unlocked</string>
     <string name="account_lock_vault">Lock vault</string>
+    <string name="account_lock_vault_body">Locks your vault now. You need your PIN to open it again.</string>
     <string name="account_portal">Open account portal</string>
     <string name="account_portal_body">Membership, subscription and terms are changed there</string>
     <string name="account_membership">Membership</string>

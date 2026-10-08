@@ -21,8 +21,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Badge
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.ErrorOutline
-import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material3.Icon
@@ -64,6 +64,12 @@ data object SharedProfileRoute
 /** The account's name change (ANDROID-PLAN 0.1.10, VAULT-MESSAGING 0.18.0 §10.8). */
 @Serializable
 data object ChangeNameRoute
+
+/**
+ * The shared profile's glyph (owner feedback 2026-10-08: an ID card, Material Icons Outlined `Badge`): the screen's
+ * header and every row that opens it (Settings, the avatar sheet).
+ */
+val SharedProfileIcon: ImageVector get() = Icons.Outlined.Badge
 
 /** The hero glyph above a [FormScaffold] title (centred by the scaffold), as on the owner-check screen. */
 @Composable
@@ -113,8 +119,8 @@ data class SharedProfileActions(
     val onSave: () -> Unit = {},
     val onChangeName: () -> Unit = {},
     val onDismiss: () -> Unit = {},
-    /** Opens the Photo Picker; the picture comes back as a preview. */
-    val onChoosePhoto: () -> Unit = {},
+    /** Opens the in-app camera (the photo is taken, never chosen from the gallery). */
+    val onTakePhoto: () -> Unit = {},
     val onSavePhoto: () -> Unit = {},
     val onDiscardPhoto: () -> Unit = {},
     val onRemovePhoto: () -> Unit = {},
@@ -141,7 +147,7 @@ fun SharedProfileContent(state: SharedProfileUiState, actions: SharedProfileActi
         busy = state.busy,
         onBack = actions.onBack,
         modifier = Modifier.testTag("shared_profile"),
-        header = { HeaderGlyph(Icons.Outlined.Person) },
+        header = { HeaderGlyph(SharedProfileIcon) },
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
             DetailCard(Modifier.testTag("profile_names")) {
@@ -326,7 +332,7 @@ private fun NamesStep(state: ChangeNameUiState, actions: ChangeNameActions, now:
         primaryEnabled = !tooSoon,
         onBack = actions.onClose,
         modifier = Modifier.testTag("change_name_names"),
-        header = { HeaderGlyph(Icons.Outlined.Badge) },
+        header = { HeaderGlyph(Icons.Outlined.Edit) },
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
             if (tooSoon) {
@@ -487,8 +493,9 @@ private const val SECONDS_PER_MINUTE = 60L
 private const val WARN_LEFT = 3
 
 /**
- * The profile photo (§10.8): the vault's, or the chosen one as a preview until it is saved; "Choose photo" opens
- * the Photo Picker, "Remove photo" (confirmed) sends `photo: ""`.
+ * The profile photo (§10.8): the vault's, or a taken one as a preview until it is saved; "Take a photo" ("Retake
+ * photo" when one is shared) opens the in-app camera (owner feedback 2026-10-08: no picture is chosen from the
+ * gallery), "Remove photo" (confirmed) sends `photo: ""`.
  */
 @Composable
 private fun PhotoCard(state: SharedProfileUiState, actions: SharedProfileActions) {
@@ -527,8 +534,9 @@ private fun PhotoCard(state: SharedProfileUiState, actions: SharedProfileActions
                     Text(stringResource(R.string.settings_profile_photo_discard))
                 }
             } else {
-                TextButton(onClick = actions.onChoosePhoto, enabled = enabled, modifier = buttonModifier.testTag("photo_choose")) {
-                    Text(stringResource(R.string.settings_profile_photo_choose))
+                TextButton(onClick = actions.onTakePhoto, enabled = enabled, modifier = buttonModifier.testTag("photo_take")) {
+                    val hasPhoto = state.profile?.photo != null
+                    Text(stringResource(if (hasPhoto) R.string.settings_profile_photo_retake else R.string.settings_profile_photo_take))
                 }
                 if (state.profile?.photo != null) {
                     TextButton(onClick = { confirmRemove = true }, enabled = enabled, modifier = buttonModifier.testTag("photo_remove")) {
