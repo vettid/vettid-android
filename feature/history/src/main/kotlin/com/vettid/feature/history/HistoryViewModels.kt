@@ -136,13 +136,13 @@ class HistoryViewModel @Inject constructor(
 
     /**
      * What this phone can search when the vault does not (§10.9's fields it holds): the kind in both forms, the
-     * connection's names and alias, and the entry's title in the app's language.
+     * connection's names (the app no longer uses aliases), and the entry's title in the app's language.
      */
     private fun localText(r: AuditRecord): List<String> {
         val c = r.connectionId?.let { known[it] }
         return AuditFilter.kindText(r.kind) + listOfNotNull(
             HistoryText.title(context, r.kind),
-            c?.name, c?.alias, c?.firstName, c?.lastName, c?.accountName,
+            c?.name, c?.firstName, c?.lastName, c?.accountName,
             AuditKinds.itemOf(r.kind, r.ref)?.let { state.value.itemNames[it] },
         )
     }
@@ -189,7 +189,7 @@ class HistoryViewModel @Inject constructor(
         state.update { it.copy(loading = true, error = null, entries = if (debounce) it.entries else emptyList()) }
         job = viewModelScope.launch {
             if (debounce) delay(SEARCH_DEBOUNCE_MS)
-            run { pager.reset(state.value.filter) }
+            load { pager.reset(state.value.filter) }
         }
     }
 
@@ -199,10 +199,15 @@ class HistoryViewModel @Inject constructor(
         val busy = s.loading || s.loadingMore
         if (busy || s.end || s.error != null) return
         state.update { it.copy(loadingMore = true) }
-        job = viewModelScope.launch { run { pager.more() } }
+        job = viewModelScope.launch { load { pager.more() } }
     }
 
-    private suspend fun run(block: suspend () -> HistoryPager.Snapshot) {
+    /**
+     * Runs one load of the pager and shows what it read (or its failure). Not named `run`: inside `launch { }` a call
+     * `run { }` resolves to the standard library's `CoroutineScope.run`, which returned the snapshot without showing
+     * it, so History spun forever (owner, 2026-10-08).
+     */
+    private suspend fun load(block: suspend () -> HistoryPager.Snapshot) {
         try {
             val snap = block()
             state.update {

@@ -49,15 +49,6 @@ class ConnectionNamesScreenTest {
     }
 
     @Test
-    fun anAliasNeverTitlesTheConnection() {
-        val withAlias = ada.copy(alias = "Mum")
-        assertEquals("Ada Lovelace", withAlias.displayName)
-        detail(withAlias)
-        rule.onNodeWithTag("detail_name").assertTextContains("Ada Lovelace")
-        assertEquals(0, rule.onAllNodesWithText("Mum", substring = true).fetchSemanticsNodes().size)
-    }
-
-    @Test
     fun theDetailHasNoSafetyCodeAliasNoteEditOrBlock() {
         detail(ada)
         rule.onNodeWithTag("fingerprint_card").assertExists()
