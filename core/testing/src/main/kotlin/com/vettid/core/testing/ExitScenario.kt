@@ -40,10 +40,13 @@ class ExitScenario(
     private val collectMode: MailboxCollector.Mode = MailboxCollector.Mode.LONG_POLL,
     private val log: (String) -> Unit,
 ) {
+    /** What a later phase's scenario gets once the A2 steps passed: the app's vault and the connection to the peer. */
+    class Connected(val device: VaultDevice, val vault: VaultApi, val connectionId: String, val peerConnectionId: String)
+
     val guid = "android-" + Ulid.new().lowercase()
 
     @Suppress("LongMethod")
-    suspend fun run(scope: CoroutineScope) {
+    suspend fun run(scope: CoroutineScope, then: suspend (Connected) -> Unit = {}) {
         val trust = stack.trust()
         val cfg = DeviceConfig(
             name = "Pixel test", relayUrl = stack.relayUrl, http = stack.http, store = store, trust = trust,
@@ -129,6 +132,7 @@ class ExitScenario(
             check(VaultJson.str(inbound, "direction") == "in" && VaultJson.str(inbound, "connection_id") == conn)
             check(vault.messageList(conn).map { it.text }.containsAll(listOf(out, back)))
             log("app received: $back")
+            then(Connected(device, vault, conn, peerConn))
         } finally {
             device.stop()
         }

@@ -83,6 +83,13 @@ class SharingManagerTest {
         }
 
         override suspend fun grantFetch(grantId: String): GrantFetched = fetched!!
+
+        var asked: Pair<String, JsonObject>? = null
+
+        override suspend fun grantRequest(connectionId: String, items: kotlinx.serialization.json.JsonArray, reason: String?): String {
+            asked = connectionId to (items.single() as JsonObject)
+            return "01REQ"
+        }
     }
 
     private val ops = Ops()
@@ -225,5 +232,17 @@ class SharingManagerTest {
         assertArrayEquals(ByteArray(pt.size), pt)
         ops.fetched = GrantFetched("g2", null, null, "exhausted")
         assertEquals(FetchOutcome.Refused("exhausted"), m.fetchShared("g2"))
+    }
+
+    @Test
+    fun aRequestAsksForACategory() = runTest {
+        assertEquals("01REQ", m.requestGrant("c1", "insurance", " Your insurance card ", ""))
+        assertEquals("""{"kind":"category","ref":"insurance","label":"Your insurance card"}""", VaultJson.json.encodeToString(JsonObject.serializer(), ops.asked!!.second))
+        try {
+            m.requestGrant("c1", "Not A Category", null, null)
+            fail()
+        } catch (e: VaultFailure) {
+            assertEquals(FailureKind.OTHER, e.kind)
+        }
     }
 }

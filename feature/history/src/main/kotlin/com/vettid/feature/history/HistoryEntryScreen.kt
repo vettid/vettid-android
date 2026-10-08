@@ -42,6 +42,7 @@ fun HistoryEntryScreen(
     onBack: () -> Unit,
     onRetry: () -> Unit = {},
     onOpenConnection: (String) -> Unit = {},
+    onOpenItem: (String) -> Unit = {},
 ) {
     DetailScaffold(onBackClick = onBack, modifier = Modifier.testTag("history_entry")) {
         val e = state.entry
@@ -63,13 +64,14 @@ fun HistoryEntryScreen(
                 stringResource(R.string.history_detail_missing),
                 modifier = Modifier.padding(Spacing.xl),
             )
-            else -> EntryDetail(e, state, onOpenConnection)
+            else -> EntryDetail(e, state, onOpenConnection, onOpenItem)
         }
     }
 }
 
 @Composable
-private fun EntryDetail(e: AuditRecord, state: HistoryEntryUiState, onOpenConnection: (String) -> Unit) {
+@Suppress("CyclomaticComplexMethod")
+private fun EntryDetail(e: AuditRecord, state: HistoryEntryUiState, onOpenConnection: (String) -> Unit, onOpenItem: (String) -> Unit) {
     val clipboard = LocalClipboardManager.current
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = Spacing.xxl),
@@ -89,6 +91,16 @@ private fun EntryDetail(e: AuditRecord, state: HistoryEntryUiState, onOpenConnec
                             onClick = { onOpenConnection(id) },
                             modifier = Modifier.heightIn(min = Spacing.touchTarget).testTag("history_open_connection"),
                         ) { Text(stringResource(R.string.history_detail_open_connection)) }
+                    }
+                }
+                AuditKinds.itemOf(e.kind, e.ref)?.let { id ->
+                    Field(R.string.history_detail_item, state.itemName ?: stringResource(R.string.history_item_deleted))
+                    // A critical item opens to its metadata; its values still need the credential password there.
+                    if (state.itemExists) {
+                        TextButton(
+                            onClick = { onOpenItem(id) },
+                            modifier = Modifier.heightIn(min = Spacing.touchTarget).testTag("history_open_item"),
+                        ) { Text(stringResource(R.string.history_detail_open_item)) }
                     }
                 }
                 e.direction?.let {

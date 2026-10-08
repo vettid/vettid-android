@@ -191,4 +191,19 @@ class SharingViewModelsTest {
         vm.hide()
         assertTrue(vm.uiState.value.opened.isEmpty())
     }
+
+    /** §10.12 `grant.request`: a category entry the other member answers. */
+    @Test
+    fun aConnectionIsAskedForACategory() = runTest {
+        sharing.requests.clear()
+        val vm = SharedWithYouViewModel(SavedStateHandle(mapOf(SharedWithYouRoute.ARG to "c1")), sharing, social)
+        advanceUntilIdle()
+        vm.openAsk(true)
+        vm.setAsk(GrantAskForm(category = "insurance", label = "Your insurance card", reason = "For the trip"))
+        vm.sendAsk()
+        advanceUntilIdle()
+        assertEquals(listOf("c1", "insurance", "Your insurance card", "For the trip"), sharing.requests.single())
+        assertNull(vm.uiState.value.ask)
+        assertTrue(vm.uiState.value.asked)
+    }
 }

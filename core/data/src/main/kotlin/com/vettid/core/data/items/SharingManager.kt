@@ -59,6 +59,12 @@ interface SharingRepository {
     /** Revokes a grant given, or gives up one received. */
     suspend fun revokeGrant(grantId: String)
 
+    /**
+     * Asks a connection for "your <category>" (§10.12 `grant.request`, a category entry the other member answers
+     * with one of their items); [label] (≤ 128 bytes) describes it, [reason] (≤ 256 bytes) says why. Returns the request id.
+     */
+    suspend fun requestGrant(connectionId: String, category: String, label: String?, reason: String?): String
+
     /** Fetches what a connection shares with the member under a received grant (each fetch may count a use). */
     suspend fun fetchShared(grantId: String): FetchOutcome
 }
@@ -84,10 +90,13 @@ interface SharingOps {
 
     suspend fun grantRevoke(grantId: String)
 
+    suspend fun grantRequest(connectionId: String, items: JsonArray, reason: String?): String
+
     suspend fun grantFetch(grantId: String): GrantFetched
 }
 
 /** [SharingOps] over the vault client. */
+@Suppress("TooManyFunctions")
 internal class VaultSharingOps(private val api: VaultApi) : SharingOps {
     override suspend fun tagList(after: String?): TagPage = api.tagList(after = after)
 
@@ -108,6 +117,9 @@ internal class VaultSharingOps(private val api: VaultApi) : SharingOps {
     override suspend fun grantList(): JsonObject = api.grantList()
 
     override suspend fun grantRevoke(grantId: String) = api.grantRevoke(grantId)
+
+    override suspend fun grantRequest(connectionId: String, items: JsonArray, reason: String?): String =
+        api.grantRequest(connectionId, items, reason = reason)
 
     override suspend fun grantFetch(grantId: String): GrantFetched = api.grantFetch(grantId)
 }
@@ -215,10 +227,35 @@ class SharingManager(
         return GrantLists(
             given = arr(o, "given").mapNotNull { grant(it, GrantDirection.GIVEN) },
             received = arr(o, "received").mapNotNull { grant(it, GrantDirection.RECEIVED) },
+            requested = arr(o, "requested").mapNotNull { r ->
+                val id = VaultJson.str(r, "request_id") ?: return@mapNotNull null
+                val conn = VaultJson.str(r, "connection_id") ?: return@mapNotNull null
+                val labels = arr(r, "items").mapNotNull { VaultJson.str(it, "label") ?: VaultJson.str(it, "ref") }
+                GrantAsk(id, conn, labels, VaultJson.str(r, "state") ?: "")
+            },
         )
     }
 
     override suspend fun revokeGrant(grantId: String) = vaultGuard { ops().grantRevoke(grantId) }
+
+    override suspend fun requestGrant(connectionId: String, category: String, label: String?, reason: String?): String {
+        val l = label?.trim()?.takeIf { it.isNotEmpty() }
+        val r = reason?.trim()?.takeIf { it.isNotEmpty() }
+        val tooLong = (l?.toByteArray()?.size ?: 0) > MAX_LABEL || (r?.toByteArray()?.size ?: 0) > MAX_REASON
+        if (!ItemChecks.isValidCategory(category) || tooLong) {
+            throw VaultFailure(FailureKind.OTHER, CODE_BAD_REQUEST)
+        }
+        val items = kotlinx.serialization.json.buildJsonArray {
+            add(
+                buildJsonObject {
+                    put("kind", "category")
+                    put("ref", category)
+                    l?.let { put("label", it) }
+                },
+            )
+        }
+        return vaultGuard { ops().grantRequest(connectionId, items, r) }
+    }
 
     @Suppress("ReturnCount")
     override suspend fun fetchShared(grantId: String): FetchOutcome {
@@ -235,6 +272,10 @@ class SharingManager(
     companion object {
         private const val CODE_BAD_REQUEST = "bad_request"
         private const val MAX_TAGS_LISTED = 4_096
+
+        /** §10.12: a request entry's label at most 128 bytes, its reason at most 256. */
+        const val MAX_LABEL = 128
+        const val MAX_REASON = 256
 
         private fun arr(o: JsonObject, k: String): List<JsonObject> = (o[k] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
 

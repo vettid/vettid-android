@@ -238,6 +238,7 @@ fun AppShell(
                                 navigate = navigate,
                                 onBack = back,
                                 onOpenConnection = { navController.navigate(ConnectionDetailRoute(it)) { launchSingleTop = true } },
+                                onOpenItem = { navController.navigate(ItemDetailRoute(it)) { launchSingleTop = true } },
                             ),
                         )
                         credentialDestination(

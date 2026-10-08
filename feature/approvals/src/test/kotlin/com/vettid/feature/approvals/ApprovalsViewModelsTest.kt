@@ -39,7 +39,13 @@ class ApprovalsViewModelsTest {
     private val device = Approval.DeviceRequest("approval.pending", "d1", "Laptop", "desktop", "item.reveal", now, null)
     private val social = FakeSocial().apply { approvals.value = listOf(request, auth, grant, critical, device) }
 
-    private fun detail(a: Approval) = ApprovalDetailViewModel(SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to a.key)), social)
+    private val items = com.vettid.core.testing.FakeItems().apply {
+        add(com.vettid.core.testing.FakeItems.item("i1", "Passport", category = "identity_document"))
+        add(com.vettid.core.testing.FakeItems.item("i2", "Health card", category = "insurance"))
+        add(com.vettid.core.testing.FakeItems.item("i3", "Seed", com.vettid.core.data.items.Sensitivity.CRITICAL))
+    }
+
+    private fun detail(a: Approval) = ApprovalDetailViewModel(SavedStateHandle(mapOf(ApprovalDetailRoute.ARG to a.key)), social, items)
 
     @Test
     fun listsWhatTheRepositoryHolds() = runTest {
@@ -209,5 +215,70 @@ class ApprovalsViewModelsTest {
         all.toggleShareItem("i2")
         advanceUntilIdle()
         assertFalse(all.uiState.value.canApprove)
+    }
+
+    /** §10.12: entries ticked one by one, a category answered with the member's item, uses and lifetime chosen. */
+    @Test
+    fun aGrantIsDecidedEntryByEntry() = runTest {
+        val g = Approval.GrantRequest(
+            "g2", "c1",
+            listOf(GrantEntry("item", "i1", "Your passport", true), GrantEntry("category", "insurance", "Your insurance card", false), GrantEntry("item", "gone", null, false)),
+            1, 604_800, "Booking", now, null,
+        )
+        social.approvals.value = listOf(g)
+        val vm = detail(g)
+        advanceUntilIdle()
+        assertEquals(setOf(0), vm.uiState.value.grantIndexes)
+        assertEquals(listOf("i1", "i2"), vm.uiState.value.answerable.map { it.itemId }.sorted().take(2))
+        assertFalse(vm.uiState.value.answerable.any { it.itemId == "i3" }) // critical: never granted
+        vm.answerGrantEntry(1, "i2")
+        vm.toggleGrantEntry(2) // not available: never granted
+        vm.setGrantUses(3)
+        vm.setGrantExpiresIn(86_400)
+        advanceUntilIdle()
+        assertEquals(setOf(0, 1), vm.uiState.value.grantIndexes)
+        vm.toggleGrantEntry(0)
+        advanceUntilIdle()
+        vm.approve()
+        advanceUntilIdle()
+        assertEquals(com.vettid.core.data.social.GrantDecision(listOf(1), mapOf(1 to "i2"), 3, 86_400), social.lastGrant)
+        assertTrue(vm.uiState.value.done)
+    }
+
+    /** §10.13: the result stays on screen; a backoff counts down. */
+    @Test
+    fun aCriticalUseShowsItsResult() = runTest {
+        val c = critical.copy(payload = payload)
+        social.approvals.value = listOf(c)
+        social.criticalStatus = "unsuitable"
+        val vm = detail(c)
+        advanceUntilIdle()
+        social.fail["approveCriticalUse"] = VaultFailure(FailureKind.BACKOFF, "backoff", retryAfterSeconds = 30)
+        vm.setPassword("pw")
+        vm.approve()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.retryUntil != null)
+        vm.setPassword("pw")
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.canApprove)
+    }
+
+    @Test
+    fun aCriticalUseResultIsShownBeforeClosing() = runTest {
+        val c = critical.copy(payload = payload)
+        social.approvals.value = listOf(c)
+        social.criticalStatus = "unsuitable"
+        val vm = detail(c)
+        advanceUntilIdle()
+        vm.setPassword("pw")
+        advanceUntilIdle()
+        vm.approve()
+        advanceUntilIdle()
+        assertEquals("unsuitable", vm.uiState.value.criticalResult)
+        assertFalse(vm.uiState.value.done)
+        assertFalse(vm.uiState.value.gone)
+        vm.finish()
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.done)
     }
 }

@@ -30,6 +30,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -485,7 +486,7 @@ internal fun SharedWithYouRouteContent(host: ItemsHost) {
         state,
         SharedWithYouActions(
             onBack = host.onBack, onRetry = vm::load, onFetch = vm::fetch, onAskGiveUp = vm::askGiveUp, onGiveUp = vm::giveUp,
-            onDismissError = vm::dismissError,
+            onDismissError = vm::dismissError, onOpenAsk = vm::openAsk, onAsk = vm::setAsk, onSendAsk = vm::sendAsk,
         ),
     )
 }
@@ -498,6 +499,9 @@ data class SharedWithYouActions(
     val onAskGiveUp: (GrantView?) -> Unit = {},
     val onGiveUp: () -> Unit = {},
     val onDismissError: () -> Unit = {},
+    val onOpenAsk: (Boolean) -> Unit = {},
+    val onAsk: (GrantAskForm) -> Unit = {},
+    val onSendAsk: () -> Unit = {},
 )
 
 /**
@@ -532,8 +536,10 @@ fun SharedWithYouScreen(state: SharedWithYouUiState, actions: SharedWithYouActio
                 )
             }
             state.received.forEach { g -> ReceivedCard(g, state, name, actions) }
+            AskSection(state, name, actions)
         }
     }
+    state.ask?.let { AskDialog(it, name, actions) }
     state.confirmGiveUp?.let { g ->
         ConfirmDialog(
             title = stringResource(R.string.items_shared_give_up_title, g.name),
@@ -584,6 +590,91 @@ private fun ReceivedCard(g: GrantView, state: SharedWithYouUiState, name: String
         }
     }
 }
+
+/** What the member asked this connection for (§10.12), and "Ask for something". */
+@Composable
+private fun AskSection(state: SharedWithYouUiState, name: String, actions: SharedWithYouActions) {
+    Section(stringResource(R.string.items_ask_title))
+    if (state.asked) {
+        Text(
+            stringResource(R.string.items_ask_sent, name),
+            modifier = Modifier.padding(horizontal = Spacing.gutter).testTag("ask_sent"),
+        )
+    }
+    state.requested.forEach { r ->
+        Text(
+            stringResource(R.string.items_ask_row, r.labels.joinToString(", ").ifEmpty { "?" }, askState(r.state)),
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.xs),
+        )
+    }
+    SecondaryButton(
+        stringResource(R.string.items_ask_button, name),
+        { actions.onOpenAsk(true) },
+        modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s).testTag("ask_open"),
+    )
+}
+
+@Composable
+private fun askState(s: String): String = when (s) {
+    "granted", "approved" -> stringResource(R.string.items_ask_state_granted)
+    "denied" -> stringResource(R.string.items_ask_state_denied)
+    else -> stringResource(R.string.items_ask_state_pending)
+}
+
+@Composable
+private fun AskDialog(f: GrantAskForm, name: String, actions: SharedWithYouActions) {
+    var open by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(false) }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { actions.onOpenAsk(false) },
+        title = { Text(stringResource(R.string.items_ask_button, name)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(Spacing.s)) {
+                Box {
+                    TextButton(onClick = { open = true }, modifier = Modifier.testTag("ask_category")) {
+                        Text(stringResource(R.string.items_ask_category, ItemsText.category(f.category)))
+                    }
+                    androidx.compose.material3.DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+                        ItemTemplates.categories.forEach { c ->
+                            androidx.compose.material3.DropdownMenuItem(text = { Text(stringResource(c.label)) }, onClick = {
+                                open = false
+                                actions.onAsk(f.copy(category = c.id))
+                            })
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = f.label,
+                    onValueChange = { actions.onAsk(f.copy(label = it.take(ASK_LABEL_CHARS))) },
+                    label = { Text(stringResource(R.string.items_ask_label)) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().testTag("ask_label"),
+                )
+                OutlinedTextField(
+                    value = f.reason,
+                    onValueChange = { actions.onAsk(f.copy(reason = it.take(ASK_REASON_CHARS))) },
+                    label = { Text(stringResource(R.string.items_ask_reason)) },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    stringResource(R.string.items_ask_note, name),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = actions.onSendAsk, enabled = !f.busy, modifier = Modifier.testTag("ask_send")) {
+                Text(stringResource(R.string.items_ask_send))
+            }
+        },
+        dismissButton = { TextButton(onClick = { actions.onOpenAsk(false) }) { Text(stringResource(R.string.items_cancel)) } },
+    )
+}
+
+/** §10.12: a label at most 128 bytes, a reason at most 256; the fields stop at as many characters, the vault checks bytes. */
+private const val ASK_LABEL_CHARS = 128
+private const val ASK_REASON_CHARS = 256
 
 @Composable
 private fun SharedFields(c: SharedContent) {

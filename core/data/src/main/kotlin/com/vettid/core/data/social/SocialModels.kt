@@ -191,6 +191,18 @@ data class ConversationSummary(
     val unread: Int,
 )
 
+/**
+ * The member's answer to a grant request (§10.12): [items] are the request's entry indexes granted; [answers] name
+ * the member's item for category entries (index → item id); [uses] (1–100) and [expiresInSeconds]
+ * (60–31,536,000) replace the request's when set.
+ */
+data class GrantDecision(
+    val items: List<Int>,
+    val answers: Map<Int, String> = emptyMap(),
+    val uses: Int? = null,
+    val expiresInSeconds: Long? = null,
+)
+
 /** An item of a grant request (§10.12): an item the asker names, or a category the member answers. */
 data class GrantEntry(val kind: String, val ref: String, val label: String?, val available: Boolean)
 

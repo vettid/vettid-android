@@ -109,6 +109,8 @@ data class HistoryHost(
     val onBack: () -> Unit,
     /** Opens a connection's detail (the entry detail's connection). */
     val onOpenConnection: (String) -> Unit,
+    /** Opens an item of the Vault (an item entry's detail). */
+    val onOpenItem: (String) -> Unit = {},
 )
 
 /** Registers History, a connection's History and the entry detail. */
@@ -118,7 +120,13 @@ fun NavGraphBuilder.historyDestination(chrome: ShellChrome, host: HistoryHost) {
     composable<HistoryEntryRoute> {
         val vm: HistoryEntryViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
-        HistoryEntryScreen(state, onBack = host.onBack, onRetry = vm::load, onOpenConnection = host.onOpenConnection)
+        HistoryEntryScreen(
+            state,
+            onBack = host.onBack,
+            onRetry = vm::load,
+            onOpenConnection = host.onOpenConnection,
+            onOpenItem = host.onOpenItem,
+        )
     }
 }
 
@@ -456,7 +464,7 @@ private fun EntryList(state: HistoryUiState, actions: HistoryActions) {
         if (nearEnd && !state.end) actions.onLoadMore()
     }
     LazyColumn(state = list, modifier = Modifier.fillMaxSize().testTag("history_list")) {
-        items(state.entries, key = { it.seq }) { e -> EntryRow(e, state.connectionNames, actions.onOpen) }
+        items(state.entries, key = { it.seq }) { e -> EntryRow(e, state.connectionNames, state.itemNames, actions.onOpen) }
         item(key = "footer") {
             Box(Modifier.fillMaxWidth().navigationBarsPadding().padding(Spacing.l), contentAlignment = Alignment.Center) {
                 when {
@@ -488,11 +496,13 @@ private fun EntryList(state: HistoryUiState, actions: HistoryActions) {
 }
 
 @Composable
-private fun EntryRow(e: AuditRecord, names: Map<String, String>, onOpen: (Long) -> Unit) {
+private fun EntryRow(e: AuditRecord, names: Map<String, String>, itemNames: Map<String, String>, onOpen: (Long) -> Unit) {
     val connection = e.connectionId?.let { names[it] ?: stringResource(R.string.history_connection_removed) }
+    // ANDROID-PLAN 0.1.11: the item's name where the entry refers to one; a removed one shows "Deleted item".
+    val item = AuditKinds.itemOf(e.kind, e.ref)?.let { itemNames[it] ?: stringResource(R.string.history_item_deleted) }
     VettIdListRow(
         title = HistoryText.title(e.kind),
-        supporting = connection ?: stringResource(AuditKinds.categoryLabel(e.category)),
+        supporting = listOfNotNull(item, connection).joinToString(" · ").ifEmpty { stringResource(AuditKinds.categoryLabel(e.category)) },
         meta = e.at?.let { Times.short(it) },
         tileIcon = categoryIcon(e.category),
         onClick = { onOpen(e.seq) },
