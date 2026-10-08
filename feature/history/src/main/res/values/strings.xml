@@ -68,4 +68,63 @@
     <string name="history_item_deleted">Deleted item</string>
     <string name="history_detail_item">Item</string>
     <string name="history_detail_open_item">Open the item</string>
+
+    <!-- History export (ANDROID-PLAN 0.1.17, VAULT-MESSAGING 0.22.0 §10.9) -->
+    <string name="history_more_actions">More options</string>
+    <string name="history_export_menu">Export…</string>
+    <string name="history_export_title">Export history</string>
+    <string name="history_export_preparing">Counting the entries…</string>
+    <plurals name="history_export_count">
+        <item quantity="one">%1$d entry</item>
+        <item quantity="other">%1$d entries</item>
+    </plurals>
+    <string name="history_export_count_range">%1$s, %2$s</string>
+    <string name="history_export_filters">What the list shows: %1$s</string>
+    <string name="history_export_filters_none">All of your history</string>
+    <string name="history_export_search">“%1$s”</string>
+    <string name="history_export_more">Only the newest 10,000 of the matching entries can be exported. Narrow the dates to export older ones.</string>
+    <string name="history_export_format">Format</string>
+    <string name="history_export_csv">CSV</string>
+    <string name="history_export_csv_note">For a spreadsheet</string>
+    <string name="history_export_json">JSON</string>
+    <string name="history_export_json_note">For checking against your vault</string>
+    <string name="history_export_unencrypted_title">The file is not encrypted</string>
+    <string name="history_export_unencrypted">The file is not encrypted. Anyone who gets it can see who you connected with, your devices and item names, and when. It holds no item values, passwords or messages.</string>
+    <string name="history_export_continue">Continue</string>
+    <string name="history_export_close">Close</string>
+    <string name="history_export_nothing_title">Nothing to export</string>
+    <string name="history_export_nothing">No entries match what the list shows. Change the filters and try again.</string>
+    <string name="history_export_alarm_title">Export is not available</string>
+    <string name="history_export_alarm">Export is not available while a credential alarm is open.</string>
+    <string name="history_export_alarm_open">Open the alarm</string>
+    <string name="history_export_old_vault_title">Export is not available yet</string>
+    <string name="history_export_old_vault">Export needs a newer vault release. It will be offered once your vault is updated.</string>
+    <string name="history_export_pin_title">Enter your vault PIN</string>
+    <string name="history_export_pin_body">Your vault PIN confirms the export. Your vault records it in your history.</string>
+    <string name="history_export_pin_label">Vault PIN</string>
+    <string name="history_export_pin_wrong">Wrong PIN</string>
+    <string name="history_export_pin_backoff">Too many wrong PINs. Try again in %1$d s.</string>
+    <string name="history_export_pin_backoff_undated">Too many wrong PINs. Try again later.</string>
+    <string name="history_export_export">Export</string>
+    <plurals name="history_export_reading">
+        <item quantity="one">Preparing %1$d entry…</item>
+        <item quantity="other">Preparing %1$d entries…</item>
+    </plurals>
+    <string name="history_export_reading_progress">%1$d of %2$d read</string>
+    <string name="history_export_save_title">Choose where to save</string>
+    <string name="history_export_save_body">Pick a place for the file in the dialog. Only you choose where it goes.</string>
+    <string name="history_export_save_again">Choose where to save</string>
+    <string name="history_export_writing">Saving the file…</string>
+    <string name="history_export_done_title">History exported</string>
+    <plurals name="history_export_done">
+        <item quantity="one">%1$d entry exported.</item>
+        <item quantity="other">%1$d entries exported.</item>
+    </plurals>
+    <string name="history_export_done_partial">%1$d of %2$d entries exported; %3$d older entries were removed by your vault\'s history limit meanwhile.</string>
+    <string name="history_export_done_note">The file is not encrypted: keep it somewhere safe, and delete it when you no longer need it.</string>
+    <string name="history_export_failed_title">Export did not finish</string>
+    <string name="history_export_save_failed">The file could not be saved. Nothing was kept; try again.</string>
+    <string name="history_export_owner_check">Check now</string>
+    <string name="history_device_removed">Removed device</string>
+    <string name="history_export_summary">%1$s · %2$s</string>
 </resources>

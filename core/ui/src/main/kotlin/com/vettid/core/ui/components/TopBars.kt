@@ -51,6 +51,8 @@ fun VettIdTopAppBar(
     accountPhoto: androidx.compose.ui.graphics.ImageBitmap? = null,
     /** The search icon's description (default "Search"). */
     searchLabel: String? = null,
+    /** Icon actions before the avatar (History's ⋯ menu). */
+    actions: @Composable RowScope.() -> Unit = {},
 ) {
     Row(
         modifier = modifier
@@ -78,6 +80,7 @@ fun VettIdTopAppBar(
                 Icon(Icons.Outlined.Search, contentDescription = searchLabel ?: stringResource(R.string.core_ui_cd_search))
             }
         }
+        actions()
         val avatarLabel = stringResource(R.string.core_ui_cd_account, accountName)
         // Not an IconButton: its circular clip would cut the tile's corners.
         Box(

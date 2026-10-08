@@ -104,8 +104,26 @@ internal class CredentialOps(private val d: VaultDevice) {
             throw VaultOpException(type, r.inner.error?.code ?: "error", r.inner.error?.message ?: "", r.body.takeIf { it.isNotEmpty() })
         }
         keep(r.body)
+        lastTs = r.ts
         return Triple(r.body, rk, id)
     }
+
+    /** The `ts` of the last successful sealed answer (read under [VaultDevice.credentialLock]). */
+    private var lastTs: Instant? = null
+
+    /**
+     * A sealed operation without the blob that answers with its body and its `ts` (History export, §10.9 0.22.0:
+     * the PIN alone, sealed to a UTK as `vault.delete` carries it).
+     */
+    suspend fun sealedOpAt(
+        type: String,
+        payload: JsonObjectBuilder.() -> Unit,
+        extra: JsonObjectBuilder.() -> Unit = {},
+    ): Pair<JsonObject, Instant> =
+        d.credentialLock.withLock {
+            val body = sealedWith(type, takeUtk(), false, payload, false, extra).first
+            body to (lastTs ?: Instant.now())
+        }
 
     /** A credential operation (with the blob); on stale_credential fetches the latest blob once and retries (§3.5.3). */
     suspend fun credOp(

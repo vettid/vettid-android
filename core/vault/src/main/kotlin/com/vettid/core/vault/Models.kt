@@ -297,6 +297,34 @@ data class AuditPage(
     val partial: Boolean = false,
 )
 
+/**
+ * `audit.export`'s answer (VAULT-MESSAGING 0.22.0 §10.9 History export), a preview's and an export's: [count]
+ * (0–10,000, newest first) entries match, [more] beyond the cap; [uptoSeq] bounds the export and [uptoHash] (base64,
+ * 32 bytes) is its entry's hash; the range only when [count] > 0; [entrySeq] the `audit.exported` entry (an export,
+ * not a preview).
+ */
+@Serializable
+data class AuditExportAnswer(
+    val count: Long,
+    val more: Boolean = false,
+    @SerialName("upto_seq") val uptoSeq: Long,
+    @SerialName("upto_hash") val uptoHash: String,
+    @SerialName("oldest_seq") val oldestSeq: Long? = null,
+    @SerialName("newest_seq") val newestSeq: Long? = null,
+    @SerialName("oldest_at") val oldestAt: String? = null,
+    @SerialName("newest_at") val newestAt: String? = null,
+    @SerialName("entry_seq") val entrySeq: Long? = null,
+)
+
+/** The filters of `audit.list` that `audit.export` takes (§10.9): no cursor, no `limit`. [since]/[until] as sent. */
+data class AuditExportFilters(
+    val connectionId: String? = null,
+    val kinds: List<String>? = null,
+    val q: String? = null,
+    val since: String? = null,
+    val until: String? = null,
+)
+
 /** `sync.event` (§10.1): [kind] and its members; devices fetch what changed. */
 data class SyncEvent(val kind: String, val body: JsonObject)
 

@@ -822,6 +822,43 @@ class VaultApi(val device: VaultDevice) {
         }.decode(AuditPage.serializer())
     }
 
+    private fun JsonObjectBuilder.exportFilters(f: AuditExportFilters) {
+        f.connectionId?.let { put("connection_id", it) }
+        f.kinds?.let { k -> putJsonArray("kinds") { k.forEach { add(JsonPrimitive(it)) } } }
+        f.q?.let { put("q", it) }
+        f.since?.let { put("since", it) }
+        f.until?.let { put("until", it) }
+    }
+
+    /**
+     * `audit.export`'s preview (VAULT-MESSAGING 0.22.0 §10.9 History export): counts what [filters] match, without
+     * the PIN; spends nothing and writes no audit entry. [format] (`csv` / `json`) is only checked.
+     */
+    suspend fun auditExportPreview(filters: AuditExportFilters, format: String? = null): AuditExportAnswer = op(TYPE_AUDIT_EXPORT) {
+        exportFilters(filters)
+        put("dry_run", true)
+        format?.let { put("format", it) }
+    }.decode(AuditExportAnswer.serializer())
+
+    /**
+     * The export (§10.9): the same [filters], [format], the preview's [uptoSeq] and the vault [pin] alone sealed to a
+     * UTK (no blob, not a credential operation). Answers the preview's members for `seq` ≤ [uptoSeq] with `entry_seq`,
+     * and the answer's `ts` (the file's `exported_at`). No UTKs come back: the pool is topped up when it runs empty.
+     */
+    suspend fun auditExport(
+        filters: AuditExportFilters,
+        format: String,
+        uptoSeq: Long,
+        pin: String,
+    ): Pair<AuditExportAnswer, java.time.Instant> {
+        val (body, ts) = cred.sealedOpAt(TYPE_AUDIT_EXPORT, { put("pin", pin) }) {
+            exportFilters(filters)
+            put("format", format)
+            put("upto_seq", uptoSeq)
+        }
+        return body.decode(AuditExportAnswer.serializer()) to ts
+    }
+
     suspend fun feedList(status: String? = null, afterSeq: Long? = null, limit: Int? = null): FeedPage = op("feed.list") {
         status?.let { put("status", it) }
         afterSeq?.let { put("after_seq", it) }
@@ -857,6 +894,7 @@ class VaultApi(val device: VaultDevice) {
          * their underscores.
          */
         const val TYPE_OWNER_CHECK = "vault.owner-check"
+        const val TYPE_AUDIT_EXPORT = "audit.export"
         const val TYPE_ACCOUNT_NAME_SET = "account.name.set"
         private const val AWAIT_S = 90L
         private const val GRANT_FETCH_WAIT_S = 60L

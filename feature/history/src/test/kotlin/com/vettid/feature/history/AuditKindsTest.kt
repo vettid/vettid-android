@@ -35,8 +35,29 @@ class AuditKindsTest {
         "intro.accepted", "intro.declined", "intro.connecting", "intro.closed", "location.share.started",
         "location.share.stopped", "location.share.received", "location.share.ended", "location.requested",
         "location.history.deleted", "location.history.shared", "location.history.received", "wallet.created",
-        "wallet.deleted", "wallet.address_issued", "wallet.signed", "drop.suppressed",
+        "wallet.deleted", "wallet.address_issued", "wallet.signed", "drop.suppressed", "audit.exported",
     )
+
+    @Test
+    fun aHistoryExportIsUnderSecurityWithItsSummary() {
+        assertEquals(AuditCategory.SECURITY, AuditCategory.of("audit.exported"))
+        assertEquals(AuditKinds.Title.Known(R.string.history_kind_audit_exported), AuditKinds.title("audit.exported"))
+        val ref = "format=csv;count=40;seqs=700-790;filters=kinds,dates;since=2026-10-01T04:00:00.000Z"
+        assertEquals("csv" to 40, AuditKinds.exportSummary("audit.exported", ref))
+        assertEquals("json" to 812, AuditKinds.exportSummary("audit.exported", "format=json;count=812;seqs=1-812;filters=none"))
+        assertEquals(null, AuditKinds.exportSummary("audit.exported", "count=1"))
+        assertEquals(null, AuditKinds.exportSummary("item.added", "format=csv;count=1"))
+    }
+
+    @Test
+    fun categoryIdentifiersFollowThePlansTable() {
+        assertEquals(
+            listOf(
+                "unlocks", "security", "devices", "connections", "messages", "vault", "agents", "location", "account", "dropped", "other",
+            ),
+            AuditCategory.entries.map { it.id },
+        )
+    }
 
     @Test
     fun everySpecKindHasATitleAndAGroup() {

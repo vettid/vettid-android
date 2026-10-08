@@ -17,6 +17,20 @@ object AuditKinds {
 
     /** The item an entry refers to, if any. */
     fun itemOf(kind: String, ref: String?): String? = ref?.takeIf { kind in ITEM_REF_KINDS && it.isNotEmpty() }
+
+    /**
+     * An `audit.exported` entry's format and count from its `ref` (VAULT-MESSAGING 0.22.0 §10.9:
+     * `format=<csv|json>;count=<n>;seqs=…;filters=…`), or null for another kind or a summary that does not read.
+     */
+    fun exportSummary(kind: String, ref: String?): Pair<String, Int>? {
+        val pairs = ref?.takeIf { kind == KIND_EXPORTED }?.split(';')
+            ?.mapNotNull { p -> p.split('=', limit = 2).takeIf { it.size == 2 }?.let { it[0] to it[1] } }?.toMap()
+        val format = pairs?.get("format")?.takeIf { it == "csv" || it == "json" }
+        val count = pairs?.get("count")?.toIntOrNull()?.takeIf { it >= 0 }
+        return if (format != null && count != null) format to count else null
+    }
+
+    const val KIND_EXPORTED = "audit.exported"
     /** How [kind] reads: a known title, a known title as an hourly summary, a dropped message, or unknown. */
     sealed interface Title {
         data class Known(@param:StringRes val res: Int) : Title
@@ -108,6 +122,7 @@ object AuditKinds {
         "credential.alarm.confirmed" to R.string.history_kind_credential_alarm_confirmed,
         "credential.alarm.resolved" to R.string.history_kind_credential_alarm_resolved,
         "credential.reset" to R.string.history_kind_credential_reset,
+        "audit.exported" to R.string.history_kind_audit_exported,
         "recovery.requested" to R.string.history_kind_recovery_requested,
         "recovery.replaced" to R.string.history_kind_recovery_replaced,
         "recovery.bad_code" to R.string.history_kind_recovery_bad_code,

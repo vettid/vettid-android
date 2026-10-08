@@ -7,6 +7,8 @@ dependencies {
     implementation(projects.core.data)
     implementation(libs.androidx.hilt.navigation.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    // BackHandler and the Storage Access Framework's "Save to…" of a History export (ANDROID-PLAN 0.1.17).
+    implementation(libs.androidx.activity.compose)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
