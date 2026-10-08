@@ -18,7 +18,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import com.vettid.app.BuildConfig
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -78,6 +81,11 @@ fun VettIdApp(
     val paused by viewModel.servicePaused.collectAsStateWithLifecycle()
     val canaryVm: CanaryManifestViewModel = hiltViewModel()
     val canaryPrompt by canaryVm.prompt.collectAsStateWithLifecycle()
+    // A shared document is taken only while this activity is started (CanaryManifestViewModel.receive).
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(canaryVm, lifecycle) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) { canaryVm.receive() }
+    }
     val uri = LocalUriHandler.current
     val portal = viewModel.portalUrl
     val nav = rememberNavController()

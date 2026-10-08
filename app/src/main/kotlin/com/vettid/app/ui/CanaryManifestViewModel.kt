@@ -7,6 +7,7 @@ import com.vettid.core.data.vault.CanaryManifestRepository
 import com.vettid.core.data.vault.CanaryManifestView
 import com.vettid.core.data.vault.VaultFailure
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -38,13 +39,19 @@ class CanaryManifestViewModel @Inject constructor(
     private val state = MutableStateFlow<CanaryManifestPrompt?>(null)
     val prompt: StateFlow<CanaryManifestPrompt?> = state.asStateFlow()
     private var pending: ByteArray? = null
+    private var checking: Job? = null
 
-    init {
-        viewModelScope.launch {
-            inbox.document.filterNotNull().collect { doc ->
-                inbox.consume()
-                check(doc)
-            }
+    /**
+     * Takes the documents shared to the app while it is called: by the root of the UI, only while its activity
+     * is started. Another instance of the activity left in the background (a share sheet may open a second
+     * one in a task of its own) must not take a document and ask about it where the member cannot see it.
+     * The check runs in the ViewModel, so that stopping the UI does not lose a document already taken.
+     */
+    suspend fun receive() {
+        inbox.document.filterNotNull().collect { doc ->
+            inbox.consume()
+            checking?.cancel()
+            checking = viewModelScope.launch { check(doc) }
         }
     }
 
