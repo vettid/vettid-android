@@ -37,9 +37,6 @@ interface ConnectionsRepository {
 
     suspend fun setFavorite(id: String, favorite: Boolean)
 
-    /** Sets the owner's alias and note; "" clears one, null leaves it. */
-    suspend fun updateNames(id: String, alias: String?, note: String?)
-
     suspend fun remove(id: String)
 
     /** Removes the connection and blocks its identity (§10.4 block list). */
@@ -47,9 +44,6 @@ interface ConnectionsRepository {
 
     /** Asks the connection's member to prove presence (§10.4); returns the request id. */
     suspend fun requestAuthentication(id: String, context: String?): String
-
-    /** The safety code this app showed when the connection was made, if it recorded one. */
-    fun safetyCode(id: String): SafetyCodeRecord?
 }
 
 /** Messages with connections (§10.5). */

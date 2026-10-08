@@ -28,16 +28,17 @@ enum class ConnectionState {
  * A connection (§10.4). [firstName] and [lastName] are the names on the peer's VettID account, from the shared
  * profile's core (VAULT-MESSAGING 0.18.0 §10.8; on the inviter's side, before the first `profile.update`, from the
  * request): null before they arrived, never verified. [name] (the display name), [photo] and [sharedItems] are
- * the peer's self-asserted extras; [alias], [note], [favorite] and [archived] are the owner's own metadata, never
- * sent to the peer.
+ * the peer's self-asserted extras; [favorite] and [archived] are the owner's own metadata, never sent to the peer.
+ * The owner's alias and note (§10.4) are not read: the app neither shows nor sets them (owner decision 2026-10-08);
+ * any a vault holds stay there untouched.
  */
 data class ConnectionInfo(
     val id: String,
     /** The peer's display name (optional); "" without one. Never the title on its own (§10.8). */
     val name: String,
     val state: ConnectionState,
+    /** Always null: the app no longer reads the owner's alias (2026-10-08); kept until History stops matching it. */
     val alias: String? = null,
-    val note: String? = null,
     val favorite: Boolean = false,
     val archived: Boolean = false,
     val tags: List<String> = emptyList(),
@@ -59,10 +60,10 @@ data class ConnectionInfo(
     val accountName: String? get() = AccountNames.full(firstName, lastName)
 
     /**
-     * The title (§10.8): the owner's alias, else "First Last"; "" before the names arrived, for which the UI shows
-     * "Name not shared yet". Never the display name alone.
+     * The title (§10.8): "First Last"; "" before the names arrived, for which the UI shows "Name not shared yet".
+     * Never the display name alone, never an alias.
      */
-    val displayName: String get() = alias?.takeIf { it.isNotBlank() } ?: accountName ?: ""
+    val displayName: String get() = accountName ?: ""
 
     /** The peer's display name when it adds something to the title (non-empty and different), for secondary text. */
     val secondaryName: String? get() = name.takeIf { it.isNotBlank() && it != displayName && it != accountName }
@@ -157,9 +158,6 @@ enum class RequestEnd {
  * request showed (self-asserted), kept from the request since it has left the list.
  */
 data class PeerDecline(val requestId: String, val name: String?, val outgoing: Boolean, val at: Instant)
-
-/** The safety code shown when a connection was made (recorded by this app). */
-data class SafetyCodeRecord(val sas: String, val at: Instant)
 
 /** What this vault knows about a connection's member authentication (§10.4). */
 data class AuthenticationState(

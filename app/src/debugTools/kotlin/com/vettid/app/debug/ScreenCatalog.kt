@@ -72,7 +72,6 @@ import com.vettid.core.data.social.InviteTtl
 import com.vettid.core.data.social.MessageInfo
 import com.vettid.core.data.social.OutstandingInvite
 import com.vettid.core.data.social.PeerDecline
-import com.vettid.core.data.social.SafetyCodeRecord
 import com.vettid.core.data.social.ShareItem
 import com.vettid.feature.approvals.ApprovalDetailScreen
 import com.vettid.feature.approvals.ApprovalDetailUiState
@@ -307,7 +306,7 @@ object ScreenCatalog {
     private val sam = ConnectionInfo("c1", "Sam", ConnectionState.ACTIVE, favorite = true, firstName = "Samira", lastName = "Rivera",
         sharedItems = listOf(SharedProfileItem("i1", "Where I live", listOf("City" to "Lisbon"))),
         keyFingerprint = "9a1f bb7d 873e eafb 494b ef94 f072 7b25", createdAt = t0.minusSeconds(86_400 * 30), lastActiveAt = t0.plusSeconds(600))
-    private val alex = ConnectionInfo("c2", "", ConnectionState.ACTIVE, alias = "Alex (work)", firstName = "Alexandra", lastName = "Okafor",
+    private val alex = ConnectionInfo("c2", "Alex", ConnectionState.ACTIVE, firstName = "Alexandra", lastName = "Okafor",
         keyFingerprint = "1c2d 3e4f 4e8e e8f7 0a0b 0c0d 0e0f 1011", createdAt = t0.minusSeconds(86_400 * 3), lastActiveAt = t0.minusSeconds(7200))
     private val jo = ConnectionInfo("c3", "", ConnectionState.STALE, firstName = "Jo", lastName = "Lindqvist", createdAt = t0.minusSeconds(86_400 * 90))
     /** Between activation and the first profile.update on the accepter's side: no names yet (§10.8). */
@@ -678,16 +677,12 @@ object ScreenCatalog {
         "connections.add" to { ConnectionsScreen(ConnectionsUiState(loading = false, connections = connections, addSheet = true), chrome, ConnectionsActions()) },
         "connections.detail" to {
             ConnectionDetailScreen(
-                ConnectionDetailUiState("c1", sam, AuthenticationState("c1", t0, "authenticated", t0), SafetyCodeRecord("042817", t0.minusSeconds(86_400 * 30)), loading = false),
+                ConnectionDetailUiState("c1", sam, AuthenticationState("c1", t0, "authenticated", t0), loading = false),
                 DetailActions(),
             )
         },
-        "connections.detail_not_shared" to { ConnectionDetailScreen(ConnectionDetailUiState("c4", riley, null, null, loading = false), DetailActions()) },
-        "connections.detail_alias" to { ConnectionDetailScreen(ConnectionDetailUiState("c2", alex, null, null, loading = false), DetailActions()) },
-        "connections.detail_edit" to {
-            ConnectionDetailScreen(ConnectionDetailUiState("c2", alex, loading = false, editing = true, aliasInput = "Alex (work)", noteInput = "Met at the 2026 conference"), DetailActions())
-        },
-        "connections.detail_block" to { ConnectionDetailScreen(ConnectionDetailUiState("c1", sam, loading = false, confirm = DetailConfirm.BLOCK), DetailActions()) },
+        "connections.detail_not_shared" to { ConnectionDetailScreen(ConnectionDetailUiState("c4", riley, null, loading = false), DetailActions()) },
+        "connections.detail_remove" to { ConnectionDetailScreen(ConnectionDetailUiState("c1", sam, loading = false, confirm = DetailConfirm.REMOVE), DetailActions()) },
         "invite.choose" to { InviteScreen(InviteUiState(ttls = InviteTtl.entries.toList()), InviteActions()) },
         "invite.choose_remote" to { InviteScreen(InviteUiState(ttls = InviteTtl.entries.toList(), ttl = InviteTtl.ONE_DAY), InviteActions()) },
         "invite.show" to { InviteScreen(InviteUiState(step = InviteStep.SHOWING, invite = invite), InviteActions()) },

@@ -421,7 +421,7 @@ private fun PickRow(c: ConnectionInfo, onClick: () -> Unit) {
     val name = c.displayName.ifBlank { stringResource(R.string.messages_name_not_shared) }
     VettIdListRow(
         title = name,
-        supporting = c.alias?.let { a -> c.name.takeIf { it.isNotBlank() && it != a } },
+        supporting = c.secondaryName,
         tileName = name,
         tileStyle = if (c.favorite) TileStyle.Favorite else TileStyle.Connection,
         onClick = onClick,

@@ -18,7 +18,6 @@ import com.vettid.core.data.social.OutstandingInvite
 import com.vettid.core.data.social.PeerDecline
 import com.vettid.core.data.social.RequestEnd
 import com.vettid.core.data.social.RequestState
-import com.vettid.core.data.social.SafetyCodeRecord
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import kotlinx.coroutines.flow.Flow
@@ -42,7 +41,6 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
     var ttls = InviteTtl.entries.toList()
     var invite = InviteInfo("01JINVITE0000000000000000A", "link", "{}", Instant.parse("2026-10-04T12:10:00Z"), remote = false)
     var outstanding = listOf<OutstandingInvite>()
-    val safety = mutableMapOf<String, SafetyCodeRecord>()
     private var seq = 0
 
     override val connections = MutableStateFlow<List<ConnectionInfo>>(emptyList())
@@ -121,13 +119,6 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
         edit(id) { it.copy(favorite = favorite) }
     }
 
-    override suspend fun updateNames(id: String, alias: String?, note: String?) {
-        call("updateNames")
-        edit(id) { c ->
-            c.copy(alias = alias?.let { it.ifEmpty { null } } ?: c.alias, note = note?.let { it.ifEmpty { null } } ?: c.note)
-        }
-    }
-
     override suspend fun remove(id: String) {
         call("remove")
         connections.update { l -> l.filterNot { it.id == id } }
@@ -143,8 +134,6 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
         authentication.update { it + (id to AuthenticationState(id, lastResult = "requested")) }
         return "auth-request"
     }
-
-    override fun safetyCode(id: String): SafetyCodeRecord? = safety[id]
 
     override fun messages(connectionId: String): Flow<List<MessageInfo>> = messageMap.map { it[connectionId].orEmpty() }
 
