@@ -389,7 +389,7 @@ class ItemEditViewModel @Inject constructor(
         items.items.onEach { l -> state.update { it.copy(customCategories = ItemCategories.customs(l.map { i -> i.category })) } }
             .launchIn(viewModelScope)
         if (route.itemId == null) {
-            val draft = route.template?.let { ItemTemplates.template(it)?.draft(context) } ?: ItemTemplates.blank(context)
+            val draft = route.template?.let { ItemTemplates.template(it)?.draft(context) } ?: ItemTemplates.blank()
             setDraft(draft, dirty = false)
         } else {
             load(route.itemId)
@@ -499,6 +499,18 @@ class ItemEditViewModel @Inject constructor(
     }
 
     fun removeTag(tag: String) = change { d -> d.copy(tags = d.tags - tag) }
+
+    /**
+     * The built-in "Shared profile" choice (`@profile`, §10.8): only a standard (`data`) item can carry it; it can
+     * always be taken off. No template adds it (VAULT-ITEMS 0.1.1).
+     */
+    fun setInProfile(on: Boolean) = change { d ->
+        when {
+            !on -> d.copy(tags = d.tags - ItemChecks.PROFILE_TAG)
+            d.sensitivity != Sensitivity.DATA -> d
+            else -> d.copy(tags = (d.tags + ItemChecks.PROFILE_TAG).distinct())
+        }
+    }
 
     fun setFieldLabel(i: Int, v: String) = changeField(i) { it.copy(label = v) }
 

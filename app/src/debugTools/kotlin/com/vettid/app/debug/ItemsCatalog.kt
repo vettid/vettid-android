@@ -72,12 +72,15 @@ internal object ItemsCatalog {
         ),
         createdAt = t0, updatedAt = t0.plusSeconds(3_600),
     )
+    // One item per contact point (VAULT-ITEMS 0.1.1); the member put the email into their shared profile themselves.
     private val contact = ItemDetail(
-        "01JCONTACT000000000000000", 2, "Contact details", "contact", Sensitivity.DATA, "contact_card", listOf("@profile"),
-        listOf(
-            text("f1", "Email", "email", "sam@example.org"),
-            ItemFieldView("f2", "Address", "address", FieldValue.Address(AddressValue(street = "Lindenstraße 1", postalCode = "10969", city = "Berlin", country = "DE"))),
-        ),
+        "01JCONTACT000000000000000", 2, "Email address", "contact", Sensitivity.DATA, "email_address", listOf("@profile"),
+        listOf(text("f1", "Email", "email", "sam@example.org")),
+        createdAt = t0,
+    )
+    private val home = ItemDetail(
+        "01JHOME000000000000000000", 1, "Home address", "contact", Sensitivity.DATA, "postal_address", emptyList(),
+        listOf(ItemFieldView("f1", "Address", "address", FieldValue.Address(AddressValue(street = "Lindenstraße 1", postalCode = "10969", city = "Berlin", country = "DE")))),
         createdAt = t0,
     )
     private val login = ItemDetail(
@@ -93,7 +96,7 @@ internal object ItemsCatalog {
         listOf(text("f1", "Wallet", "text", "Cold wallet"), text("f2", "Words", "multiline", "abandon ability able about above absent absorb abstract absurd abuse access accident"), text("f3", "Passphrase", "password", "")),
         createdAt = t0, revealed = true,
     )
-    private val list = listOf(passport, contact, login, phrase).map { it.summary }
+    private val list = listOf(passport, contact, home, login, phrase).map { it.summary }
 
     private val newDraft = ItemDraft(
         "Passport", "identity_document", "passport", Sensitivity.DATA, listOf("identity", "travel"),
@@ -178,6 +181,8 @@ internal object ItemsCatalog {
         "items.edit_new" to { ItemEditScreen(edit(newDraft), ItemEditActions()) },
         "items.edit_problems" to { ItemEditScreen(edit(badDraft, errors = true), ItemEditActions()) },
         "items.edit_profile" to { ItemEditScreen(edit(profileDraft, isNew = false), ItemEditActions()) },
+        "items.edit_blank" to { ItemEditScreen(edit(ItemDraft()), ItemEditActions()) },
+        "items.edit_address" to { ItemEditScreen(edit(ItemDraft.of(home), isNew = false), ItemEditActions()) },
         "items.edit_card" to { ItemEditScreen(edit(cardDraft), ItemEditActions()) },
         "items.edit_add_field" to { ItemEditScreen(edit(cardDraft).copy(dialog = EditDialog.AddField("Billing postcode")), ItemEditActions()) },
         "items.edit_add_field_long" to { ItemEditScreen(edit(cardDraft).copy(dialog = EditDialog.AddField("x".repeat(70))), ItemEditActions()) },

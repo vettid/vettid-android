@@ -161,12 +161,24 @@ object ItemTemplates {
                 f(R.string.items_label_next_inspection, FieldKinds.DATE),
             ),
         ),
+        // Contact information is one item per contact point, so each can be shared on its own; no template adds a
+        // reserved tag (VAULT-ITEMS 0.1.1, owner decision 2026-10-08). Items made from the former `contact_card` keep
+        // their template id and are shown and edited as any other item.
         ItemTemplate(
-            "contact_card", R.string.items_template_contact_card, "contact", Sensitivity.DATA, listOf("@profile"),
-            listOf(
-                f(R.string.items_label_email, FieldKinds.EMAIL), f(R.string.items_label_phone, FieldKinds.PHONE),
-                f(R.string.items_label_address, FieldKinds.ADDRESS), f(R.string.items_label_website, FieldKinds.URL),
-            ),
+            "email_address", R.string.items_template_email_address, "contact", Sensitivity.DATA, emptyList(),
+            listOf(f(R.string.items_label_email, FieldKinds.EMAIL)),
+        ),
+        ItemTemplate(
+            "phone_number", R.string.items_template_phone_number, "contact", Sensitivity.DATA, emptyList(),
+            listOf(f(R.string.items_label_phone, FieldKinds.PHONE)),
+        ),
+        ItemTemplate(
+            "postal_address", R.string.items_template_postal_address, "contact", Sensitivity.DATA, emptyList(),
+            listOf(f(R.string.items_label_address, FieldKinds.ADDRESS)),
+        ),
+        ItemTemplate(
+            "website", R.string.items_template_website, "contact", Sensitivity.DATA, emptyList(),
+            listOf(f(R.string.items_label_website, FieldKinds.URL)),
         ),
         ItemTemplate(
             "emergency_contact", R.string.items_template_emergency_contact, "contact", Sensitivity.DATA, listOf("medical"),
@@ -204,7 +216,9 @@ object ItemTemplates {
 
     fun template(id: String): ItemTemplate? = byId[id]
 
-    /** A blank item: a name and one text field, in the category the member picks. */
-    fun blank(context: Context): ItemDraft =
-        ItemDraft(fields = listOf(DraftField(label = context.getString(R.string.items_label_text), kind = FieldKinds.TEXT)))
+    /**
+     * A blank item: a name, in the category the member picks, and no field yet. Each field is added through "Add a
+     * field", which asks what it is called (a pre-made "Text" field read as "Text" twice: caption and type).
+     */
+    fun blank(): ItemDraft = ItemDraft()
 }
