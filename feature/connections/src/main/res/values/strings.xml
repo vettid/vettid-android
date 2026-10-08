@@ -2,6 +2,10 @@
 <resources>
     <string name="connections_title">Connections</string>
     <string name="connections_empty_title">No connections yet</string>
+    <string name="connections_search_open">Search connections</string>
+    <string name="connections_search">Search by name</string>
+    <string name="connections_no_match_title">No connections match</string>
+    <string name="connections_no_match_body">Try another name</string>
     <string name="connections_empty_body">Invite someone or scan their code to connect</string>
     <string name="connections_detail_history">History</string>
     <string name="connections_add_invite">Invite with a QR code or link</string>
@@ -149,7 +153,54 @@
     <string name="connections_remove">Remove</string>
     <string name="connections_remove_title">Remove %1$s?</string>
     <string name="connections_remove_body">The connection with %1$s ends and they are told it was removed. Connecting again needs a new invitation.</string>
-    <string name="connections_detail_sharing">Sharing</string>
-    <string name="connections_detail_sharing_mine">What %1$s can see in your vault</string>
-    <string name="connections_detail_sharing_theirs">What %1$s shares with you</string>
+    <!-- Sharing on the connection detail, both ways (VAULT-ITEMS §6, VAULT-MESSAGING §10.12; owner request 2026-10-08). -->
+    <string name="connections_share_out_title">You share with %1$s</string>
+    <string name="connections_share_out_title_unnamed">You share with this connection</string>
+    <string name="connections_share_out_empty">You’re not sharing anything with %1$s yet.</string>
+    <string name="connections_share_out_empty_unnamed">You’re not sharing anything with this connection yet.</string>
+    <string name="connections_share_out_rules">Share rules</string>
+    <string name="connections_share_out_items">Items they can see now</string>
+    <string name="connections_share_out_action">Share items…</string>
+    <string name="connections_share_out_manage">Manage what you share</string>
+    <plurals name="connections_share_out_count">
+        <item quantity="one">%d item shared</item>
+        <item quantity="other">%d items shared</item>
+    </plurals>
+    <string name="connections_share_in_title">%1$s shares with you</string>
+    <string name="connections_share_in_title_unnamed">This connection shares with you</string>
+    <string name="connections_share_in_empty">%1$s isn’t sharing anything with you yet.</string>
+    <string name="connections_share_in_empty_unnamed">This connection isn’t sharing anything with you yet.</string>
+    <string name="connections_share_in_action">Ask for something</string>
+    <string name="connections_share_in_open">See what is shared with you</string>
+    <plurals name="connections_share_in_count">
+        <item quantity="one">%d item shared with you</item>
+        <item quantity="other">%d items shared with you</item>
+    </plurals>
+    <plurals name="connections_share_in_asked">
+        <item quantity="one">You asked for %d thing; waiting for an answer.</item>
+        <item quantity="other">You asked for %d things; waiting for an answer.</item>
+    </plurals>
+    <string name="connections_share_unavailable">Sharing could not be read just now.</string>
+    <string name="connections_share_rule_ask">Asks you for each new item</string>
+    <string name="connections_share_rule_auto">Shares new items automatically</string>
+    <string name="connections_share_rule_all">Needs all these tags</string>
+    <string name="connections_share_rule_open">Change this rule</string>
+    <plurals name="connections_share_rule_pending">
+        <item quantity="one">%d waiting for you</item>
+        <item quantity="other">%d waiting for you</item>
+    </plurals>
+    <plurals name="connections_share_uses">
+        <item quantity="one">%d use</item>
+        <item quantity="other">%d uses</item>
+    </plurals>
+    <plurals name="connections_share_uses_left">
+        <item quantity="one">%d use left</item>
+        <item quantity="other">%d uses left</item>
+    </plurals>
+    <string name="connections_share_until">until %1$s</string>
+    <string name="connections_share_by_rule">From a rule</string>
+    <string name="connections_share_one_off">Shared once</string>
+    <string name="connections_share_deleted_item">Deleted item</string>
+    <string name="connections_share_theirs">%1$s’s</string>
+    <string name="connections_share_theirs_unnamed">Theirs</string>
 </resources>

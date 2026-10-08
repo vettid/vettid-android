@@ -29,7 +29,18 @@ data class MessagesUiState(
     /** True when the member has no active connection at all (the empty state then suggests an invite). */
     val noConnections: Boolean = true,
     val error: FailureKind? = null,
+    /** The top bar's search (owner request 2026-10-08): connection names and the latest message, on this phone. */
+    val query: String = "",
+    /** Whether there is any conversation at all (the search is offered then). */
+    val searchable: Boolean = false,
 )
+
+/** Whether [c] matches [query]: the connection's title or display name, or its latest message's text, ignoring case. */
+internal fun ConversationSummary.matches(query: String): Boolean {
+    val q = query.trim()
+    if (q.isEmpty()) return true
+    return listOfNotNull(connection.displayName, connection.name, last?.text).any { it.contains(q, ignoreCase = true) }
+}
 
 /** Messages (ANDROID-PLAN §4, Proton's inbox): conversations by connection, the Unread chip. */
 @HiltViewModel
@@ -38,8 +49,9 @@ class MessagesViewModel @Inject constructor(private val repo: MessagesRepository
 
     val uiState: StateFlow<MessagesUiState> = combine(local, repo.conversations) { s, all ->
         s.copy(
-            conversations = if (s.unreadOnly) all.filter { it.unread > 0 } else all,
+            conversations = (if (s.unreadOnly) all.filter { it.unread > 0 } else all).filter { it.matches(s.query) },
             noConnections = all.none { it.connection.state == ConnectionState.ACTIVE },
+            searchable = all.isNotEmpty(),
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, MessagesUiState())
 
@@ -60,6 +72,8 @@ class MessagesViewModel @Inject constructor(private val repo: MessagesRepository
     }
 
     fun setUnreadOnly(on: Boolean) = local.update { it.copy(unreadOnly = on) }
+
+    fun setQuery(q: String) = local.update { it.copy(query = q) }
 
     fun dismissError() = local.update { it.copy(error = null) }
 }

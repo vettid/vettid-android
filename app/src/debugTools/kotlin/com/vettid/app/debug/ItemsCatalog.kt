@@ -98,24 +98,31 @@ internal object ItemsCatalog {
     )
     private val list = listOf(passport, contact, home, login, phrase).map { it.summary }
 
+    // A template's name is the placeholder, never pre-typed (owner request 2026-10-08).
     private val newDraft = ItemDraft(
-        "Passport", "identity_document", "passport", Sensitivity.DATA, listOf("identity", "travel"),
+        "", "identity_document", "passport", Sensitivity.DATA, listOf("identity", "travel"),
         listOf(DraftField(label = "Number", kind = "text", text = "C01X00T47"), DraftField(label = "Expires", kind = "date"), DraftField(label = "Issued", kind = "date")),
     )
-    private val badDraft = newDraft.copy(name = "", fields = listOf(DraftField(label = "Expires", kind = "date", text = "next May"), DraftField(label = "", kind = "email", text = "sam")))
+    private val badDraft = newDraft.copy(name = "", template = null, fields = listOf(DraftField(label = "Expires", kind = "date", text = "next May"), DraftField(label = "", kind = "email", text = "sam")))
     private val profileDraft = ItemDraft.of(contact)
 
     /** A payment card being added (owner feedback 2026-10-08: value-first fields captioned by their labels). */
     private val cardDraft = ItemDraft(
-        "Visa", "payment_card", "payment_card", Sensitivity.SECRET, listOf("money"),
+        "", "payment_card", "payment_card", Sensitivity.SECRET, listOf("money"),
         listOf(
             DraftField(label = "Cardholder", kind = "text", text = "Sam Rivera"), DraftField(label = "Number", kind = "text"),
-            DraftField(label = "Expires", kind = "date"), DraftField(label = "Security code", kind = "password"),
+            DraftField(label = "Expires", kind = "date", text = "2031-04", monthYear = true), DraftField(label = "Security code", kind = "password"),
         ),
     )
 
-    private fun edit(d: ItemDraft, isNew: Boolean = true, errors: Boolean = false) =
-        ItemEditUiState(itemId = if (isNew) null else "01J", draft = d, check = ItemChecks.check(d), showErrors = errors)
+    /** The sample templates' names, as the editor shows them for a new item. */
+    private val templateNames = mapOf("passport" to "Passport", "payment_card" to "Payment card")
+
+    private fun edit(d: ItemDraft, isNew: Boolean = true, errors: Boolean = false): ItemEditUiState {
+        val hint = d.template?.let { templateNames[it] }?.takeIf { isNew }
+        val named = if (d.name.isBlank() && hint != null) d.copy(name = hint) else d
+        return ItemEditUiState(itemId = if (isNew) null else "01J", draft = d, check = ItemChecks.check(named), showErrors = errors, nameHint = hint)
+    }
 
     private fun detail(d: ItemDetail, vararg extra: (ItemDetailUiState) -> ItemDetailUiState): ItemDetailUiState =
         extra.fold(ItemDetailUiState(d.itemId, d, loading = false)) { s, f -> f(s) }
@@ -157,6 +164,9 @@ internal object ItemsCatalog {
 
     val screens: Map<String, @Composable () -> Unit> = linkedMapOf(
         "items" to { ItemsScreen(ItemsUiState(list, load = ListLoad.LOADED), chrome, ItemsActions()) },
+        // The search behind the top bar's icon (owner request 2026-10-08): hidden, then open with a query.
+        "items.list" to { ItemsScreen(ItemsUiState(list, load = ListLoad.LOADED), chrome, ItemsActions()) },
+        "items.list_search" to { ItemsScreen(ItemsUiState(list, ItemFilter(query = "pass"), ListLoad.LOADED), chrome, ItemsActions()) },
         "items.filtered" to { ItemsScreen(ItemsUiState(list, ItemFilter(tag = "travel", sensitivity = Sensitivity.DATA), ListLoad.LOADED), chrome, ItemsActions()) },
         "items.empty" to { ItemsScreen(ItemsUiState(load = ListLoad.LOADED), chrome, ItemsActions()) },
         "items.no_match" to { ItemsScreen(ItemsUiState(list, ItemFilter(query = "zzz"), ListLoad.LOADED), chrome, ItemsActions()) },
@@ -184,6 +194,19 @@ internal object ItemsCatalog {
         "items.edit_blank" to { ItemEditScreen(edit(ItemDraft()), ItemEditActions()) },
         "items.edit_address" to { ItemEditScreen(edit(ItemDraft.of(home), isNew = false), ItemEditActions()) },
         "items.edit_card" to { ItemEditScreen(edit(cardDraft), ItemEditActions()) },
+        // An existing item's protection changed in the editor (owner request 2026-10-08), and the warning for leaving critical.
+        "items.edit_protection" to {
+            ItemEditScreen(edit(ItemDraft.of(login), isNew = false).copy(protectionTo = Sensitivity.CRITICAL), ItemEditActions())
+        },
+        "items.edit_leave_critical" to {
+            ItemEditScreen(edit(ItemDraft.of(phrase), isNew = false).copy(protectionTo = Sensitivity.SECRET, confirmLeaveCritical = true), ItemEditActions())
+        },
+        "items.edit_saved_protection_not" to {
+            ItemEditScreen(
+                edit(ItemDraft.of(login), isNew = false).copy(protectionTo = Sensitivity.CRITICAL, savedButProtection = true, error = FailureKind.LIMIT),
+                ItemEditActions(),
+            )
+        },
         "items.edit_add_field" to { ItemEditScreen(edit(cardDraft).copy(dialog = EditDialog.AddField("Billing postcode")), ItemEditActions()) },
         "items.edit_add_field_long" to { ItemEditScreen(edit(cardDraft).copy(dialog = EditDialog.AddField("x".repeat(70))), ItemEditActions()) },
         "items.edit_rename_field" to { ItemEditScreen(edit(cardDraft).copy(dialog = EditDialog.RenameField(0, "Cardholder")), ItemEditActions()) },

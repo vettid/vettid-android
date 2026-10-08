@@ -51,6 +51,7 @@ import com.vettid.feature.history.historyDestination
 import com.vettid.feature.items.ItemsHost
 import com.vettid.feature.items.ItemDetailRoute
 import com.vettid.feature.items.ConnectionSharingRoute
+import com.vettid.feature.items.RuleEditRoute
 import com.vettid.feature.items.SharedWithYouRoute
 import com.vettid.feature.items.itemsDestination
 import com.vettid.feature.connections.AcceptRoute
@@ -218,6 +219,11 @@ fun AppShell(
                                 onOpenHistory = { id -> navController.navigate(ConnectionHistoryRoute(id)) { launchSingleTop = true } },
                                 onOpenSharing = { id -> navController.navigate(ConnectionSharingRoute(id)) { launchSingleTop = true } },
                                 onOpenShared = { id -> navController.navigate(SharedWithYouRoute(id)) { launchSingleTop = true } },
+                                onNewShareRule = { id -> navController.navigate(RuleEditRoute(id)) { launchSingleTop = true } },
+                                onOpenShareRule = { id, rule ->
+                                    navController.navigate(RuleEditRoute(id, rule)) { launchSingleTop = true }
+                                },
+                                onAskFor = { id -> navController.navigate(SharedWithYouRoute(id, ask = true)) { launchSingleTop = true } },
                             ),
                         )
                         approvalsDestination(chrome, navigate = navigate, onBack = back)

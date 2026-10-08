@@ -83,11 +83,12 @@ data class RuleEditRoute(val connectionId: String, val ruleId: String? = null) {
     }
 }
 
-/** What a connection shares with the member. */
+/** What a connection shares with the member; [ask] opens "Ask for something" at once (from the connection detail). */
 @Serializable
-data class SharedWithYouRoute(val connectionId: String) {
+data class SharedWithYouRoute(val connectionId: String, val ask: Boolean = false) {
     companion object {
         const val ARG = "connectionId"
+        const val ARG_ASK = "ask"
     }
 }
 

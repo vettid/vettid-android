@@ -23,6 +23,7 @@ import androidx.compose.material.icons.outlined.PersonAdd
 import androidx.compose.material.icons.outlined.QrCode2
 import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.Schedule
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -44,6 +45,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
@@ -60,6 +63,7 @@ import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.core.ui.components.TopLevelScaffold
+import com.vettid.core.ui.components.rememberTopBarSearch
 import com.vettid.core.ui.components.VettIdFab
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.theme.Spacing
@@ -111,6 +115,12 @@ data class ConnectionsHost(
     val onOpenSharing: (String) -> Unit = {},
     /** What the connection shares with the member (items feature). */
     val onOpenShared: (String) -> Unit = {},
+    /** A new share rule for the connection (items feature's rule editor). */
+    val onNewShareRule: (String) -> Unit = {},
+    /** A share rule of the connection's: (connection, rule). */
+    val onOpenShareRule: (String, String) -> Unit = { _, _ -> },
+    /** Asking the connection for something (`grant.request`, items feature). */
+    val onAskFor: (String) -> Unit = {},
 )
 
 /** Registers the Connections destinations. */
@@ -144,12 +154,15 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
                 onRetry = vm::refresh,
                 onDismissError = vm::dismissError,
                 onDismissPeerDecline = vm::dismissPeerDecline,
+                onQuery = vm::setQuery,
             ),
         )
     }
     composable<ConnectionDetailRoute> {
         val vm: ConnectionDetailViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
+        // Back from the rule editor or the shared items: both directions are read again.
+        LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.loadSharing() }
         ConnectionDetailScreen(
             state = state,
             actions = DetailActions(
@@ -163,6 +176,9 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
                 onHistory = { host.onOpenHistory(state.connectionId) },
                 onSharing = { host.onOpenSharing(state.connectionId) },
                 onSharedWithYou = { host.onOpenShared(state.connectionId) },
+                onShareItems = { host.onNewShareRule(state.connectionId) },
+                onOpenRule = { host.onOpenShareRule(state.connectionId, it) },
+                onAskForSomething = { host.onAskFor(state.connectionId) },
             ),
         )
     }
@@ -233,6 +249,7 @@ data class ConnectionsActions(
     val onRetry: () -> Unit = {},
     val onDismissError: () -> Unit = {},
     val onDismissPeerDecline: (String) -> Unit = {},
+    val onQuery: (String) -> Unit = {},
 )
 
 /**
@@ -241,11 +258,19 @@ data class ConnectionsActions(
  * button offers invite (QR or link), scan, or paste.
  */
 @Composable
+@Suppress("CyclomaticComplexMethod") // one branch per list state
 fun ConnectionsScreen(state: ConnectionsUiState, chrome: ShellChrome, actions: ConnectionsActions, modifier: Modifier = Modifier) {
+    val search = rememberTopBarSearch(
+        state.query,
+        actions.onQuery,
+        label = stringResource(R.string.connections_search_open),
+        placeholder = stringResource(R.string.connections_search),
+    )
     TopLevelScaffold(
         title = stringResource(R.string.connections_title),
         chrome = chrome,
         modifier = modifier,
+        search = search.takeIf { state.searchable },
         overlay = {
             BottomFloatingControls(
                 end = {
@@ -274,6 +299,12 @@ fun ConnectionsScreen(state: ConnectionsUiState, chrome: ShellChrome, actions: C
                     actions = { TextButton(onClick = actions.onRetry) { Text(stringResource(R.string.connections_retry)) } },
                 )
             }
+            state.searching && state.connections.isEmpty() -> EmptyState(
+                icon = Icons.Outlined.Search,
+                title = stringResource(R.string.connections_no_match_title),
+                body = stringResource(R.string.connections_no_match_body),
+                modifier = Modifier.testTag("connections_no_match"),
+            )
             state.connections.isEmpty() && state.invites.isEmpty() && state.peerDeclines.isEmpty() -> EmptyState(
                 icon = Icons.Outlined.People,
                 title = stringResource(R.string.connections_empty_title),
@@ -315,14 +346,15 @@ private fun ConnectionList(state: ConnectionsUiState, actions: ConnectionsAction
                 )
             }
         }
-        items(state.peerDeclines, key = { "declined-${it.requestId}" }) { d ->
+        // While searching, only the matching connections show.
+        items(if (state.searching) emptyList() else state.peerDeclines, key = { "declined-${it.requestId}" }) { d ->
             PeerDeclineNotice(
                 d,
                 onDismiss = { actions.onDismissPeerDecline(d.requestId) },
                 modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s),
             )
         }
-        if (state.invites.isNotEmpty()) {
+        if (state.invites.isNotEmpty() && !state.searching) {
             item { SectionHeader(stringResource(R.string.connections_invites_header)) }
             items(state.invites, key = { "invite-${it.inviteId}" }) { InviteRow(it, onCancel = { actions.onCancelInvite(it) }) }
             item { SectionHeader(stringResource(R.string.connections_header)) }

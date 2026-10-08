@@ -1,5 +1,5 @@
 // Debug-only sample data for screenshots: long literal rows are clearer than wrapped ones.
-@file:Suppress("MaxLineLength", "MagicNumber", "TooManyFunctions")
+@file:Suppress("MaxLineLength", "MagicNumber", "TooManyFunctions", "LargeClass")
 
 package com.vettid.app.debug
 
@@ -89,6 +89,7 @@ import com.vettid.feature.connections.ConnectionsScreen
 import com.vettid.feature.connections.ConnectionsUiState
 import com.vettid.feature.connections.DetailActions
 import com.vettid.feature.connections.DetailConfirm
+import com.vettid.feature.connections.DetailSharing
 import com.vettid.feature.connections.InviteActions
 import com.vettid.feature.connections.InviteScreen
 import com.vettid.feature.connections.InviteStep
@@ -310,6 +311,28 @@ object ScreenCatalog {
         keyFingerprint = "1c2d 3e4f 4e8e e8f7 0a0b 0c0d 0e0f 1011", createdAt = t0.minusSeconds(86_400 * 3), lastActiveAt = t0.minusSeconds(7200))
     private val jo = ConnectionInfo("c3", "", ConnectionState.STALE, firstName = "Jo", lastName = "Lindqvist", createdAt = t0.minusSeconds(86_400 * 90))
     /** Between activation and the first profile.update on the accepter's side: no names yet (§10.8). */
+    /** Sharing with Samira both ways: a rule and two items out, one item in, one request waiting. */
+    private val bothWays = DetailSharing(
+        rules = listOf(
+            com.vettid.core.data.items.ShareRule(
+                "r1", 1, "c1", tags = listOf("medical"), mode = com.vettid.core.data.items.ShareMode.ASK,
+                included = listOf("i1"), pending = listOf("i3"),
+            ),
+            com.vettid.core.data.items.ShareRule(
+                "r2", 1, "c1", tags = listOf("travel"), mode = com.vettid.core.data.items.ShareMode.AUTO, uses = 5,
+                expiresAt = Instant.parse("2027-04-30T00:00:00Z"), included = listOf("i2"),
+            ),
+        ),
+        given = listOf(
+            com.vettid.core.data.items.GrantView("g1", "c1", com.vettid.core.data.items.GrantDirection.GIVEN, "i1", "Allergies", "medical", ruleId = "r1"),
+            com.vettid.core.data.items.GrantView("g2", "c1", com.vettid.core.data.items.GrantDirection.GIVEN, "i2", "Passport", "identity_document", uses = 3, used = 1),
+        ),
+        received = listOf(
+            com.vettid.core.data.items.GrantView("g3", "c1", com.vettid.core.data.items.GrantDirection.RECEIVED, "x1", "Home address", "contact"),
+        ),
+        asked = listOf(com.vettid.core.data.items.GrantAsk("q1", "c1", listOf(com.vettid.core.data.items.GrantAskEntry("category", "insurance")), "pending")),
+        loaded = true,
+    )
     private val riley = ConnectionInfo("c4", "Riley", ConnectionState.ACTIVE, createdAt = t0, lastActiveAt = t0)
     private val connections = listOf(sam, alex, jo, riley)
     private fun msg(id: String, conn: String, text: String, out: Boolean, min: Long, read: Boolean = true) =
@@ -659,9 +682,13 @@ object ScreenCatalog {
         "settings.delete_confirm" to {
             DeleteVaultContent(DeleteVaultUiState(phrase = "delete my vault", pin = "975310", password = "pw", acknowledged = true, confirming = true), DeleteVaultActions())
         },
-        "messages" to { MessagesScreen(MessagesUiState(loading = false, conversations = conversations, noConnections = false), chrome) },
+        "messages" to { MessagesScreen(MessagesUiState(loading = false, conversations = conversations, noConnections = false, searchable = true), chrome) },
+        "messages.search" to {
+            MessagesScreen(MessagesUiState(loading = false, conversations = conversations.take(1), noConnections = false, query = "sam", searchable = true), chrome)
+        },
+        "messages.search_none" to { MessagesScreen(MessagesUiState(loading = false, noConnections = false, query = "zz", searchable = true), chrome) },
         "messages.empty" to { MessagesScreen(MessagesUiState(loading = false), chrome) },
-        "messages.unread" to { MessagesScreen(MessagesUiState(loading = false, conversations = conversations.filter { it.unread > 0 }, unreadOnly = true, noConnections = false), chrome) },
+        "messages.unread" to { MessagesScreen(MessagesUiState(loading = false, conversations = conversations.filter { it.unread > 0 }, unreadOnly = true, noConnections = false, searchable = true), chrome) },
         "messages.conversation" to { ConversationScreen(ConversationUiState("c1", sam, thread, loading = false, draft = "See you there"), ConversationActions()) },
         "messages.conversation_empty" to { ConversationScreen(ConversationUiState("c2", alex, emptyList(), loading = false), ConversationActions()) },
         "messages.conversation_stale" to { ConversationScreen(ConversationUiState("c3", jo, emptyList(), loading = false), ConversationActions()) },
@@ -669,19 +696,29 @@ object ScreenCatalog {
         "messages.new" to { NewMessageScreen(NewMessageUiState(false, listOf(sam, alex)), {}, {}, {}) },
         "connections" to {
             ConnectionsScreen(
-                ConnectionsUiState(loading = false, connections = connections, invites = listOf(OutstandingInvite("i1", t0.plusSeconds(3600), remote = true))),
+                ConnectionsUiState(loading = false, connections = connections, invites = listOf(OutstandingInvite("i1", t0.plusSeconds(3600), remote = true)), searchable = true),
                 chrome, ConnectionsActions(),
             )
         },
+        "connections.search" to {
+            ConnectionsScreen(ConnectionsUiState(loading = false, connections = connections.take(1), query = "sam", searchable = true), chrome, ConnectionsActions())
+        },
+        "connections.search_none" to { ConnectionsScreen(ConnectionsUiState(loading = false, query = "zz", searchable = true), chrome, ConnectionsActions()) },
         "connections.empty" to { ConnectionsScreen(ConnectionsUiState(loading = false), chrome, ConnectionsActions()) },
         "connections.add" to { ConnectionsScreen(ConnectionsUiState(loading = false, connections = connections, addSheet = true), chrome, ConnectionsActions()) },
         "connections.detail" to {
             ConnectionDetailScreen(
-                ConnectionDetailUiState("c1", sam, AuthenticationState("c1", t0, "authenticated", t0), loading = false),
+                ConnectionDetailUiState("c1", sam, AuthenticationState("c1", t0, "authenticated", t0), loading = false, sharing = bothWays),
                 DetailActions(),
             )
         },
-        "connections.detail_not_shared" to { ConnectionDetailScreen(ConnectionDetailUiState("c4", riley, null, loading = false), DetailActions()) },
+        // The two sharing cards with nothing either way (owner request 2026-10-08).
+        "connections.detail_sharing_empty" to {
+            ConnectionDetailScreen(ConnectionDetailUiState("c1", sam, null, loading = false, sharing = DetailSharing(loaded = true)), DetailActions())
+        },
+        "connections.detail_not_shared" to {
+            ConnectionDetailScreen(ConnectionDetailUiState("c4", riley, null, loading = false, sharing = DetailSharing(loaded = true)), DetailActions())
+        },
         "connections.detail_remove" to { ConnectionDetailScreen(ConnectionDetailUiState("c1", sam, loading = false, confirm = DetailConfirm.REMOVE), DetailActions()) },
         "invite.choose" to { InviteScreen(InviteUiState(ttls = InviteTtl.entries.toList()), InviteActions()) },
         "invite.choose_remote" to { InviteScreen(InviteUiState(ttls = InviteTtl.entries.toList(), ttl = InviteTtl.ONE_DAY), InviteActions()) },

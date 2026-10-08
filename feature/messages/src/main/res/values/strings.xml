@@ -2,6 +2,10 @@
 <resources>
     <string name="messages_title">Messages</string>
     <string name="messages_empty_title">No messages</string>
+    <string name="messages_search_open">Search messages</string>
+    <string name="messages_search">Search by name or message</string>
+    <string name="messages_no_match_title">No conversations match</string>
+    <string name="messages_no_match_body">Try another name or word</string>
     <string name="messages_empty_body">Conversations with your connections appear here</string>
     <string name="messages_empty_no_connections">Invite someone to connect, then write to them here</string>
     <string name="messages_empty_unread_title">No unread messages</string>

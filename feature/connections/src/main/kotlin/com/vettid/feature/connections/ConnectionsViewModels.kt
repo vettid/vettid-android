@@ -3,6 +3,10 @@ package com.vettid.feature.connections
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.vettid.core.data.items.GrantAsk
+import com.vettid.core.data.items.GrantView
+import com.vettid.core.data.items.ShareRule
+import com.vettid.core.data.items.SharingRepository
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.ApprovalsRepository
 import com.vettid.core.data.social.AuthenticationState
@@ -42,7 +46,19 @@ data class ConnectionsUiState(
     /** Requests the other member declined (0.10.5), until dismissed here or in Approvals. */
     val peerDeclines: List<PeerDecline> = emptyList(),
     val error: FailureKind? = null,
-)
+    /** The top bar's search by name (owner request 2026-10-08); while it is set only matching connections show. */
+    val query: String = "",
+    /** Whether there is any connection to search. */
+    val searchable: Boolean = false,
+) {
+    val searching: Boolean get() = query.isNotBlank()
+}
+
+/** Whether [c] matches [query]: its title ("First Last") or display name, ignoring case. */
+internal fun ConnectionInfo.matches(query: String): Boolean {
+    val q = query.trim()
+    return q.isEmpty() || displayName.contains(q, ignoreCase = true) || name.contains(q, ignoreCase = true)
+}
 
 /**
  * Connections (ANDROID-PLAN §4, Proton's contacts): favourites first, then
@@ -58,8 +74,10 @@ class ConnectionsViewModel @Inject constructor(
 
     val uiState: StateFlow<ConnectionsUiState> = combine(local, repo.connections, approvals.peerDeclines) { s, cs, declines ->
         s.copy(
-            connections = cs.sortedWith(compareByDescending<ConnectionInfo> { it.favorite }.thenBy { it.displayName.lowercase() }),
+            connections = cs.filter { it.matches(s.query) }
+                .sortedWith(compareByDescending<ConnectionInfo> { it.favorite }.thenBy { it.displayName.lowercase() }),
             peerDeclines = declines,
+            searchable = cs.isNotEmpty(),
         )
     }.stateIn(viewModelScope, SharingStarted.Eagerly, ConnectionsUiState())
 
@@ -83,6 +101,8 @@ class ConnectionsViewModel @Inject constructor(
     fun setFavorite(id: String, favorite: Boolean) = act { repo.setFavorite(id, favorite) }
 
     fun showAddSheet(show: Boolean) = local.update { it.copy(addSheet = show) }
+
+    fun setQuery(q: String) = local.update { it.copy(query = q) }
 
     fun askCancel(invite: OutstandingInvite?) = local.update { it.copy(cancelling = invite) }
 
@@ -471,21 +491,49 @@ data class ConnectionDetailUiState(
     val gone: Boolean = false,
     val notice: DetailNotice? = null,
     val error: FailureKind? = null,
+    /** Both directions of sharing with this connection (VAULT-ITEMS §6, VAULT-MESSAGING §10.12). */
+    val sharing: DetailSharing = DetailSharing(),
 )
+
+/**
+ * Sharing with one connection, both ways (§10.12): what the member shares with it ([rules] for this connection and
+ * the [given] grants in force) and what it shares with the member ([received] grants in force, and the member's
+ * [asked] requests still waiting). [loaded] once read; [failed] when the vault could not say (the rest of the detail
+ * still shows).
+ */
+data class DetailSharing(
+    val rules: List<ShareRule> = emptyList(),
+    val given: List<GrantView> = emptyList(),
+    val received: List<GrantView> = emptyList(),
+    val asked: List<GrantAsk> = emptyList(),
+    val loaded: Boolean = false,
+    val failed: Boolean = false,
+) {
+    /** How many items the connection can fetch now (each item once, however many grants name it). */
+    val outgoingCount: Int get() = given.distinctBy { it.itemRef }.size
+
+    /** How many of the connection's items the member can fetch now. */
+    val incomingCount: Int get() = received.distinctBy { it.itemRef }.size
+
+    val outgoingEmpty: Boolean get() = rules.isEmpty() && given.isEmpty()
+
+    val incomingEmpty: Boolean get() = received.isEmpty()
+}
 
 enum class DetailConfirm { REMOVE }
 
 enum class DetailNotice { AUTH_REQUESTED }
 
 /**
- * A connection (ANDROID-PLAN §4): the profile it shares (self-asserted), member
- * authentication (§10.4), favourite and remove. No safety code, alias, note or
- * block here (owner decision 2026-10-08).
+ * A connection (ANDROID-PLAN §4): the profile it shares (self-asserted), sharing both ways (what the member shares
+ * with it, what it shares with the member: §10.12), member authentication (§10.4), favourite and remove. No safety
+ * code, alias, note or block here (owner decision 2026-10-08).
  */
 @HiltViewModel
 class ConnectionDetailViewModel @Inject constructor(
     savedState: SavedStateHandle,
     private val repo: ConnectionsRepository,
+    private val sharing: SharingRepository,
 ) : ViewModel() {
     private val id: String = checkNotNull(savedState[ConnectionDetailRoute.ARG]) { "no connection" }
     private val local = MutableStateFlow(ConnectionDetailUiState(id))
@@ -501,6 +549,33 @@ class ConnectionDetailViewModel @Inject constructor(
                 local.update { it.copy(loading = false, connection = c) }
             } catch (e: VaultFailure) {
                 local.update { it.copy(loading = false, error = e.kind, gone = e.kind == FailureKind.NOT_FOUND) }
+            }
+        }
+        loadSharing()
+    }
+
+    /**
+     * Reads both directions again (`share.rule.list` for this connection, `grant.list`), e.g. when the screen comes
+     * back from the rule editor. Only grants in force count; a failure leaves the rest of the screen as it is.
+     */
+    fun loadSharing() {
+        viewModelScope.launch {
+            try {
+                val rules = sharing.rules(id).filter { it.connectionId == id }
+                val g = sharing.grants()
+                local.update {
+                    it.copy(
+                        sharing = DetailSharing(
+                            rules = rules,
+                            given = g.given.filter { x -> x.connectionId == id && x.active }.sortedBy { x -> x.name.lowercase() },
+                            received = g.received.filter { x -> x.connectionId == id && x.active }.sortedBy { x -> x.name.lowercase() },
+                            asked = g.requested.filter { x -> x.connectionId == id && x.state == ASK_PENDING },
+                            loaded = true,
+                        ),
+                    )
+                }
+            } catch (_: VaultFailure) {
+                local.update { it.copy(sharing = it.sharing.copy(loaded = true, failed = true)) }
             }
         }
     }
@@ -538,5 +613,9 @@ class ConnectionDetailViewModel @Inject constructor(
                 local.update { it.copy(busy = false, error = e.kind) }
             }
         }
+    }
+
+    private companion object {
+        const val ASK_PENDING = "pending"
     }
 }
