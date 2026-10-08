@@ -1,6 +1,8 @@
 package com.vettid.core.ui.components
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -15,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -46,7 +49,10 @@ fun AvatarSheet(
     }
 }
 
-/** The sheet's body, usable without the modal (gallery, previews). */
+/**
+ * The sheet's body, usable without the modal (gallery, previews). It scrolls: on a phone the options are taller than
+ * the screen (owner feedback 2026-10-08), and the sheet opens fully expanded.
+ */
 @Composable
 fun AvatarSheetContent(
     name: String,
@@ -58,6 +64,8 @@ fun AvatarSheetContent(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .testTag("avatar_sheet_content")
             .navigationBarsPadding()
             .padding(bottom = Spacing.l),
         horizontalAlignment = Alignment.CenterHorizontally,

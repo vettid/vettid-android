@@ -92,6 +92,12 @@ android {
     // The on-phone exit test runs against the devStack build (devstack/README.md).
     testBuildType = providers.gradleProperty("vettidTestBuildType").orNull ?: "debug"
 
+    testOptions.unitTests {
+        isIncludeAndroidResources = true
+        // Robolectric's API 36 runtime reaches into the JDK's file descriptor internals.
+        all { it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED") }
+    }
+
     sourceSets {
         getByName("debug").kotlin.srcDir("src/debugTools/kotlin")
         getByName("devStack").kotlin.srcDir("src/debugTools/kotlin")
@@ -197,6 +203,11 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    // The account sheet rendered under Robolectric (as :core:ui's FormScaffoldHeaderTest).
+    testImplementation(libs.robolectric)
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    testImplementation(libs.androidx.compose.ui.test.manifest)
 
     // The A3 exit test (devStack build, on the phone against the local dev stack) and Compose UI tests.
     androidTestImplementation(platform(libs.androidx.compose.bom))

@@ -39,11 +39,11 @@ data class SharedProfileUiState(
     val error: FailureKind? = null,
     /** The limit a `limit` error named (VAULT-MESSAGING 0.21.0 §10.1: `profile_items`, `profile_size`). */
     val limit: com.vettid.core.data.vault.VaultLimit? = null,
-    /** A photo chosen and encoded (base64 JPEG, at most 65,536 bytes), shown as a preview until saved or dropped. */
+    /** A photo taken and encoded (base64 JPEG, at most 65,536 bytes), shown as a preview until saved or dropped. */
     val pendingPhoto: String? = null,
-    /** The chosen picture is being read and encoded, or the photo is being saved. */
+    /** The taken photo is being encoded, or the photo is being saved. */
     val photoBusy: Boolean = false,
-    /** The chosen picture could not be read as an image. */
+    /** The taken photo could not be encoded. */
     val photoUnreadable: Boolean = false,
     val photoSaved: Boolean = false,
     /** The member's items tagged `@profile` (§10.8): every connection sees them in the shared profile. */
@@ -150,12 +150,17 @@ class SharedProfileViewModel @Inject constructor(
 
     fun dismiss() = state.update { it.copy(saved = false, error = null, photoUnreadable = false, photoSaved = false) }
 
-    /** The picture is being read and encoded (off the main thread, by the screen). */
+    /** The taken photo is being encoded (off the main thread, by the screen). */
     fun photoEncoding() = state.update { it.copy(photoBusy = true, photoUnreadable = false, photoSaved = false, error = null) }
 
-    /** The chosen picture, encoded (`ProfilePhotos.encodeBase64`), to preview; null when it could not be read. */
-    fun photoPicked(base64: String?) = state.update {
-        it.copy(pendingPhoto = base64, photoBusy = false, photoUnreadable = base64 == null)
+    /**
+     * The photo the member took and accepted ("Use photo"), encoded (`ProfilePhotos.encodeBase64`), sent with
+     * `profile.set{photo}`; it stays as a preview (with "Save photo") if the vault refuses. Null: it could not be
+     * encoded.
+     */
+    fun photoTaken(base64: String?) {
+        state.update { it.copy(pendingPhoto = base64, photoBusy = false, photoUnreadable = base64 == null) }
+        if (base64 != null) sendPhoto(base64)
     }
 
     fun discardPhoto() = state.update { it.copy(pendingPhoto = null, photoUnreadable = false) }

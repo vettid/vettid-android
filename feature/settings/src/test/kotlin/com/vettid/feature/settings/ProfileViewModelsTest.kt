@@ -37,16 +37,13 @@ class ProfileViewModelsTest {
     // --- the shared profile ---
 
     @Test
-    fun aChosenPhotoIsPreviewedThenSaved() = runTest {
+    fun aTakenPhotoIsSentWithProfileSet() = runTest {
         val vm = SharedProfileViewModel(vault, vault, items)
         advanceUntilIdle()
         assertNull(vm.uiState.value.shownPhoto)
         vm.photoEncoding()
         assertTrue(vm.uiState.value.photoBusy)
-        vm.photoPicked("/9j/4AAQ")
-        assertEquals("/9j/4AAQ", vm.uiState.value.shownPhoto)
-        assertNull(vault.lastPhoto) // a preview only
-        vm.savePhoto()
+        vm.photoTaken("/9j/4AAQ")
         advanceUntilIdle()
         assertEquals("/9j/4AAQ", vault.lastPhoto)
         assertEquals("/9j/4AAQ", vault.profile.value!!.photo)
@@ -55,11 +52,27 @@ class ProfileViewModelsTest {
     }
 
     @Test
-    fun anUnreadablePictureIsSaidAndNothingSent() = runTest {
+    fun aRefusedPhotoStaysAsAPreviewToSaveAgain() = runTest {
+        val vm = SharedProfileViewModel(vault, vault, items)
+        advanceUntilIdle()
+        vault.fail["setPhoto"] = com.vettid.core.data.vault.VaultFailure(FailureKind.NETWORK)
+        vm.photoTaken("/9j/4AAQ")
+        advanceUntilIdle()
+        assertNull(vault.lastPhoto)
+        assertEquals("/9j/4AAQ", vm.uiState.value.pendingPhoto)
+        assertEquals(FailureKind.NETWORK, vm.uiState.value.error)
+        vm.savePhoto()
+        advanceUntilIdle()
+        assertEquals("/9j/4AAQ", vault.lastPhoto)
+        assertNull(vm.uiState.value.pendingPhoto)
+    }
+
+    @Test
+    fun aPhotoThatCouldNotBeEncodedIsSaidAndNothingSent() = runTest {
         val vm = SharedProfileViewModel(vault, vault, items)
         advanceUntilIdle()
         vm.photoEncoding()
-        vm.photoPicked(null)
+        vm.photoTaken(null)
         assertTrue(vm.uiState.value.photoUnreadable)
         vm.savePhoto()
         advanceUntilIdle()

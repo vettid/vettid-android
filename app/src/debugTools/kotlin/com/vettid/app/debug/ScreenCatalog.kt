@@ -887,4 +887,4 @@ object ScreenCatalog {
 private const val CRITICAL_PAYLOAD = "SGVsbG8sIFZldHRJRCE="
 
 /** An 8×8 PNG in four colour blocks, drawn as a photo tile. */
-private const val SAMPLE_PHOTO = "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAH0lEQVR4nGP4f1AVjrz9TsARAxUl5Of1wdF/JEBFCQCiLXjhwCs13wAAAABJRU5ErkJggg=="
+internal const val SAMPLE_PHOTO = "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAH0lEQVR4nGP4f1AVjrz9TsARAxUl5Of1wdF/JEBFCQCiLXjhwCs13wAAAABJRU5ErkJggg=="
