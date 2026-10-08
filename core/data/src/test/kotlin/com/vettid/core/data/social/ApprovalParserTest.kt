@@ -199,12 +199,17 @@ class ApprovalParserTest {
     }
 
     @Test
-    fun theAliasTitlesAndTheNamesStayAvailable() {
+    fun anAliasInTheVaultIsNeitherReadNorTheTitle() {
+        // Owner decision 2026-10-08: aliases and notes a vault still holds stay there, unshown.
         val c = ApprovalParser.connection(
-            Connection(id = "C1", state = "active", profile = o("""{"first_name":"Ada","last_name":"King"}"""), alias = "Mum"),
+            Connection(
+                id = "C1", state = "active", profile = o("""{"first_name":"Ada","last_name":"King"}"""),
+                alias = "Mum", note = "Sunday calls",
+            ),
         )
-        assertEquals("Mum", c.displayName)
+        assertEquals("Ada King", c.displayName)
         assertEquals("Ada King", c.accountName)
+        assertNull(c.alias)
         assertNull(c.secondaryName)
     }
 

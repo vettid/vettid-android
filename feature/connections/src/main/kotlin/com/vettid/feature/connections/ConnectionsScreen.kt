@@ -157,10 +157,6 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
                 onMessage = { host.onOpenConversation(state.connectionId) },
                 onFavorite = vm::toggleFavorite,
                 onAuthenticate = vm::requestAuthentication,
-                onEdit = vm::edit,
-                onAlias = vm::setAlias,
-                onNote = vm::setNote,
-                onSave = vm::saveNames,
                 onAsk = vm::ask,
                 onConfirm = vm::confirm,
                 onDismissNotice = vm::dismissNotice,
@@ -351,18 +347,9 @@ private fun ConnectionItem(c: ConnectionInfo, actions: ConnectionsActions) {
 }
 
 @Composable
-private fun supportingLine(c: ConnectionInfo): String = (listOfNotNull(stateLabel(c.state)) + secondaryNames(c))
+private fun supportingLine(c: ConnectionInfo): String = listOfNotNull(stateLabel(c.state), c.secondaryName)
     .joinToString(" · ")
     .ifEmpty { stringResource(R.string.connections_state_active) }
-
-/**
- * What a connection's secondary text adds to its title (VAULT-MESSAGING 0.18.0 §10.8): under an alias, the names on
- * the peer's account; and the display name, if any, when it differs from the title.
- */
-internal fun secondaryNames(c: ConnectionInfo): List<String> = listOfNotNull(
-    c.accountName?.takeIf { c.alias != null && it != c.displayName },
-    c.secondaryName,
-)
 
 /** The state as a short label; null for active (the usual case, left unsaid in rows). */
 @Composable

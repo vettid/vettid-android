@@ -190,8 +190,6 @@ object ApprovalParser {
             id = c.id,
             name = p?.displayName ?: c.name,
             state = ConnectionState.of(c.state),
-            alias = c.alias?.takeIf { it.isNotEmpty() },
-            note = c.note?.takeIf { it.isNotEmpty() },
             favorite = c.favorite,
             archived = c.archived,
             tags = c.tags,

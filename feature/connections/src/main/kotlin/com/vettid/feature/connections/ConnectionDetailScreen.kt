@@ -14,16 +14,12 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Chat
-import androidx.compose.material.icons.outlined.Block
-import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.PersonRemove
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material.icons.outlined.StarOutline
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -51,7 +47,6 @@ import com.vettid.core.ui.components.InitialTile
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.PillAction
-import com.vettid.core.ui.components.SafetyCode
 import com.vettid.core.ui.components.SecondaryButton
 import com.vettid.core.ui.components.TileStyle
 import com.vettid.core.ui.format.Times
@@ -64,10 +59,6 @@ data class DetailActions(
     val onMessage: () -> Unit = {},
     val onFavorite: () -> Unit = {},
     val onAuthenticate: () -> Unit = {},
-    val onEdit: (Boolean) -> Unit = {},
-    val onAlias: (String) -> Unit = {},
-    val onNote: (String) -> Unit = {},
-    val onSave: () -> Unit = {},
     val onAsk: (DetailConfirm?) -> Unit = {},
     val onConfirm: () -> Unit = {},
     val onDismissNotice: () -> Unit = {},
@@ -80,10 +71,12 @@ data class DetailActions(
 )
 
 /**
- * A connection (ANDROID-PLAN §4, 0.1.10): titled "First Last" from the names on the peer's VettID account (the
- * owner's alias may replace it), the display name secondary; the profile shared with you (the names labelled as the
- * account's, never verified; the extras as self-asserted), the vault key fingerprint, safety code, member
- * authentication, alias and note; the pill holds message, favourite, edit, block and remove (both confirmed).
+ * A connection (ANDROID-PLAN §4, 0.1.10): titled "First Last" from the names on the peer's VettID account, the
+ * display name secondary; the profile shared with you (the names labelled as the account's, never verified; the
+ * extras as self-asserted), sharing, member authentication and the vault key fingerprint, the lasting identity
+ * check. The safety code belongs to the moment of connecting and is not shown here; the owner's alias and note, if a
+ * vault holds any, are not shown either (owner decision 2026-10-08). The pill holds message, favourite, History and
+ * remove (confirmed).
  */
 @Composable
 fun ConnectionDetailScreen(state: ConnectionDetailUiState, actions: DetailActions, modifier: Modifier = Modifier) {
@@ -113,14 +106,7 @@ fun ConnectionDetailScreen(state: ConnectionDetailUiState, actions: DetailAction
                             ),
                             actions.onFavorite,
                         ),
-                        PillAction(Icons.Outlined.Edit, stringResource(R.string.connections_detail_edit), { actions.onEdit(true) }),
                         PillAction(Icons.Outlined.History, stringResource(R.string.connections_detail_history), actions.onHistory),
-                        PillAction(
-                            Icons.Outlined.Block,
-                            stringResource(R.string.connections_block),
-                            { actions.onAsk(DetailConfirm.BLOCK) },
-                            destructive = true,
-                        ),
                         PillAction(
                             Icons.Outlined.PersonRemove,
                             stringResource(R.string.connections_remove),
@@ -166,15 +152,6 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
                 textAlign = TextAlign.Center,
                 modifier = Modifier.semantics { heading() }.testTag("detail_name"),
             )
-            // Under the owner's alias the names on the peer's account are still shown (§10.8).
-            c.accountName?.takeIf { c.alias != null && it != title }?.let {
-                Text(
-                    stringResource(R.string.connections_detail_their_name, AccountNames.isolate(it)),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.testTag("detail_account_name"),
-                )
-            }
             c.secondaryName?.let {
                 Text(
                     it,
@@ -189,16 +166,11 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
                 color = MaterialTheme.colorScheme.primary,
             )
         }
-        state.notice?.let { n ->
+        state.notice?.let {
             NoticeCard(
                 kind = NoticeKind.SUCCESS,
-                title = stringResource(
-                    if (n == DetailNotice.SAVED) R.string.connections_detail_saved else R.string.connections_auth_requested_title,
-                ),
-                body = stringResource(
-                    if (n == DetailNotice.SAVED) R.string.connections_detail_saved_body else R.string.connections_auth_requested_body,
-                    name,
-                ),
+                title = stringResource(R.string.connections_auth_requested_title),
+                body = stringResource(R.string.connections_auth_requested_body, name),
                 modifier = Modifier.padding(horizontal = Spacing.s),
                 actions = { TextButton(onClick = actions.onDismissNotice) { Text(stringResource(R.string.connections_ok)) } },
             )
@@ -214,9 +186,7 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
         }
         ProfileCard(c)
         if (c.state == ConnectionState.ACTIVE) SharingCard(name, actions)
-        SafetyCard(state)
         AuthCard(state.auth, name, state.busy, c.state == ConnectionState.ACTIVE, actions.onAuthenticate)
-        NotesCard(c, actions)
         DetailCard {
             CardTitle(stringResource(R.string.connections_detail_about))
             c.createdAt?.let { InfoLine(stringResource(R.string.connections_detail_since), Times.full(it)) }
@@ -315,24 +285,6 @@ private fun FingerprintCard(fingerprint: String) {
 }
 
 @Composable
-private fun SafetyCard(state: ConnectionDetailUiState) {
-    DetailCard {
-        CardTitle(stringResource(R.string.connections_safety_code))
-        val rec = state.safetyCode
-        if (rec != null) {
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) { SafetyCode(rec.sas) }
-            Spacer(Modifier.height(Spacing.s))
-            Text(
-                stringResource(R.string.connections_detail_sas_when, Times.full(rec.at)),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            Text(stringResource(R.string.connections_detail_sas_none), color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
-@Composable
 private fun AuthCard(auth: AuthenticationState?, name: String, busy: Boolean, active: Boolean, onAuthenticate: () -> Unit) {
     DetailCard(Modifier.testTag("auth_card")) {
         CardTitle(stringResource(R.string.connections_auth_title))
@@ -365,67 +317,12 @@ private fun AuthCard(auth: AuthenticationState?, name: String, busy: Boolean, ac
 }
 
 @Composable
-private fun NotesCard(c: ConnectionInfo, actions: DetailActions) {
-    DetailCard {
-        CardTitle(stringResource(R.string.connections_detail_yours))
-        InfoLine(stringResource(R.string.connections_detail_alias), c.alias ?: stringResource(R.string.connections_detail_none))
-        InfoLine(stringResource(R.string.connections_detail_note), c.note ?: stringResource(R.string.connections_detail_none))
-        Spacer(Modifier.height(Spacing.xs))
-        Text(
-            stringResource(R.string.connections_detail_yours_hint),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        TextButton(onClick = { actions.onEdit(true) }, modifier = Modifier.heightIn(min = Spacing.touchTarget)) {
-            Text(stringResource(R.string.connections_detail_edit))
-        }
-    }
-}
-
-@Composable
 private fun DetailDialogs(state: ConnectionDetailUiState, name: String, actions: DetailActions) {
-    if (state.editing) {
-        AlertDialog(
-            onDismissRequest = { actions.onEdit(false) },
-            title = { Text(stringResource(R.string.connections_detail_edit)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
-                    OutlinedTextField(
-                        value = state.aliasInput,
-                        onValueChange = actions.onAlias,
-                        label = { Text(stringResource(R.string.connections_detail_alias)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().testTag("alias_input"),
-                    )
-                    OutlinedTextField(
-                        value = state.noteInput,
-                        onValueChange = actions.onNote,
-                        label = { Text(stringResource(R.string.connections_detail_note)) },
-                        minLines = 2,
-                        maxLines = 5,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            },
-            confirmButton = { TextButton(onClick = actions.onSave) { Text(stringResource(R.string.connections_save)) } },
-            dismissButton = {
-                TextButton(onClick = { actions.onEdit(false) }) { Text(stringResource(UiR.string.core_ui_cancel)) }
-            },
-        )
-    }
     when (state.confirm) {
         DetailConfirm.REMOVE -> ConfirmDialog(
             title = stringResource(R.string.connections_remove_title, name),
             text = stringResource(R.string.connections_remove_body, name),
             confirmLabel = stringResource(R.string.connections_remove),
-            onConfirm = actions.onConfirm,
-            onDismiss = { actions.onAsk(null) },
-            destructive = true,
-        )
-        DetailConfirm.BLOCK -> ConfirmDialog(
-            title = stringResource(R.string.connections_block_title, name),
-            text = stringResource(R.string.connections_block_body, name),
-            confirmLabel = stringResource(R.string.connections_block),
             onConfirm = actions.onConfirm,
             onDismiss = { actions.onAsk(null) },
             destructive = true,

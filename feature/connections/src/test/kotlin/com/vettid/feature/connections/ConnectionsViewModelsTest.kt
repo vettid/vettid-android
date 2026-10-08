@@ -296,26 +296,23 @@ class ConnectionsViewModelsTest {
     }
 
     @Test
-    fun detailEditsFavouritesAuthenticatesAndRemoves() = runTest {
+    fun detailFavouritesAuthenticatesAndRemoves() = runTest {
         social.seed(listOf(FakeSocial.connection("c1", "Sam")))
         val vm = ConnectionDetailViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), social)
         advanceUntilIdle()
         vm.toggleFavorite()
         advanceUntilIdle()
         assertTrue(vm.uiState.value.connection!!.favorite)
-        vm.edit(true)
-        vm.setAlias("Sammy")
-        vm.saveNames()
-        advanceUntilIdle()
-        assertEquals("Sammy", vm.uiState.value.connection?.alias)
-        assertEquals(DetailNotice.SAVED, vm.uiState.value.notice)
         vm.requestAuthentication()
         advanceUntilIdle()
         assertEquals("requested", vm.uiState.value.auth?.lastResult)
+        assertEquals(DetailNotice.AUTH_REQUESTED, vm.uiState.value.notice)
         vm.ask(DetailConfirm.REMOVE)
         vm.confirm()
         advanceUntilIdle()
         assertTrue(vm.uiState.value.gone)
         assertTrue(social.connections.value.isEmpty())
+        // Removing, never blocking, and the owner's alias and note are never sent (2026-10-08).
+        assertEquals(listOf("connection", "setFavorite", "requestAuthentication", "remove"), social.calls)
     }
 }
