@@ -175,7 +175,7 @@ class PhotoCameraHandle internal constructor() {
  * (front shots came out upside down on a Pixel 9 Pro, 2026-10-08). Scales the shorter side down to
  * [keepSide] at most.
  */
-internal fun uprightShot(raw: Bitmap, rotationDegrees: Int, mirror: Boolean, keepSide: Int = 1_024): Bitmap {
+internal fun uprightShot(raw: Bitmap, rotationDegrees: Int, mirror: Boolean, keepSide: Int = SHOT_SIDE): Bitmap {
     val scale = min(1f, keepSide.toFloat() / min(raw.width, raw.height))
     val m = Matrix().apply {
         postRotate(rotationDegrees.toFloat())
@@ -266,5 +266,11 @@ fun PhotoCamera(
     AndroidView(factory = { previewView }, modifier = modifier)
 }
 
-private const val CAPTURE_WIDTH = 1_280
-private const val CAPTURE_HEIGHT = 960
+/**
+ * The shorter side a shot is kept at: three times [ProfilePhotos.TARGET_SIDE], so the review can zoom in up to 3x
+ * before the crop would be scaled up (owner, 2026-10-08: "my head in my photo looks pretty small").
+ */
+internal const val SHOT_SIDE = 1_536
+
+private const val CAPTURE_WIDTH = 2_048
+private const val CAPTURE_HEIGHT = 1_536

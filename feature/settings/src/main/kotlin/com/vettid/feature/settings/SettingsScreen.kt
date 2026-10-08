@@ -155,12 +155,15 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
             PhotoCaptureScreen(
                 capture.machine,
                 onClose = { capturing = false },
-                onUse = { shot ->
+                onUse = { selection ->
                     capturing = false
-                    // Cropped, scaled and re-encoded off the main thread (VAULT-MESSAGING §10.8: at most 65,536 bytes).
+                    // The square under the round frame, scaled and re-encoded off the main thread (VAULT-MESSAGING
+                    // §10.8: at most 65,536 bytes).
                     vm.photoEncoding()
                     scope.launch {
-                        val encoded = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { encodeShot(shot) }
+                        val encoded = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+                            encodeShot(selection)
+                        }
                         vm.photoTaken(encoded)
                     }
                 },

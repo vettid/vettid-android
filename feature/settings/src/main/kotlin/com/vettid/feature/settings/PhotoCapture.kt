@@ -20,7 +20,7 @@ enum class CaptureStep {
     /** The shutter was pressed; the picture is on its way. */
     TAKING,
 
-    /** The shot is shown with "Retake" and "Use photo". */
+    /** The shot is shown in the round frame, to zoom and move, with "Reset", "Retake" and "Use photo". */
     REVIEW,
 }
 
@@ -37,6 +37,8 @@ data class PhotoCaptureUiState(
     val shot: Bitmap? = null,
     /** The last shutter press brought no picture. */
     val failed: Boolean = false,
+    /** How the shot under review sits in the round frame (normalised: it survives a rotation). */
+    val framing: Framing = Framing(),
 ) {
     /** The camera may be shown. */
     val live: Boolean get() = access == CameraAccess.GRANTED && !noCamera
@@ -44,7 +46,13 @@ data class PhotoCaptureUiState(
     val canShoot: Boolean get() = live && step == CaptureStep.LIVE
 
     val canSwitch: Boolean get() = canShoot && front && back
+
+    /** The most the shot under review can be zoomed in (1: none, or no shot). */
+    val maxZoom: Float get() = shot?.let { PhotoCrop.maxZoom(it.width, it.height) } ?: 1f
 }
+
+/** The shot "Use photo" hands over and the square of it to keep (under the round frame). */
+class PhotoSelection(val shot: Bitmap, val crop: CropRect)
 
 /**
  * The capture's state machine: the permission, the cameras, the shutter, the shot under review. Pure state; the
@@ -87,23 +95,44 @@ class PhotoCaptureMachine {
             return
         }
         state.update {
-            if (b == null) it.copy(step = CaptureStep.LIVE, failed = true) else it.copy(step = CaptureStep.REVIEW, shot = b)
+            if (b == null) {
+                it.copy(step = CaptureStep.LIVE, failed = true)
+            } else {
+                it.copy(step = CaptureStep.REVIEW, shot = b, framing = Framing())
+            }
         }
     }
 
-    /** Back to the live camera; the shot is dropped. */
+    /**
+     * The shot under review zoomed or moved: [change] gets the current framing and the shot's width and height; what
+     * it returns is clamped so the shot covers the frame within the allowed zoom. Ignored without a shot under review.
+     */
+    fun frame(change: (Framing, Int, Int) -> Framing) = state.update {
+        val shot = it.shot
+        if (it.step != CaptureStep.REVIEW || shot == null) {
+            it
+        } else {
+            it.copy(framing = PhotoCrop.clamp(change(it.framing, shot.width, shot.height), shot.width, shot.height))
+        }
+    }
+
+    /** Back to the live camera; the shot (and its framing) is dropped. */
     fun retake() {
         val old = state.value.shot
-        state.update { it.copy(step = CaptureStep.LIVE, shot = null, failed = false) }
+        state.update { it.copy(step = CaptureStep.LIVE, shot = null, failed = false, framing = Framing()) }
         old?.recycle()
     }
 
-    /** The shot under review, handed over to the caller (who recycles it); null when there is none. */
-    fun use(): Bitmap? {
+    /**
+     * The shot under review and the square under the round frame, handed over to the caller (who recycles the shot);
+     * null when there is none.
+     */
+    fun use(): PhotoSelection? {
         val s = state.value
-        if (s.step != CaptureStep.REVIEW) return null
-        state.update { it.copy(step = CaptureStep.LIVE, shot = null) }
-        return s.shot
+        val shot = s.shot
+        if (s.step != CaptureStep.REVIEW || shot == null) return null
+        state.update { it.copy(step = CaptureStep.LIVE, shot = null, framing = Framing()) }
+        return PhotoSelection(shot, PhotoCrop.sourceRect(s.framing, shot.width, shot.height))
     }
 
     /** A fresh capture: the front camera, no shot (the permission is kept). */
@@ -114,6 +143,9 @@ class PhotoCaptureMachine {
     }
 }
 
+/** "Reset": the shot under review centred and fitted again. */
+fun PhotoCaptureMachine.resetFraming() = frame { _, _, _ -> Framing() }
+
 /** Holds the [PhotoCaptureMachine] for the shared-profile screen; the shot is dropped with it. */
 @HiltViewModel
 class PhotoCaptureViewModel @Inject constructor() : ViewModel() {
@@ -123,16 +155,30 @@ class PhotoCaptureViewModel @Inject constructor() : ViewModel() {
 }
 
 /**
- * The shot as `profile.set{photo}` takes it (VAULT-MESSAGING §10.8): [ProfilePhotos.encodeBase64] crops it to a
- * centred square, scales it down and re-encodes it as a JPEG of at most 65,536 bytes; re-encoding the pixels writes
- * no EXIF or location. Recycles [shot]. Null when it cannot be encoded. Blocking: call off the main thread.
+ * The selected square of the shot as `profile.set{photo}` takes it (VAULT-MESSAGING §10.8): exactly the square under
+ * the round frame ([PhotoSelection.crop]), which [ProfilePhotos.encodeBase64] scales down and re-encodes as a JPEG of
+ * at most 65,536 bytes; re-encoding the pixels writes no EXIF or location. Recycles the shot. Null when it cannot be
+ * encoded. Blocking: call off the main thread.
  */
-internal fun encodeShot(shot: Bitmap): String? = try {
-    ProfilePhotos.encodeBase64(shot)
-} catch (_: IllegalStateException) {
-    null
-} catch (_: OutOfMemoryError) {
-    null
-} finally {
-    shot.recycle()
+internal fun encodeShot(selection: PhotoSelection): String? {
+    val shot = selection.shot
+    var square: Bitmap? = null
+    return try {
+        val c = selection.crop
+        square = Bitmap.createBitmap(shot, c.left, c.top, c.side, c.side)
+        ProfilePhotos.encodeBase64(square)
+    } catch (_: IllegalArgumentException) {
+        null
+    } catch (_: IllegalStateException) {
+        null
+    } catch (_: OutOfMemoryError) {
+        null
+    } finally {
+        if (square !== shot) square?.recycle()
+        shot.recycle()
+    }
 }
+
+/** [shot] with the default framing (centred, fitted), as [encodeShot] takes it. */
+internal fun centredSelection(shot: Bitmap): PhotoSelection =
+    PhotoSelection(shot, PhotoCrop.sourceRect(Framing(), shot.width, shot.height))
