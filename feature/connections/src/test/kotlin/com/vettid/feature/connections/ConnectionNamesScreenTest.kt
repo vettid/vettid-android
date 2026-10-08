@@ -3,7 +3,9 @@ package com.vettid.feature.connections
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import com.vettid.core.data.social.ConnectionInfo
@@ -18,7 +20,8 @@ import org.robolectric.RobolectricTestRunner
 /**
  * Connections titled from the names on the peer's VettID account (VAULT-MESSAGING 0.18.0 §10.8, ANDROID-PLAN
  * 0.1.10): "First Last", the display name secondary, "Name not shared yet" before the names, the fingerprint in the
- * details, and nothing that calls the names verified.
+ * details, and nothing that calls the names verified. Owner decision 2026-10-08: no alias in titles, no safety
+ * code, alias, note, edit or block on the detail; the fingerprint stays as the lasting identity check.
  */
 @RunWith(RobolectricTestRunner::class)
 class ConnectionNamesScreenTest {
@@ -31,7 +34,7 @@ class ConnectionNamesScreenTest {
     )
 
     private fun detail(c: ConnectionInfo) = rule.setContent {
-        ConnectionDetailScreen(ConnectionDetailUiState(c.id, c, null, null, loading = false), DetailActions())
+        ConnectionDetailScreen(ConnectionDetailUiState(c.id, c, null, loading = false), DetailActions())
     }
 
     @Test
@@ -46,10 +49,24 @@ class ConnectionNamesScreenTest {
     }
 
     @Test
-    fun theAliasReplacesTheTitleAndTheNamesStayShown() {
-        detail(ada.copy(alias = "Mum", name = ""))
-        rule.onNodeWithTag("detail_name").assertTextContains("Mum")
-        rule.onNodeWithTag("detail_account_name").assertTextContains("Ada Lovelace", substring = true)
+    fun anAliasNeverTitlesTheConnection() {
+        val withAlias = ada.copy(alias = "Mum")
+        assertEquals("Ada Lovelace", withAlias.displayName)
+        detail(withAlias)
+        rule.onNodeWithTag("detail_name").assertTextContains("Ada Lovelace")
+        assertEquals(0, rule.onAllNodesWithText("Mum", substring = true).fetchSemanticsNodes().size)
+    }
+
+    @Test
+    fun theDetailHasNoSafetyCodeAliasNoteEditOrBlock() {
+        detail(ada)
+        rule.onNodeWithTag("fingerprint_card").assertExists()
+        for (gone in listOf("Safety code", "Alias", "Your notes", "Edit alias and note", "Block")) {
+            assertEquals(gone, 0, rule.onAllNodesWithText(gone, substring = true).fetchSemanticsNodes().size)
+            assertEquals(gone, 0, rule.onAllNodesWithContentDescription(gone, substring = true).fetchSemanticsNodes().size)
+        }
+        rule.onNodeWithContentDescription("Remove").assertExists()
+        rule.onNodeWithContentDescription("History", substring = true).assertExists()
     }
 
     @Test

@@ -41,7 +41,7 @@ import java.time.Instant
  * connection requests (`connection.request.list`, VAULT-MESSAGING 0.10.2),
  * grant and critical-item requests. Approvals that only arrive as events
  * (share decisions, member authentication, desktop and agent requests) and the
- * safety codes this app showed are kept in [store], a Keystore-encrypted file.
+ * safety codes of open requests are kept in [store], a Keystore-encrypted file.
  *
  * [onEvent] gets every event of the vault ([com.vettid.core.data.vault.VaultManager]
  * forwards them); nothing here touches transport or crypto beyond the typed API.
@@ -109,16 +109,15 @@ class SocialManager(
     }
 
     /**
-     * [safety]: the safety code of each connection, as this app showed it, by connection id.
      * [requestSas]: the codes of open requests by request id (`pending_id` or the outgoing
-     * `connection_id`), until `connection.event{added}` names the request it came from (0.10.2).
+     * `connection_id`), until `connection.event{added}` names the request it came from (0.10.2);
+     * a connection keeps no code: it protects the moment of connecting only (2026-10-08).
      * [requestNames]: the names open requests showed, by request id; [declines]: the other
      * member's declines not yet dismissed (0.10.5).
      */
     @Serializable
     private data class Local(
         val events: List<StoredEvent> = emptyList(),
-        val safety: Map<String, StoredSas> = emptyMap(),
         val requestSas: Map<String, StoredSas> = emptyMap(),
         val requestNames: Map<String, StoredName> = emptyMap(),
         val declines: List<StoredDecline> = emptyList(),
@@ -361,27 +360,14 @@ class SocialManager(
             "removed" -> {
                 messagesFlow.update { it - conn }
                 authFlow.update { it - conn }
-                edit { l -> l.copy(safety = l.safety - conn) }
             }
         }
     }
 
-    /** A new connection: the code of the request it came from becomes the connection's ([req], §10.4 `pending_id`). */
+    /** A new connection: the request it came from ([req], §10.4 `pending_id`) and its code are done with. */
     private suspend fun onAdded(conn: String, req: String) {
-        val t = now().toEpochMilli()
-        val code = local.requestSas[req] ?: when (val a = requestsFlow.value.firstOrNull { requestId(it) == req }) {
-            is Approval.ConnectionRequest -> StoredSas(a.sas, t)
-            is Approval.OutgoingRequest -> a.sas?.let { StoredSas(it, t) }
-            else -> null
-        }
         requestsFlow.update { l -> l.filterNot { requestId(it) == req } }
-        edit { l ->
-            l.copy(
-                safety = if (code != null) l.safety + (conn to code) else l.safety,
-                requestSas = l.requestSas - req,
-                requestNames = l.requestNames - req,
-            )
-        }
+        edit { l -> l.copy(requestSas = l.requestSas - req, requestNames = l.requestNames - req) }
         runCatching { load(conn) }
     }
 
@@ -553,11 +539,6 @@ class SocialManager(
     override suspend fun setFavorite(id: String, favorite: Boolean) =
         updateMeta(id) { a, v -> a.connectionUpdate(id, v, favorite = favorite) }
 
-    override suspend fun updateNames(id: String, alias: String?, note: String?) {
-        if (alias == null && note == null) return
-        updateMeta(id) { a, v -> a.connectionUpdate(id, v, alias = alias, note = note) }
-    }
-
     override suspend fun remove(id: String) {
         vaultGuard { api().connectionRemove(id) }
         forget(id)
@@ -568,11 +549,10 @@ class SocialManager(
         forget(id)
     }
 
-    private suspend fun forget(id: String) {
+    private fun forget(id: String) {
         connectionsFlow.update { l -> l.filterNot { it.id == id } }
         messagesFlow.update { it - id }
         authFlow.update { it - id }
-        edit { l -> l.copy(safety = l.safety - id) }
     }
 
     override suspend fun requestAuthentication(id: String, context: String?): String = vaultGuard {
@@ -583,8 +563,6 @@ class SocialManager(
         }
         rid
     }
-
-    override fun safetyCode(id: String): SafetyCodeRecord? = local.safety[id]?.let { SafetyCodeRecord(it.sas, Instant.ofEpochMilli(it.at)) }
 
     // --- MessagesRepository ---
 

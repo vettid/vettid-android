@@ -16,7 +16,6 @@ import com.vettid.core.data.social.OutstandingInvite
 import com.vettid.core.data.social.PeerDecline
 import com.vettid.core.data.social.RequestEnd
 import com.vettid.core.data.social.RequestState
-import com.vettid.core.data.social.SafetyCodeRecord
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -465,27 +464,23 @@ data class ConnectionDetailUiState(
     val connectionId: String,
     val connection: ConnectionInfo? = null,
     val auth: AuthenticationState? = null,
-    val safetyCode: SafetyCodeRecord? = null,
     val loading: Boolean = true,
     val busy: Boolean = false,
-    val editing: Boolean = false,
-    val aliasInput: String = "",
-    val noteInput: String = "",
     val confirm: DetailConfirm? = null,
-    /** The connection is gone (removed or blocked here): the screen closes. */
+    /** The connection is gone (removed here): the screen closes. */
     val gone: Boolean = false,
     val notice: DetailNotice? = null,
     val error: FailureKind? = null,
 )
 
-enum class DetailConfirm { REMOVE, BLOCK }
+enum class DetailConfirm { REMOVE }
 
-enum class DetailNotice { AUTH_REQUESTED, SAVED }
+enum class DetailNotice { AUTH_REQUESTED }
 
 /**
- * A connection (ANDROID-PLAN §4): the profile it shares (self-asserted), the
- * safety code shown when it was made, member authentication (§10.4), the
- * owner's alias and note, favourite, block and remove.
+ * A connection (ANDROID-PLAN §4): the profile it shares (self-asserted), member
+ * authentication (§10.4), favourite and remove. No safety code, alias, note or
+ * block here (owner decision 2026-10-08).
  */
 @HiltViewModel
 class ConnectionDetailViewModel @Inject constructor(
@@ -493,7 +488,7 @@ class ConnectionDetailViewModel @Inject constructor(
     private val repo: ConnectionsRepository,
 ) : ViewModel() {
     private val id: String = checkNotNull(savedState[ConnectionDetailRoute.ARG]) { "no connection" }
-    private val local = MutableStateFlow(ConnectionDetailUiState(id, safetyCode = repo.safetyCode(id)))
+    private val local = MutableStateFlow(ConnectionDetailUiState(id))
 
     val uiState: StateFlow<ConnectionDetailUiState> = combine(local, repo.connections, repo.authentication) { s, cs, auth ->
         s.copy(connection = cs.firstOrNull { it.id == id } ?: s.connection, auth = auth[id])
@@ -520,35 +515,13 @@ class ConnectionDetailViewModel @Inject constructor(
         local.update { it.copy(notice = DetailNotice.AUTH_REQUESTED) }
     }
 
-    fun edit(show: Boolean) {
-        val c = uiState.value.connection
-        local.update { it.copy(editing = show, aliasInput = c?.alias.orEmpty(), noteInput = c?.note.orEmpty()) }
-    }
-
-    fun setAlias(v: String) = local.update { it.copy(aliasInput = v.take(MAX_ALIAS)) }
-
-    fun setNote(v: String) = local.update { it.copy(noteInput = v.take(MAX_NOTE)) }
-
-    fun saveNames() {
-        val c = uiState.value.connection ?: return
-        val s = local.value
-        val alias = s.aliasInput.trim().takeIf { it != c.alias.orEmpty() }
-        val note = s.noteInput.trim().takeIf { it != c.note.orEmpty() }
-        local.update { it.copy(editing = false) }
-        if (alias == null && note == null) return
-        act {
-            repo.updateNames(id, alias, note)
-            local.update { it.copy(notice = DetailNotice.SAVED) }
-        }
-    }
-
     fun ask(confirm: DetailConfirm?) = local.update { it.copy(confirm = confirm) }
 
     fun confirm() {
-        val what = local.value.confirm ?: return
+        if (local.value.confirm != DetailConfirm.REMOVE) return
         local.update { it.copy(confirm = null) }
         act {
-            if (what == DetailConfirm.BLOCK) repo.block(id) else repo.remove(id)
+            repo.remove(id)
             local.update { it.copy(gone = true) }
         }
     }
@@ -565,11 +538,5 @@ class ConnectionDetailViewModel @Inject constructor(
                 local.update { it.copy(busy = false, error = e.kind) }
             }
         }
-    }
-
-    private companion object {
-        /** §10.4: alias at most 128 bytes, note 1,024 (characters here; the vault checks bytes). */
-        const val MAX_ALIAS = 64
-        const val MAX_NOTE = 500
     }
 }
