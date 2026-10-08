@@ -310,9 +310,24 @@ enum class FailureKind {
     OTHER,
 }
 
-/** A failed action: [kind] for the UI, [code] the spec's or API's code. */
-class VaultFailure(val kind: FailureKind, val code: String? = null, val retryAfterSeconds: Long = 0, cause: Throwable? = null) :
-    Exception("$kind${code?.let { " ($it)" } ?: ""}", cause)
+/**
+ * A failed action: [kind] for the UI, [code] the spec's or API's code; [limit] the limit a `limit` error names
+ * (VAULT-MESSAGING 0.21.0 §10.1), null from an older vault.
+ */
+class VaultFailure(
+    val kind: FailureKind,
+    val code: String? = null,
+    val retryAfterSeconds: Long = 0,
+    cause: Throwable? = null,
+    val limit: VaultLimit? = null,
+) : Exception("$kind${code?.let { " ($it)" } ?: ""}${limit?.let { " [${it.name}]" } ?: ""}", cause)
+
+/**
+ * The limit a `limit` error names (VAULT-MESSAGING 0.21.0 §10.1: `{limit, max, size?}`): [name] one of the spec's
+ * table (a name this app does not know reads as a generic "limit reached"), [max] the bound (a count, or bytes for a
+ * `*_size` limit), [size] for a size limit the size the refused request would have reached.
+ */
+data class VaultLimit(val name: String, val max: Long? = null, val size: Long? = null)
 
 // --- recovery on a new phone (§11.11) and direct transfer (§6.7.1) ---
 

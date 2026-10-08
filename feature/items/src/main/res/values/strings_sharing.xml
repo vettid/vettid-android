@@ -131,6 +131,10 @@
     <string name="items_impact_auto">Saving shares this item with %1$s automatically.</string>
     <string name="items_impact_ask">You will be asked whether to share this item with %1$s.</string>
     <string name="items_impact_usable">%1$s will be able to ask you to use this item, never read it.</string>
+    <string name="items_shared_holds">Holds: %1$s</string>
+    <string name="items_ask_entry_category">%1$s (any item)</string>
+    <string name="items_ask_entry_item">an item</string>
+    <string name="items_impact_withdrawn">Saving stops sharing this item with %1$s.</string>
 
     <!-- Shared with you -->
     <string name="items_shared_title">Shared by %1$s</string>

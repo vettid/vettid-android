@@ -7,9 +7,11 @@ import com.vettid.core.data.items.ItemDetail
 import com.vettid.core.data.items.ItemDraft
 import com.vettid.core.data.items.ItemFieldView
 import com.vettid.core.data.items.ItemSummary
+import com.vettid.core.data.items.ItemsManager
 import com.vettid.core.data.items.ItemsRepository
 import com.vettid.core.data.items.ListLoad
 import com.vettid.core.data.items.Sensitivity
+import com.vettid.core.data.items.ShareEffect
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -17,7 +19,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 /**
  * TEST ONLY. An in-memory vault of items for ViewModel tests: [stored] holds every item with its values; calls are
  * recorded in [calls]; [fail] makes the next call of a name throw; [password] is the credential password critical
- * operations need (a wrong one is `bad_password`).
+ * operations need (a wrong one is `bad_password`). `get` reports each item's `size` (VAULT-MESSAGING 0.21.0) unless
+ * [reportSize] is off (an older vault); an update keeps the stored value of a kept field and the kept notes, and the
+ * last draft sent is [lastDraft]. [effect] is what [shareEffect] answers.
  */
 @Suppress("TooManyFunctions")
 class FakeItems : ItemsRepository {
@@ -26,7 +30,10 @@ class FakeItems : ItemsRepository {
     var password = "correct horse"
     val stored = linkedMapOf<String, ItemDetail>()
     private var next = 1
-    private var opened: ItemDetail? = null
+    var reportSize = true
+    var lastDraft: ItemDraft? = null
+    var effect = ShareEffect()
+    val effectAsked = mutableListOf<List<String>>()
 
     override val items = MutableStateFlow<List<ItemSummary>>(emptyList())
     override val load = MutableStateFlow(ListLoad.NOT_LOADED)
@@ -59,7 +66,9 @@ class FakeItems : ItemsRepository {
 
     override suspend fun get(itemId: String): ItemDetail {
         call("get")
-        return find(itemId).hidden()
+        val d = find(itemId)
+        val size = ItemChecks.check(ItemDraft.of(d.copy(revealed = true))).size.takeIf { reportSize }
+        return d.hidden().copy(size = size)
     }
 
     override suspend fun reveal(itemId: String): ItemDetail {
@@ -88,6 +97,7 @@ class FakeItems : ItemsRepository {
 
     override suspend fun create(draft: ItemDraft): String {
         call("create")
+        lastDraft = draft
         val id = "01ITEM${next++}"
         stored[id] = detail(id, 1, draft)
         publish()
@@ -96,6 +106,7 @@ class FakeItems : ItemsRepository {
 
     override suspend fun createCritical(draft: ItemDraft, password: String): String {
         call("createCritical")
+        lastDraft = draft
         checkPassword(password)
         val id = "01CRIT${next++}"
         stored[id] = detail(id, 1, draft.copy(sensitivity = Sensitivity.CRITICAL))
@@ -105,19 +116,21 @@ class FakeItems : ItemsRepository {
 
     override suspend fun update(itemId: String, version: Long, draft: ItemDraft): Long {
         call("update")
+        lastDraft = draft
         val cur = find(itemId)
         if (cur.version != version) throw VaultFailure(FailureKind.CONFLICT, "conflict")
-        stored[itemId] = detail(itemId, version + 1, draft.copy(sensitivity = cur.sensitivity))
+        stored[itemId] = detail(itemId, version + 1, ItemsManager.merged(draft, cur).copy(sensitivity = cur.sensitivity))
         publish()
         return version + 1
     }
 
     override suspend fun updateCritical(itemId: String, version: Long, draft: ItemDraft, password: String): Long {
         call("updateCritical")
+        lastDraft = draft
         checkPassword(password)
         val cur = find(itemId)
         if (cur.version != version) throw VaultFailure(FailureKind.CONFLICT, "conflict")
-        stored[itemId] = detail(itemId, version + 1, draft.copy(sensitivity = Sensitivity.CRITICAL))
+        stored[itemId] = detail(itemId, version + 1, ItemsManager.merged(draft, cur).copy(sensitivity = Sensitivity.CRITICAL))
         publish()
         return version + 1
     }
@@ -147,11 +160,11 @@ class FakeItems : ItemsRepository {
         return version + 1
     }
 
-    override fun keepOpened(detail: ItemDetail) {
-        opened = detail
+    override suspend fun shareEffect(itemId: String?, version: Long?, sensitivity: Sensitivity, tags: List<String>): ShareEffect {
+        call("shareEffect")
+        effectAsked += ItemChecks.normalizeTags(tags) ?: tags
+        return effect
     }
-
-    override fun takeOpened(itemId: String): ItemDetail? = opened?.takeIf { it.itemId == itemId }.also { opened = null }
 
     companion object {
         /** A sample item with string values. */

@@ -37,11 +37,17 @@ class ItemsManagerTest {
         var revealed = mutableMapOf<String, Item>()
         var plaintext: ByteArray = ByteArray(0)
         var error: String? = null
+        var errorBody: JsonObject? = null
+
+        /** The next critical `item.put` fails with this code (an older vault refusing kept values: `bad_request`). */
+        var criticalError: String? = null
+        var effect: JsonObject = JsonObject(emptyMap())
+        val dryRuns = mutableListOf<List<Any?>>()
         val puts = mutableListOf<List<Any?>>()
         val deletes = mutableListOf<Pair<String, String?>>()
         val sensitivities = mutableListOf<List<Any?>>()
 
-        private fun err(t: String) = error?.let { throw VaultOpException(t, it, "") }
+        private fun err(t: String) = error?.let { throw VaultOpException(t, it, "", errorBody) }
 
         override suspend fun list(after: String?, limit: Int): ItemPage {
             calls += "list:$after:$limit"
@@ -74,6 +80,10 @@ class ItemsManagerTest {
 
         override suspend fun putCritical(password: String, content: ItemContent, tags: List<String>?, itemId: String?, version: Long?): ItemRef {
             calls += "putCritical:$password"
+            criticalError?.let {
+                criticalError = null
+                throw VaultOpException("item.put", it, "")
+            }
             puts += listOf(content, "critical", tags, itemId, version)
             return ItemRef(itemId ?: "01CRIT", (version ?: 0) + 1, credentialVersion = 9)
         }
@@ -81,6 +91,13 @@ class ItemsManagerTest {
         override suspend fun tag(itemId: String, version: Long, tags: List<String>): Long {
             calls += "tag:$tags"
             return version + 1
+        }
+
+        override suspend fun putDryRun(itemId: String?, version: Long?, sensitivity: String?, tags: List<String>?): JsonObject {
+            calls += "dryRun"
+            err("item.put")
+            dryRuns += listOf(itemId, version, sensitivity, tags)
+            return effect
         }
 
         override suspend fun sensitivity(itemId: String, version: Long, sensitivity: String, password: String?): Long {
@@ -95,8 +112,7 @@ class ItemsManagerTest {
 
     private val ops = Ops()
     private val scope = TestScope()
-    private var clock = 0L
-    private val m = ItemsManager(scope, ops = { ops }, now = { clock })
+    private val m = ItemsManager(scope, ops = { ops })
 
     private fun item(id: String, name: String, s: String = "data", vararg fields: ItemField) =
         Item(itemId = id, version = 2, name = name, category = "identity_document", sensitivity = s, tags = listOf("travel"), fields = fields.toList())
@@ -290,17 +306,127 @@ class ItemsManagerTest {
         assertEquals(2, ops.calls.count { it.startsWith("list:null") })
     }
 
+    // --- VAULT-MESSAGING 0.21.0: kept values, the size, the dry run, named limits ---
+
+    private fun secretLogin(size: Long?) = item("01S", "Login", "secret", ItemField("f1", "User", "text"), ItemField("f2", "Password", "password"))
+        .copy(hasNotes = true, size = size)
+
     @Test
-    fun anOpenedItemIsHandedOverOnceAndNotForLong() {
-        val d = ItemDetail("01C", 1, "Phrase", "crypto_wallet", Sensitivity.CRITICAL, revealed = true)
-        m.keepOpened(d)
-        assertEquals(d, m.takeOpened("01C"))
-        assertNull(m.takeOpened("01C"))
-        m.keepOpened(d)
-        assertNull(m.takeOpened("01X"))
-        m.keepOpened(d)
-        clock += ItemsManager.OPENED_TTL_MS + 1
-        assertNull(m.takeOpened("01C"))
+    fun aSecretItemIsEditedWithItsValuesKeptAndNothingRevealed() = scope.runTest {
+        ops.items["01S"] = secretLogin(size = 180)
+        val d = m.get("01S")
+        assertEquals(180, d.size)
+        val draft = ItemDraft.of(d)
+        assertTrue(draft.fields.all { it.kept })
+        assertTrue(draft.keepNotes)
+        // The member renames one field and types a new password; the user name stays kept.
+        val edited = draft.copy(fields = listOf(draft.fields[0].copy(label = "Login name"), draft.fields[1].copy(text = "new-pass", kept = false)))
+        m.update("01S", 2, edited)
+        assertFalse("reveal" in ops.calls)
+        val content = ops.puts.single()[0] as ItemContent
+        assertEquals(listOf(ItemField("f1", "Login name", "text", null), ItemField("f2", "Password", "password", JsonPrimitive("new-pass"))), content.fields)
+        assertTrue(content.keepNotes)
+        assertNull(content.notes)
+    }
+
+    @Test
+    fun aCriticalItemIsEditedInOneCredentialOperation() = scope.runTest {
+        ops.items["01C"] = item("01C", "Phrase", "critical", ItemField("f1", "Words", "multiline")).copy(hasNotes = true, size = 150)
+        val draft = ItemDraft.of(m.get("01C")).let { it.copy(name = "Cold phrase") }
+        m.updateCritical("01C", 2, draft, "pw")
+        assertEquals(1, ops.calls.count { it.startsWith("putCritical") })
+        assertFalse(ops.calls.any { it.startsWith("revealCritical") })
+        val content = ops.puts.single()[0] as ItemContent
+        assertEquals(listOf(ItemField("f1", "Words", "multiline", null)), content.fields)
+        assertTrue(content.keepNotes)
+    }
+
+    @Test
+    fun aVaultWithoutSizeGetsASecretItemsValuesInFull() = scope.runTest {
+        // Before 0.21.0 a vault keeps no values: the app reads them (never shown) and sends them all.
+        ops.items["01S"] = secretLogin(size = null)
+        ops.revealed["01S"] = item(
+            "01S", "Login", "secret", ItemField("f1", "User", "text", JsonPrimitive("sam")), ItemField("f2", "Password", "password", JsonPrimitive("old")),
+        ).copy(notes = "branch")
+        val draft = ItemDraft.of(m.get("01S"))
+        assertFalse(ItemChecks.check(draft).sizeKnown)
+        m.update("01S", 2, draft.copy(fields = listOf(draft.fields[0], draft.fields[1].copy(text = "new", kept = false))))
+        assertTrue("reveal" in ops.calls)
+        val content = ops.puts.single()[0] as ItemContent
+        assertEquals(listOf(JsonPrimitive("sam"), JsonPrimitive("new")), content.fields!!.map { it.value })
+        assertEquals("branch", content.notes)
+        assertFalse(content.keepNotes)
+    }
+
+    @Test
+    fun anOlderVaultRefusingKeptValuesGetsThemWithTheSamePassword() = scope.runTest {
+        ops.items["01C"] = item("01C", "Phrase", "critical", ItemField("f1", "Words", "multiline"))
+        ops.plaintext = """{"fields":[{"field_id":"f1","value":"abandon ability"}]}""".toByteArray()
+        ops.criticalError = "bad_request"
+        m.updateCritical("01C", 2, ItemDraft.of(m.get("01C")), "pw")
+        assertEquals(listOf("putCritical:pw", "revealCritical:pw", "putCritical:pw"), ops.calls.filter { it.contains(":pw") })
+        val content = ops.puts.single()[0] as ItemContent
+        assertEquals(JsonPrimitive("abandon ability"), content.fields!!.single().value)
+    }
+
+    @Test
+    fun keptNotesAloneOnAnItemWithoutSizeAreOpenedFirst() = scope.runTest {
+        // An older vault ignores keep_notes: with every field typed, the notes would be lost. The values come first.
+        ops.items["01C"] = item("01C", "Phrase", "critical", ItemField("f1", "Words", "multiline")).copy(hasNotes = true)
+        ops.plaintext = """{"fields":[{"field_id":"f1","value":"old"}],"notes":"cold"}""".toByteArray()
+        val draft = ItemDraft.of(m.get("01C"))
+        m.updateCritical("01C", 2, draft.copy(fields = listOf(draft.fields[0].copy(text = "new", kept = false))), "pw")
+        assertEquals(listOf("revealCritical:pw", "putCritical:pw"), ops.calls.filter { it.contains(":pw") })
+        val content = ops.puts.single()[0] as ItemContent
+        assertEquals("cold", content.notes)
+        assertEquals(JsonPrimitive("new"), content.fields!!.single().value)
+    }
+
+    @Test
+    fun anotherRefusalOfACriticalEditIsNotRetried() = scope.runTest {
+        ops.items["01C"] = item("01C", "Phrase", "critical", ItemField("f1", "Words", "multiline")).copy(size = 120)
+        ops.criticalError = "bad_request"
+        try {
+            m.updateCritical("01C", 2, ItemDraft.of(m.get("01C")), "pw")
+            fail()
+        } catch (e: VaultFailure) {
+            assertEquals("bad_request", e.code)
+        }
+        assertFalse(ops.calls.any { it.startsWith("revealCritical") })
+    }
+
+    @Test
+    fun theDryRunNeverCarriesContentAndIsParsed() = scope.runTest {
+        ops.effect = json(
+            """{"version":3,"shares":[{"rule_id":"01R1","subject":{"connection_id":"c1"},"mode":"auto"},{"rule_id":"01R2","subject":{"connection_id":"c2"},"mode":"ask","usable":true},{"subject":{}}],"withdrawals":[{"rule_id":"01R3","subject":{"agent_id":"a1"},"state":"pending"}]}""",
+        ).jsonObject
+        val e = m.shareEffect("01A", 3, Sensitivity.DATA, listOf("Medical"))
+        assertEquals(listOf("01A", 3L, null, listOf("medical")), ops.dryRuns.single())
+        assertEquals(3L, e.version)
+        assertEquals(listOf(EffectShare("01R1", ShareSubject("c1"), ShareMode.AUTO), EffectShare("01R2", ShareSubject("c2"), ShareMode.ASK, usable = true)), e.shares)
+        assertEquals(listOf(EffectWithdrawal("01R3", ShareSubject(agentId = "a1"), "pending")), e.withdrawals)
+        m.shareEffect(null, 9, Sensitivity.CRITICAL, emptyList())
+        assertEquals(listOf(null, null, "critical", emptyList<String>()), ops.dryRuns[1])
+    }
+
+    @Test
+    fun aLimitNamesItsLimit() = scope.runTest {
+        ops.error = "limit"
+        ops.errorBody = json("""{"limit":"item_size","max":65536,"size":70001}""").jsonObject
+        try {
+            m.create(ItemDraft(name = "Big"))
+            fail()
+        } catch (e: VaultFailure) {
+            assertEquals(FailureKind.LIMIT, e.kind)
+            assertEquals(com.vettid.core.data.vault.VaultLimit("item_size", 65_536, 70_001), e.limit)
+        }
+        ops.errorBody = null
+        try {
+            m.create(ItemDraft(name = "Older vault"))
+            fail()
+        } catch (e: VaultFailure) {
+            assertNull(e.limit)
+        }
     }
 
     @Test

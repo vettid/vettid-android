@@ -33,7 +33,10 @@ object FieldKinds {
     const val OTP = "otp"
     const val ADDRESS = "address"
 
-    /** The kinds a member can choose, in the order the add-field menu offers them. */
+    /** Reserved for files later (§10.7, still in 0.21.0): never offered, and refused before anything is sent. */
+    const val FILE = "file"
+
+    /** The kinds a member can choose, in the order the add-field menu offers them (never [FILE]). */
     val CHOOSABLE = listOf(TEXT, MULTILINE, PASSWORD, NUMBER, DATE, EMAIL, PHONE, URL, OTP, ADDRESS)
 
     /** Kinds the apps mask and reveal on purpose (§10.7: `password`; an `otp` seed is a secret too). */
@@ -96,6 +99,9 @@ sealed interface FieldValue {
         }
 }
 
+/** A field's metadata, never its value (§10.12 `labels`: what a grant or a request entry holds). */
+data class FieldLabel(val fieldId: String, val label: String, val kind: String)
+
 /** One field as the app shows it. [value] null: not revealed (a `secret` or `critical` item's values, §10.7). */
 data class ItemFieldView(val fieldId: String?, val label: String, val kind: String, val value: FieldValue? = null)
 
@@ -132,6 +138,11 @@ data class ItemDetail(
     val createdAt: Instant? = null,
     val updatedAt: Instant? = null,
     val revealed: Boolean = sensitivity == Sensitivity.DATA,
+    /**
+     * The item's size as the vault counts it (`item.get`'s `size`, VAULT-MESSAGING 0.21.0 §10.7), for the room left
+     * when the values are not at hand; null from an older vault, or for a critical item not written since its upgrade.
+     */
+    val size: Int? = null,
 ) {
     val summary: ItemSummary
         get() = ItemSummary(itemId, version, name, category, sensitivity, template, tags, fields.map { it.label }, updatedAt)

@@ -281,4 +281,44 @@ class ApprovalsViewModelsTest {
         advanceUntilIdle()
         assertTrue(vm.uiState.value.done)
     }
+
+    @Test
+    fun aFieldThatCannotHoldASeedCanOnlyBeDenied() = runTest {
+        // VAULT-MESSAGING 0.21.0 §10.13: the kind is known before the password; a 0.21.0 vault never asks for these.
+        val c = critical.copy(requestId = "u7", payload = payload, kind = "url")
+        social.approvals.value = listOf(c)
+        val vm = detail(c)
+        advanceUntilIdle()
+        vm.setPassword("pw")
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.canApprove)
+        vm.approve()
+        advanceUntilIdle()
+        assertFalse("approveCriticalUse" in social.calls)
+        vm.deny()
+        advanceUntilIdle()
+        assertTrue("denyCriticalUse" in social.calls)
+        // A suitable kind, or none from an older vault, is approved as before.
+        val ok = critical.copy(requestId = "u8", payload = payload, kind = "password")
+        social.approvals.value = listOf(ok)
+        val vm2 = detail(ok)
+        advanceUntilIdle()
+        vm2.setPassword("pw")
+        advanceUntilIdle()
+        assertTrue(vm2.uiState.value.canApprove)
+    }
+
+    @Test
+    fun aNamedLimitIsShownWithTheFailure() = runTest {
+        val share = Approval.ShareDecision("r1", "c1", null, listOf(com.vettid.core.data.social.ShareItem("i1", "Passport", "identity_document", "data")), null, now)
+        social.approvals.value = listOf(share)
+        val limit = com.vettid.core.data.vault.VaultLimit("grants_given", 1_000)
+        social.fail["decideShare"] = VaultFailure(FailureKind.LIMIT, "limit", limit = limit)
+        val vm = detail(share)
+        advanceUntilIdle()
+        vm.approve()
+        advanceUntilIdle()
+        assertEquals(FailureKind.LIMIT, vm.uiState.value.error)
+        assertEquals(limit, vm.uiState.value.limit)
+    }
 }

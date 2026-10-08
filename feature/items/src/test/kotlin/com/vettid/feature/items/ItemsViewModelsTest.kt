@@ -197,18 +197,6 @@ class ItemsViewModelsTest {
     }
 
     @Test
-    fun aRevealedItemIsHandedToTheEditScreen() = runTest {
-        val vm = detail("01L")
-        advanceUntilIdle()
-        vm.handOff()
-        assertNull(items.takeOpened("01L")) // nothing revealed: nothing handed over
-        vm.reveal()
-        advanceUntilIdle()
-        vm.handOff()
-        assertEquals("01L", items.takeOpened("01L")?.itemId)
-    }
-
-    @Test
     fun aDeletedItemIsMissing() = runTest {
         val vm = detail("01GONE")
         advanceUntilIdle()

@@ -33,7 +33,7 @@ internal suspend fun <T> vaultGuard(block: suspend () -> T): T = try {
 } catch (e: MemberApiException) {
     throw VaultFailure(VaultManager.memberFailure(e), e.code, e.retryAfterSeconds.toLong(), e)
 } catch (e: VaultOpException) {
-    throw VaultFailure(VaultManager.opFailure(e.code), e.code, retryAfterOf(e), e)
+    throw VaultFailure(VaultManager.opFailure(e.code), e.code, retryAfterOf(e), e, limitOf(e))
 } catch (e: AltRefusedException) {
     val kind = if (e.reason == AltRefusedException.Reason.ROLLBACK_RELEASE) FailureKind.ROLLBACK else FailureKind.MANIFEST
     throw VaultFailure(kind, e.reason.name.lowercase(), cause = e)
@@ -65,3 +65,16 @@ internal suspend fun <T> vaultGuard(block: suspend () -> T): T = try {
  */
 internal fun retryAfterOf(e: VaultOpException): Long =
     (e.body?.get("retry_after") as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull?.takeIf { it > 0 } ?: 0
+
+/**
+ * A `limit` error's limit (VAULT-MESSAGING 0.21.0 §10.1: the body `{limit: <name>, max, size?}`); null for another
+ * error or a body without a name (a vault release before 0.21.0).
+ */
+@Suppress("ReturnCount")
+internal fun limitOf(e: VaultOpException): VaultLimit? {
+    if (e.code != "limit") return null
+    val b = e.body ?: return null
+    val name = (b["limit"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf { it.isNotEmpty() } ?: return null
+    fun n(k: String) = (b[k] as? JsonPrimitive)?.takeIf { !it.isString }?.longOrNull?.takeIf { it >= 0 }
+    return VaultLimit(name, n("max"), n("size"))
+}

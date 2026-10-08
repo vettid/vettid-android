@@ -127,6 +127,37 @@ class ApprovalParserTest {
     }
 
     @Test
+    fun grantEntriesCarryTheMembersItemAndCriticalUsesTheirKind() {
+        // 0.21.0 §10.12: an available item entry names the member's item and the fields it would grant.
+        val g = ApprovalParser.parse(
+            "grant.pending",
+            o("""{"request_id":"R1","connection_id":"C1","items":[{"kind":"item","ref":"01A","label":"Your passport","available":true,"name":"Passport","category":"identity_document","labels":[{"field_id":"f1","label":"Number","kind":"text"}]},{"kind":"item","ref":"01B","available":false},{"kind":"category","ref":"insurance","available":false}],"uses":1,"expires_in":604800,"exp":"2026-10-11T12:00:00.000Z"}"""),
+            at,
+        ) as Approval.GrantRequest
+        val e = g.entries[0]
+        assertEquals("Passport", e.name)
+        assertEquals("identity_document", e.category)
+        assertEquals(listOf(com.vettid.core.data.items.FieldLabel("f1", "Number", "text")), e.labels)
+        assertNull(g.entries[1].name)
+        assertNull(g.entries[1].labels)
+        // An older vault: no name, no labels.
+        assertNull(g.entries[2].labels)
+
+        // 0.21.0 §10.13: the field's kind, and whether it can hold a seed at all.
+        val body = """{"request_id":"U1","connection_id":"C1","item_id":"01K","field_id":"f1","name":"Key","label":"Seed","operation":"sign","payload_sha256":"x","kind":"%s"}"""
+        fun use(kind: String) = ApprovalParser.parse("critical-secret-use.pending", o(body.format(kind)), at) as Approval.CriticalUse
+        assertEquals("password", use("password").kind)
+        assertEquals(true, use("password").suitable)
+        assertEquals(true, use("text").suitable)
+        assertEquals(true, use("multiline").suitable)
+        assertEquals(false, use("url").suitable)
+        assertEquals(false, use("otp").suitable)
+        val older = ApprovalParser.parse("critical-secret-use.pending", o(body.replace(",\"kind\":\"%s\"", "")), at) as Approval.CriticalUse
+        assertNull(older.kind)
+        assertNull(older.suitable)
+    }
+
+    @Test
     fun aRequestWithoutNamesHasNoTitleAndADisplayNameAloneIsNeverOne() {
         val a = ApprovalParser.incoming(o("""{"pending_id":"P1","sas":"042817","profile":{"name":"Morgan"}}"""), at)!!
         assertNull(a.name)

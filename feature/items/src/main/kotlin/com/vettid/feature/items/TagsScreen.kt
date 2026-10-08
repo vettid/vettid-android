@@ -83,6 +83,8 @@ data class TagsUiState(
     val busy: Boolean = false,
     val dialog: TagDialog? = null,
     val error: FailureKind? = null,
+    /** The limit a `limit` error named (VAULT-MESSAGING 0.21.0 §10.1). */
+    val limit: com.vettid.core.data.vault.VaultLimit? = null,
 ) {
     /** `@profile` first, then the member's tags by name. */
     val tags: List<TagView> get() = registry?.tags.orEmpty().sortedWith(compareBy({ !it.reserved }, { it.tag }))
@@ -204,7 +206,7 @@ class TagsViewModel @Inject constructor(private val sharing: SharingRepository) 
                 state.update { it.copy(busy = false, loading = false) }
             } catch (e: VaultFailure) {
                 val keep = e.kind != FailureKind.IN_USE
-                state.update { it.copy(busy = false, loading = false, error = e.kind, dialog = it.dialog.takeIf { keep }) }
+                state.update { it.copy(busy = false, loading = false, error = e.kind, limit = e.limit, dialog = it.dialog.takeIf { keep }) }
             }
         }
     }
@@ -265,7 +267,7 @@ fun TagsScreen(state: TagsUiState, actions: TagsActions, modifier: Modifier = Mo
                 NoticeCard(
                     NoticeKind.WARNING,
                     stringResource(R.string.items_error_item),
-                    ItemsText.failure(e),
+                    ItemsText.failure(e, limit = state.limit),
                     modifier = Modifier.padding(horizontal = Spacing.s).testTag("tags_error"),
                     actions = { TextButton(onClick = actions.onDismissError) { Text(stringResource(R.string.items_ok)) } },
                 )

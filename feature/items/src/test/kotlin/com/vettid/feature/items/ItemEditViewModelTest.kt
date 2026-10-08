@@ -137,37 +137,107 @@ class ItemEditViewModelTest {
     }
 
     @Test
-    fun editingACriticalItemOpensItFirstUnlessHandedOver() = runTest {
-        items.add(FakeItems.item("01C", "Phrase", Sensitivity.CRITICAL, fields = listOf("Words" to "a b")))
+    fun editingACriticalItemKeepsItsValuesAndTakesOnePassword() = runTest {
+        // VAULT-MESSAGING 0.21.0 §10.7 Kept values: nothing is opened to edit; the save is one credential operation.
+        items.add(FakeItems.item("01C", "Phrase", Sensitivity.CRITICAL, fields = listOf("Words" to "a b", "Passphrase" to "p")).copy(notes = "cold"))
         val vm = vm(itemId = "01C")
         advanceUntilIdle()
-        assertTrue(vm.uiState.value.needsOpen)
-        assertEquals(PasswordPurpose.OPEN, vm.uiState.value.prompt?.purpose)
+        val s = vm.uiState.value
+        assertNull(s.prompt)
+        assertTrue(s.draft.fields.all { it.kept && it.text.isEmpty() })
+        assertTrue(s.draft.keepNotes)
+        vm.setFieldLabel(0, "Recovery words")
+        vm.setFieldText(1, "new passphrase")
+        vm.save()
+        assertEquals(PasswordPurpose.SAVE, vm.uiState.value.prompt?.purpose)
         vm.setPassword("correct horse")
         vm.submitPassword()
         advanceUntilIdle()
-        assertFalse(vm.uiState.value.needsOpen)
-        assertEquals("a b", vm.uiState.value.draft.fields.single().text)
-        items.keepOpened(items.stored.getValue("01C"))
-        val handed = vm(itemId = "01C")
-        advanceUntilIdle()
-        assertFalse(handed.uiState.value.needsOpen)
-        assertNull(handed.uiState.value.prompt)
+        assertEquals("01C", vm.uiState.value.savedId)
+        assertEquals(listOf("get", "updateCritical"), items.calls.filter { it != "refresh" })
+        val sent = items.lastDraft!!
+        assertTrue(sent.fields[0].kept)
+        assertFalse(sent.fields[1].kept)
+        val stored = items.stored.getValue("01C")
+        assertEquals(FieldValue.Text("a b"), stored.fields[0].value)
+        assertEquals("Recovery words", stored.fields[0].label)
+        assertEquals(FieldValue.Text("new passphrase"), stored.fields[1].value)
+        assertEquals("cold", stored.notes)
     }
 
     @Test
-    fun editingASecretItemRevealsIt() = runTest {
+    fun editingASecretItemRevealsNothing() = runTest {
         items.add(FakeItems.item("01S", "Login", Sensitivity.SECRET, fields = listOf("Password" to "hunter2")))
         val vm = vm(itemId = "01S")
         advanceUntilIdle()
-        assertTrue("reveal" in items.calls)
-        assertEquals("hunter2", vm.uiState.value.draft.fields.single().text)
+        assertFalse("reveal" in items.calls)
+        assertTrue(vm.uiState.value.draft.fields.single().kept)
+        assertEquals("", vm.uiState.value.draft.fields.single().text)
         vm.setSensitivity(Sensitivity.DATA) // only for a new item
         assertEquals(Sensitivity.SECRET, vm.uiState.value.draft.sensitivity)
         vm.setFieldText(0, "hunter3")
+        assertFalse(vm.uiState.value.draft.fields.single().kept)
         vm.save()
         advanceUntilIdle()
+        assertFalse("reveal" in items.calls)
         assertEquals(FieldValue.Text("hunter3"), items.stored.getValue("01S").fields.single().value)
+    }
+
+    @Test
+    fun keptNotesAreReplacedByTypingOrRemoved() = runTest {
+        items.add(FakeItems.item("01S", "Login", Sensitivity.SECRET).copy(notes = "branch"))
+        val vm = vm(itemId = "01S")
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.draft.keepNotes)
+        vm.removeNotes()
+        assertFalse(vm.uiState.value.draft.keepNotes)
+        vm.save()
+        advanceUntilIdle()
+        assertNull(items.stored.getValue("01S").notes)
+    }
+
+    @Test
+    fun theRoomLeftComesFromTheStoredSize() = runTest {
+        items.add(FakeItems.item("01S", "Login", Sensitivity.SECRET, fields = listOf("Password" to "x".repeat(5_000))))
+        val expected = com.vettid.core.data.items.ItemChecks.check(
+            com.vettid.core.data.items.ItemDraft.of(items.stored.getValue("01S")),
+        ).size
+        val vm = vm(itemId = "01S")
+        advanceUntilIdle()
+        val c = vm.uiState.value.check
+        assertEquals(expected, c.size)
+        assertTrue(c.exact)
+        assertEquals(com.vettid.core.data.items.ItemChecks.MAX_ITEM_BYTES - expected, c.roomLeft)
+        // An older vault gives no size: nothing is claimed about the room left.
+        items.reportSize = false
+        val older = vm(itemId = "01S")
+        advanceUntilIdle()
+        assertNull(older.uiState.value.check.roomLeft)
+    }
+
+    @Test
+    fun aNamedLimitIsKept() = runTest {
+        items.add(FakeItems.item("01P", "Passport"))
+        val vm = vm(itemId = "01P")
+        advanceUntilIdle()
+        val limit = com.vettid.core.data.vault.VaultLimit("share_pending", 4_096)
+        items.fail["update"] = VaultFailure(FailureKind.LIMIT, "limit", limit = limit)
+        vm.setTagInput("medical")
+        vm.addTag()
+        vm.save()
+        advanceUntilIdle()
+        assertEquals(FailureKind.LIMIT, vm.uiState.value.error)
+        assertEquals(limit, vm.uiState.value.limit)
+        vm.dismissError()
+        assertNull(vm.uiState.value.limit)
+    }
+
+    @Test
+    fun aFileFieldIsNeverOffered() {
+        val vm = vm()
+        val before = vm.uiState.value.draft.fields.size
+        vm.addField("Scan", FieldKinds.FILE)
+        assertEquals(before, vm.uiState.value.draft.fields.size)
     }
 
     @Test
@@ -199,7 +269,52 @@ class ItemEditViewModelTest {
     }
 
     @Test
-    fun tagsShowWhatSavingWouldShare() = runTest {
+    fun theSharingNoticeIsTheVaultsDryRun() = runTest {
+        social.connections.value = listOf(
+            com.vettid.core.data.social.ConnectionInfo("c1", "", com.vettid.core.data.social.ConnectionState.ACTIVE, firstName = "Dana", lastName = "Lee"),
+            com.vettid.core.data.social.ConnectionInfo("c2", "", com.vettid.core.data.social.ConnectionState.ACTIVE, firstName = "Jo", lastName = "Park"),
+        )
+        items.effect = com.vettid.core.data.items.ShareEffect(
+            shares = listOf(
+                com.vettid.core.data.items.EffectShare("r1", com.vettid.core.data.items.ShareSubject("c1"), com.vettid.core.data.items.ShareMode.AUTO),
+                com.vettid.core.data.items.EffectShare("r9", com.vettid.core.data.items.ShareSubject(agentId = "a1"), com.vettid.core.data.items.ShareMode.ASK),
+            ),
+            withdrawals = listOf(com.vettid.core.data.items.EffectWithdrawal("r2", com.vettid.core.data.items.ShareSubject("c2"), "included")),
+        )
+        // The local rules would say otherwise: they are not read while the vault answers the dry run.
+        sharing.rulesStored += com.vettid.core.data.items.ShareRule("r3", 1, "c2", tags = listOf("medical"))
+        val vm = vm(template = "allergies")
+        advanceUntilIdle()
+        assertEquals(listOf(listOf("medical")), items.effectAsked)
+        assertEquals(
+            listOf(ShareImpact("Dana Lee", com.vettid.core.data.items.ShareMode.AUTO), ShareImpact("Jo Park", com.vettid.core.data.items.ShareMode.ASK, withdrawn = true)),
+            vm.uiState.value.shareImpact,
+        )
+        assertFalse("rules" in sharing.calls)
+        // A change of tags asks again (once the member pauses); the same tags do not.
+        vm.setTagInput("travel")
+        vm.addTag()
+        vm.setName("Allergy list")
+        advanceUntilIdle()
+        assertEquals(listOf(listOf("medical"), listOf("medical", "travel")), items.effectAsked)
+    }
+
+    @Test
+    fun anExistingItemsUnchangedTagsAskNothing() = runTest {
+        items.add(FakeItems.item("01P", "Passport", tags = listOf("travel")))
+        val vm = vm(itemId = "01P")
+        advanceUntilIdle()
+        assertTrue(items.effectAsked.isEmpty())
+        vm.setTagInput("id")
+        vm.addTag()
+        advanceUntilIdle()
+        assertEquals(listOf(listOf("id", "travel")), items.effectAsked)
+    }
+
+    @Test
+    fun anOlderVaultsRulesShowWhatSavingWouldShare() = runTest {
+        // Before 0.21.0 the vault refuses the dry run (bad_request): the app matches the rules itself.
+        items.fail["shareEffect"] = VaultFailure(FailureKind.OTHER, "bad_request")
         social.connections.value = listOf(
             com.vettid.core.data.social.ConnectionInfo("c1", "", com.vettid.core.data.social.ConnectionState.ACTIVE, firstName = "Dana", lastName = "Lee"),
         )
@@ -214,9 +329,13 @@ class ItemEditViewModelTest {
         assertEquals(com.vettid.core.data.items.ShareMode.ASK, vm.uiState.value.shareImpact.single().mode)
         vm.setTagInput("travel")
         vm.addTag()
+        advanceUntilIdle()
         assertEquals(2, vm.uiState.value.shareImpact.size)
         vm.removeTag("medical")
+        advanceUntilIdle()
         assertTrue(vm.uiState.value.shareImpact.isEmpty())
+        // The fallback stays: no second dry run.
+        assertEquals(1, items.calls.count { it == "shareEffect" })
     }
 
     @Test

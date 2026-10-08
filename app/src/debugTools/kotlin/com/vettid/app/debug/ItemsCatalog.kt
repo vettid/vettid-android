@@ -126,7 +126,10 @@ internal object ItemsCatalog {
     )
     private val received = listOf(
         GrantView("g5", "c1", GrantDirection.RECEIVED, "x1", "Practice address", "contact"),
-        GrantView("g6", "c1", GrantDirection.RECEIVED, "x2", "Opening hours", "note", uses = 3, used = 1),
+        GrantView(
+            "g6", "c1", GrantDirection.RECEIVED, "x2", "Opening hours", "note", uses = 3, used = 1,
+            labels = listOf(com.vettid.core.data.items.FieldLabel("f1", "Weekdays", "text"), com.vettid.core.data.items.FieldLabel("f2", "Saturday", "text")),
+        ),
         GrantView("g7", "c1", GrantDirection.RECEIVED, "x3", "Old fax number", "contact", state = "revoked"),
     )
     private val opened = mapOf(
@@ -185,7 +188,9 @@ internal object ItemsCatalog {
         "items.shared_with_you_empty" to { SharedWithYouScreen(SharedWithYouUiState("c1", "Dana Lee", loading = false), SharedWithYouActions()) },
         "items.edit_share_impact" to {
             ItemEditScreen(
-                edit(ItemDraft.of(passport), isNew = false).copy(shareImpact = listOf(ShareImpact("Dana Lee", ShareMode.AUTO), ShareImpact("Alex Kim", ShareMode.ASK))),
+                edit(ItemDraft.of(passport), isNew = false).copy(
+                    shareImpact = listOf(ShareImpact("Dana Lee", ShareMode.AUTO), ShareImpact("Alex Kim", ShareMode.ASK), ShareImpact("Jo Park", ShareMode.ASK, withdrawn = true)),
+                ),
                 ItemEditActions(),
             )
         },
@@ -221,7 +226,10 @@ internal object ItemsCatalog {
             val g = com.vettid.core.data.social.Approval.GrantRequest(
                 "g9", "c1",
                 listOf(
-                    com.vettid.core.data.social.GrantEntry("item", passport.itemId, "Your passport", true),
+                    com.vettid.core.data.social.GrantEntry(
+                        "item", passport.itemId, "Your passport", true, name = passport.name, category = passport.category,
+                        labels = passport.fields.take(2).map { com.vettid.core.data.items.FieldLabel(it.fieldId!!, it.label, it.kind) },
+                    ),
                     com.vettid.core.data.social.GrantEntry("category", "insurance", "Your insurance card", false),
                     com.vettid.core.data.social.GrantEntry("item", "01JGONE", "Your visa", false),
                 ),
@@ -288,7 +296,12 @@ internal object ItemsCatalog {
             SharedWithYouScreen(
                 SharedWithYouUiState(
                     "c1", "Dana Lee", received, loading = false,
-                    requested = listOf(com.vettid.core.data.items.GrantAsk("q1", "c1", listOf("Your vaccination record"), "pending")),
+                    requested = listOf(
+                        com.vettid.core.data.items.GrantAsk(
+                            "q1", "c1", listOf(com.vettid.core.data.items.GrantAskEntry("category", "medical", "Your vaccination record")), "pending",
+                        ),
+                        com.vettid.core.data.items.GrantAsk("q2", "c1", listOf(com.vettid.core.data.items.GrantAskEntry("category", "insurance")), "denied"),
+                    ),
                     ask = com.vettid.feature.items.GrantAskForm("medical", "Your vaccination record", "For school"),
                 ),
                 SharedWithYouActions(),
@@ -296,6 +309,46 @@ internal object ItemsCatalog {
         },
         "items.edit_critical_password" to {
             ItemEditScreen(edit(ItemDraft.of(phrase)).copy(prompt = PasswordPrompt(PasswordPurpose.SAVE)), ItemEditActions())
+        },
+        // --- VAULT-MESSAGING 0.21.0: kept values, the room left, named limits, suitability ---
+        "items.edit_secret_kept" to {
+            ItemEditScreen(edit(ItemDraft.of(login.hidden().copy(size = 61_000)), isNew = false), ItemEditActions())
+        },
+        "items.edit_critical_kept" to {
+            ItemEditScreen(edit(ItemDraft.of(phrase.hidden().copy(size = 9_800)), isNew = false), ItemEditActions())
+        },
+        "items.edit_limit" to {
+            ItemEditScreen(
+                edit(ItemDraft.of(passport), isNew = false).copy(
+                    error = FailureKind.LIMIT,
+                    limit = com.vettid.core.data.vault.VaultLimit("share_pending", 4_096),
+                ),
+                ItemEditActions(),
+            )
+        },
+        "approvals.critical_suitable" to {
+            val payload = "SGVsbG8sIFZldHRJRCE="
+            val c = com.vettid.core.data.social.Approval.CriticalUse(
+                "u5", "c1", "Signing key", "Key", "sign", payload,
+                com.vettid.core.data.social.ApprovalParser.payloadSha256(payload)!!, "Sign the lease", t0, t0.plusSeconds(86_400), "Dana Lee",
+                kind = "password",
+            )
+            com.vettid.feature.approvals.ApprovalDetailScreen(
+                com.vettid.feature.approvals.ApprovalDetailUiState(c.key, c),
+                com.vettid.feature.approvals.DecisionActions(),
+            )
+        },
+        "approvals.critical_unsuitable_kind" to {
+            val payload = "SGVsbG8sIFZldHRJRCE="
+            val c = com.vettid.core.data.social.Approval.CriticalUse(
+                "u6", "c1", "Bank login", "Website", "auth", payload,
+                com.vettid.core.data.social.ApprovalParser.payloadSha256(payload)!!, null, t0, t0.plusSeconds(86_400), "Dana Lee",
+                kind = "url",
+            )
+            com.vettid.feature.approvals.ApprovalDetailScreen(
+                com.vettid.feature.approvals.ApprovalDetailUiState(c.key, c),
+                com.vettid.feature.approvals.DecisionActions(),
+            )
         },
     )
 }

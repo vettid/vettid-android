@@ -50,4 +50,35 @@
     <string name="data_strength_fair">Fair</string>
     <string name="data_strength_good">Good</string>
     <string name="data_strength_strong">Strong</string>
+    <!-- `limit` errors by name (VAULT-MESSAGING 0.21.0 §10.1); counts and kilobytes -->
+    <string name="data_limit_items">Your vault is full: it holds at most %1$,d items. Delete some first.</string>
+    <string name="data_limit_critical_items">Your credential is full: it holds at most %1$,d critical items.</string>
+    <string name="data_limit_item_size">This item is too large: an item holds at most %1$,d KB.</string>
+    <string name="data_limit_item_size_of">This item is too large: %1$,d KB, and an item holds at most %2$,d KB.</string>
+    <string name="data_limit_credential_size">Your credential is full: it holds at most %1$,d KB.</string>
+    <string name="data_limit_credential_size_of">Your credential is full: this would make it %1$,d KB, and it holds at most %2$,d KB.</string>
+    <string name="data_limit_profile_items">Your shared profile is full: it holds at most %1$,d items.</string>
+    <string name="data_limit_profile_size">Your shared profile is too large: it holds at most %1$,d KB.</string>
+    <string name="data_limit_profile_size_of">Your shared profile is too large: this would make it %1$,d KB, and it holds at most %2$,d KB.</string>
+    <string name="data_limit_tag_registry">Your vault keeps at most %1$,d tags. Delete one first.</string>
+    <string name="data_limit_app_settings">This app keeps at most %1$,d settings in your vault.</string>
+    <string name="data_limit_share_rules_subject">This connection has the most share rules it can have (%1$,d).</string>
+    <string name="data_limit_share_rules">Your vault has the most share rules it can have (%1$,d). Delete one first.</string>
+    <string name="data_limit_share_pending">Too many items are waiting for your sharing decision (at most %1$,d). Decide some first.</string>
+    <string name="data_limit_grants_given">You share the most items you can (%1$,d). Stop sharing some first.</string>
+    <string name="data_limit_grant_requests">You have asked for the most items you can (%1$,d requests).</string>
+    <string name="data_limit_catalog_requests">Too many lists of shared items are being fetched (at most %1$,d). Try again later.</string>
+    <string name="data_limit_grant_fetches">Too many shared items are being fetched (at most %1$,d). Try again later.</string>
+    <string name="data_limit_held_approvals">Too many requests are waiting for your approval (at most %1$,d).</string>
+    <string name="data_limit_connection_requests">You have sent the most connection requests you can (%1$,d waiting).</string>
+    <string name="data_limit_blocks">Your block list is full: it holds at most %1$,d entries.</string>
+    <string name="data_limit_auth_challenges">Too many identity checks are waiting for this connection (at most %1$,d).</string>
+    <string name="data_limit_agent_grants">This agent has the most permissions it can have (%1$,d).</string>
+    <string name="data_limit_critical_use_requests">Too many requests to use critical items are waiting (at most %1$,d).</string>
+    <string name="data_limit_action_invocations">Too many actions are waiting (at most %1$,d). Try again later.</string>
+    <string name="data_limit_introductions">You have the most open introductions you can (%1$,d).</string>
+    <string name="data_limit_location_shares">You share your location with the most connections you can (%1$,d).</string>
+    <string name="data_limit_location_requests">You asked this connection for their location a short while ago. Try again later.</string>
+    <string name="data_limit_wallets">You have the most wallets you can (%1$,d).</string>
+    <string name="data_limit_wallet_addresses">This wallet has the most addresses it can have (%1$,d).</string>
 </resources>

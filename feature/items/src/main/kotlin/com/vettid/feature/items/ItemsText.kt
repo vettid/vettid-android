@@ -7,12 +7,15 @@ import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
 import com.vettid.core.data.items.DraftProblem
 import com.vettid.core.data.items.FieldKinds
 import com.vettid.core.data.items.Sensitivity
 import com.vettid.core.data.vault.FailureKind
+import com.vettid.core.data.vault.VaultLimit
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.data.vault.message
 
 /** The member-facing names of sensitivities, kinds and categories, and the Vault screens' messages. */
 object ItemsText {
@@ -89,12 +92,21 @@ object ItemsText {
     }
 
     /**
-     * A failure on the Vault screens: the limits of §10.7 and §10.8 in the member's words ([creating]: an add,
-     * where `limit` is the vault's item count; [critical]: the credential's; [profile]: the shared profile's), a
-     * change made on another device (`conflict`), else the app's general message.
+     * A failure on the Vault screens: a `limit` in the member's words from the limit it names ([limit], VAULT-MESSAGING
+     * 0.21.0 §10.1); from an older vault, which names none, the likeliest of §10.7 and §10.8 ([creating]: an add, where
+     * `limit` is the vault's item count; [critical]: the credential's; [profile]: the shared profile's). A change made
+     * on another device (`conflict`), else the app's general message.
      */
     @Composable
-    fun failure(kind: FailureKind, creating: Boolean = false, critical: Boolean = false, profile: Boolean = false): String = when {
+    @Suppress("CyclomaticComplexMethod") // one message per failure
+    fun failure(
+        kind: FailureKind,
+        creating: Boolean = false,
+        critical: Boolean = false,
+        profile: Boolean = false,
+        limit: VaultLimit? = null,
+    ): String = when {
+        kind == FailureKind.LIMIT && limit != null -> limit(limit)
         kind == FailureKind.LIMIT && profile -> stringResource(R.string.items_error_limit_profile)
         kind == FailureKind.LIMIT && creating && critical -> stringResource(R.string.items_error_limit_critical)
         kind == FailureKind.LIMIT && creating -> stringResource(R.string.items_error_limit_items)
@@ -104,4 +116,8 @@ object ItemsText {
         kind == FailureKind.OTHER -> stringResource(R.string.items_error_refused)
         else -> stringResource(kind.messageRes())
     }
+
+    /** A named limit (VAULT-MESSAGING 0.21.0 §10.1) in the member's words, with its bound. */
+    @Composable
+    fun limit(l: VaultLimit): String = l.message(LocalResources.current)
 }

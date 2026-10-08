@@ -704,37 +704,13 @@ class SocialManager(
         nowFlow.value = t
     }
 
-    /**
-     * The share decisions waiting (§10.12): every rule's `pending` items from `share.rule.list`, so that a decision
-     * whose `share.pending` this phone missed (or that another device left open) is still asked. Names come from the
-     * item list; an item not in it yet is shown by its category only when the event named it.
-     */
-    private suspend fun pendingShares(a: VaultApi, t: Instant): List<Approval.ShareDecision> {
-        val out = mutableListOf<Approval.ShareDecision>()
-        val names = itemNames()
-        var after: String? = null
-        do {
-            val page = vaultGuard { a.shareRuleList(after = after) }
-            val rules = (page["rules"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
-            rules.forEach { r ->
-                val id = VaultJson.str(r, "rule_id") ?: return@forEach
-                val pending = (r["pending"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.content }
-                if (pending.isEmpty()) return@forEach
-                val subject = r["subject"] as? JsonObject
-                out += Approval.ShareDecision(
-                    ruleId = id,
-                    subjectConnectionId = subject?.let { VaultJson.str(it, "connection_id") },
-                    subjectAgentId = subject?.let { VaultJson.str(it, "agent_id") },
-                    items = pending.map { i -> names[i] ?: ShareItem(i, "", "other", "data") },
-                    reason = null,
-                    receivedAt = ApprovalParser.instant(VaultJson.str(r, "updated_at")) ?: t,
-                    tags = (r["tags"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.content },
-                )
-            }
-            after = VaultJson.str(page, "next")?.takeIf { rules.isNotEmpty() }
-        } while (after != null)
-        return out
-    }
+    /** The share decisions waiting (§10.12, [SharePending.decisions]). */
+    private suspend fun pendingShares(a: VaultApi, t: Instant): List<Approval.ShareDecision> = SharePending.decisions(
+        pendingPage = { after -> vaultGuard { a.sharePendingList(after = after, limit = SharePending.PAGE) } },
+        rulePage = { after -> vaultGuard { a.shareRuleList(after = after) } },
+        names = itemNames(),
+        t = t,
+    )
 
     private fun merge(stored: List<StoredEvent>, listed: List<Approval>, cs: List<ConnectionInfo>, now: Instant): List<Approval> {
         val names = cs.filter { it.displayName.isNotBlank() }.associate { it.id to it.displayName }
@@ -902,12 +878,20 @@ class SocialManager(
         decideShare(ruleId, include = if (approve) ids else emptyList(), decline = if (approve) emptyList() else ids)
     }
 
-    /** Includes [include] and declines [decline] (§10.12 `share.decide`, one call each); declined items are not asked again. */
+    /**
+     * Includes [include] and declines [decline] in one change (§10.12 `share.decide{include, decline}`, 0.21.0: one
+     * flush, nothing changed on an error); declined items are not asked again. A vault before 0.21.0 refuses that
+     * form (`bad_request`, nothing changed): the two lists then go as two `{items, approve}` calls.
+     */
     override suspend fun decideShare(ruleId: String, include: List<String>, decline: List<String>) {
         if (include.isEmpty() && decline.isEmpty()) throw VaultFailure(FailureKind.OTHER, "bad_request")
-        decide("share:$ruleId") {
-            if (include.isNotEmpty()) it.shareDecide(ruleId, include, true)
-            if (decline.isNotEmpty()) it.shareDecide(ruleId, decline, false)
+        decide("share:$ruleId") { a ->
+            SharePending.decide(
+                include,
+                decline,
+                both = { vaultGuard { a.shareDecide(ruleId, include, decline) } },
+                one = { items, approve -> vaultGuard { a.shareDecide(ruleId, items, approve) } },
+            )
         }
     }
 

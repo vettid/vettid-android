@@ -45,6 +45,7 @@ import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.vault.AccountInfo
 import com.vettid.core.data.vault.NameRequestState
 import com.vettid.core.data.vault.NameRequestView
+import com.vettid.core.data.vault.message
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.DetailCard
 import com.vettid.core.ui.components.FormScaffold
@@ -197,10 +198,12 @@ fun SharedProfileContent(state: SharedProfileUiState, actions: SharedProfileActi
                 )
             }
             state.error?.let {
+                val resources = androidx.compose.ui.platform.LocalResources.current
+                val limit = state.limit?.takeIf { _ -> it == com.vettid.core.data.vault.FailureKind.LIMIT }?.message(resources)
                 NoticeCard(
                     NoticeKind.WARNING,
                     stringResource(R.string.settings_profile_error),
-                    stringResource(it.messageRes()),
+                    limit ?: stringResource(it.messageRes()),
                     actions = { TextButton(onClick = actions.onDismiss) { Text(stringResource(R.string.settings_done)) } },
                 )
             }

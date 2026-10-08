@@ -46,6 +46,9 @@ interface ItemsOps {
 
     suspend fun tag(itemId: String, version: Long, tags: List<String>): Long
 
+    /** `item.put{dry_run: true, item_id?, version?, sensitivity?, tags?}` (§10.7 Dry run, 0.21.0): never the content. */
+    suspend fun putDryRun(itemId: String?, version: Long?, sensitivity: String?, tags: List<String>?): JsonObject
+
     suspend fun sensitivity(itemId: String, version: Long, sensitivity: String, password: String?): Long
 
     suspend fun delete(itemId: String, password: String?)
@@ -82,6 +85,9 @@ internal class VaultItemsOps(private val api: VaultApi) : ItemsOps {
 
     override suspend fun tag(itemId: String, version: Long, tags: List<String>): Long = api.itemTag(itemId, version, tags)
 
+    override suspend fun putDryRun(itemId: String?, version: Long?, sensitivity: String?, tags: List<String>?): JsonObject =
+        api.itemPutDryRun(itemId, version, sensitivity, tags)
+
     override suspend fun sensitivity(itemId: String, version: Long, sensitivity: String, password: String?): Long =
         api.itemSensitivity(itemId, version, sensitivity, password)
 
@@ -91,28 +97,24 @@ internal class VaultItemsOps(private val api: VaultApi) : ItemsOps {
 /**
  * [ItemsRepository] over [ItemsOps]. The list (metadata of every item, at most 2,000) is kept in memory while the
  * vault is open and re-read when another device changes an item (`sync.event` `item.changed`, `item.deleted`,
- * `tag.changed`, §10.1). Values are never kept here, except a revealed critical item handed to its edit screen
- * ([keepOpened]) for at most [OPENED_TTL_MS].
+ * `tag.changed`, §10.1). Values are never kept here: an edit leaves the stored ones in the vault (§10.7 Kept values).
  */
 @Suppress("TooManyFunctions")
 class ItemsManager(
     private val scope: CoroutineScope,
     private val ops: suspend () -> ItemsOps,
-    private val now: () -> Long = System::currentTimeMillis,
 ) : ItemsRepository {
     private val list = MutableStateFlow<List<ItemSummary>>(emptyList())
     private val loadState = MutableStateFlow(ListLoad.NOT_LOADED)
     override val items: StateFlow<List<ItemSummary>> = list.asStateFlow()
     override val load: StateFlow<ListLoad> = loadState.asStateFlow()
     private var pending: Job? = null
-    private var opened: Pair<ItemDetail, Long>? = null
 
     /** Forgets everything (the vault locked, or this phone was wiped). */
     fun clear() {
         pending?.cancel()
         list.value = emptyList()
         loadState.value = ListLoad.NOT_LOADED
-        opened = null
     }
 
     /** The vault opened: the list is read in the background. */
@@ -188,14 +190,40 @@ class ItemsManager(
     }
 
     override suspend fun update(itemId: String, version: Long, draft: ItemDraft): Long {
-        val (content, tags) = content(draft)
+        // Every `item.get` of a secret item from a 0.21.0 vault has `size`: without it, the vault keeps no values.
+        val d = if (draft.keeps && draft.base?.bytes == null) {
+            merged(draft, detail(vaultGuard { ops().reveal(itemId) }))
+        } else {
+            draft
+        }
+        val (content, tags) = content(d)
         val ref = vaultGuard { ops().put(content, null, tags, itemId, version) }
         afterWrite()
         return ref.version
     }
 
+    @Suppress("ReturnCount")
     override suspend fun updateCritical(itemId: String, version: Long, draft: ItemDraft, password: String): Long {
-        val (content, tags) = content(draft.copy(sensitivity = Sensitivity.CRITICAL))
+        val d = draft.copy(sensitivity = Sensitivity.CRITICAL)
+        // A critical item without `size` is kept by an older vault, or not written since the upgrade. Notes kept without
+        // a kept field would pass an older vault, which ignores `keep_notes`, and lose them: the values are opened first.
+        val unsure = d.keeps && d.base?.bytes == null
+        if (unsure && d.fields.none { it.kept }) return putCriticalMerged(itemId, version, d, password)
+        val (content, tags) = content(d)
+        val ref = try {
+            vaultGuard { ops().putCritical(password, content, tags, itemId, version) }
+        } catch (e: VaultFailure) {
+            if (!(unsure && e.kind == FailureKind.OTHER && e.code == CODE_BAD_REQUEST)) throw e
+            return putCriticalMerged(itemId, version, d, password)
+        }
+        afterWrite()
+        return ref.version
+    }
+
+    /** For a vault before 0.21.0: the stored values opened with the same password, merged, and sent in full. */
+    private suspend fun putCriticalMerged(itemId: String, version: Long, d: ItemDraft, password: String): Long {
+        val full = merged(d, revealCritical(itemId, password))
+        val (content, tags) = content(full)
         val ref = vaultGuard { ops().putCritical(password, content, tags, itemId, version) }
         afterWrite()
         return ref.version
@@ -205,7 +233,6 @@ class ItemsManager(
         if (sensitivity == Sensitivity.CRITICAL && password == null) throw VaultFailure(FailureKind.BAD_PASSWORD, "password_required")
         vaultGuard { ops().delete(itemId, password.takeIf { sensitivity == Sensitivity.CRITICAL }) }
         list.update { l -> l.filterNot { it.itemId == itemId } }
-        if (opened?.first?.itemId == itemId) opened = null
     }
 
     override suspend fun setTags(itemId: String, version: Long, tags: List<String>): Long {
@@ -223,14 +250,12 @@ class ItemsManager(
         return v
     }
 
-    override fun keepOpened(detail: ItemDetail) {
-        opened = detail to now()
-    }
-
-    override fun takeOpened(itemId: String): ItemDetail? {
-        val (d, at) = opened ?: return null
-        opened = null
-        return d.takeIf { it.itemId == itemId && now() - at <= OPENED_TTL_MS }
+    override suspend fun shareEffect(itemId: String?, version: Long?, sensitivity: Sensitivity, tags: List<String>): ShareEffect {
+        val n = ItemChecks.normalizeTags(tags) ?: throw VaultFailure(FailureKind.OTHER, CODE_BAD_REQUEST)
+        val o = vaultGuard {
+            ops().putDryRun(itemId, version.takeIf { itemId != null }, sensitivity.wire.takeIf { itemId == null }, n)
+        }
+        return effect(o)
     }
 
     /** A detail read updates its row (the list may be older). */
@@ -242,17 +267,24 @@ class ItemsManager(
         runCatching { refresh() }
     }
 
-    /** The content and tags `item.put` sends (§10.7): names trimmed, tags normalised; refused here if the vault would refuse it. */
+    /**
+     * The content and tags `item.put` sends (§10.7): names trimmed, tags normalised, a kept field without `value` and
+     * kept notes as `keep_notes` (0.21.0); refused here if the vault would refuse it.
+     */
     private fun content(d: ItemDraft): Pair<ItemContent, List<String>> {
         val check = ItemChecks.check(d)
         if (!check.ok) throw VaultFailure(FailureKind.OTHER, CODE_BAD_REQUEST)
-        val fields = d.fields.map { f -> ItemField(f.fieldId, f.label.trim(), f.kind, valueElement(f.value)) }
+        val fields = d.fields.map { f ->
+            val kept = f.kept && f.fieldId != null
+            ItemField(f.fieldId, f.label.trim(), f.kind, if (kept) null else valueElement(f.value))
+        }
         val content = ItemContent(
             name = d.name.trim(),
             category = d.category,
             template = d.template,
             fields = fields,
-            notes = d.notes.takeIf { it.isNotEmpty() },
+            notes = d.notes.takeIf { it.isNotEmpty() && !d.keepNotes },
+            keepNotes = d.keepNotes,
         )
         return content to (check.tags ?: emptyList())
     }
@@ -260,7 +292,6 @@ class ItemsManager(
     companion object {
         /** `item.list`'s largest page (§10.7: 1–500). */
         const val PAGE = 500
-        const val OPENED_TTL_MS = 120_000L
         private const val EVENT_DEBOUNCE_MS = 400L
         private const val CODE_BAD_REQUEST = "bad_request"
 
@@ -313,6 +344,48 @@ class ItemsManager(
                 createdAt = instant(i.createdAt),
                 updatedAt = instant(i.updatedAt),
                 revealed = hasValues,
+                size = i.size?.takeIf { it in 0..Int.MAX_VALUE }?.toInt(),
+            )
+        }
+
+        /**
+         * [d] with its kept values taken from [revealed] (the item's values, opened), for a vault that keeps none
+         * (before 0.21.0). A field the item no longer has keeps "" (or `{}`), as the vault would.
+         */
+        fun merged(d: ItemDraft, revealed: ItemDetail): ItemDraft {
+            val values = revealed.fields.associate { it.fieldId to it.value }
+            return d.copy(
+                fields = d.fields.map { f ->
+                    if (!f.kept) return@map f
+                    when (val v = values[f.fieldId]) {
+                        is FieldValue.Address -> f.copy(address = v.address, kept = false)
+                        is FieldValue.Text -> f.copy(text = v.text, kept = false)
+                        null -> f.copy(kept = false)
+                    }
+                },
+                notes = if (d.keepNotes) revealed.notes.orEmpty() else d.notes,
+                keepNotes = false,
+                base = null,
+            )
+        }
+
+        /** A dry run's answer (§10.7: `{version?, shares, withdrawals}`); entries without `rule_id` are skipped. */
+        fun effect(o: JsonObject): ShareEffect {
+            fun arr(k: String) = (o[k] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+            fun subject(e: JsonObject) = (e["subject"] as? JsonObject).let { s ->
+                ShareSubject(s?.let { VaultJson.str(it, "connection_id") }, s?.let { VaultJson.str(it, "agent_id") })
+            }
+            return ShareEffect(
+                version = VaultJson.long(o, "version"),
+                shares = arr("shares").mapNotNull { e ->
+                    val r = VaultJson.str(e, "rule_id") ?: return@mapNotNull null
+                    val usable = (e["usable"] as? JsonPrimitive)?.takeIf { !it.isString }?.content == "true"
+                    EffectShare(r, subject(e), ShareMode.of(VaultJson.str(e, "mode")), usable)
+                },
+                withdrawals = arr("withdrawals").mapNotNull { e ->
+                    val r = VaultJson.str(e, "rule_id") ?: return@mapNotNull null
+                    EffectWithdrawal(r, subject(e), VaultJson.str(e, "state") ?: "included")
+                },
             )
         }
 

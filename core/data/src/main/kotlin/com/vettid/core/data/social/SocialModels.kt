@@ -203,8 +203,20 @@ data class GrantDecision(
     val expiresInSeconds: Long? = null,
 )
 
-/** An item of a grant request (§10.12): an item the asker names, or a category the member answers. */
-data class GrantEntry(val kind: String, val ref: String, val label: String?, val available: Boolean)
+/**
+ * An item of a grant request (§10.12): an item the asker names, or a category the member answers. [label] is the
+ * asker's own words. For an available `item` entry the member's vault adds the item's current [name], [category] and
+ * the [labels] of the fields it would grant (VAULT-MESSAGING 0.21.0); null from an older vault.
+ */
+data class GrantEntry(
+    val kind: String,
+    val ref: String,
+    val label: String?,
+    val available: Boolean,
+    val name: String? = null,
+    val category: String? = null,
+    val labels: List<com.vettid.core.data.items.FieldLabel>? = null,
+)
 
 /** An item waiting for a share decision (§10.12 `share.pending`). */
 data class ShareItem(val itemId: String, val name: String, val category: String, val sensitivity: String)
@@ -309,8 +321,17 @@ sealed interface Approval {
         override val receivedAt: Instant,
         override val exp: Instant?,
         override val connectionName: String? = null,
+        /** The field's kind (VAULT-MESSAGING 0.21.0 §10.13), as the vault recorded it; null from an older vault. */
+        val kind: String? = null,
     ) : Approval {
         override val key: String get() = "critical:$requestId"
+
+        /**
+         * Whether the field can hold the Ed25519 seed a use needs (§10.13 Suitability: a `password`, `text` or
+         * `multiline` field); null when the vault did not say. A 0.21.0 vault refuses the others at once and never
+         * asks the member; one that still arrives can only be denied.
+         */
+        val suitable: Boolean? get() = kind?.let { it in SUITABLE_KINDS }
 
         /**
          * The payload is here and SHA-256(payload) equals [payloadSha256] (§10.13): only then is
@@ -370,3 +391,6 @@ val Approval.needsDecision: Boolean
 
 /** How long an unanswered incoming connection request is kept (§6.4: 7 days). */
 val CONNECTION_REQUEST_TTL: Duration = Duration.ofDays(7)
+
+/** The field kinds that can hold an Ed25519 seed for a critical-item use (VAULT-MESSAGING 0.21.0 §10.13). */
+val SUITABLE_KINDS: Set<String> = setOf("password", "text", "multiline")

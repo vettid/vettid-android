@@ -27,6 +27,7 @@ class FakeSharing : SharingRepository {
     val rulesStored = mutableListOf<ShareRule>()
     var given = mutableListOf<GrantView>()
     var received = mutableListOf<GrantView>()
+    var requested = mutableListOf<com.vettid.core.data.items.GrantAsk>()
     var preview = RulePreview(emptyList(), 0)
     var change = TagChange(1, 0)
     val contents = mutableMapOf<String, SharedContent>()
@@ -104,7 +105,7 @@ class FakeSharing : SharingRepository {
 
     override suspend fun grants(): GrantLists {
         call("grants")
-        return GrantLists(given.toList(), received.toList())
+        return GrantLists(given.toList(), received.toList(), requested.toList())
     }
 
     override suspend fun revokeGrant(grantId: String) {

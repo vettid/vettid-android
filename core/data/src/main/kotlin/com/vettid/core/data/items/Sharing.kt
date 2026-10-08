@@ -135,6 +135,11 @@ data class GrantView(
     /** `active`, `used`, `expired` or `revoked`. */
     val state: String = STATE_ACTIVE,
     val createdAt: Instant? = null,
+    /**
+     * A received grant's field labels, as the connection's vault described them (`grant.list`, VAULT-MESSAGING 0.21.0
+     * §10.12; not refreshed): what it holds before it is fetched. Empty for a given grant and from an older vault.
+     */
+    val labels: List<FieldLabel> = emptyList(),
 ) {
     val active: Boolean get() = state == STATE_ACTIVE
 
@@ -148,8 +153,35 @@ data class GrantView(
 
 data class GrantLists(val given: List<GrantView>, val received: List<GrantView>, val requested: List<GrantAsk> = emptyList())
 
-/** A request this vault made of a connection (`grant.list`'s `requested`): [state] as the vault reports it. */
-data class GrantAsk(val requestId: String, val connectionId: String, val labels: List<String>, val state: String)
+/** One entry of a request this vault made (§10.12 `grant.request`, as sent): an `item` or a `category` [ref], the asker's [label]. */
+data class GrantAskEntry(val kind: String, val ref: String, val label: String? = null)
+
+/**
+ * A request this vault made of a connection (`grant.list`'s `requested`, §10.12 as 0.21.0 pins it): its [entries]
+ * exactly as sent, and [state] `pending`, `granted` (some entries granted: they arrive as received grants) or
+ * `denied` (denied, or not decided within 7 days).
+ */
+data class GrantAsk(val requestId: String, val connectionId: String, val entries: List<GrantAskEntry>, val state: String)
+
+/** Who a share rule is for (§10.12 `subject`): a connection or an agent. */
+data class ShareSubject(val connectionId: String? = null, val agentId: String? = null)
+
+/** A rule an item would gain (§10.7 Dry run): asked about (`ask`) or included at once (`auto`); [usable] for a critical item. */
+data class EffectShare(val ruleId: String, val subject: ShareSubject, val mode: ShareMode, val usable: Boolean = false)
+
+/** A rule an item would leave, where it is [state] `pending` or `included` (§10.7 Dry run). */
+data class EffectWithdrawal(val ruleId: String, val subject: ShareSubject, val state: String)
+
+/**
+ * What saving an item (or its tags) would do to sharing, as the vault plans it (`item.put` / `item.tag` with
+ * `dry_run`, VAULT-MESSAGING 0.21.0 §10.7): the rules it gains ([shares]) and leaves ([withdrawals]); [version] the
+ * item's current one (null for a new item).
+ */
+data class ShareEffect(
+    val version: Long? = null,
+    val shares: List<EffectShare> = emptyList(),
+    val withdrawals: List<EffectWithdrawal> = emptyList(),
+)
 
 /** What a connection shared with the member, as fetched (§10.12): read-only, the connection's own data. */
 data class SharedContent(
