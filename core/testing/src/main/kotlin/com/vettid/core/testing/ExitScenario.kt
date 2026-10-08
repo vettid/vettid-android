@@ -52,15 +52,32 @@ class ExitScenario(
             name = "Pixel test", relayUrl = stack.relayUrl, http = stack.http, store = store, trust = trust,
             pollWait = Duration.ofSeconds(10), collectMode = collectMode,
         )
-        val device = VaultDevice.create(cfg, secrets)
+        // MEMBER-API 2.0.0 (vettid-vault 0.15.0 and later): the portal issues a setup code, the app redeems it with its
+        // app key and signs every later request with it. An older stand-in (no setup codes) takes the member's guid.
+        val setup = SetupCodes.issue(stack, guid)
+        val key = setup?.let { SoftwareAppKey() }
+        // The app key's public half goes in the enrollment (`app.api_key`, 0.15.0).
+        val withKey = if (key == null) secrets else DeviceSecrets(secrets.identity, secrets.kem, secrets.relay, key.spki())
+        val device = VaultDevice.create(cfg, withKey)
         device.start(scope)
         val vault = VaultApi(device)
-        val member = MemberApiClient(stack.apiBase, stack.manifestUrl, stack.http, MemberAuth.Bearer(guid))
+        var vaultId = ""
+        val auth = if (setup == null || key == null) {
+            MemberAuth.Bearer(guid)
+        } else {
+            val redeemed = MemberApiClient(stack.apiBase, stack.manifestUrl, stack.http, MemberAuth.AppKey(key) { "" })
+                .redeemSecret(setup, key.spki())
+            check(redeemed.userGuid == guid) { "redeemed for ${redeemed.userGuid}" }
+            vaultId = redeemed.vaultId
+            log("setup code redeemed: vault $vaultId")
+            MemberAuth.AppKey(key) { vaultId }
+        }
+        val member = MemberApiClient(stack.apiBase, stack.manifestUrl, stack.http, auth)
         val flow = AltChannelFlow(member, trust)
         try {
             // --- enroll (§11.3): PIN, then the first handshake and the credential password ---
-            // The dev stack's stand-in assigns the vault id itself (no setup code, MEMBER-API 2.0.0 not simulated).
-            val enrolled = flow.enroll(device, "", guid, PIN, attester)
+            // An older stand-in assigns the vault id itself ("").
+            val enrolled = flow.enroll(device, vaultId, guid, PIN, attester)
             check(enrolled.ok) { "enroll refused: ${enrolled.code}" }
             log("enrolled vault ${enrolled.vaultId} on ${enrolled.instanceId}")
             device.awaitEnrolled()
