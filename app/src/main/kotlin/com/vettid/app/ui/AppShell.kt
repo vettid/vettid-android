@@ -49,6 +49,9 @@ import com.vettid.feature.history.ConnectionHistoryRoute
 import com.vettid.feature.history.HistoryHost
 import com.vettid.feature.history.historyDestination
 import com.vettid.feature.items.ItemsHost
+import com.vettid.feature.items.ItemDetailRoute
+import com.vettid.feature.items.ConnectionSharingRoute
+import com.vettid.feature.items.SharedWithYouRoute
 import com.vettid.feature.items.itemsDestination
 import com.vettid.feature.connections.AcceptRoute
 import com.vettid.feature.connections.ConnectionDetailRoute
@@ -213,6 +216,8 @@ fun AppShell(
                                     navController.navigate(ConversationRoute(id)) { launchSingleTop = true }
                                 },
                                 onOpenHistory = { id -> navController.navigate(ConnectionHistoryRoute(id)) { launchSingleTop = true } },
+                                onOpenSharing = { id -> navController.navigate(ConnectionSharingRoute(id)) { launchSingleTop = true } },
+                                onOpenShared = { id -> navController.navigate(SharedWithYouRoute(id)) { launchSingleTop = true } },
                             ),
                         )
                         approvalsDestination(chrome, navigate = navigate, onBack = back)
@@ -251,6 +256,7 @@ fun AppShell(
                                 onAccountClick = { showAccount = true },
                                 onOpenAccountSite = { uri.openUri(portal) },
                                 onOwnerCheck = { holdOff -> asked = if (holdOff) OwnerCheckMode.HOLD_OFF else OwnerCheckMode.VOLUNTARY },
+                                onOpenItem = { id -> navController.navigate(ItemDetailRoute(id)) { launchSingleTop = true } },
                             ),
                         )
                         helpDestination(onBack = { navController.popBackStack() })

@@ -15,6 +15,10 @@ import com.vettid.core.data.items.ItemSummary
 import com.vettid.core.data.items.ItemsRepository
 import com.vettid.core.data.items.ListLoad
 import com.vettid.core.data.items.Sensitivity
+import com.vettid.core.data.items.ShareMode
+import com.vettid.core.data.items.ShareRule
+import com.vettid.core.data.items.SharingRepository
+import com.vettid.core.data.social.ConnectionsRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -269,6 +273,9 @@ class ItemDetailViewModel @Inject constructor(saved: SavedStateHandle, private v
 
 // --- adding and editing ---
 
+/** A connection whose share rule the item would newly match ([connectionName] "" before its names arrived). */
+data class ShareImpact(val connectionName: String, val mode: ShareMode, val usableOnly: Boolean = false)
+
 /** Immutable UI state of the add/edit screen. */
 data class ItemEditUiState(
     val itemId: String? = null,
@@ -288,6 +295,8 @@ data class ItemEditUiState(
     val confirmDiscard: Boolean = false,
     /** Set when saved: the item to show. */
     val savedId: String? = null,
+    /** Share rules the item newly matches with the tags as they are now (the effect shown before saving, §10.7). */
+    val shareImpact: List<ShareImpact> = emptyList(),
 ) {
     val isNew: Boolean get() = itemId == null
 
@@ -307,7 +316,12 @@ class ItemEditViewModel @Inject constructor(
     saved: SavedStateHandle,
     private val items: ItemsRepository,
     @param:ApplicationContext private val context: Context,
+    private val sharing: SharingRepository,
+    private val connections: ConnectionsRepository,
 ) : ViewModel() {
+    private var rules: List<ShareRule> = emptyList()
+    private var savedTags: List<String> = emptyList()
+
     private val route = ItemEditRoute(saved[ItemEditRoute.ARG_ITEM], saved[ItemEditRoute.ARG_TEMPLATE])
     private val state = MutableStateFlow(ItemEditUiState(itemId = route.itemId))
     val uiState: StateFlow<ItemEditUiState> = state.asStateFlow()
@@ -318,6 +332,25 @@ class ItemEditViewModel @Inject constructor(
             setDraft(draft, dirty = false)
         } else {
             load(route.itemId)
+        }
+        viewModelScope.launch {
+            rules = runCatching { sharing.rules() }.getOrDefault(emptyList())
+            impact()
+        }
+    }
+
+    /** The rules (of connections) the item gains with its current tags, as §10.12 matches them. */
+    private fun impact() {
+        val d = state.value.draft
+        val tags = ItemChecks.normalizeTags(d.tags) ?: return
+        val names = connections.connections.value.associate { it.id to it.displayName }
+        val gained = rules.filter { r -> r.connectionId != null && r.matches(tags) && !r.matches(savedTags) }
+        state.update { s ->
+            s.copy(
+                shareImpact = gained.map { r ->
+                    ShareImpact(names[r.connectionId].orEmpty(), r.mode, usableOnly = d.sensitivity == Sensitivity.CRITICAL)
+                },
+            )
         }
     }
 
@@ -348,12 +381,15 @@ class ItemEditViewModel @Inject constructor(
     }
 
     private fun edit(d: ItemDetail) {
+        savedTags = d.tags
         state.update { it.copy(loading = false, needsOpen = false, version = d.version, prompt = null) }
         setDraft(ItemDraft.of(d), dirty = false)
     }
 
-    private fun setDraft(d: ItemDraft, dirty: Boolean = true) =
+    private fun setDraft(d: ItemDraft, dirty: Boolean = true) {
         state.update { it.copy(draft = d, check = ItemChecks.check(d), dirty = it.dirty || dirty, error = null) }
+        impact()
+    }
 
     private fun change(f: (ItemDraft) -> ItemDraft) = setDraft(f(state.value.draft))
 

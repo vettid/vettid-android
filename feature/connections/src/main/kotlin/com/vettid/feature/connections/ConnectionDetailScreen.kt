@@ -73,6 +73,10 @@ data class DetailActions(
     val onDismissNotice: () -> Unit = {},
     /** The connection's History (ANDROID-PLAN 0.1.11: History with the connection preset). */
     val onHistory: () -> Unit = {},
+    /** What this connection can see: share rules and grants (VAULT-ITEMS §6). */
+    val onSharing: () -> Unit = {},
+    /** What this connection shares with the member (received grants, §10.12). */
+    val onSharedWithYou: () -> Unit = {},
 )
 
 /**
@@ -209,6 +213,7 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
             )
         }
         ProfileCard(c)
+        if (c.state == ConnectionState.ACTIVE) SharingCard(name, actions)
         SafetyCard(state)
         AuthCard(state.auth, name, state.busy, c.state == ConnectionState.ACTIVE, actions.onAuthenticate)
         NotesCard(c, actions)
@@ -271,6 +276,20 @@ private fun ProfileCard(c: ConnectionInfo) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+/** Sharing with this connection (VAULT-ITEMS §6): what it can see of the vault, and what it shares with the member. */
+@Composable
+private fun SharingCard(name: String, actions: DetailActions) {
+    DetailCard(Modifier.testTag("sharing_card")) {
+        CardTitle(stringResource(R.string.connections_detail_sharing))
+        TextButton(onClick = actions.onSharing, modifier = Modifier.heightIn(min = Spacing.touchTarget).testTag("open_sharing")) {
+            Text(stringResource(R.string.connections_detail_sharing_mine, name))
+        }
+        TextButton(onClick = actions.onSharedWithYou, modifier = Modifier.heightIn(min = Spacing.touchTarget).testTag("open_shared")) {
+            Text(stringResource(R.string.connections_detail_sharing_theirs, name))
         }
     }
 }

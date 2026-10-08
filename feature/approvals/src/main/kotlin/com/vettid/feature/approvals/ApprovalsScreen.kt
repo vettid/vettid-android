@@ -4,6 +4,11 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material3.Checkbox
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -93,6 +98,7 @@ fun NavGraphBuilder.approvalsDestination(chrome: ShellChrome, navigate: (Any) ->
                 onDeny = vm::deny,
                 onAskBlock = vm::askBlock,
                 onBlock = vm::block,
+                onToggleShareItem = vm::toggleShareItem,
             ),
         )
     }
@@ -210,6 +216,8 @@ data class DecisionActions(
     val onDeny: () -> Unit = {},
     val onAskBlock: (Boolean) -> Unit = {},
     val onBlock: () -> Unit = {},
+    /** Ticks or unticks an item of a share decision. */
+    val onToggleShareItem: (String) -> Unit = {},
 )
 
 /** One approval: what is asked and by whom, then approve or deny (the password when it is a critical action). */
@@ -240,7 +248,7 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
         onBack = actions.onBack,
         modifier = modifier.testTag("approval_detail"),
     ) {
-        Facts(a)
+        if (a is Approval.ShareDecision) ShareFacts(a, state.shareExcluded, actions.onToggleShareItem) else Facts(a)
         if (state.needs == Needs.PASSWORD) {
             Spacer(Modifier.height(Spacing.l))
             SecretField(
@@ -275,6 +283,56 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
             destructive = true,
         )
     }
+}
+
+/**
+ * A share rule's items waiting for the member (§10.12 `share.pending`): ticked items are shared, unticked ones
+ * declined (and not asked again until they gain the rule again); the rule's tags say why they were asked.
+ */
+@Composable
+private fun ShareFacts(a: Approval.ShareDecision, excluded: Set<String>, onToggle: (String) -> Unit) {
+    if (a.tags.isNotEmpty()) {
+        Label(stringResource(R.string.approvals_share_tags))
+        Value(a.tags.joinToString(", "))
+    }
+    a.reason?.let {
+        Text(
+            stringResource(if (it == "rule") R.string.approvals_share_reason_rule else R.string.approvals_share_reason_tagged),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(Spacing.s))
+    }
+    Label(stringResource(R.string.approvals_share_items))
+    a.items.forEach { i ->
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = Spacing.touchTarget)
+                .toggleable(value = i.itemId !in excluded, role = Role.Checkbox, onValueChange = { onToggle(i.itemId) })
+                .testTag("share_item_${i.itemId}"),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(checked = i.itemId !in excluded, onCheckedChange = null)
+            Spacer(Modifier.width(Spacing.m))
+            Column {
+                Text(i.name.ifBlank { stringResource(R.string.approvals_share_unnamed) }, style = MaterialTheme.typography.bodyLarge)
+                if (i.sensitivity == "critical") {
+                    Text(
+                        stringResource(R.string.approvals_share_usable),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+    Spacer(Modifier.height(Spacing.s))
+    Text(
+        stringResource(R.string.approvals_share_note),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
 }
 
 @Composable

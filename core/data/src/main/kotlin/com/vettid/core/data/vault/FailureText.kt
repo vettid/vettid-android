@@ -36,6 +36,7 @@ fun FailureKind.messageRes(): Int = when (this) {
     FailureKind.CREDENTIAL_LOCKED -> R.string.data_failure_credential_locked
     FailureKind.CONFLICT -> R.string.data_failure_conflict
     FailureKind.LIMIT -> R.string.data_failure_limit
+    FailureKind.IN_USE -> R.string.data_failure_in_use
     FailureKind.REJECTED -> R.string.data_failure_rejected
     FailureKind.OWNER_CHECK_REQUIRED -> R.string.data_failure_owner_check_required
     FailureKind.OTHER -> R.string.data_failure_other

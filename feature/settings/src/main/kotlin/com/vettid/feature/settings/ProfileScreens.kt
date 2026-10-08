@@ -117,6 +117,11 @@ data class SharedProfileActions(
     val onSavePhoto: () -> Unit = {},
     val onDiscardPhoto: () -> Unit = {},
     val onRemovePhoto: () -> Unit = {},
+    /** The `@profile` items (§10.8): add one from the Vault, take one out, open one. */
+    val onPickItem: (Boolean) -> Unit = {},
+    val onAddItem: (com.vettid.core.data.items.ItemSummary) -> Unit = {},
+    val onRemoveItem: (com.vettid.core.data.items.ItemSummary) -> Unit = {},
+    val onOpenItem: (String) -> Unit = {},
 )
 
 /**
@@ -210,14 +215,67 @@ fun SharedProfileContent(state: SharedProfileUiState, actions: SharedProfileActi
                     )
                 }
             }
-            Text(
-                stringResource(R.string.settings_profile_items),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            ProfileItemsCard(state, actions)
         }
     }
+    if (state.pickingItem) ProfileItemPicker(state, actions)
 }
+
+/** The items connections see in the shared profile (§10.8: `data` items tagged `@profile`, at most 32). */
+@Composable
+private fun ProfileItemsCard(state: SharedProfileUiState, actions: SharedProfileActions) {
+    DetailCard(Modifier.testTag("profile_items")) {
+        Text(stringResource(R.string.settings_profile_items_title), style = MaterialTheme.typography.labelLarge)
+        Text(
+            stringResource(R.string.settings_profile_items),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (state.profileItems.isEmpty()) {
+            Text(
+                stringResource(R.string.settings_profile_items_none),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("profile_items_none"),
+            )
+        }
+        state.profileItems.forEach { i ->
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.testTag("profile_item_${i.itemId}")) {
+                TextButton(onClick = { actions.onOpenItem(i.itemId) }, modifier = Modifier.weight(1f)) {
+                    Text(i.name, modifier = Modifier.fillMaxWidth())
+                }
+                TextButton(onClick = { actions.onRemoveItem(i) }, enabled = !state.itemsBusy) {
+                    Text(stringResource(R.string.settings_profile_items_remove))
+                }
+            }
+        }
+        TextButton(
+            onClick = { actions.onPickItem(true) },
+            enabled = !state.itemsBusy && state.candidates.isNotEmpty() && state.profileItems.size < MAX_PROFILE_ITEMS,
+            modifier = Modifier.heightIn(min = Spacing.touchTarget).testTag("profile_items_add"),
+        ) { Text(stringResource(R.string.settings_profile_items_add)) }
+    }
+}
+
+@Composable
+private fun ProfileItemPicker(state: SharedProfileUiState, actions: SharedProfileActions) {
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = { actions.onPickItem(false) },
+        title = { Text(stringResource(R.string.settings_profile_items_pick)) },
+        text = {
+            androidx.compose.foundation.lazy.LazyColumn {
+                items(state.candidates.size) { n ->
+                    val i = state.candidates[n]
+                    TextButton(onClick = { actions.onAddItem(i) }, modifier = Modifier.fillMaxWidth()) {
+                        Text(i.name, modifier = Modifier.fillMaxWidth())
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { actions.onPickItem(false) }) { Text(stringResource(R.string.settings_cancel)) } },
+    )
+}
+
+private const val MAX_PROFILE_ITEMS = 32
 
 /** What the change-name flow can ask for. */
 data class ChangeNameActions(

@@ -17,7 +17,12 @@
     <string name="settings_profile_saved">Display name saved. Your connections get it with your profile.</string>
     <string name="settings_profile_key">Your vault key fingerprint</string>
     <string name="settings_profile_key_note">Your connections see this fingerprint for your vault. It changes only when your vault rotates its key.</string>
-    <string name="settings_profile_items">Items you tag @profile in your Vault are shared with every connection too.</string>
+    <string name="settings_profile_items">Every connection sees these items, with all of their fields, as part of your profile. Only standard items can be added.</string>
+    <string name="settings_profile_items_title">Items in your profile</string>
+    <string name="settings_profile_items_none">No items yet</string>
+    <string name="settings_profile_items_add">Add an item from your vault</string>
+    <string name="settings_profile_items_remove">Remove</string>
+    <string name="settings_profile_items_pick">Add to your shared profile</string>
     <string name="settings_profile_error">Could not save</string>
 
     <string name="settings_name_title">Change your name</string>

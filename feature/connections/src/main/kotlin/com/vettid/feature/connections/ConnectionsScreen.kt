@@ -107,6 +107,10 @@ data class ConnectionsHost(
     val onOpenConversation: (String) -> Unit,
     /** The connection's History (history feature). */
     val onOpenHistory: (String) -> Unit = {},
+    /** What the connection can see of the member's vault (items feature). */
+    val onOpenSharing: (String) -> Unit = {},
+    /** What the connection shares with the member (items feature). */
+    val onOpenShared: (String) -> Unit = {},
 )
 
 /** Registers the Connections destinations. */
@@ -161,6 +165,8 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
                 onConfirm = vm::confirm,
                 onDismissNotice = vm::dismissNotice,
                 onHistory = { host.onOpenHistory(state.connectionId) },
+                onSharing = { host.onOpenSharing(state.connectionId) },
+                onSharedWithYou = { host.onOpenShared(state.connectionId) },
             ),
         )
     }

@@ -449,10 +449,12 @@ class VaultApi(val device: VaultDevice) {
     /** Creates or replaces a share rule ([rule] as §10.12: subject, tags, match, mode, ...); returns the rule or a dry run's matches. */
     suspend fun shareRuleSet(rule: JsonObject): JsonObject = device.op("share.rule.set", rule)
 
-    suspend fun shareRuleList(connectionId: String? = null, agentId: String? = null): JsonObject = op("share.rule.list") {
-        connectionId?.let { put("connection_id", it) }
-        agentId?.let { put("agent_id", it) }
-    }
+    suspend fun shareRuleList(connectionId: String? = null, agentId: String? = null, after: String? = null): JsonObject =
+        op("share.rule.list") {
+            connectionId?.let { put("connection_id", it) }
+            agentId?.let { put("agent_id", it) }
+            after?.let { put("after", it) }
+        }
 
     suspend fun shareRuleDelete(ruleId: String) {
         op("share.rule.delete") { put("rule_id", ruleId) }
@@ -665,6 +667,29 @@ class VaultApi(val device: VaultDevice) {
 
     suspend fun grantList(): JsonObject = op("grant.list")
 
+    /**
+     * Fetches a received grant's current content (§10.12): a one-time KEM key for this fetch only, `grant.fetch`,
+     * then the connection's answer in `grant.value` (matched by `fetch_id`), opened and the key destroyed. The
+     * plaintext is the item's content JSON; the caller wipes it. A refusal of the member's vault is [GrantFetched.error].
+     */
+    suspend fun grantFetch(grantId: String, timeout: Duration = Duration.ofSeconds(GRANT_FETCH_WAIT_S)): GrantFetched {
+        val rk = com.vettid.core.crypto.hpke.KemPrivateKey.generate()
+        try {
+            val r = op("grant.fetch") {
+                put("grant_id", grantId)
+                put("reply_key", Base64s.encodeStd(rk.publicKey.bytes()))
+            }
+            val fetchId = VaultJson.str(r, "fetch_id") ?: throw VaultStateException("grant.fetch without fetch_id")
+            val ev = device.awaitEvent("grant.value", timeout) { VaultJson.str(it, "fetch_id") == fetchId }.body
+            VaultJson.str(ev, "error")?.let { return GrantFetched(grantId, null, null, it) }
+            val sealed = VaultJson.str(ev, "value_sealed") ?: throw VaultStateException("grant.value without value_sealed")
+            val pt = com.vettid.core.crypto.grant.GrantSeal.openValue(rk, grantId, fetchId, Base64s.decodeStd(sealed))
+            return GrantFetched(grantId, pt, VaultJson.long(ev, "uses_left"), null)
+        } finally {
+            rk.destroy()
+        }
+    }
+
     suspend fun grantRevoke(grantId: String) {
         op("grant.revoke") { put("grant_id", grantId) }
     }
@@ -768,6 +793,7 @@ class VaultApi(val device: VaultDevice) {
         const val TYPE_OWNER_CHECK = "vault.owner-check"
         const val TYPE_ACCOUNT_NAME_SET = "account.name.set"
         private const val AWAIT_S = 90L
+        private const val GRANT_FETCH_WAIT_S = 60L
         val APPROVAL_TYPES = setOf(
             "connection.request.pending", "connection.request.outgoing", "grant.pending", "critical-secret-use.pending",
             "share.pending", "approval.pending",

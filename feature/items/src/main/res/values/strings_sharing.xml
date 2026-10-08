@@ -1,0 +1,150 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tags (VAULT-MESSAGING §10.8) -->
+    <string name="items_tags_manage">Manage tags</string>
+    <string name="items_tags_title">Tags</string>
+    <string name="items_tags_new">New tag</string>
+    <string name="items_tags_edit">Edit tag</string>
+    <string name="items_tags_name">Tag</string>
+    <string name="items_tags_description">Description (optional)</string>
+    <string name="items_tags_delete">Delete tag</string>
+    <string name="items_tags_rename">Rename</string>
+    <string name="items_tags_rename_title">Rename %1$s to %2$s?</string>
+    <string name="items_tags_delete_title">Delete the tag %1$s?</string>
+    <string name="items_tags_empty_title">No tags yet</string>
+    <string name="items_tags_empty_body">Tags organise your items and decide what you share with each connection</string>
+    <string name="items_tag_profile_note">Every connection sees these items in your profile</string>
+    <plurals name="items_tag_items">
+        <item quantity="one">%1$d item</item>
+        <item quantity="other">%1$d items</item>
+    </plurals>
+    <plurals name="items_tag_rules">
+        <item quantity="one">used by %1$d sharing rule</item>
+        <item quantity="other">used by %1$d sharing rules</item>
+    </plurals>
+    <plurals name="items_tags_used_by_rules">
+        <item quantity="one">%1$d sharing rule uses this tag: it cannot be deleted while it does, and renaming it changes the rule too.</item>
+        <item quantity="other">%1$d sharing rules use this tag: it cannot be deleted while they do, and renaming it changes the rules too.</item>
+    </plurals>
+    <plurals name="items_tags_change_items">
+        <item quantity="one">This changes %1$d item.</item>
+        <item quantity="other">This changes %1$d items.</item>
+    </plurals>
+    <plurals name="items_tags_change_shared">
+        <item quantity="one">%1$d item is then shared automatically.</item>
+        <item quantity="other">%1$d items are then shared automatically.</item>
+    </plurals>
+    <plurals name="items_tags_change_asked">
+        <item quantity="one">You will be asked about sharing %1$d item.</item>
+        <item quantity="other">You will be asked about sharing %1$d items.</item>
+    </plurals>
+
+    <!-- What a connection can see (VAULT-ITEMS §6, VAULT-MESSAGING §10.12) -->
+    <string name="items_sharing_this_connection">this connection</string>
+    <string name="items_sharing_title">What %1$s can see</string>
+    <string name="items_sharing_body">%1$s sees only the items you share, never your tags or rules.</string>
+    <string name="items_sharing_rules">Sharing by tag</string>
+    <string name="items_sharing_no_rules">You share nothing with %1$s by tag.</string>
+    <string name="items_sharing_new_rule">Share items by tag</string>
+    <string name="items_sharing_pending_title">Waiting for you</string>
+    <plurals name="items_sharing_pending_body">
+        <item quantity="one">%1$d item waits for your decision in Approvals.</item>
+        <item quantity="other">%1$d items wait for your decision in Approvals.</item>
+    </plurals>
+    <string name="items_sharing_can_see">What %1$s can fetch now</string>
+    <string name="items_sharing_nothing">%1$s can fetch nothing from your vault.</string>
+    <string name="items_sharing_usable">%1$s: can ask you to use it, never read it</string>
+    <string name="items_sharing_revoke">Revoke</string>
+    <string name="items_sharing_revoke_title">Stop sharing %1$s?</string>
+    <string name="items_sharing_revoke_body">%1$s can no longer fetch it.</string>
+    <string name="items_sharing_revoke_body_rule">%1$s can no longer fetch it. The sharing rule stays as it is: change the item\'s tags or the rule to keep it from being shared again.</string>
+    <string name="items_deleted_item">Deleted item</string>
+    <string name="items_grant_by_rule">By a tag rule</string>
+    <string name="items_grant_one_off">Asked for once</string>
+    <plurals name="items_grant_uses_left">
+        <item quantity="one">%1$d fetch left</item>
+        <item quantity="other">%1$d fetches left</item>
+    </plurals>
+
+    <!-- A share rule -->
+    <string name="items_rule_new_title">Share by tag</string>
+    <string name="items_rule_edit_title">Sharing rule</string>
+    <string name="items_rule_body">Items with these tags can be read by %1$s. Your tags stay private.</string>
+    <string name="items_rule_tags">Tags</string>
+    <string name="items_rule_no_tags">Add tags to your items first: a rule shares by tag.</string>
+    <string name="items_rule_match_any">Items with any of these tags</string>
+    <string name="items_rule_match_all">Only items with all of these tags</string>
+    <string name="items_rule_match_any_short">Any of these tags</string>
+    <string name="items_rule_match_all_short">All of these tags</string>
+    <string name="items_rule_mode">When an item gets one of these tags</string>
+    <string name="items_rule_mode_ask">Ask me for each new item</string>
+    <string name="items_rule_mode_ask_note">You decide in Approvals before anything is shared</string>
+    <string name="items_rule_mode_auto">Share automatically</string>
+    <string name="items_rule_mode_auto_note">New items with these tags are shared at once</string>
+    <string name="items_rule_existing">Include items that already have these tags</string>
+    <string name="items_rule_existing_note">Off: only items that get these tags from now on</string>
+    <string name="items_rule_uses">Fetches per item (optional)</string>
+    <string name="items_rule_uses_note">Empty: no limit; every fetch is recorded</string>
+    <string name="items_rule_uses_bad">Between 1 and 10,000</string>
+    <string name="items_rule_expiry">Ends</string>
+    <string name="items_rule_expiry_never">Never</string>
+    <string name="items_rule_expiry_month">In 30 days</string>
+    <string name="items_rule_expiry_year">In a year</string>
+    <string name="items_rule_until">until %1$s</string>
+    <plurals name="items_rule_uses">
+        <item quantity="one">%1$d fetch per item</item>
+        <item quantity="other">%1$d fetches per item</item>
+    </plurals>
+    <plurals name="items_rule_included">
+        <item quantity="one">%1$d shared</item>
+        <item quantity="other">%1$d shared</item>
+    </plurals>
+    <plurals name="items_rule_pending">
+        <item quantity="one">%1$d waiting</item>
+        <item quantity="other">%1$d waiting</item>
+    </plurals>
+    <plurals name="items_rule_declined">
+        <item quantity="one">%1$d declined</item>
+        <item quantity="other">%1$d declined</item>
+    </plurals>
+    <string name="items_rule_change">Change</string>
+    <string name="items_rule_save">Save rule</string>
+    <string name="items_rule_delete">Delete rule</string>
+    <string name="items_rule_delete_title">Delete this sharing rule?</string>
+    <string name="items_rule_delete_body">%1$s can no longer fetch the items it shared.</string>
+    <string name="items_rule_preview">What it matches now</string>
+    <string name="items_rule_preview_none">Choose at least one tag</string>
+    <plurals name="items_rule_preview_ask">
+        <item quantity="one">%1$d item matches: you will be asked about it.</item>
+        <item quantity="other">%1$d items match: you will be asked about each.</item>
+    </plurals>
+    <plurals name="items_rule_preview_auto">
+        <item quantity="one">%1$d item matches and will be shared.</item>
+        <item quantity="other">%1$d items match and will be shared.</item>
+    </plurals>
+    <string name="items_rule_preview_later">They count only if they get a tag again; new items count from now.</string>
+    <string name="items_rule_preview_usable">%1$s (critical: usable only, never readable)</string>
+    <string name="items_rule_preview_more">and %1$d more</string>
+
+    <!-- The effect of tags before saving an item -->
+    <string name="items_impact_title">Sharing</string>
+    <string name="items_impact_auto">Saving shares this item with %1$s automatically.</string>
+    <string name="items_impact_ask">You will be asked whether to share this item with %1$s.</string>
+    <string name="items_impact_usable">%1$s will be able to ask you to use this item, never read it.</string>
+
+    <!-- Shared with you -->
+    <string name="items_shared_title">Shared by %1$s</string>
+    <string name="items_shared_body">What %1$s shares with you, as they entered it. It is theirs: you can read it here, not change it.</string>
+    <string name="items_shared_none">%1$s shares nothing with you.</string>
+    <string name="items_shared_by">shared by %1$s</string>
+    <string name="items_shared_fetch">Show</string>
+    <string name="items_shared_fetching">Asking…</string>
+    <string name="items_shared_ended">No longer shared</string>
+    <string name="items_shared_give_up">Remove</string>
+    <string name="items_shared_give_up_title">Remove %1$s?</string>
+    <string name="items_shared_give_up_body">You can no longer see it, and %1$s is told.</string>
+    <string name="items_shared_refused_revoked">They stopped sharing it.</string>
+    <string name="items_shared_refused_expired">The sharing ended.</string>
+    <string name="items_shared_refused_exhausted">No fetches are left.</string>
+    <string name="items_shared_refused_unavailable">It is not available any more.</string>
+</resources>

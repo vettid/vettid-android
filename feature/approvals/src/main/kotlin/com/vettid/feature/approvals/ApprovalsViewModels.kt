@@ -80,6 +80,8 @@ data class ApprovalDetailUiState(
     /** It left the list without a decision here (decided on another device, or expired). */
     val gone: Boolean = false,
     val error: FailureKind? = null,
+    /** A share decision's items the member unticked: declined, the rest included (§10.12). */
+    val shareExcluded: Set<String> = emptySet(),
 ) {
     /** Critical actions ask for the credential password (ANDROID-PLAN §4). */
     val needs: Needs get() = when (approval) {
@@ -95,6 +97,7 @@ data class ApprovalDetailUiState(
         is Approval.OutgoingRequest -> a.state == RequestState.PENDING && a.sas != null
         // §10.13: only a payload that matches its hash, shown to the member, can be approved.
         is Approval.CriticalUse -> a.payloadVerified && password.isNotEmpty()
+        is Approval.ShareDecision -> a.items.any { it.itemId !in shareExcluded }
         else -> needs == Needs.NOTHING || password.isNotEmpty()
     }
 
@@ -138,6 +141,11 @@ class ApprovalDetailViewModel @Inject constructor(
 
     fun askBlock(show: Boolean) = local.update { it.copy(confirmBlock = show) }
 
+    /** Ticks or unticks one item of a share decision. */
+    fun toggleShareItem(itemId: String) = local.update { s ->
+        s.copy(shareExcluded = if (itemId in s.shareExcluded) s.shareExcluded - itemId else s.shareExcluded + itemId)
+    }
+
     fun approve() {
         val s = local.value.copy(approval = uiState.value.approval ?: local.value.approval)
         val a = s.approval ?: return
@@ -150,7 +158,10 @@ class ApprovalDetailViewModel @Inject constructor(
                 is Approval.Authentication -> repo.approveAuthentication(a.requestId, pw)
                 is Approval.GrantRequest -> repo.decideGrant(a.requestId, approve = true)
                 is Approval.CriticalUse -> repo.approveCriticalUse(a.requestId, pw)
-                is Approval.ShareDecision -> repo.decideShare(a.ruleId, approve = true)
+                is Approval.ShareDecision -> {
+                    val ids = a.items.map { it.itemId }
+                    repo.decideShare(a.ruleId, include = ids - s.shareExcluded, decline = ids.filter { it in s.shareExcluded })
+                }
                 is Approval.DeviceRequest -> Unit
             }
         }

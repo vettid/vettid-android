@@ -53,6 +53,8 @@ class SocialManager(
     private val credential: CredentialRepository,
     private val store: DeviceStateStore,
     private val clock: Clock = Clock.systemUTC(),
+    /** The member's items by id (the Vault list): names for the share decisions read from the rules (§10.12). */
+    private val itemNames: () -> Map<String, ShareItem> = { emptyMap() },
 ) : ConnectionsRepository, MessagesRepository, ApprovalsRepository {
     private val mutex = Mutex()
     private var local: Local = load()
@@ -657,6 +659,7 @@ class SocialManager(
 
     // --- ApprovalsRepository ---
 
+    @Suppress("CyclomaticComplexMethod")
     override suspend fun refreshApprovals() {
         val t = now()
         val a = vaultGuard { api() }
@@ -678,6 +681,12 @@ class SocialManager(
         } catch (_: VaultFailure) {
             // as above
         }
+        val sharesOk = try {
+            listed += pendingShares(a, t)
+            true
+        } catch (_: VaultFailure) {
+            false
+        }
         listedFlow.value = listed
         // The lists are authoritative for what they cover: drop decided or expired requests kept from events.
         val keys = listed.map { it.key }.toSet()
@@ -685,7 +694,8 @@ class SocialManager(
             l.copy(
                 events = l.events.filter { e ->
                     val p = parsed(e) ?: return@filter false
-                    val stale = (p is Approval.GrantRequest && grantsOk) || (p is Approval.CriticalUse && criticalOk)
+                    val stale = (p is Approval.GrantRequest && grantsOk) || (p is Approval.CriticalUse && criticalOk) ||
+                        (p is Approval.ShareDecision && sharesOk)
                     val exp = p.exp
                     (!stale || p.key in keys) && (exp == null || exp.isAfter(t))
                 },
@@ -694,11 +704,54 @@ class SocialManager(
         nowFlow.value = t
     }
 
+    /**
+     * The share decisions waiting (§10.12): every rule's `pending` items from `share.rule.list`, so that a decision
+     * whose `share.pending` this phone missed (or that another device left open) is still asked. Names come from the
+     * item list; an item not in it yet is shown by its category only when the event named it.
+     */
+    private suspend fun pendingShares(a: VaultApi, t: Instant): List<Approval.ShareDecision> {
+        val out = mutableListOf<Approval.ShareDecision>()
+        val names = itemNames()
+        var after: String? = null
+        do {
+            val page = vaultGuard { a.shareRuleList(after = after) }
+            val rules = (page["rules"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+            rules.forEach { r ->
+                val id = VaultJson.str(r, "rule_id") ?: return@forEach
+                val pending = (r["pending"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.content }
+                if (pending.isEmpty()) return@forEach
+                val subject = r["subject"] as? JsonObject
+                out += Approval.ShareDecision(
+                    ruleId = id,
+                    subjectConnectionId = subject?.let { VaultJson.str(it, "connection_id") },
+                    subjectAgentId = subject?.let { VaultJson.str(it, "agent_id") },
+                    items = pending.map { i -> names[i] ?: ShareItem(i, "", "other", "data") },
+                    reason = null,
+                    receivedAt = ApprovalParser.instant(VaultJson.str(r, "updated_at")) ?: t,
+                    tags = (r["tags"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.content },
+                )
+            }
+            after = VaultJson.str(page, "next")?.takeIf { rules.isNotEmpty() }
+        } while (after != null)
+        return out
+    }
+
     private fun merge(stored: List<StoredEvent>, listed: List<Approval>, cs: List<ConnectionInfo>, now: Instant): List<Approval> {
         val names = cs.filter { it.displayName.isNotBlank() }.associate { it.id to it.displayName }
         val fromEvents = stored.mapNotNull(::parsed)
-        // Events carry what lists leave out (a critical request's payload): they win for the same key.
-        val all = (fromEvents + listed.filter { l -> fromEvents.none { it.key == l.key } })
+        // Events carry what lists leave out (a critical request's payload): they win for the same key. A share
+        // decision's event names its items; the rule's list says which are still pending, with the rule's tags.
+        val listedShares = listed.filterIsInstance<Approval.ShareDecision>().associateBy { it.key }
+        val events = fromEvents.map { e ->
+            val l = listedShares[e.key]
+            if (e is Approval.ShareDecision && l != null) {
+                val named = e.items.associateBy { it.itemId }
+                e.copy(items = l.items.map { named[it.itemId] ?: it }, tags = l.tags)
+            } else {
+                e
+            }
+        }
+        val all = (events + listed.filter { l -> events.none { it.key == l.key } })
             .filter { a -> a.exp?.isAfter(now) ?: true }
             .distinctBy { it.key }
         return all.map { a -> withName(a, names) }.sortedByDescending { it.receivedAt }
@@ -821,7 +874,17 @@ class SocialManager(
 
     override suspend fun decideShare(ruleId: String, approve: Boolean) {
         val req = find("share:$ruleId") as? Approval.ShareDecision ?: throw VaultFailure(FailureKind.NOT_FOUND)
-        decide("share:$ruleId") { it.shareDecide(ruleId, req.items.map { i -> i.itemId }, approve) }
+        val ids = req.items.map { i -> i.itemId }
+        decideShare(ruleId, include = if (approve) ids else emptyList(), decline = if (approve) emptyList() else ids)
+    }
+
+    /** Includes [include] and declines [decline] (§10.12 `share.decide`, one call each); declined items are not asked again. */
+    override suspend fun decideShare(ruleId: String, include: List<String>, decline: List<String>) {
+        if (include.isEmpty() && decline.isEmpty()) throw VaultFailure(FailureKind.OTHER, "bad_request")
+        decide("share:$ruleId") {
+            if (include.isNotEmpty()) it.shareDecide(ruleId, include, true)
+            if (decline.isNotEmpty()) it.shareDecide(ruleId, decline, false)
+        }
     }
 
     override suspend fun declineDeviceRequest(key: String) {

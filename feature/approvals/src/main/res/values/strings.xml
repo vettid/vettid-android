@@ -89,7 +89,14 @@
     <string name="approvals_operation_auth">Sign in (authenticate)</string>
     <string name="approvals_payload">Data to sign (base64)</string>
     <string name="approvals_share_body">A share rule asks whether to share these items with %1$s.</string>
-    <string name="approvals_share_approve">Share them</string>
+    <string name="approvals_share_approve">Share the ticked items</string>
+    <string name="approvals_share_tags">Because they carry</string>
+    <string name="approvals_share_reason_rule">You just made or changed this sharing rule.</string>
+    <string name="approvals_share_reason_tagged">These items just gained one of the rule\'s tags.</string>
+    <string name="approvals_share_items">Items</string>
+    <string name="approvals_share_unnamed">An item in your vault</string>
+    <string name="approvals_share_usable">Critical: they can ask to use it, never read it</string>
+    <string name="approvals_share_note">Unticked items are not shared and you are not asked about them again unless their tags change.</string>
     <string name="approvals_device_body">A desktop or agent of yours asks for a decision.</string>
     <string name="approvals_device">Device</string>
     <string name="approvals_request">Request</string>
