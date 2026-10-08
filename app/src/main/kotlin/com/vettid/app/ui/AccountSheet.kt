@@ -2,15 +2,14 @@ package com.vettid.app.ui
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
-import androidx.compose.material.icons.outlined.Badge
 import androidx.compose.material.icons.outlined.CardMembership
 import androidx.compose.material.icons.outlined.Gavel
+import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.HowToVote
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Person
-import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
@@ -30,14 +29,17 @@ import com.vettid.core.ui.components.SettingsInfoRow
 import com.vettid.core.ui.components.SettingsRow
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.theme.Spacing
+import com.vettid.feature.settings.SharedProfileIcon
 import com.vettid.feature.settings.nameStatusText
 import java.time.Instant
 
 /**
- * Avatar sheet (ANDROID-PLAN §4, 0.1.10): the name on the member's VettID account (read-only, from the vault's
- * account snapshot: every connection sees it) with "Change name" (the only place it changes, VAULT-MESSAGING 0.18.0
- * §10.8) and the shared profile; vault status, lock vault, the membership and subscription (read-only, §11.13), and
- * the account portal in the browser, where the other changes are made. The app never signs in: no sign-out.
+ * Avatar sheet (ANDROID-PLAN §4, 0.1.10): "Lock vault" first, right under the name (owner feedback 2026-10-08: at the
+ * bottom it was cut off on a phone); the name on the member's VettID account (read-only, from the vault's account
+ * snapshot: every connection sees it) with "Change name" (the only place it changes, VAULT-MESSAGING 0.18.0 §10.8)
+ * and the shared profile; the membership and subscription (read-only, §11.13), vault status, and the account portal
+ * in the browser, where the other changes are made. The sheet scrolls ([AvatarSheet]). The app never signs in: no
+ * sign-out.
  */
 @Suppress("LongParameterList")
 @Composable
@@ -51,7 +53,6 @@ fun AccountSheet(
     onSharedProfile: () -> Unit = {},
     photo: androidx.compose.ui.graphics.ImageBitmap? = null,
 ) {
-    val uri = LocalUriHandler.current
     AvatarSheet(
         photo = photo,
         // First and last name and the full address (owner feedback 2026-10-07; `email` from VAULT-MESSAGING 0.20.0,
@@ -61,28 +62,52 @@ fun AccountSheet(
         onDismiss = onDismiss,
         optionsHeader = stringResource(R.string.account_options),
     ) {
-        AccountNamesGroup(account, now, onChangeName, onSharedProfile)
-        AccountEmailGroup(account)
-        AccountDetails(account, now)
-        SettingsGroup {
-            SettingsRow(
-                label = stringResource(R.string.account_vault_status),
-                supporting = stringResource(R.string.account_vault_status_value),
-                onClick = {},
-                icon = Icons.Outlined.Storage,
-                showChevron = false,
-            )
-            SettingsDivider()
-            SettingsRow(stringResource(R.string.account_lock_vault), onLockVault, icon = Icons.Outlined.Lock, showChevron = false)
-            SettingsDivider()
-            SettingsRow(
-                stringResource(R.string.account_portal),
-                { uri.openUri(portalUrl) },
-                icon = Icons.AutoMirrored.Outlined.OpenInNew,
-                showChevron = false,
-                supporting = stringResource(R.string.account_portal_body),
-            )
-        }
+        AccountSheetOptions(account, portalUrl, onLockVault, now, onChangeName, onSharedProfile)
+    }
+}
+
+/** The avatar sheet's option groups, in order: lock, names and shared profile, address, membership, vault and portal. */
+@Suppress("LongParameterList")
+@Composable
+fun AccountSheetOptions(
+    account: AccountInfo?,
+    portalUrl: String,
+    onLockVault: () -> Unit,
+    now: Instant = Instant.now(),
+    onChangeName: () -> Unit = {},
+    onSharedProfile: () -> Unit = {},
+) {
+    val uri = LocalUriHandler.current
+    SettingsGroup(Modifier.testTag("account_lock")) {
+        SettingsRow(
+            stringResource(R.string.account_lock_vault),
+            onLockVault,
+            icon = Icons.Outlined.Lock,
+            showChevron = false,
+            supporting = stringResource(R.string.account_lock_vault_body),
+            modifier = Modifier.testTag("account_lock_vault"),
+        )
+    }
+    AccountNamesGroup(account, now, onChangeName, onSharedProfile)
+    AccountEmailGroup(account)
+    AccountDetails(account, now)
+    SettingsGroup(Modifier.testTag("account_vault")) {
+        SettingsRow(
+            label = stringResource(R.string.account_vault_status),
+            supporting = stringResource(R.string.account_vault_status_value),
+            onClick = {},
+            icon = Icons.Outlined.Storage,
+            showChevron = false,
+        )
+        SettingsDivider()
+        SettingsRow(
+            stringResource(R.string.account_portal),
+            { uri.openUri(portalUrl) },
+            icon = Icons.AutoMirrored.Outlined.OpenInNew,
+            showChevron = false,
+            supporting = stringResource(R.string.account_portal_body),
+            modifier = Modifier.testTag("account_portal"),
+        )
     }
 }
 
@@ -118,7 +143,7 @@ fun AccountNamesGroup(account: AccountInfo?, now: Instant, onChangeName: () -> U
         SettingsRow(
             stringResource(R.string.account_shared_profile),
             onSharedProfile,
-            icon = Icons.Outlined.Share,
+            icon = SharedProfileIcon,
             supporting = stringResource(R.string.account_shared_profile_body),
             modifier = Modifier.testTag("account_shared_profile"),
         )
@@ -160,7 +185,7 @@ fun AccountDetails(account: AccountInfo?, now: Instant) {
             SettingsInfoRow(
                 stringResource(R.string.account_membership),
                 stringResource(R.string.account_membership_waiting),
-                icon = Icons.Outlined.Badge,
+                icon = Icons.Outlined.Groups,
             )
         }
         return
@@ -174,7 +199,7 @@ fun AccountDetails(account: AccountInfo?, now: Instant) {
                 account.state == STATE_MEMBER -> stringResource(R.string.account_membership_member)
                 else -> stringResource(R.string.account_membership_registered)
             },
-            icon = Icons.Outlined.Badge,
+            icon = Icons.Outlined.Groups,
         )
         SettingsDivider()
         SettingsInfoRow(

@@ -22,7 +22,6 @@ import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Password
-import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.PhonelinkSetup
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Share
@@ -146,23 +145,27 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
     }
     composable<SharedProfileRoute> {
         val vm: SharedProfileViewModel = hiltViewModel()
+        val capture: PhotoCaptureViewModel = hiltViewModel()
         val state by vm.uiState.collectAsStateWithLifecycle()
-        val context = androidx.compose.ui.platform.LocalContext.current
         val scope = androidx.compose.runtime.rememberCoroutineScope()
-        // The Photo Picker: no storage permission; the chosen picture is cropped, scaled and re-encoded off the
-        // main thread, then previewed (VAULT-MESSAGING §10.8: at most 65,536 bytes).
-        val picker = androidx.activity.compose.rememberLauncherForActivityResult(
-            androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia(),
-        ) { uri ->
-            if (uri != null) {
-                vm.photoEncoding()
-                scope.launch {
-                    val encoded = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
-                        PhotoPicking.encode(context, uri)
+        // The profile photo is taken with the in-app camera, never chosen from the gallery (owner feedback
+        // 2026-10-08). Saved across process death: the screen comes back to the live camera (the shot is never stored).
+        var capturing by rememberSaveable { mutableStateOf(false) }
+        if (capturing) {
+            PhotoCaptureScreen(
+                capture.machine,
+                onClose = { capturing = false },
+                onUse = { shot ->
+                    capturing = false
+                    // Cropped, scaled and re-encoded off the main thread (VAULT-MESSAGING §10.8: at most 65,536 bytes).
+                    vm.photoEncoding()
+                    scope.launch {
+                        val encoded = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) { encodeShot(shot) }
+                        vm.photoTaken(encoded)
                     }
-                    vm.photoPicked(encoded)
-                }
-            }
+                },
+            )
+            return@composable
         }
         SharedProfileContent(
             state,
@@ -172,12 +175,9 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 onSave = vm::save,
                 onChangeName = { host.navigate(ChangeNameRoute) },
                 onDismiss = vm::dismiss,
-                onChoosePhoto = {
-                    picker.launch(
-                        androidx.activity.result.PickVisualMediaRequest(
-                            androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia.ImageOnly,
-                        ),
-                    )
+                onTakePhoto = {
+                    capture.machine.reset()
+                    capturing = true
                 },
                 onSavePhoto = vm::savePhoto,
                 onDiscardPhoto = vm::discardPhoto,
@@ -423,7 +423,7 @@ fun SettingsContent(
                 SettingsRow(
                     stringResource(R.string.settings_privacy_profile),
                     actions.sharedProfile,
-                    icon = Icons.Outlined.Person,
+                    icon = SharedProfileIcon,
                     supporting = state.account?.fullName ?: stringResource(R.string.settings_privacy_profile_body),
                     modifier = Modifier.testTag("shared_profile_row"),
                 )

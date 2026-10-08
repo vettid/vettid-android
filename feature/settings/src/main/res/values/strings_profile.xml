@@ -68,13 +68,33 @@
     <string name="settings_profile_photo_shared">Every connection sees this photo.</string>
     <string name="settings_profile_photo_preview">Preview: save it to share it with every connection.</string>
     <string name="settings_profile_photo_working">Working…</string>
-    <string name="settings_profile_photo_choose">Choose photo</string>
+    <string name="settings_profile_photo_take">Take a photo</string>
+    <string name="settings_profile_photo_retake">Retake photo</string>
     <string name="settings_profile_photo_save">Save photo</string>
     <string name="settings_profile_photo_discard">Cancel</string>
     <string name="settings_profile_photo_remove">Remove photo</string>
     <string name="settings_profile_photo_remove_title">Remove your photo?</string>
     <string name="settings_profile_photo_remove_body">Your connections see your initial instead.</string>
-    <string name="settings_profile_photo_unreadable">That picture could not be read. Choose another one.</string>
+    <string name="settings_profile_photo_unreadable">That photo could not be used. Take another one.</string>
     <string name="settings_profile_photo_saved">Photo saved. Your connections receive it.</string>
-    <string name="settings_profile_photo_note">Cropped to a square and made smaller on this phone. The picture\'s location and camera details are not sent.</string>
+    <string name="settings_profile_photo_note">Taken with this app\'s camera, cropped to a square and made smaller on this phone. It is not saved to your gallery, and no location or camera details are sent.</string>
+    <!-- The in-app camera for the profile photo (owner feedback 2026-10-08: taken, never chosen from the gallery). -->
+    <string name="settings_photo_capture_title">Take your photo</string>
+    <string name="settings_photo_capture_body">Centre your face in the square. Every connection sees this photo.</string>
+    <string name="settings_photo_capture_shutter">Take photo</string>
+    <string name="settings_photo_capture_to_back">Use the rear camera</string>
+    <string name="settings_photo_capture_to_front">Use the front camera</string>
+    <string name="settings_photo_capture_review_title">Use this photo?</string>
+    <string name="settings_photo_capture_review_body">Your connections will see it in your shared profile.</string>
+    <string name="settings_photo_capture_use">Use photo</string>
+    <string name="settings_photo_capture_retake">Retake</string>
+    <string name="settings_photo_capture_allow">Allow camera</string>
+    <string name="settings_photo_capture_open_settings">Open settings</string>
+    <string name="settings_photo_capture_permission_title">Camera needed</string>
+    <string name="settings_photo_capture_permission_body">Your profile photo is taken with the camera, in this app. Allow the camera to take it.</string>
+    <string name="settings_photo_capture_permission_blocked">The camera is turned off for VettID. To take your profile photo, open the app\'s settings, choose Permissions, and allow the camera.</string>
+    <string name="settings_photo_capture_no_camera_title">No camera</string>
+    <string name="settings_photo_capture_no_camera_body">This phone has no camera VettID can use, so a profile photo cannot be taken. Connections see your initial.</string>
+    <string name="settings_photo_capture_failed">The photo could not be taken. Try again.</string>
+    <string name="settings_photo_capture_note">The photo stays in this app until you use it: it is never saved to your gallery.</string>
 </resources>
