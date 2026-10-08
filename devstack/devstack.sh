@@ -18,7 +18,7 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VAULT_REF="${VAULT_REF:-ca10a72}"
+VAULT_REF="${VAULT_REF:-26b71409a83e537656019a63d7caffedab545cfd}"   # release/staging/5 (VAULT-MESSAGING 0.21.1)
 DEVICE_POLICY="${DEVICE_POLICY:-$HERE/device-policy.json}"
 DATA="${XDG_CACHE_HOME:-$HOME/.cache}/vettid-devstack"
 STATE="${XDG_CACHE_HOME:-$HOME/.cache}/vettid-android-devstack"
