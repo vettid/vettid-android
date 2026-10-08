@@ -196,6 +196,7 @@ dependencies {
     "devStackImplementation"(projects.core.testing)
 
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 
     // The A3 exit test (devStack build, on the phone against the local dev stack) and Compose UI tests.
     androidTestImplementation(platform(libs.androidx.compose.bom))

@@ -23,10 +23,14 @@
         android:enableOnBackInvokedCallback="true"
         tools:targetApi="33">
 
+        <!-- singleTask: the share sheet starts its target with FLAG_ACTIVITY_NEW_DOCUMENT and MULTIPLE_TASK, which
+             would open a second MainActivity (in a task of its own, or in the sharing app's) while the first one
+             lives on in the background. One activity, one UI: a shared file or a link reaches the running one
+             (onNewIntent), in the app's own task. -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:launchMode="singleTop"
+            android:launchMode="singleTask"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
