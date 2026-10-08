@@ -6,7 +6,11 @@ package com.vettid.feature.items
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.hasScrollAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -14,6 +18,7 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performScrollToNode
 import com.vettid.core.data.items.DraftProblem
 import com.vettid.core.data.items.ItemChecks
 import com.vettid.core.data.items.ItemDetail
@@ -130,8 +135,45 @@ class ItemsScreenTest {
         rule.setContent {
             ItemEditScreen(ItemEditUiState(draft = d, check = ItemChecks.check(d)), ItemEditActions())
         }
-        rule.onNodeWithTag("item_edit_profile_note").assertExists()
+        rule.onNodeWithTag("item_edit_profile_choice").assertIsOn()
         rule.onNodeWithText("Shared profile").assertExists()
+        rule.onNodeWithText("Everyone you're connected with sees items with this tag.").assertExists()
+        // The reserved tag is the built-in choice, not one of the member's tag chips.
+        rule.onNodeWithTag("item_edit_tags").assertDoesNotExist()
+    }
+
+    @Test
+    fun theSharedProfileChoiceIsForStandardItems() {
+        var chosen: Boolean? = null
+        editor(ItemDraft(name = "Email"), actions = ItemEditActions(onInProfile = { chosen = it }))
+        rule.onNodeWithTag("item_edit_profile_choice").performScrollTo().assertIsEnabled().assertIsOff().performClick()
+        assertEquals(true, chosen)
+    }
+
+    @Test
+    fun aSecretItemCannotJoinTheSharedProfileAndSaysWhy() {
+        editor(ItemDraft(name = "Bank login", sensitivity = Sensitivity.SECRET))
+        rule.onNodeWithTag("item_edit_profile_choice").assertIsNotEnabled()
+        rule.onNodeWithText("Only standard items can be in your shared profile").assertExists()
+        rule.onNodeWithText("Everyone you're connected with sees items with this tag.").assertDoesNotExist()
+    }
+
+    @Test
+    fun aBlankItemInvitesTheFirstField() {
+        editor(ItemDraft())
+        rule.onNodeWithTag("item_edit_no_fields").assertExists()
+        rule.onNodeWithTag("item_edit_field_value_0").assertDoesNotExist()
+        rule.onNodeWithTag("item_edit_add_field").assertExists()
+    }
+
+    @Test
+    fun theTemplatesOfferOneItemPerContactPoint() {
+        rule.setContent { TemplatePickerScreen(onBack = {}, onPick = {}) }
+        listOf("Email address", "Phone number", "Postal address", "Website").forEach {
+            rule.onNode(hasScrollAction()).performScrollToNode(hasText(it))
+            rule.onNodeWithText(it).assertExists()
+        }
+        rule.onNodeWithText("Contact details").assertDoesNotExist()
     }
 
     @Test

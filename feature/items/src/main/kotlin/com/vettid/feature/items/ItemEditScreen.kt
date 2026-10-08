@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -25,6 +26,7 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -49,6 +51,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -92,6 +95,7 @@ internal fun ItemEditRouteContent(host: ItemsHost) {
             onTagInput = vm::setTagInput,
             onAddTag = vm::addTag,
             onRemoveTag = vm::removeTag,
+            onInProfile = vm::setInProfile,
             onFieldText = vm::setFieldText,
             onFieldAddress = vm::setFieldAddress,
             onAskAddField = vm::askAddField,
@@ -127,6 +131,7 @@ data class ItemEditActions(
     val onTagInput: (String) -> Unit = {},
     val onAddTag: () -> Unit = {},
     val onRemoveTag: (String) -> Unit = {},
+    val onInProfile: (Boolean) -> Unit = {},
     val onFieldText: (Int, String) -> Unit = { _, _ -> },
     val onFieldAddress: (Int, AddressValue) -> Unit = { _, _ -> },
     val onAskAddField: () -> Unit = {},
@@ -220,6 +225,14 @@ fun ItemEditScreen(state: ItemEditUiState, actions: ItemEditActions, modifier: M
             SensitivitySection(state, actions)
             TagsSection(state, actions)
             Text(stringResource(R.string.items_fields), style = MaterialTheme.typography.titleSmall)
+            if (d.fields.isEmpty()) {
+                Text(
+                    stringResource(R.string.items_no_fields_yet),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("item_edit_no_fields"),
+                )
+            }
             d.fields.forEachIndexed { i, f ->
                 val problems = if (show) state.check.fieldProblems[i].orEmpty() else emptySet()
                 FieldEditor(FieldSlot(i, d.fields.size, focus = state.focusField == i), f, problems, actions)
@@ -363,9 +376,11 @@ private fun TagsSection(state: ItemEditUiState, actions: ItemEditActions) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.testTag("item_edit_tags_note"),
     )
-    if (state.draft.tags.isNotEmpty()) {
+    // The reserved @profile is the built-in choice below, not a chip.
+    val own = state.draft.tags.filter { it != ItemChecks.PROFILE_TAG }
+    if (own.isNotEmpty()) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.s), modifier = Modifier.testTag("item_edit_tags")) {
-            state.draft.tags.forEach { t ->
+            own.forEach { t ->
                 InputChip(
                     selected = false,
                     onClick = { actions.onRemoveTag(t) },
@@ -403,13 +418,40 @@ private fun TagsSection(state: ItemEditUiState, actions: ItemEditActions) {
             modifier = Modifier.testTag("item_edit_share_impact"),
         )
     }
-    if (state.inProfile) {
-        NoticeCard(
-            NoticeKind.INFO,
-            stringResource(R.string.items_profile_title),
-            stringResource(R.string.items_profile_body),
-            modifier = Modifier.testTag("item_edit_profile_note"),
-        )
+    ProfileChoice(state, actions.onInProfile)
+}
+
+/**
+ * "Shared profile" (`@profile`, §10.8) as a built-in tag choice: only a standard item can carry it, so for a secret or
+ * critical one it is shown off, with the reason (an item that carries it anyway can still take it off).
+ */
+@Composable
+private fun ProfileChoice(state: ItemEditUiState, onInProfile: (Boolean) -> Unit) {
+    val on = state.inProfile
+    val available = on || state.draft.sensitivity == Sensitivity.DATA
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = Spacing.touchTarget)
+            .toggleable(value = on, enabled = available, role = Role.Checkbox, onValueChange = onInProfile)
+            .padding(vertical = Spacing.xs)
+            .testTag("item_edit_profile_choice"),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Checkbox(checked = on, onCheckedChange = null, enabled = available)
+        Spacer(Modifier.width(Spacing.m))
+        Column(Modifier.weight(1f)) {
+            Text(
+                stringResource(R.string.items_tag_profile),
+                style = MaterialTheme.typography.bodyLarge,
+                color = if (available) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                stringResource(if (available) R.string.items_profile_choice_note else R.string.items_problem_profile),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 

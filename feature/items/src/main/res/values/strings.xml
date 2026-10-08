@@ -85,7 +85,10 @@
     <string name="items_template_blood_type">Blood type</string>
     <string name="items_template_insurance_card">Insurance card</string>
     <string name="items_template_vehicle">Vehicle</string>
-    <string name="items_template_contact_card">Contact details</string>
+    <string name="items_template_email_address">Email address</string>
+    <string name="items_template_phone_number">Phone number</string>
+    <string name="items_template_postal_address">Postal address</string>
+    <string name="items_template_website">Website</string>
     <string name="items_template_emergency_contact">Emergency contact</string>
     <string name="items_template_note">Note</string>
     <string name="items_template_secure_note">Secure note</string>
@@ -204,8 +207,8 @@
     <string name="items_tag_add">Add a tag</string>
     <string name="items_tag_hint">Lowercase letters, digits, spaces, hyphens (-) and underscores (_), up to 32 characters.</string>
     <string name="items_cd_remove_tag">Remove tag %1$s</string>
-    <string name="items_profile_title">In your shared profile</string>
-    <string name="items_profile_body">Every connection sees this item, with all of its fields, as part of your profile.</string>
+    <string name="items_profile_choice_note">Everyone you\'re connected with sees items with this tag.</string>
+    <string name="items_no_fields_yet">No fields yet. Add the details you want to keep, such as a membership number.</string>
     <string name="items_fields">Fields</string>
     <string name="items_cd_choose_kind">Choose the type of field</string>
     <string name="items_cd_field_options">Options for %1$s</string>

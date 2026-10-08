@@ -91,30 +91,81 @@ class ItemEditViewModelTest {
 
     @Test
     fun aStandardItemIsCreated() = runTest {
-        val vm = vm(template = "contact_card")
-        vm.setFieldText(0, "ada@example.com")
-        vm.setFieldAddress(2, AddressValue(city = "London", country = "GB"))
-        vm.addTag()
+        val vm = vm(template = "postal_address")
+        vm.setFieldAddress(0, AddressValue(city = "London", country = "GB"))
         vm.setTagInput(" Family ")
         vm.addTag()
         vm.save()
         advanceUntilIdle()
         val id = vm.uiState.value.savedId!!
         val saved = items.stored.getValue(id)
-        assertEquals(listOf("@profile", "family"), saved.tags)
-        assertEquals(FieldValue.Address(AddressValue(city = "London", country = "GB")), saved.fields[2].value)
-        assertTrue(vm.uiState.value.inProfile)
+        assertEquals(listOf("family"), saved.tags)
+        assertEquals("postal_address", saved.template)
+        assertEquals(FieldValue.Address(AddressValue(city = "London", country = "GB")), saved.fields.single().value)
+        assertFalse(vm.uiState.value.inProfile)
     }
 
     @Test
-    fun theProfileTagKeepsANewItemStandard() {
-        val vm = vm(template = "contact_card")
+    fun noTemplateSuggestsAReservedTag() {
+        // VAULT-ITEMS 0.1.1 (owner decision 2026-10-08): the shared profile holds only what the member tags.
+        ItemTemplates.all.forEach { t ->
+            assertTrue(t.id, t.tags.none { it.startsWith("@") })
+            assertFalse(t.id, vm(template = t.id).uiState.value.inProfile)
+        }
+    }
+
+    @Test
+    fun contactInformationIsOneItemPerContactPoint() {
+        assertNull(ItemTemplates.template("contact_card"))
+        val kinds = mapOf("email_address" to FieldKinds.EMAIL, "phone_number" to FieldKinds.PHONE, "postal_address" to FieldKinds.ADDRESS, "website" to FieldKinds.URL)
+        kinds.forEach { (id, kind) ->
+            val d = vm(template = id).uiState.value.draft
+            assertEquals(id, d.template)
+            assertEquals("contact", d.category)
+            assertEquals(Sensitivity.DATA, d.sensitivity)
+            assertEquals(emptyList<String>(), d.tags)
+            assertEquals(listOf(kind), d.fields.map { it.kind })
+        }
+    }
+
+    @Test
+    fun anOldContactCardStillEdits() = runTest {
+        items.add(FakeItems.item("01K", "Contact details", category = "contact", tags = listOf("@profile"), fields = listOf("Email" to "sam@example.org")).copy(template = "contact_card"))
+        val vm = vm(itemId = "01K")
+        advanceUntilIdle()
+        assertTrue(vm.uiState.value.inProfile)
+        vm.setFieldText(0, "sam@example.com")
+        vm.save()
+        advanceUntilIdle()
+        val stored = items.stored.getValue("01K")
+        assertEquals("contact_card", stored.template)
+        assertEquals(listOf("@profile"), stored.tags)
+        assertEquals(FieldValue.Text("sam@example.com"), stored.fields.single().value)
+    }
+
+    @Test
+    fun theSharedProfileIsAChoiceForStandardItemsOnly() {
+        val vm = vm(template = "email_address")
+        vm.setInProfile(true)
+        assertTrue(vm.uiState.value.inProfile)
         vm.setSensitivity(Sensitivity.SECRET)
         vm.save()
         assertTrue(DraftProblem.PROFILE_NOT_DATA in vm.uiState.value.check.problems)
-        vm.removeTag("@profile")
+        vm.setInProfile(false)
         assertFalse(vm.uiState.value.inProfile)
         assertTrue(vm.uiState.value.check.ok)
+        vm.setInProfile(true) // a secret item cannot carry it
+        assertFalse(vm.uiState.value.inProfile)
+        vm.setSensitivity(Sensitivity.DATA)
+        vm.setInProfile(true)
+        assertEquals(listOf("@profile"), vm.uiState.value.draft.tags)
+    }
+
+    @Test
+    fun aBlankItemStartsWithoutFields() {
+        val d = vm().uiState.value.draft
+        assertEquals(emptyList<com.vettid.core.data.items.DraftField>(), d.fields)
+        assertNull(d.template)
     }
 
     @Test
@@ -256,6 +307,7 @@ class ItemEditViewModelTest {
     @Test
     fun fieldsAreAddedMovedAndRemoved() {
         val vm = vm()
+        vm.addField("Text", FieldKinds.TEXT)
         vm.addField("PIN", FieldKinds.PASSWORD)
         vm.addField("Site", FieldKinds.URL)
         vm.moveField(2, -1)
