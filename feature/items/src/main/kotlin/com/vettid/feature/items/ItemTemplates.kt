@@ -76,7 +76,7 @@ object ItemTemplates {
     fun icon(category: String): ImageVector = byCategory[category]?.icon ?: Icons.Outlined.Folder
 
     /** A member-defined category, as shown: `home_lab` → "Home lab". */
-    fun customLabel(id: String): String = id.replace('_', ' ').replaceFirstChar { it.uppercase() }
+    fun customLabel(id: String): String = com.vettid.core.data.items.ItemCategories.humanize(id)
 
     private fun f(@StringRes label: Int, kind: String) = TemplateField(label, kind)
 

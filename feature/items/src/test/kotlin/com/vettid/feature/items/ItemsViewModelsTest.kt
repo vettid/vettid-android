@@ -35,6 +35,19 @@ class ItemsViewModelsTest {
     private fun detail(id: String) = ItemDetailViewModel(SavedStateHandle(mapOf(ItemDetailRoute.ARG to id)), items)
 
     @Test
+    fun theCategoryFilterIncludesTheMembersOwnCategories() = runTest {
+        // §10.7: any [a-z][a-z0-9_]{0,31} category; the recommended ones first, then the member's own.
+        items.add(FakeItems.item("01K", "Coffee card", category = "loyalty_cards"))
+        items.add(FakeItems.item("01G", "Gym card", category = "gym"))
+        val vm = ItemsViewModel(items)
+        advanceUntilIdle()
+        assertEquals(listOf("identity_document", "login", "crypto_wallet", "gym", "loyalty_cards"), vm.uiState.value.categories)
+        vm.setCategory("loyalty_cards")
+        advanceUntilIdle()
+        assertEquals(listOf("Coffee card"), vm.uiState.value.visible.map { it.name })
+    }
+
+    @Test
     fun theListFiltersOnThePhone() = runTest {
         val vm = ItemsViewModel(items)
         advanceUntilIdle()

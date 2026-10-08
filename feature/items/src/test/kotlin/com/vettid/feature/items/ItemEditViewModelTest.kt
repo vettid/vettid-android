@@ -346,4 +346,110 @@ class ItemEditViewModelTest {
         assertEquals("-nope", vm.uiState.value.tagInput)
         assertTrue(vm.uiState.value.draft.tags.isEmpty())
     }
+
+    @Test
+    fun addingAFieldAsksForItsLabelAndTypeFirst() {
+        // Value-first fields (owner feedback 2026-10-08): the label is asked for once, then the value is typed.
+        val vm = vm()
+        val before = vm.uiState.value.draft.fields.size
+        vm.askAddField()
+        assertEquals(EditDialog.AddField(), vm.uiState.value.dialog)
+        vm.confirmDialog() // no label: it stays open, nothing is added
+        assertEquals(before, vm.uiState.value.draft.fields.size)
+        vm.setDialogText("é".repeat(33)) // 66 bytes: over §10.7's 64
+        vm.confirmDialog()
+        assertEquals(before, vm.uiState.value.draft.fields.size)
+        vm.setDialogText("  Cardholder ")
+        vm.setDialogKind(FieldKinds.FILE) // never offered
+        assertEquals(FieldKinds.TEXT, (vm.uiState.value.dialog as EditDialog.AddField).kind)
+        vm.setDialogKind(FieldKinds.DATE)
+        vm.confirmDialog()
+        val s = vm.uiState.value
+        assertNull(s.dialog)
+        assertEquals(before + 1, s.draft.fields.size)
+        assertEquals("Cardholder", s.draft.fields.last().label)
+        assertEquals(FieldKinds.DATE, s.draft.fields.last().kind)
+        assertEquals(before, s.focusField)
+        vm.fieldFocused()
+        assertNull(vm.uiState.value.focusField)
+    }
+
+    @Test
+    fun aDismissedAddDialogAddsNothing() {
+        val vm = vm()
+        val before = vm.uiState.value.draft.fields
+        vm.askAddField()
+        vm.setDialogText("PIN")
+        vm.dismissDialog()
+        assertNull(vm.uiState.value.dialog)
+        assertEquals(before, vm.uiState.value.draft.fields)
+    }
+
+    @Test
+    fun aFieldIsRenamedThroughItsDialog() {
+        val vm = vm(template = "passport")
+        vm.askRenameField(1)
+        assertEquals(EditDialog.RenameField(1, "Full name"), vm.uiState.value.dialog)
+        vm.setDialogText("")
+        vm.confirmDialog()
+        assertEquals("Full name", vm.uiState.value.draft.fields[1].label)
+        vm.setDialogText("Name on passport ")
+        vm.confirmDialog()
+        assertNull(vm.uiState.value.dialog)
+        assertEquals("Name on passport", vm.uiState.value.draft.fields[1].label)
+        assertTrue(vm.uiState.value.dirty)
+    }
+
+    @Test
+    fun onlyAnUnsavedFieldChangesItsType() = runTest {
+        items.add(FakeItems.item("01S", "Login", Sensitivity.SECRET, fields = listOf("Password" to "hunter2")))
+        val vm = vm(itemId = "01S")
+        advanceUntilIdle()
+        vm.askFieldKind(0) // saved (§10.7): its kind stays
+        assertNull(vm.uiState.value.dialog)
+        vm.askAddField()
+        vm.setDialogText("Site")
+        vm.confirmDialog()
+        vm.askFieldKind(1)
+        assertEquals(EditDialog.FieldKind(1, FieldKinds.TEXT), vm.uiState.value.dialog)
+        vm.setDialogKind(FieldKinds.URL)
+        vm.confirmDialog()
+        assertEquals(FieldKinds.URL, vm.uiState.value.draft.fields[1].kind)
+        assertTrue(vm.uiState.value.draft.fields[0].kept)
+    }
+
+    @Test
+    fun aNewCategoryIsDerivedFromItsName() {
+        val vm = vm()
+        vm.askNewCategory()
+        vm.setDialogText("2fa codes")
+        vm.confirmDialog() // no identifier: it stays open
+        assertEquals(EditDialog.NewCategory("2fa codes"), vm.uiState.value.dialog)
+        vm.setDialogText("Loyalty cards")
+        vm.confirmDialog()
+        assertNull(vm.uiState.value.dialog)
+        assertEquals("loyalty_cards", vm.uiState.value.draft.category)
+        assertEquals(listOf("loyalty_cards"), vm.uiState.value.pickerCustoms)
+        assertFalse(DraftProblem.CATEGORY_INVALID in vm.uiState.value.check.problems)
+        // A name that is a recommended category selects it.
+        vm.askNewCategory()
+        vm.setDialogText("Payment card")
+        vm.confirmDialog()
+        assertEquals("payment_card", vm.uiState.value.draft.category)
+        assertEquals(emptyList<String>(), vm.uiState.value.pickerCustoms)
+    }
+
+    @Test
+    fun thePickerOffersTheMembersOwnCategories() = runTest {
+        items.add(FakeItems.item("01G", "Gym card", category = "gym"))
+        items.add(FakeItems.item("01L", "Coffee card", category = "loyalty_cards"))
+        items.add(FakeItems.item("01M", "Bonus card", category = "loyalty_cards"))
+        items.add(FakeItems.item("01P", "Passport", category = "identity_document"))
+        val vm = vm()
+        advanceUntilIdle()
+        assertEquals(listOf("gym", "loyalty_cards"), vm.uiState.value.customCategories)
+        items.add(FakeItems.item("01T", "Ticket", category = "tickets"))
+        advanceUntilIdle()
+        assertEquals(listOf("gym", "loyalty_cards", "tickets"), vm.uiState.value.pickerCustoms)
+    }
 }
