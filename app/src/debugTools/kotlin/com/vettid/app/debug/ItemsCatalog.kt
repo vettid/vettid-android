@@ -17,6 +17,7 @@ import com.vettid.core.data.items.Sensitivity
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.feature.items.DetailDialog
+import com.vettid.feature.items.EditDialog
 import com.vettid.feature.items.ItemDetailActions
 import com.vettid.feature.items.ItemDetailScreen
 import com.vettid.feature.items.ItemDetailUiState
@@ -101,6 +102,15 @@ internal object ItemsCatalog {
     private val badDraft = newDraft.copy(name = "", fields = listOf(DraftField(label = "Expires", kind = "date", text = "next May"), DraftField(label = "", kind = "email", text = "sam")))
     private val profileDraft = ItemDraft.of(contact)
 
+    /** A payment card being added (owner feedback 2026-10-08: value-first fields captioned by their labels). */
+    private val cardDraft = ItemDraft(
+        "Visa", "payment_card", "payment_card", Sensitivity.SECRET, listOf("money"),
+        listOf(
+            DraftField(label = "Cardholder", kind = "text", text = "Sam Rivera"), DraftField(label = "Number", kind = "text"),
+            DraftField(label = "Expires", kind = "date"), DraftField(label = "Security code", kind = "password"),
+        ),
+    )
+
     private fun edit(d: ItemDraft, isNew: Boolean = true, errors: Boolean = false) =
         ItemEditUiState(itemId = if (isNew) null else "01J", draft = d, check = ItemChecks.check(d), showErrors = errors)
 
@@ -168,6 +178,16 @@ internal object ItemsCatalog {
         "items.edit_new" to { ItemEditScreen(edit(newDraft), ItemEditActions()) },
         "items.edit_problems" to { ItemEditScreen(edit(badDraft, errors = true), ItemEditActions()) },
         "items.edit_profile" to { ItemEditScreen(edit(profileDraft, isNew = false), ItemEditActions()) },
+        "items.edit_card" to { ItemEditScreen(edit(cardDraft), ItemEditActions()) },
+        "items.edit_add_field" to { ItemEditScreen(edit(cardDraft).copy(dialog = EditDialog.AddField("Billing postcode")), ItemEditActions()) },
+        "items.edit_add_field_long" to { ItemEditScreen(edit(cardDraft).copy(dialog = EditDialog.AddField("x".repeat(70))), ItemEditActions()) },
+        "items.edit_rename_field" to { ItemEditScreen(edit(cardDraft).copy(dialog = EditDialog.RenameField(0, "Cardholder")), ItemEditActions()) },
+        "items.edit_field_type" to { ItemEditScreen(edit(cardDraft).copy(dialog = EditDialog.FieldKind(1, "text")), ItemEditActions()) },
+        "items.edit_new_category" to { ItemEditScreen(edit(cardDraft).copy(dialog = EditDialog.NewCategory("Loyalty cards")), ItemEditActions()) },
+        "items.edit_new_category_bad" to { ItemEditScreen(edit(cardDraft).copy(dialog = EditDialog.NewCategory("2fa codes")), ItemEditActions()) },
+        "items.edit_custom_category" to {
+            ItemEditScreen(edit(cardDraft.copy(category = "loyalty_cards")).copy(customCategories = listOf("gym", "loyalty_cards")), ItemEditActions())
+        },
         "items.edit_conflict" to { ItemEditScreen(edit(ItemDraft.of(passport), isNew = false).copy(error = FailureKind.CONFLICT), ItemEditActions()) },
         "items.tags" to { TagsScreen(TagsUiState(registry, loading = false), TagsActions()) },
         "items.tags_edit" to { TagsScreen(TagsUiState(registry, loading = false, dialog = TagDialog.Edit(registry.tags[3], "medical", "")), TagsActions()) },

@@ -29,7 +29,7 @@ import java.time.Duration
 import java.time.Instant
 import javax.inject.Inject
 
-/** The connection's title for the sharing screens (§10.8: "First Last", the alias, or null before the names arrived). */
+/** The connection's title for the sharing screens: its display name (the account's "First Last", or the placeholder), null when blank. */
 private fun ConnectionsRepository.nameOf(id: String): String? =
     connections.value.firstOrNull { it.id == id }?.displayName?.takeIf { it.isNotBlank() }
 
