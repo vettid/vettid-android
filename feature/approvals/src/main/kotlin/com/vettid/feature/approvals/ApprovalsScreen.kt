@@ -43,6 +43,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import com.vettid.core.data.account.AccountNames
+import com.vettid.core.data.items.ItemCategories
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.social.needsDecision
@@ -386,7 +387,8 @@ private fun GrantFacts(a: Approval.GrantRequest, state: ApprovalDetailUiState, a
             Spacer(Modifier.width(Spacing.m))
             Column(Modifier.weight(1f)) {
                 val title = when {
-                    e.kind == "category" -> stringResource(R.string.approvals_grant_category, e.label ?: e.ref)
+                    // A category is the asker's label, or its identifier as the vault names it (a custom one humanized, §10.7).
+                    e.kind == "category" -> stringResource(R.string.approvals_grant_category, e.label ?: ItemCategories.humanize(e.ref))
                     e.available && itemName != null -> itemName
                     else -> stringResource(R.string.approvals_grant_item_missing, e.label ?: e.ref)
                 }
@@ -746,7 +748,7 @@ private fun Facts(a: Approval) {
         }
         is Approval.ShareDecision -> {
             Label(stringResource(R.string.approvals_items_asked))
-            a.items.forEach { Text("• ${it.name} (${it.category})", style = MaterialTheme.typography.bodyLarge) }
+            a.items.forEach { Text("• ${it.name} (${ItemCategories.humanize(it.category)})", style = MaterialTheme.typography.bodyLarge) }
         }
         is Approval.DeviceRequest -> {
             Label(stringResource(R.string.approvals_device))

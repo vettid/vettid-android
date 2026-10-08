@@ -8,6 +8,7 @@ import com.vettid.core.data.items.AddressValue
 import com.vettid.core.data.items.DraftCheck
 import com.vettid.core.data.items.DraftField
 import com.vettid.core.data.items.FieldKinds
+import com.vettid.core.data.items.ItemCategories
 import com.vettid.core.data.items.ItemChecks
 import com.vettid.core.data.items.ItemDetail
 import com.vettid.core.data.items.ItemDraft
@@ -32,6 +33,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -52,8 +55,11 @@ data class ItemsUiState(
     /** The tags on the member's items, for the tag filter. */
     val tags: List<String> get() = items.flatMap { it.tags }.distinct().sorted()
 
-    /** The categories in use, for the category filter. */
-    val categories: List<String> get() = items.map { it.category }.distinct().sorted()
+    /** The categories in use, for the category filter: the recommended ones in their order, then the member's own (§10.7). */
+    val categories: List<String>
+        get() = items.map { it.category }.toSet().let { used ->
+            ItemChecks.RECOMMENDED_CATEGORIES.filter { it in used } + ItemCategories.customs(used)
+        }
 
     val loading: Boolean get() = items.isEmpty() && (load == ListLoad.NOT_LOADED || load == ListLoad.LOADING)
 }
@@ -292,6 +298,23 @@ data class ShareImpact(
     val withdrawn: Boolean = false,
 )
 
+/**
+ * A small dialog of the add/edit screen. Fields are value-first (owner feedback 2026-10-08): each shows one input
+ * captioned with its label, and the label and type change through these dialogs.
+ */
+sealed interface EditDialog {
+    /** "Add a field": what it is called and its type, before it is added. */
+    data class AddField(val label: String = "", val kind: String = FieldKinds.TEXT) : EditDialog
+
+    data class RenameField(val index: Int, val label: String) : EditDialog
+
+    /** Only for a field not yet saved (a saved field keeps its kind, §10.7). */
+    data class FieldKind(val index: Int, val kind: String) : EditDialog
+
+    /** A member-defined category (§10.7): the typed name; the identifier is derived from it. */
+    data class NewCategory(val name: String = "") : EditDialog
+}
+
 /** Immutable UI state of the add/edit screen. */
 data class ItemEditUiState(
     val itemId: String? = null,
@@ -316,8 +339,17 @@ data class ItemEditUiState(
      * older vault the share rules the item newly matches.
      */
     val shareImpact: List<ShareImpact> = emptyList(),
+    val dialog: EditDialog? = null,
+    /** The field whose value input takes the focus (once: just added). */
+    val focusField: Int? = null,
+    /** The member's own categories in their vault (distinct, sorted), offered after the recommended ones. */
+    val customCategories: List<String> = emptyList(),
 ) {
     val isNew: Boolean get() = itemId == null
+
+    /** The custom categories the picker lists: the member's own, and this item's when it is a custom one. */
+    val pickerCustoms: List<String>
+        get() = (customCategories + ItemCategories.customs(listOf(draft.category))).distinct().sorted()
 
     /** Whether the item carries the reserved `@profile` tag (connections see it in the shared profile, §10.8). */
     val inProfile: Boolean get() = ItemChecks.PROFILE_TAG in draft.tags
@@ -353,6 +385,9 @@ class ItemEditViewModel @Inject constructor(
     val uiState: StateFlow<ItemEditUiState> = state.asStateFlow()
 
     init {
+        state.update { it.copy(customCategories = ItemCategories.customs(items.items.value.map { i -> i.category })) }
+        items.items.onEach { l -> state.update { it.copy(customCategories = ItemCategories.customs(l.map { i -> i.category })) } }
+            .launchIn(viewModelScope)
         if (route.itemId == null) {
             val draft = route.template?.let { ItemTemplates.template(it)?.draft(context) } ?: ItemTemplates.blank(context)
             setDraft(draft, dirty = false)
@@ -479,6 +514,72 @@ class ItemEditViewModel @Inject constructor(
         if (kind !in FieldKinds.CHOOSABLE) return
         change { d -> d.copy(fields = d.fields + DraftField(label = label, kind = kind)) }
     }
+
+    fun askAddField() {
+        if (state.value.draft.fields.size < ItemChecks.MAX_FIELDS) state.update { it.copy(dialog = EditDialog.AddField()) }
+    }
+
+    fun askRenameField(i: Int) {
+        val f = state.value.draft.fields.getOrNull(i) ?: return
+        state.update { it.copy(dialog = EditDialog.RenameField(i, f.label)) }
+    }
+
+    /** A saved field keeps its kind (§10.7): nothing to ask. */
+    fun askFieldKind(i: Int) {
+        val f = state.value.draft.fields.getOrNull(i)?.takeIf { it.fieldId == null } ?: return
+        state.update { it.copy(dialog = EditDialog.FieldKind(i, f.kind)) }
+    }
+
+    fun askNewCategory() = state.update { it.copy(dialog = EditDialog.NewCategory()) }
+
+    /** The label typed in the add or rename dialog, or the name in the new-category one. */
+    fun setDialogText(v: String) = state.update { s ->
+        s.copy(
+            dialog = when (val d = s.dialog) {
+                is EditDialog.AddField -> d.copy(label = v)
+                is EditDialog.RenameField -> d.copy(label = v)
+                is EditDialog.NewCategory -> d.copy(name = v)
+                else -> d
+            },
+        )
+    }
+
+    fun setDialogKind(kind: String) = state.update { s ->
+        if (kind !in FieldKinds.CHOOSABLE) return@update s
+        s.copy(
+            dialog = when (val d = s.dialog) {
+                is EditDialog.AddField -> d.copy(kind = kind)
+                is EditDialog.FieldKind -> d.copy(kind = kind)
+                else -> d
+            },
+        )
+    }
+
+    fun dismissDialog() = state.update { it.copy(dialog = null) }
+
+    /**
+     * Applies the open dialog when what it holds is valid (the label checks of §10.7; a category name that gives an
+     * identifier); otherwise it stays open. A new field is appended, ready for its value.
+     */
+    fun confirmDialog() {
+        val applied = when (val d = state.value.dialog) {
+            is EditDialog.AddField -> validLabel(d.label)?.let { label ->
+                val at = state.value.draft.fields.size
+                addField(label, d.kind)
+                if (state.value.draft.fields.size > at) state.update { it.copy(focusField = at) }
+            }
+            is EditDialog.RenameField -> validLabel(d.label)?.let { setFieldLabel(d.index, it) }
+            is EditDialog.FieldKind -> setFieldKind(d.index, d.kind)
+            is EditDialog.NewCategory -> ItemCategories.derive(d.name).id?.let { setCategory(it) }
+            null -> null
+        }
+        if (applied != null) state.update { it.copy(dialog = null) }
+    }
+
+    /** The trimmed label when it passes §10.7's checks, else null. */
+    private fun validLabel(v: String): String? = v.trim().takeIf { ItemChecks.labelProblems(it).isEmpty() }
+
+    fun fieldFocused() = state.update { it.copy(focusField = null) }
 
     fun removeField(i: Int) = change { d -> d.copy(fields = d.fields.filterIndexed { j, _ -> j != i }) }
 
