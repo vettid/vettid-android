@@ -62,8 +62,8 @@ class PhotoUprightTest {
     fun largeShotsAreScaledToTheKeptSide() {
         val big = Bitmap.createBitmap(3000, 2000, Bitmap.Config.ARGB_8888)
         val out = uprightShot(big, 270, mirror = true)
-        assertEquals(1024, minOf(out.width, out.height))
-        assertEquals(1536, maxOf(out.width, out.height))
+        assertEquals(SHOT_SIDE, minOf(out.width, out.height))
+        assertEquals(2304, maxOf(out.width, out.height))
     }
 
     private companion object {

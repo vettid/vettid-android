@@ -24,9 +24,14 @@ object ProfilePhotos {
     /** §10.8: at most 65,536 bytes of image. */
     const val MAX_BYTES = 65_536
 
-    /** The side the member's photo is encoded at first; smaller sides are tried if the qualities do not fit. */
+    /**
+     * The side the member's photo is encoded at first (smaller sides are tried if the qualities do not fit). The
+     * crop under the review's round frame is never smaller than this, so the photo is never scaled up into blur.
+     */
+    const val TARGET_SIDE = 512
+
     @Suppress("MagicNumber")
-    private val SIDES = intArrayOf(512, 384, 256, 192, 128, 96)
+    private val SIDES = intArrayOf(TARGET_SIDE, 384, 256, 192, 128, 96)
     @Suppress("MagicNumber")
     private val QUALITIES = intArrayOf(85, 75, 65, 55, 45, 35)
 

@@ -77,7 +77,7 @@
     <string name="settings_profile_photo_remove_body">Your connections see your initial instead.</string>
     <string name="settings_profile_photo_unreadable">That photo could not be used. Take another one.</string>
     <string name="settings_profile_photo_saved">Photo saved. Your connections receive it.</string>
-    <string name="settings_profile_photo_note">Taken with this app\'s camera, cropped to a square and made smaller on this phone. It is not saved to your gallery, and no location or camera details are sent.</string>
+    <string name="settings_profile_photo_note">Taken with this app\'s camera, cropped to the circle you chose and made smaller on this phone. It is not saved to your gallery, and no location or camera details are sent.</string>
     <!-- The in-app camera for the profile photo (owner feedback 2026-10-08: taken, never chosen from the gallery). -->
     <string name="settings_photo_capture_title">Take your photo</string>
     <string name="settings_photo_capture_body">Centre your face in the square. Every connection sees this photo.</string>
@@ -85,7 +85,7 @@
     <string name="settings_photo_capture_to_back">Use the rear camera</string>
     <string name="settings_photo_capture_to_front">Use the front camera</string>
     <string name="settings_photo_capture_review_title">Use this photo?</string>
-    <string name="settings_photo_capture_review_body">Your connections will see it in your shared profile.</string>
+    <string name="settings_photo_capture_review_body">Pinch or use the zoom controls, and drag, until your face fills the circle. Your connections see what is inside it.</string>
     <string name="settings_photo_capture_use">Use photo</string>
     <string name="settings_photo_capture_retake">Retake</string>
     <string name="settings_photo_capture_allow">Allow camera</string>
@@ -96,5 +96,16 @@
     <string name="settings_photo_capture_no_camera_title">No camera</string>
     <string name="settings_photo_capture_no_camera_body">This phone has no camera VettID can use, so a profile photo cannot be taken. Connections see your initial.</string>
     <string name="settings_photo_capture_failed">The photo could not be taken. Try again.</string>
+    <!-- The review's round frame: zoom and move the shot (owner, 2026-10-08). -->
+    <string name="settings_photo_crop_frame">Your photo in the round frame</string>
+    <string name="settings_photo_crop_zoom_state">Zoomed %1$s times</string>
+    <string name="settings_photo_crop_zoom">Zoom</string>
+    <string name="settings_photo_crop_zoom_in">Zoom in</string>
+    <string name="settings_photo_crop_zoom_out">Zoom out</string>
+    <string name="settings_photo_crop_reset">Reset</string>
+    <string name="settings_photo_crop_show_left">Show more to the left</string>
+    <string name="settings_photo_crop_show_right">Show more to the right</string>
+    <string name="settings_photo_crop_show_up">Show more above</string>
+    <string name="settings_photo_crop_show_down">Show more below</string>
     <string name="settings_photo_capture_note">The photo stays in this app until you use it: it is never saved to your gallery.</string>
 </resources>
