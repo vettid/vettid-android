@@ -137,4 +137,49 @@ class ItemsScreenTest {
         rule.onNodeWithText("Blank item").assertIsDisplayed()
         rule.onNodeWithText("Passport").assertIsDisplayed()
     }
+
+    @Test
+    fun anEditKeepsHiddenValuesHiddenAndSaysSo() {
+        // VAULT-MESSAGING 0.21.0 §10.7 Kept values: the edit form never holds the stored values.
+        val hidden = login.copy(notes = "Branch: Kreuzberg").hidden().copy(size = 60_000)
+        val d = ItemDraft.of(hidden)
+        rule.setContent { ItemEditScreen(ItemEditUiState(itemId = "01L", draft = d, check = ItemChecks.check(d)), ItemEditActions()) }
+        noValue("hunter2")
+        noValue("Kreuzberg")
+        rule.onNodeWithTag("item_edit_notes_remove").assertExists()
+        rule.onAllNodesWithText("Kept as it is", substring = true).fetchSemanticsNodes().let { assertTrue(it.isNotEmpty()) }
+        // 60,000 of 65,536 bytes: the room left, from the vault's size.
+        rule.onNodeWithTag("item_edit_size").assertTextContains("Room left: 5 of 64 KB")
+    }
+
+    @Test
+    fun aNamedLimitIsSaidInTheMembersWords() {
+        val d = ItemDraft.of(passport)
+        rule.setContent {
+            ItemEditScreen(
+                ItemEditUiState(
+                    itemId = "01P", draft = d, check = ItemChecks.check(d), error = FailureKind.LIMIT,
+                    limit = com.vettid.core.data.vault.VaultLimit("share_pending", 4_096),
+                ),
+                ItemEditActions(),
+            )
+        }
+        rule.onNodeWithText("Too many items are waiting for your sharing decision (at most 4,096). Decide some first.").assertExists()
+    }
+
+    @Test
+    fun theSharingNoticeSaysWhatIsGainedAndWithdrawn() {
+        val d = ItemDraft.of(passport)
+        rule.setContent {
+            ItemEditScreen(
+                ItemEditUiState(
+                    itemId = "01P", draft = d, check = ItemChecks.check(d),
+                    shareImpact = listOf(ShareImpact("Dana Lee", com.vettid.core.data.items.ShareMode.AUTO), ShareImpact("Jo Park", com.vettid.core.data.items.ShareMode.ASK, withdrawn = true)),
+                ),
+                ItemEditActions(),
+            )
+        }
+        rule.onNodeWithTag("item_edit_share_impact").assertTextContains("automatically", substring = true)
+        rule.onNodeWithTag("item_edit_share_impact").assertTextContains("stops sharing", substring = true)
+    }
 }

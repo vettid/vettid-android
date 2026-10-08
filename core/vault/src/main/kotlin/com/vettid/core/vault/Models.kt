@@ -187,15 +187,24 @@ data class Item(
     @SerialName("has_notes") val hasNotes: Boolean = false,
     @SerialName("created_at") val createdAt: String? = null,
     @SerialName("updated_at") val updatedAt: String? = null,
+    /**
+     * The item's size as the vault counts it (§10.7 Size; `item.get` since 0.21.0): null from an older vault, and for
+     * a critical item the vault has not written or opened since it was upgraded.
+     */
+    val size: Long? = null,
 )
 
-/** What an app writes in `item.put`. */
+/**
+ * What an app writes in `item.put`. A field of a replacement without `value` keeps its stored value, and
+ * [keepNotes] the stored notes (§10.7 Kept values, 0.21.0); [notes] and [keepNotes] never go together.
+ */
 data class ItemContent(
     val name: String,
     val category: String? = null,
     val template: String? = null,
     val fields: List<ItemField>? = null,
     val notes: String? = null,
+    val keepNotes: Boolean = false,
 )
 
 /** `item.put` response; for a critical item also the credential's new version. */

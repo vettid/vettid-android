@@ -219,7 +219,14 @@
     <string name="items_address_city">City</string>
     <string name="items_address_region">Region</string>
     <string name="items_address_country">Country code</string>
-    <string name="items_size">%1$d of %2$d KB used</string>
+    <string name="items_size_left">Room left: %1$d of %2$d KB</string>
+    <string name="items_size_left_at_least">Room left: at least %1$d of %2$d KB</string>
+    <string name="items_size_over">Too large: %1$d KB over the %2$d KB an item holds</string>
+    <string name="items_field_kept">Kept as it is. Type to replace it.</string>
+    <string name="items_field_kept_placeholder">Kept (hidden)</string>
+    <string name="items_notes_kept">Your notes are kept as they are. Type to replace them.</string>
+    <string name="items_notes_kept_placeholder">Kept (hidden)</string>
+    <string name="items_notes_remove">Remove the notes</string>
     <string name="items_problems_title">Check the item</string>
     <string name="items_discard_title">Discard your changes?</string>
     <string name="items_discard_body">What you typed is not saved.</string>

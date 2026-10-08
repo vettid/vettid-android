@@ -36,10 +36,19 @@ interface ItemsRepository {
     /** Creates a `critical` item inside the credential with the password; returns its id. */
     suspend fun createCritical(draft: ItemDraft, password: String): String
 
-    /** Replaces a `data` or `secret` item's content and tags (`version` is the one it was based on; `conflict` otherwise). */
+    /**
+     * Replaces a `data` or `secret` item's content and tags (`version` is the one it was based on; `conflict`
+     * otherwise). Kept values (VAULT-MESSAGING 0.21.0 §10.7) go without `value`: a secret item is edited without
+     * `item.reveal`. A vault that gave no `size` (before 0.21.0) cannot keep values: the app reads them
+     * (`item.reveal`, never shown) and sends them all.
+     */
     suspend fun update(itemId: String, version: Long, draft: ItemDraft): Long
 
-    /** Replaces a `critical` item's content (sealed) and tags with the password. */
+    /**
+     * Replaces a `critical` item's content (sealed) and tags with the password: one credential operation, the kept
+     * values merged by the vault (§10.7 Kept values). A vault before 0.21.0 refuses fields without `value`
+     * (`bad_request`); the app then opens the values with the same password and sends them all.
+     */
     suspend fun updateCritical(itemId: String, version: Long, draft: ItemDraft, password: String): Long
 
     /** `item.delete`; a `critical` item needs the [password]. Withdraws it from every share rule and revokes its grants. */
@@ -55,10 +64,9 @@ interface ItemsRepository {
     suspend fun setSensitivity(itemId: String, version: Long, from: Sensitivity, to: Sensitivity, password: String? = null): Long
 
     /**
-     * Hands a revealed critical item from its detail screen to its edit screen, so that editing does not open the
-     * credential twice. Kept in memory only, for a short time; [takeOpened] returns it once.
+     * What saving the item with [tags] would do to sharing (`item.put{dry_run: true}`, VAULT-MESSAGING 0.21.0 §10.7),
+     * changing nothing: [itemId] null for a new item of [sensitivity]. Never carries the content, so a vault before
+     * 0.21.0 refuses it (`bad_request`) rather than saving; the caller then falls back to the share rules.
      */
-    fun keepOpened(detail: ItemDetail)
-
-    fun takeOpened(itemId: String): ItemDetail?
+    suspend fun shareEffect(itemId: String?, version: Long?, sensitivity: Sensitivity, tags: List<String>): ShareEffect
 }

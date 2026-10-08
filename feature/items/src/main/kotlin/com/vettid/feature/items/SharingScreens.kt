@@ -99,12 +99,12 @@ private fun nameOf(n: String?): String = n?.let { AccountNames.isolate(it) } ?: 
 private fun Section(text: String) = SettingsSectionHeader(text)
 
 @Composable
-private fun ErrorNotice(e: FailureKind?, onDismiss: () -> Unit) {
+private fun ErrorNotice(e: FailureKind?, limit: com.vettid.core.data.vault.VaultLimit?, onDismiss: () -> Unit) {
     e ?: return
     NoticeCard(
         NoticeKind.WARNING,
         stringResource(R.string.items_error_item),
-        ItemsText.failure(e),
+        ItemsText.failure(e, limit = limit),
         modifier = Modifier.padding(horizontal = Spacing.s).testTag("sharing_error"),
         actions = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.items_ok)) } },
     )
@@ -156,7 +156,7 @@ fun ConnectionSharingScreen(state: ConnectionSharingUiState, actions: Connection
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = Spacing.gutter),
             )
-            ErrorNotice(state.error, actions.onDismissError)
+            ErrorNotice(state.error, state.limit, actions.onDismissError)
             if (state.loading && state.rules.isEmpty()) {
                 Box(Modifier.fillMaxWidth().padding(Spacing.xl), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
@@ -331,7 +331,7 @@ fun RuleEditScreen(state: RuleEditUiState, actions: RuleEditActions, modifier: M
         header = { HeaderGlyph(Icons.Outlined.Share) },
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
-            ErrorNotice(state.error, actions.onDismissError)
+            ErrorNotice(state.error, state.limit, actions.onDismissError)
             Text(stringResource(R.string.items_rule_tags), style = MaterialTheme.typography.titleSmall)
             if (state.tags.isEmpty() && !state.loading) {
                 Text(stringResource(R.string.items_rule_no_tags), color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -520,7 +520,7 @@ fun SharedWithYouScreen(state: SharedWithYouUiState, actions: SharedWithYouActio
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = Spacing.gutter),
             )
-            ErrorNotice(state.error, actions.onDismissError)
+            ErrorNotice(state.error, state.limit, actions.onDismissError)
             Spacer(Modifier.height(Spacing.m))
             when {
                 state.loading && state.received.isEmpty() -> Box(
@@ -568,6 +568,14 @@ private fun ReceivedCard(g: GrantView, state: SharedWithYouUiState, name: String
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.testTag("received_label_${g.grantId}"),
         )
+        // What the grant holds, as the connection's vault described it (`grant.list` labels, 0.21.0), before a fetch.
+        if (content == null && g.labels.isNotEmpty()) {
+            Text(
+                stringResource(R.string.items_shared_holds, g.labels.joinToString(", ") { it.label }),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.testTag("received_fields_${g.grantId}"),
+            )
+        }
         state.refused[g.grantId]?.let { r ->
             Text(refusalText(r), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
         }
@@ -603,7 +611,7 @@ private fun AskSection(state: SharedWithYouUiState, name: String, actions: Share
     }
     state.requested.forEach { r ->
         Text(
-            stringResource(R.string.items_ask_row, r.labels.joinToString(", ").ifEmpty { "?" }, askState(r.state)),
+            stringResource(R.string.items_ask_row, r.entries.map { askEntry(it) }.joinToString(", ").ifEmpty { "?" }, askState(r.state)),
             style = MaterialTheme.typography.bodyMedium,
             modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.xs),
         )
@@ -613,6 +621,13 @@ private fun AskSection(state: SharedWithYouUiState, name: String, actions: Share
         { actions.onOpenAsk(true) },
         modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s).testTag("ask_open"),
     )
+}
+
+/** An entry as the member asked for it (§10.12 `requested`, 0.21.0: exactly as sent): their own words, else the category. */
+@Composable
+private fun askEntry(e: com.vettid.core.data.items.GrantAskEntry): String = e.label ?: when (e.kind) {
+    "category" -> stringResource(R.string.items_ask_entry_category, ItemsText.category(e.ref))
+    else -> stringResource(R.string.items_ask_entry_item)
 }
 
 @Composable

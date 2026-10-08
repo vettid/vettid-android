@@ -100,6 +100,8 @@ data class ApprovalDetailUiState(
     val criticalResult: String? = null,
     /** The end of a password backoff (`retry_after`, VAULT-MESSAGING 0.17.0). */
     val retryUntil: java.time.Instant? = null,
+    /** The limit a `limit` error named (VAULT-MESSAGING 0.21.0 §10.1: `grants_given`, say). */
+    val limit: com.vettid.core.data.vault.VaultLimit? = null,
 ) {
     /** The grant entries that will be granted: chosen, and for a category answered. */
     val grantIndexes: Set<Int>
@@ -125,8 +127,9 @@ data class ApprovalDetailUiState(
         // 0.10.3: only once the safety code is known, and only once per member.
         is Approval.ConnectionRequest -> a.state == RequestState.PENDING
         is Approval.OutgoingRequest -> a.state == RequestState.PENDING && a.sas != null
-        // §10.13: only a payload that matches its hash, shown to the member, can be approved.
-        is Approval.CriticalUse ->
+        // §10.13: only a payload that matches its hash, shown to the member, can be approved; a field that cannot
+        // hold a seed (0.21.0: never asked by a 0.21.0 vault) only denied.
+        is Approval.CriticalUse -> a.suitable != false &&
             a.payloadVerified && password.isNotEmpty() && (retryUntil == null || java.time.Instant.now().isAfter(retryUntil))
         is Approval.ShareDecision -> a.items.any { it.itemId !in shareExcluded }
         else -> needs == Needs.NOTHING || password.isNotEmpty()
@@ -263,7 +266,7 @@ class ApprovalDetailViewModel @Inject constructor(
             } catch (e: VaultFailure) {
                 val backoff = e.kind == FailureKind.BACKOFF && e.retryAfterSeconds > 0
                 val until = if (backoff) java.time.Instant.now().plusSeconds(e.retryAfterSeconds) else null
-                local.update { it.copy(busy = false, error = e.kind, password = "", retryUntil = until) }
+                local.update { it.copy(busy = false, error = e.kind, limit = e.limit, password = "", retryUntil = until) }
             }
         }
     }

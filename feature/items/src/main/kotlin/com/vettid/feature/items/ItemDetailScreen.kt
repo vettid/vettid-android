@@ -97,15 +97,8 @@ internal fun ItemDetailRouteContent(host: ItemsHost) {
             onOpen = vm::open,
             onHide = vm::hide,
             onToggleShown = vm::toggleShown,
-            onEdit = {
-                val item = state.item
-                if (item?.sensitivity == Sensitivity.SECRET && !item.revealed) {
-                    scope.launch { if (presence.confirm(title, subtitle)) host.navigate(ItemEditRoute(itemId = item.itemId)) }
-                } else if (item != null) {
-                    vm.handOff()
-                    host.navigate(ItemEditRoute(itemId = item.itemId))
-                }
-            },
+            // Editing reveals nothing (VAULT-MESSAGING 0.21.0 §10.7 Kept values): no user-presence step, no password first.
+            onEdit = { state.item?.let { host.navigate(ItemEditRoute(itemId = it.itemId)) } },
             onDelete = vm::askDelete,
             onConfirmDelete = vm::confirmDelete,
             onProtection = vm::askProtection,
@@ -239,7 +232,7 @@ private fun DetailBody(item: ItemDetail, state: ItemDetailUiState, actions: Item
             NoticeCard(
                 NoticeKind.WARNING,
                 stringResource(R.string.items_error_item),
-                ItemsText.failure(e),
+                ItemsText.failure(e, limit = state.limit),
                 modifier = Modifier.padding(horizontal = Spacing.s).testTag("item_error"),
                 actions = { TextButton(onClick = actions.onDismissError) { Text(stringResource(R.string.items_ok)) } },
             )

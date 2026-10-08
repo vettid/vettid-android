@@ -74,8 +74,8 @@ class SharingManagerTest {
 
         override suspend fun grantList(): JsonObject = VaultJson.json.parseToJsonElement(
             """{"given":[{"grant_id":"g1","connection_id":"c1","direction":"given","kind":"item","ref":"i1","rule_id":"r1","name":"Allergies","category":"medical","uses":3,"used":1,"state":"active"}],
-               "received":[{"grant_id":"g2","connection_id":"c2","direction":"received","kind":"item","ref":"x9","name":"Insurance card","category":"insurance","expires_at":"2026-10-14T00:00:00.000Z","state":"active"}],
-               "pending":[],"requested":[]}""",
+               "received":[{"grant_id":"g2","connection_id":"c2","direction":"received","kind":"item","ref":"x9","name":"Insurance card","category":"insurance","expires_at":"2026-10-14T00:00:00.000Z","state":"active","labels":[{"field_id":"f1","label":"Number","kind":"text"},{"label":"no id"},{"field_id":"f3","label":"Valid to","kind":"date"}]}],
+               "pending":[],"requested":[{"request_id":"q1","connection_id":"c2","items":[{"kind":"category","ref":"medical","label":"Your vaccination record"},{"kind":"item","ref":"01ITEM"},{"ref":"no-kind"}],"state":"granted"},{"request_id":"q2","connection_id":"c2","items":[]}]}""",
         ).jsonObject
 
         override suspend fun grantRevoke(grantId: String) {
@@ -218,6 +218,16 @@ class SharingManagerTest {
         assertEquals("r1", g.given.single().ruleId)
         assertEquals(GrantDirection.RECEIVED, g.received.single().direction)
         assertNull(g.received.single().usesLeft)
+        // 0.21.0: a received grant's labels as its descriptor had them (a malformed one skipped); a given one has none.
+        assertEquals(listOf(FieldLabel("f1", "Number", "text"), FieldLabel("f3", "Valid to", "date")), g.received.single().labels)
+        assertTrue(g.given.single().labels.isEmpty())
+        // `requested`: the entries exactly as sent, and the state (pending when absent).
+        assertEquals(
+            listOf(GrantAskEntry("category", "medical", "Your vaccination record"), GrantAskEntry("item", "01ITEM")),
+            g.requested[0].entries,
+        )
+        assertEquals("granted", g.requested[0].state)
+        assertEquals("pending", g.requested[1].state)
     }
 
     @Test

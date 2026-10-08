@@ -139,7 +139,12 @@ object ApprovalParser {
             connectionId = conn,
             entries = body.a("items").mapNotNull { i ->
                 val kind = i.s("kind") ?: return@mapNotNull null
-                GrantEntry(kind, i.s("ref") ?: "", i.s("label"), i.b("available") ?: false)
+                GrantEntry(
+                    kind, i.s("ref") ?: "", i.s("label"), i.b("available") ?: false,
+                    name = i.s("name"),
+                    category = i.s("category"),
+                    labels = if (i["labels"] is JsonArray) com.vettid.core.data.items.SharingManager.labels(i) else null,
+                )
             },
             uses = body.l("uses")?.toInt(),
             expiresIn = body.l("expires_in"),
@@ -166,6 +171,7 @@ object ApprovalParser {
             context = body.s("context"),
             receivedAt = at,
             exp = instant(body.s("exp")),
+            kind = body.s("kind"),
         )
     }
 

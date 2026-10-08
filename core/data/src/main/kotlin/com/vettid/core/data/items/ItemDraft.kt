@@ -4,30 +4,43 @@ import com.vettid.core.crypto.CryptoException
 import com.vettid.core.crypto.item.ItemSpec
 import com.vettid.core.crypto.json.JsonBuilder
 
-/** One field being edited: an existing field ([fieldId] set) or a new one. Address kinds use [address], the rest [text]. */
+/**
+ * One field being edited: an existing field ([fieldId] set) or a new one. Address kinds use [address], the rest
+ * [text]. [kept]: the field's stored value is not at hand (a `secret` or `critical` item, VAULT-MESSAGING 0.21.0
+ * §10.7 Kept values) and the vault keeps it; the field is sent without `value` until the member types into it.
+ */
 data class DraftField(
     val fieldId: String? = null,
     val label: String,
     val kind: String,
     val text: String = "",
     val address: AddressValue = AddressValue(),
+    val kept: Boolean = false,
 ) {
     val value: FieldValue get() = if (kind == FieldKinds.ADDRESS) FieldValue.Address(address) else FieldValue.Text(text)
 
-    override fun toString(): String = "DraftField($fieldId, $kind)"
+    override fun toString(): String = "DraftField($fieldId, $kind${if (kept) ", kept" else ""})"
 
     companion object {
         fun of(f: ItemFieldView): DraftField = when (val v = f.value) {
             is FieldValue.Address -> DraftField(f.fieldId, f.label, f.kind, address = v.address)
             is FieldValue.Text -> DraftField(f.fieldId, f.label, f.kind, text = v.text)
-            null -> DraftField(f.fieldId, f.label, f.kind)
+            null -> DraftField(f.fieldId, f.label, f.kind, kept = f.fieldId != null)
         }
     }
 }
 
 /**
- * An item as the member edits it (§10.7): created from a template or blank, or from an item's revealed content.
- * [tags] are as typed; [ItemChecks] normalises them.
+ * What an edit of an item without its values started from (§10.7 Kept values): the ids of the fields whose values
+ * the vault keeps, whether it keeps notes, and the bytes those values and notes add to the item's size ([bytes]:
+ * `item.get`'s `size` less the metadata's; null when the vault gave no `size`).
+ */
+data class KeptBase(val fieldIds: Set<String>, val notes: Boolean, val bytes: Int?)
+
+/**
+ * An item as the member edits it (§10.7): created from a template or blank, or from an item's content. A `data` item
+ * (or a revealed one) is edited with its values; a `secret` or `critical` one with its stored values kept ([kept]
+ * fields, [keepNotes]): editing never reveals them. [tags] are as typed; [ItemChecks] normalises them.
  */
 data class ItemDraft(
     val name: String = "",
@@ -37,20 +50,36 @@ data class ItemDraft(
     val tags: List<String> = emptyList(),
     val fields: List<DraftField> = emptyList(),
     val notes: String = "",
+    /** The stored notes are kept (`keep_notes`, §10.7); [notes] is then empty. */
+    val keepNotes: Boolean = false,
+    val base: KeptBase? = null,
 ) {
     override fun toString(): String = "ItemDraft(${sensitivity.wire}, ${fields.size} fields)"
 
+    /** Whether anything is sent as kept (a field without `value`, or `keep_notes`). */
+    val keeps: Boolean get() = keepNotes || fields.any { it.kept }
+
     companion object {
-        /** The draft of an item whose values are at hand (a `data` item, or a revealed one). */
-        fun of(d: ItemDetail): ItemDraft = ItemDraft(
-            name = d.name,
-            category = d.category,
-            template = d.template,
-            sensitivity = d.sensitivity,
-            tags = d.tags,
-            fields = d.fields.map(DraftField::of),
-            notes = d.notes.orEmpty(),
-        )
+        /**
+         * The draft of an item: with its values when they are at hand (a `data` item, or a revealed one), else with
+         * every stored value and the notes kept, and the bytes they add from the item's [ItemDetail.size].
+         */
+        fun of(d: ItemDetail): ItemDraft {
+            val draft = ItemDraft(
+                name = d.name,
+                category = d.category,
+                template = d.template,
+                sensitivity = d.sensitivity,
+                tags = d.tags,
+                fields = d.fields.map(DraftField::of),
+                notes = d.notes.orEmpty(),
+                keepNotes = !d.revealed && d.hasNotes,
+            )
+            if (!draft.keeps) return draft
+            val ids = draft.fields.filter { it.kept }.mapNotNull { it.fieldId }.toSet()
+            val bytes = d.size?.let { (it - ItemChecks.visibleSize(draft, d.tags)).coerceAtLeast(0) }
+            return draft.copy(base = KeptBase(ids, draft.keepNotes, bytes))
+        }
     }
 }
 
@@ -72,13 +101,15 @@ enum class DraftProblem {
     /** `@profile` is allowed only on `data` items (§10.8). */
     PROFILE_NOT_DATA,
 
-    /** The item's encoding would exceed 65,536 bytes (12,288 for a critical item). */
+    /** The item's size (§10.7 Size) would exceed 65,536 bytes (12,288 for a critical item). */
     TOO_LARGE,
 }
 
 /**
  * A draft's check: [problems] of the item, [fieldProblems] by field index, the normalised [tags] (null when a tag
- * is invalid), and the item's [size] as the vault would encode it (an upper bound).
+ * is invalid), and the item's [size] as the vault counts it (§10.7 Size, 0.21.0). [exact] is false when kept values
+ * are counted from the stored size but some of them left (removed or replaced fields, notes): [size] is then an upper
+ * bound; [sizeKnown] is false when the vault gave no stored size (only the values at hand are counted).
  */
 data class DraftCheck(
     val problems: Set<DraftProblem> = emptySet(),
@@ -86,8 +117,13 @@ data class DraftCheck(
     val tags: List<String>? = emptyList(),
     val size: Int = 0,
     val maxSize: Int = ItemSpec.MAX_ITEM_BYTES,
+    val exact: Boolean = true,
+    val sizeKnown: Boolean = true,
 ) {
     val ok: Boolean get() = problems.isEmpty() && fieldProblems.isEmpty()
+
+    /** The room left before the size limit; null when the size is not known. */
+    val roomLeft: Int? get() = if (sizeKnown) maxSize - size else null
 }
 
 /** The checks of §10.7 and §10.8 on what the member typed, and the size of the item it would become. */
@@ -132,9 +168,10 @@ object ItemChecks {
         return n.takeIf { it.size <= MAX_TAGS }
     }
 
-    /** The problems of one value of [kind] (an address checks each member). */
-    @Suppress("ReturnCount")
+    /** The problems of one value of [kind] (an address checks each member; `file` is reserved, §10.7). */
+    @Suppress("ReturnCount", "CyclomaticComplexMethod")
     fun valueProblems(kind: String, v: FieldValue): Set<DraftProblem> {
+        if (kind == FieldKinds.FILE) return setOf(DraftProblem.VALUE_INVALID)
         if (v is FieldValue.Address || kind == FieldKinds.ADDRESS) {
             val a = (v as? FieldValue.Address)?.address ?: return setOf(DraftProblem.VALUE_INVALID)
             val out = mutableSetOf<DraftProblem>()
@@ -184,34 +221,47 @@ object ItemChecks {
             PROFILE_TAG in tags && d.sensitivity != Sensitivity.DATA -> problems += DraftProblem.PROFILE_NOT_DATA
         }
         val fieldProblems = d.fields.mapIndexedNotNull { i, f ->
-            (labelProblems(f.label.trim()) + valueProblems(f.kind, f.value)).takeIf { it.isNotEmpty() }?.let { i to it }
+            // A kept value was checked by the vault for its kind (§10.7 Kept values); a kept file field cannot exist.
+            val value = if (f.kept && f.kind != FieldKinds.FILE) emptySet() else valueProblems(f.kind, f.value)
+            (labelProblems(f.label.trim()) + value).takeIf { it.isNotEmpty() }?.let { i to it }
         }.toMap()
         val max = if (d.sensitivity == Sensitivity.CRITICAL) MAX_CRITICAL_BYTES else MAX_ITEM_BYTES
-        val size = size(d, tags ?: emptyList())
-        if (size > max) problems += DraftProblem.TOO_LARGE
-        return DraftCheck(problems, fieldProblems, tags, size, max)
+        val visible = visibleSize(d, tags ?: emptyList())
+        val base = d.base
+        val bytes = base?.bytes
+        val (size, exact, known) = when {
+            !d.keeps -> Triple(visible, true, true)
+            bytes == null -> Triple(visible, false, false)
+            else -> {
+                val keptIds = d.fields.filter { it.kept }.mapNotNull { it.fieldId }.toSet()
+                Triple(visible + bytes, keptIds == base.fieldIds && d.keepNotes == base.notes, true)
+            }
+        }
+        // An inexact size is an upper bound: only what is certain (the values at hand) refuses the draft.
+        if ((if (exact) size else visible) > max) problems += DraftProblem.TOO_LARGE
+        return DraftCheck(problems, fieldProblems, tags, size, max, exact, known)
     }
 
     /**
-     * An upper bound of the item's encoding as `item.get` gives it with every value (§10.7 "Size"; the reference's
-     * `Item.JSON(true)`): the longest id, version, field ids and timestamps the vault could give it.
+     * The item's size as the vault counts it (§10.7 Size, 0.21.0): the length of its content encoding, without the
+     * members the vault assigns (`item_id`, `version`, the times and the field ids). Exact for a draft that holds
+     * every value; a kept value counts as empty here ([check] adds what the stored size says it holds).
+     *
+     * `{"name":…,"category":…,"sensitivity":…[,"template":…],"tags":[…],"fields":[{"label":…,"kind":…,"value":…},…][,"notes":…]}`
      */
-    fun size(d: ItemDraft, tags: List<String>): Int {
-        val b = JsonBuilder().string("item_id", ULID_SIZED).raw("version", MAX_VERSION).string("name", d.name.trim())
-            .string("category", d.category).string("sensitivity", d.sensitivity.wire)
+    fun visibleSize(d: ItemDraft, tags: List<String>): Int {
+        val b = JsonBuilder().string("name", d.name.trim()).string("category", d.category).string("sensitivity", d.sensitivity.wire)
         d.template?.let { b.string("template", it) }
         b.raw("tags", JsonBuilder.array(tags.map { JsonBuilder.quote(it) }))
         b.raw(
             "fields",
             JsonBuilder.array(
                 d.fields.map { f ->
-                    JsonBuilder().string("field_id", f.fieldId ?: FIELD_ID_SIZED).string("label", f.label.trim()).string("kind", f.kind)
-                        .raw("value", valueJson(f.value)).build()
+                    JsonBuilder().string("label", f.label.trim()).string("kind", f.kind).raw("value", valueJson(f.value)).build()
                 },
             ),
         )
-        if (d.notes.isNotEmpty()) b.string("notes", d.notes)
-        b.string("created_at", TS_SIZED).string("updated_at", TS_SIZED)
+        if (!d.keepNotes && d.notes.isNotEmpty()) b.string("notes", d.notes)
         return b.bytes().size
     }
 
@@ -222,9 +272,4 @@ object ItemChecks {
             v.address.parts().filter { it.second.isNotEmpty() }.forEach { (k, s) -> b.string(k, s) }
         }.build()
     }
-
-    private const val ULID_SIZED = "01ARZ3NDEKTSV4RRFFQ69G5FAV"
-    private const val MAX_VERSION = "9007199254740991"
-    private const val FIELD_ID_SIZED = "f9999999"
-    private const val TS_SIZED = "2026-10-07T12:34:56.789123456Z"
 }

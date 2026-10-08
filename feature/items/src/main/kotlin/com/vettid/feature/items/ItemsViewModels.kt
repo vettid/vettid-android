@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.items.AddressValue
 import com.vettid.core.data.items.DraftCheck
 import com.vettid.core.data.items.DraftField
+import com.vettid.core.data.items.FieldKinds
 import com.vettid.core.data.items.ItemChecks
 import com.vettid.core.data.items.ItemDetail
 import com.vettid.core.data.items.ItemDraft
@@ -21,8 +22,11 @@ import com.vettid.core.data.items.SharingRepository
 import com.vettid.core.data.social.ConnectionsRepository
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.data.vault.VaultLimit
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -112,6 +116,8 @@ data class ItemDetailUiState(
     /** The sensitivity the member picked, waiting for the password or the warning. */
     val target: Sensitivity? = null,
     val deleted: Boolean = false,
+    /** The limit a `limit` error named (VAULT-MESSAGING 0.21.0 §10.1). */
+    val limit: VaultLimit? = null,
 ) {
     val revealed: Boolean get() = item?.revealed == true
 }
@@ -181,7 +187,7 @@ class ItemDetailViewModel @Inject constructor(saved: SavedStateHandle, private v
 
     fun dismissDialog() = state.update { it.copy(dialog = null, target = null) }
 
-    fun dismissError() = state.update { it.copy(error = null) }
+    fun dismissError() = state.update { it.copy(error = null, limit = null) }
 
     /** Delete confirmed: a critical item asks for the password next. */
     fun confirmDelete() {
@@ -242,11 +248,6 @@ class ItemDetailViewModel @Inject constructor(saved: SavedStateHandle, private v
         }
     }
 
-    /** Before the edit screen opens: revealed values go with it (in memory), so that it does not reveal them again. */
-    fun handOff() {
-        state.value.item?.takeIf { it.sensitivity != Sensitivity.DATA && it.revealed }?.let { items.keepOpened(it) }
-    }
-
     private suspend fun reload() {
         val d = items.get(id)
         state.update { it.copy(item = d, shown = emptySet()) }
@@ -263,7 +264,14 @@ class ItemDetailViewModel @Inject constructor(saved: SavedStateHandle, private v
                     if (prompt != null && (e.kind == FailureKind.BAD_PASSWORD || e.kind == FailureKind.BACKOFF)) {
                         it.copy(busy = false, prompt = prompt.refused(e, Instant.now()))
                     } else {
-                        it.copy(busy = false, prompt = null, target = null, error = e.kind, missing = e.kind == FailureKind.NOT_FOUND)
+                        it.copy(
+                            busy = false,
+                            prompt = null,
+                            target = null,
+                            error = e.kind,
+                            limit = e.limit,
+                            missing = e.kind == FailureKind.NOT_FOUND,
+                        )
                     }
                 }
             }
@@ -273,8 +281,16 @@ class ItemDetailViewModel @Inject constructor(saved: SavedStateHandle, private v
 
 // --- adding and editing ---
 
-/** A connection whose share rule the item would newly match ([connectionName] "" before its names arrived). */
-data class ShareImpact(val connectionName: String, val mode: ShareMode, val usableOnly: Boolean = false)
+/**
+ * A rule the item would gain ([withdrawn] false) or leave ([withdrawn] true) when saved, for one connection
+ * ([connectionName] "" before its names arrived); [usableOnly] for a critical item, which a rule makes only usable.
+ */
+data class ShareImpact(
+    val connectionName: String,
+    val mode: ShareMode,
+    val usableOnly: Boolean = false,
+    val withdrawn: Boolean = false,
+)
 
 /** Immutable UI state of the add/edit screen. */
 data class ItemEditUiState(
@@ -283,32 +299,38 @@ data class ItemEditUiState(
     val check: DraftCheck = DraftCheck(),
     val version: Long = 0,
     val loading: Boolean = false,
-    /** A critical item opened without its values at hand: the password opens it first. */
-    val needsOpen: Boolean = false,
     /** Problems are shown once the member tried to save. */
     val showErrors: Boolean = false,
     val busy: Boolean = false,
     val prompt: PasswordPrompt? = null,
     val error: FailureKind? = null,
+    /** The limit a `limit` error named (VAULT-MESSAGING 0.21.0 §10.1); null from an older vault. */
+    val limit: VaultLimit? = null,
     val tagInput: String = "",
     val dirty: Boolean = false,
     val confirmDiscard: Boolean = false,
     /** Set when saved: the item to show. */
     val savedId: String? = null,
-    /** Share rules the item newly matches with the tags as they are now (the effect shown before saving, §10.7). */
+    /**
+     * What saving does to sharing with the tags as they are now: the vault's dry run (§10.7, 0.21.0), or for an
+     * older vault the share rules the item newly matches.
+     */
     val shareImpact: List<ShareImpact> = emptyList(),
 ) {
     val isNew: Boolean get() = itemId == null
 
     /** Whether the item carries the reserved `@profile` tag (connections see it in the shared profile, §10.8). */
     val inProfile: Boolean get() = ItemChecks.PROFILE_TAG in draft.tags
+
+    override fun toString(): String = "ItemEditUiState(itemId=$itemId, busy=$busy, error=$error)"
 }
 
 /**
- * Adding an item from a template or blank, or editing one (§10.7). A secret item is edited from its revealed values
- * (the detail screen hands them over, else `item.reveal`); a critical one from values opened with the password, and
- * saved with the password again (a credential operation each time, §3.5.3). Sensitivity is chosen at creation;
- * changing it later is the detail screen's (`item.sensitivity`).
+ * Adding an item from a template or blank, or editing one (§10.7). A `data` item is edited with its values; a
+ * `secret` or `critical` one with its stored values kept (VAULT-MESSAGING 0.21.0 §10.7 Kept values): each shows as
+ * kept, never revealed, and only what the member types is sent. A critical item is saved with the credential password
+ * (one credential operation, §3.5.3); a secret one with nothing more. Sensitivity is chosen at creation; changing it
+ * later is the detail screen's (`item.sensitivity`). The sharing notice is the vault's dry run.
  */
 @HiltViewModel
 @Suppress("TooManyFunctions")
@@ -319,8 +341,12 @@ class ItemEditViewModel @Inject constructor(
     private val sharing: SharingRepository,
     private val connections: ConnectionsRepository,
 ) : ViewModel() {
-    private var rules: List<ShareRule> = emptyList()
+    /** The share rules, read only for a vault without the dry run (before 0.21.0). */
+    private var rules: List<ShareRule>? = null
+    private var noDryRun = false
     private var savedTags: List<String> = emptyList()
+    private var impactKey: Pair<List<String>, Sensitivity>? = null
+    private var impactJob: Job? = null
 
     private val route = ItemEditRoute(saved[ItemEditRoute.ARG_ITEM], saved[ItemEditRoute.ARG_TEMPLATE])
     private val state = MutableStateFlow(ItemEditUiState(itemId = route.itemId))
@@ -333,61 +359,78 @@ class ItemEditViewModel @Inject constructor(
         } else {
             load(route.itemId)
         }
-        viewModelScope.launch {
-            rules = runCatching { sharing.rules() }.getOrDefault(emptyList())
-            impact()
-        }
     }
 
-    /** The rules (of connections) the item gains with its current tags, as §10.12 matches them. */
+    /**
+     * What saving would do to sharing (§10.7 Dry run): asked again when the tags (or a new item's sensitivity)
+     * change, after a short pause. An existing item whose tags did not change gains and leaves nothing.
+     */
+    @Suppress("ReturnCount")
     private fun impact() {
-        val d = state.value.draft
+        val s = state.value
+        if (s.loading) return
+        val d = s.draft
         val tags = ItemChecks.normalizeTags(d.tags) ?: return
-        val names = connections.connections.value.associate { it.id to it.displayName }
-        val gained = rules.filter { r -> r.connectionId != null && r.matches(tags) && !r.matches(savedTags) }
-        state.update { s ->
-            s.copy(
-                shareImpact = gained.map { r ->
-                    ShareImpact(names[r.connectionId].orEmpty(), r.mode, usableOnly = d.sensitivity == Sensitivity.CRITICAL)
-                },
-            )
+        val key = tags to d.sensitivity
+        if (key == impactKey) return
+        impactKey = key
+        impactJob?.cancel()
+        if (!s.isNew && tags == savedTags) return state.update { it.copy(shareImpact = emptyList()) }
+        impactJob = viewModelScope.launch {
+            delay(IMPACT_DEBOUNCE_MS)
+            val impact = try {
+                if (noDryRun) localImpact(tags, d.sensitivity) else dryRun(s, tags, d.sensitivity)
+            } catch (e: VaultFailure) {
+                // A vault before 0.21.0 refuses the dry run (no content: nothing is saved); its rules are read instead.
+                if (e.kind == FailureKind.NOT_SUPPORTED || e.kind == FailureKind.OTHER && e.code == CODE_BAD_REQUEST) {
+                    noDryRun = true
+                    runCatching { localImpact(tags, d.sensitivity) }.getOrDefault(emptyList())
+                } else {
+                    emptyList()
+                }
+            }
+            state.update { it.copy(shareImpact = impact) }
         }
     }
 
+    private suspend fun dryRun(s: ItemEditUiState, tags: List<String>, sensitivity: Sensitivity): List<ShareImpact> {
+        val e = items.shareEffect(s.itemId, s.version.takeIf { s.itemId != null }, sensitivity, tags)
+        val names = connections.connections.value.associate { it.id to it.displayName }
+        // v1 pairs no agents (D3): only connection rules are shown.
+        return e.shares.mapNotNull { x -> x.subject.connectionId?.let { ShareImpact(names[it].orEmpty(), x.mode, x.usable) } } +
+            e.withdrawals.mapNotNull { x ->
+                x.subject.connectionId?.let { ShareImpact(names[it].orEmpty(), ShareMode.ASK, withdrawn = true) }
+            }
+    }
+
+    /** Before 0.21.0: the connection rules the item newly matches by its tags (§10.12), as the app reads them. */
+    private suspend fun localImpact(tags: List<String>, sensitivity: Sensitivity): List<ShareImpact> {
+        val all = rules ?: sharing.rules().also { rules = it }
+        val names = connections.connections.value.associate { it.id to it.displayName }
+        return all.filter { r -> r.connectionId != null && r.matches(tags) && !r.matches(savedTags) }
+            .map { r -> ShareImpact(names[r.connectionId].orEmpty(), r.mode, usableOnly = sensitivity == Sensitivity.CRITICAL) }
+    }
+
+    /** The item's metadata (`item.get`): a data item with its values, a secret or critical one with them kept. */
     private fun load(itemId: String) {
-        val opened = items.takeOpened(itemId)
-        if (opened != null) return edit(opened)
         state.update { it.copy(loading = true, error = null) }
         viewModelScope.launch {
             try {
-                val meta = items.get(itemId)
-                when (meta.sensitivity) {
-                    Sensitivity.DATA -> edit(meta)
-                    Sensitivity.SECRET -> edit(items.reveal(itemId))
-                    Sensitivity.CRITICAL -> state.update {
-                        it.copy(
-                            loading = false,
-                            needsOpen = true,
-                            version = meta.version,
-                            draft = ItemDraft.of(meta),
-                            prompt = PasswordPrompt(PasswordPurpose.OPEN),
-                        )
-                    }
-                }
+                edit(items.get(itemId))
             } catch (e: VaultFailure) {
-                state.update { it.copy(loading = false, error = e.kind) }
+                state.update { it.copy(loading = false, error = e.kind, limit = e.limit) }
             }
         }
     }
 
     private fun edit(d: ItemDetail) {
         savedTags = d.tags
-        state.update { it.copy(loading = false, needsOpen = false, version = d.version, prompt = null) }
+        state.update { it.copy(loading = false, version = d.version, prompt = null) }
         setDraft(ItemDraft.of(d), dirty = false)
     }
 
     private fun setDraft(d: ItemDraft, dirty: Boolean = true) {
-        state.update { it.copy(draft = d, check = ItemChecks.check(d), dirty = it.dirty || dirty, error = null) }
+        state.update { it.copy(draft = d, check = ItemChecks.check(d), dirty = it.dirty || dirty, error = null, limit = null) }
         impact()
     }
 
@@ -405,7 +448,11 @@ class ItemEditViewModel @Inject constructor(
         if (state.value.isNew) change { it.copy(sensitivity = s) }
     }
 
-    fun setNotes(v: String) = change { it.copy(notes = v) }
+    /** Typing replaces kept notes (§10.7: `notes` instead of `keep_notes`). */
+    fun setNotes(v: String) = change { it.copy(notes = v, keepNotes = false) }
+
+    /** Removes kept notes: neither `notes` nor `keep_notes` is sent (§10.7). */
+    fun removeNotes() = change { it.copy(notes = "", keepNotes = false) }
 
     fun setTagInput(v: String) = state.update { it.copy(tagInput = v) }
 
@@ -420,14 +467,18 @@ class ItemEditViewModel @Inject constructor(
 
     fun setFieldLabel(i: Int, v: String) = changeField(i) { it.copy(label = v) }
 
-    fun setFieldText(i: Int, v: String) = changeField(i) { it.copy(text = v) }
+    /** Typing into a kept field replaces its stored value (it is sent with `value` from now on). */
+    fun setFieldText(i: Int, v: String) = changeField(i) { it.copy(text = v, kept = false) }
 
-    fun setFieldAddress(i: Int, v: AddressValue) = changeField(i) { it.copy(address = v) }
+    fun setFieldAddress(i: Int, v: AddressValue) = changeField(i) { it.copy(address = v, kept = false) }
 
-    /** The kind of a field not yet saved (a saved field keeps its kind: its id names the same field, §10.7). */
+    /** The kind of a field not yet saved (a saved field keeps its kind: a kept value must keep it, §10.7). */
     fun setFieldKind(i: Int, kind: String) = changeField(i) { if (it.fieldId == null) it.copy(kind = kind) else it }
 
-    fun addField(label: String, kind: String) = change { d -> d.copy(fields = d.fields + DraftField(label = label, kind = kind)) }
+    fun addField(label: String, kind: String) {
+        if (kind !in FieldKinds.CHOOSABLE) return
+        change { d -> d.copy(fields = d.fields + DraftField(label = label, kind = kind)) }
+    }
 
     fun removeField(i: Int) = change { d -> d.copy(fields = d.fields.filterIndexed { j, _ -> j != i }) }
 
@@ -442,11 +493,11 @@ class ItemEditViewModel @Inject constructor(
 
     fun askDiscard(show: Boolean) = state.update { it.copy(confirmDiscard = show) }
 
-    fun dismissError() = state.update { it.copy(error = null) }
+    fun dismissError() = state.update { it.copy(error = null, limit = null) }
 
     fun save() {
         val s = state.value
-        if (s.busy || s.needsOpen) return
+        if (s.busy || s.loading) return
         val check = ItemChecks.check(s.draft)
         if (!check.ok) return state.update { it.copy(check = check, showErrors = true) }
         if (s.draft.sensitivity == Sensitivity.CRITICAL) {
@@ -465,23 +516,12 @@ class ItemEditViewModel @Inject constructor(
         if (!p.canSend(Instant.now())) return
         val pw = p.password
         state.update { it.copy(prompt = p.copy(busy = true, password = "", error = null)) }
-        if (p.purpose == PasswordPurpose.OPEN) open(p, pw) else send(p, pw)
-    }
-
-    private fun open(p: PasswordPrompt, pw: String) {
-        val itemId = state.value.itemId ?: return
-        viewModelScope.launch {
-            try {
-                edit(items.revealCritical(itemId, pw))
-            } catch (e: VaultFailure) {
-                refused(p, e)
-            }
-        }
+        send(p, pw)
     }
 
     private fun send(p: PasswordPrompt?, pw: String) {
         val s = state.value
-        state.update { it.copy(busy = true, error = null) }
+        state.update { it.copy(busy = true, error = null, limit = null) }
         viewModelScope.launch {
             try {
                 val critical = s.draft.sensitivity == Sensitivity.CRITICAL
@@ -494,7 +534,7 @@ class ItemEditViewModel @Inject constructor(
                 state.update { it.copy(busy = false, prompt = null, savedId = id, dirty = false) }
             } catch (e: VaultFailure) {
                 state.update { it.copy(busy = false) }
-                if (p != null) refused(p, e) else state.update { it.copy(error = e.kind) }
+                if (p != null) refused(p, e) else state.update { it.copy(error = e.kind, limit = e.limit) }
             }
         }
     }
@@ -503,7 +543,12 @@ class ItemEditViewModel @Inject constructor(
         if (e.kind == FailureKind.BAD_PASSWORD || e.kind == FailureKind.BACKOFF) {
             it.copy(busy = false, prompt = p.refused(e, Instant.now()))
         } else {
-            it.copy(busy = false, prompt = null, error = e.kind)
+            it.copy(busy = false, prompt = null, error = e.kind, limit = e.limit)
         }
+    }
+
+    private companion object {
+        const val IMPACT_DEBOUNCE_MS = 400L
+        const val CODE_BAD_REQUEST = "bad_request"
     }
 }

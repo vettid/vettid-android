@@ -230,8 +230,12 @@ class SharingManager(
             requested = arr(o, "requested").mapNotNull { r ->
                 val id = VaultJson.str(r, "request_id") ?: return@mapNotNull null
                 val conn = VaultJson.str(r, "connection_id") ?: return@mapNotNull null
-                val labels = arr(r, "items").mapNotNull { VaultJson.str(it, "label") ?: VaultJson.str(it, "ref") }
-                GrantAsk(id, conn, labels, VaultJson.str(r, "state") ?: "")
+                // §10.12 (0.21.0): the entries exactly as sent; the label is the member's own description.
+                val entries = arr(r, "items").mapNotNull { e ->
+                    val kind = VaultJson.str(e, "kind") ?: return@mapNotNull null
+                    GrantAskEntry(kind, VaultJson.str(e, "ref") ?: "", VaultJson.str(e, "label")?.takeIf { it.isNotBlank() })
+                }
+                GrantAsk(id, conn, entries, VaultJson.str(r, "state") ?: "pending")
             },
         )
     }
@@ -365,7 +369,14 @@ class SharingManager(
                 expiresAt = instant(VaultJson.str(o, "expires_at")),
                 state = VaultJson.str(o, "state") ?: GrantView.STATE_ACTIVE,
                 createdAt = instant(VaultJson.str(o, "created_at")),
+                labels = labels(o),
             )
+        }
+
+        /** `labels: [{field_id, label, kind}]` (§10.12: a received grant's, a grant request entry's); malformed entries are skipped. */
+        fun labels(o: JsonObject): List<FieldLabel> = arr(o, "labels").mapNotNull { l ->
+            val id = VaultJson.str(l, "field_id") ?: return@mapNotNull null
+            FieldLabel(id, VaultJson.str(l, "label") ?: "", VaultJson.str(l, "kind") ?: FieldKinds.TEXT)
         }
 
         /** A fetched content (`{item_id, version, name, category, fields: [{field_id, label, kind, value}], notes?}`, §10.12). */

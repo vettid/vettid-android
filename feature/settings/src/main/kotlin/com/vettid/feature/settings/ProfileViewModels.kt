@@ -37,6 +37,8 @@ data class SharedProfileUiState(
     val busy: Boolean = false,
     val saved: Boolean = false,
     val error: FailureKind? = null,
+    /** The limit a `limit` error named (VAULT-MESSAGING 0.21.0 §10.1: `profile_items`, `profile_size`). */
+    val limit: com.vettid.core.data.vault.VaultLimit? = null,
     /** A photo chosen and encoded (base64 JPEG, at most 65,536 bytes), shown as a preview until saved or dropped. */
     val pendingPhoto: String? = null,
     /** The chosen picture is being read and encoded, or the photo is being saved. */
@@ -125,7 +127,7 @@ class SharedProfileViewModel @Inject constructor(
                 items.setTags(i.itemId, i.version, tags)
                 state.update { it.copy(itemsBusy = false) }
             } catch (e: VaultFailure) {
-                state.update { it.copy(itemsBusy = false, error = e.kind) }
+                state.update { it.copy(itemsBusy = false, error = e.kind, limit = e.limit) }
             }
         }
     }

@@ -250,6 +250,7 @@ class VaultApi(val device: VaultDevice) {
         c.template?.let { put("template", it) }
         c.fields?.let { fs -> put("fields", VaultJson.json.encodeToJsonElement(ListSerializer(ItemField.serializer()), fs)) }
         c.notes?.let { put("notes", it) }
+        if (c.keepNotes) put("keep_notes", true)
     }
 
     private fun JsonObjectBuilder.tags(tags: List<String>) = putJsonArray("tags") { tags.forEach { add(JsonPrimitive(it)) } }
@@ -291,6 +292,24 @@ class VaultApi(val device: VaultDevice) {
                 tags?.let { tags(it) }
             },
         ).first.decode(ItemRef.serializer())
+
+    /**
+     * What an `item.put` would do to sharing (§10.7 Dry run, 0.21.0): `{version?, shares, withdrawals}`, changing
+     * nothing. Never carries content: an older vault, which knows no `dry_run`, refuses a put without `name`
+     * (`bad_request`) instead of saving anything.
+     */
+    suspend fun itemPutDryRun(
+        itemId: String? = null,
+        version: Long? = null,
+        sensitivity: String? = null,
+        tags: List<String>? = null,
+    ): JsonObject = op("item.put") {
+        put("dry_run", true)
+        itemId?.let { put("item_id", it) }
+        version?.let { put("version", it) }
+        sensitivity?.let { put("sensitivity", it) }
+        tags?.let { tags(it) }
+    }
 
     suspend fun itemGet(itemId: String): Item = op("item.get") { put("item_id", itemId) }.decode(Item.serializer())
 
@@ -465,6 +484,31 @@ class VaultApi(val device: VaultDevice) {
         put("rule_id", ruleId)
         putJsonArray("items") { items.forEach { add(JsonPrimitive(it)) } }
         put("approve", approve)
+    }
+
+    /** Includes [include] and declines [decline], items of one rule, in one change (§10.12, 0.21.0). */
+    suspend fun shareDecide(ruleId: String, include: List<String>, decline: List<String>): JsonObject = op("share.decide") {
+        put("rule_id", ruleId)
+        if (include.isNotEmpty()) putJsonArray("include") { include.forEach { add(JsonPrimitive(it)) } }
+        if (decline.isNotEmpty()) putJsonArray("decline") { decline.forEach { add(JsonPrimitive(it)) } }
+    }
+
+    /**
+     * The items waiting for the member's share decisions (§10.12 `share.pending.list`, 0.21.0): `{pending: [{rule_id,
+     * subject, item_id, name, category, sensitivity, at}], next?}`, sorted by rule, then item.
+     */
+    suspend fun sharePendingList(
+        ruleId: String? = null,
+        connectionId: String? = null,
+        agentId: String? = null,
+        after: String? = null,
+        limit: Int? = null,
+    ): JsonObject = op("share.pending.list") {
+        ruleId?.let { put("rule_id", it) }
+        connectionId?.let { put("connection_id", it) }
+        agentId?.let { put("agent_id", it) }
+        after?.let { put("after", it) }
+        limit?.let { put("limit", it) }
     }
 
     // --- connections (§10.4) ---

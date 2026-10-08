@@ -80,6 +80,7 @@ internal fun ItemEditRouteContent(host: ItemsHost) {
             onCategory = vm::setCategory,
             onSensitivity = vm::setSensitivity,
             onNotes = vm::setNotes,
+            onRemoveNotes = vm::removeNotes,
             onTagInput = vm::setTagInput,
             onAddTag = vm::addTag,
             onRemoveTag = vm::removeTag,
@@ -94,7 +95,7 @@ internal fun ItemEditRouteContent(host: ItemsHost) {
             onDismissError = vm::dismissError,
             onPassword = vm::setPassword,
             onSubmitPassword = vm::submitPassword,
-            onCancelPassword = { if (state.needsOpen) host.onBack() else vm.cancelPassword() },
+            onCancelPassword = vm::cancelPassword,
         ),
     )
 }
@@ -108,6 +109,7 @@ data class ItemEditActions(
     val onCategory: (String) -> Unit = {},
     val onSensitivity: (Sensitivity) -> Unit = {},
     val onNotes: (String) -> Unit = {},
+    val onRemoveNotes: () -> Unit = {},
     val onTagInput: (String) -> Unit = {},
     val onAddTag: () -> Unit = {},
     val onRemoveTag: (String) -> Unit = {},
@@ -128,6 +130,8 @@ data class ItemEditActions(
 /**
  * Adding or editing an item (VAULT-ITEMS §9: name, category, sensitivity, tags, fields; §10.7's checks before
  * anything is sent). A new item picks its sensitivity here; a critical one is saved with the credential password.
+ * A secret or critical item's stored values show as kept, never revealed (VAULT-MESSAGING 0.21.0 §10.7 Kept values):
+ * typing into a field replaces its value.
  */
 @Composable
 @Suppress("CyclomaticComplexMethod")
@@ -152,7 +156,7 @@ fun ItemEditScreen(state: ItemEditUiState, actions: ItemEditActions, modifier: M
         title = stringResource(if (state.isNew) R.string.items_new_title else R.string.items_edit_title),
         primaryLabel = stringResource(R.string.items_save),
         onPrimary = actions.onSave,
-        primaryEnabled = !state.needsOpen,
+        primaryEnabled = !state.loading,
         busy = state.busy,
         onBack = actions.onBack,
         modifier = modifier.testTag("item_edit"),
@@ -170,6 +174,7 @@ fun ItemEditScreen(state: ItemEditUiState, actions: ItemEditActions, modifier: M
                         creating = state.isNew,
                         critical = d.sensitivity == Sensitivity.CRITICAL,
                         profile = state.inProfile,
+                        limit = state.limit,
                     ),
                     modifier = Modifier.testTag("item_edit_error"),
                     actions = { TextButton(onClick = actions.onDismissError) { Text(stringResource(R.string.items_ok)) } },
@@ -202,15 +207,30 @@ fun ItemEditScreen(state: ItemEditUiState, actions: ItemEditActions, modifier: M
                 value = d.notes,
                 onValueChange = actions.onNotes,
                 label = { Text(stringResource(R.string.items_notes)) },
-                minLines = 3,
-                isError = show && DraftProblem.NOTES_TOO_LONG in problems,
-                supportingText = if (show && DraftProblem.NOTES_TOO_LONG in problems) {
-                    { Text(ItemsText.problem(DraftProblem.NOTES_TOO_LONG)) }
+                placeholder = if (d.keepNotes) {
+                    { Text(stringResource(R.string.items_notes_kept_placeholder)) }
                 } else {
                     null
                 },
+                minLines = 3,
+                isError = show && DraftProblem.NOTES_TOO_LONG in problems,
+                supportingText = when {
+                    show && DraftProblem.NOTES_TOO_LONG in problems -> {
+                        { Text(ItemsText.problem(DraftProblem.NOTES_TOO_LONG)) }
+                    }
+                    d.keepNotes -> {
+                        { Text(stringResource(R.string.items_notes_kept)) }
+                    }
+                    else -> null
+                },
                 modifier = Modifier.fillMaxWidth().testTag("item_edit_notes"),
             )
+            if (d.keepNotes) {
+                TextButton(
+                    onClick = actions.onRemoveNotes,
+                    modifier = Modifier.heightIn(min = Spacing.touchTarget).testTag("item_edit_notes_remove"),
+                ) { Text(stringResource(R.string.items_notes_remove)) }
+            }
             val other = problems - setOf(DraftProblem.NAME_EMPTY, DraftProblem.NAME_TOO_LONG, DraftProblem.NOTES_TOO_LONG)
             if (show && other.isNotEmpty()) {
                 NoticeCard(
@@ -345,6 +365,7 @@ private fun impactText(i: ShareImpact): String {
     val who = i.connectionName.ifBlank { stringResource(R.string.items_sharing_this_connection) }
         .let { com.vettid.core.data.account.AccountNames.isolate(it) }
     return when {
+        i.withdrawn -> stringResource(R.string.items_impact_withdrawn, who)
         i.usableOnly -> stringResource(R.string.items_impact_usable, who)
         i.mode == com.vettid.core.data.items.ShareMode.AUTO -> stringResource(R.string.items_impact_auto, who)
         else -> stringResource(R.string.items_impact_ask, who)
@@ -381,6 +402,14 @@ private fun FieldEditor(i: Int, f: DraftField, count: Int, problems: Set<DraftPr
         val valueProblem = (problems - setOf(DraftProblem.LABEL_EMPTY, DraftProblem.LABEL_TOO_LONG)).firstOrNull()
         val error = valueProblem?.let { ItemsText.problem(it, f.kind) }
         if (f.kind == FieldKinds.ADDRESS) {
+            if (f.kept) {
+                Text(
+                    stringResource(R.string.items_field_kept),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.testTag("item_edit_field_kept_$i"),
+                )
+            }
             AddressEditor(f.address, error) { actions.onFieldAddress(i, it) }
         } else {
             ValueEditor(i, f, error) { actions.onFieldText(i, it) }
@@ -413,12 +442,15 @@ private fun KindChoice(f: DraftField, onKind: (String) -> Unit, modifier: Modifi
 @Suppress("CyclomaticComplexMethod")
 private fun ValueEditor(i: Int, f: DraftField, error: String?, onValue: (String) -> Unit) {
     val tag = Modifier.fillMaxWidth().testTag("item_edit_field_value_$i")
+    // A kept value is not at hand (§10.7 Kept values): the field stays empty until the member types a new one.
+    val kept = if (f.kept) stringResource(R.string.items_field_kept) else null
     if (f.kind == FieldKinds.PASSWORD) {
         return SecretField(
             value = f.text,
             onValueChange = onValue,
             label = stringResource(R.string.items_field_value),
             error = error,
+            supporting = kept,
             modifier = tag,
         )
     }
@@ -440,11 +472,11 @@ private fun ValueEditor(i: Int, f: DraftField, error: String?, onValue: (String)
         value = f.text,
         onValueChange = { v -> onValue(if (multi) v else v.replace("\n", "")) },
         label = { Text(stringResource(R.string.items_field_value)) },
-        placeholder = placeholder?.let { p -> { Text(p) } },
+        placeholder = (if (f.kept) stringResource(R.string.items_field_kept_placeholder) else placeholder)?.let { p -> { Text(p) } },
         singleLine = !multi,
         minLines = if (multi) 3 else 1,
         isError = error != null,
-        supportingText = error?.let { e -> { Text(e) } },
+        supportingText = (error ?: kept)?.let { e -> { Text(e) } },
         textStyle = MaterialTheme.typography.bodyLarge.let {
             if (f.kind == FieldKinds.OTP) it.copy(fontFamily = FontFamily.Monospace) else it
         },
@@ -508,15 +540,27 @@ private fun AddFieldButton(enabled: Boolean, onAdd: (String, String) -> Unit) {
     }
 }
 
-/** How much of the item's size limit is used, once it is more than three quarters (§10.7: 64 KiB, a critical item 12 KiB). */
+/**
+ * The room left before the item's size limit (§10.7: 64 KiB, a critical item 12 KiB), once more than three quarters
+ * are used. Kept values count from the vault's `size` (0.21.0); when some of them leave, the room is "at least" that.
+ */
 @Composable
 private fun SizeNote(state: ItemEditUiState) {
     val c = state.check
+    val left = c.roomLeft ?: return
     if (c.size * 4 < c.maxSize * 3) return
+    val kb = { b: Int -> (b + KB - 1) / KB }
+    val text = when {
+        left < 0 -> stringResource(R.string.items_size_over, kb(-left), c.maxSize / KB)
+        c.exact -> stringResource(R.string.items_size_left, left / KB, c.maxSize / KB)
+        else -> stringResource(R.string.items_size_left_at_least, left / KB, c.maxSize / KB)
+    }
     Text(
-        stringResource(R.string.items_size, (c.size + 1023) / 1024, c.maxSize / 1024),
+        text,
         style = MaterialTheme.typography.bodySmall,
-        color = if (c.size > c.maxSize) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+        color = if (left < 0 && c.exact) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.testTag("item_edit_size"),
     )
 }
+
+private const val KB = 1024

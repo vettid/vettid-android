@@ -46,6 +46,7 @@ import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.RequestState
 import com.vettid.core.data.social.needsDecision
+import com.vettid.core.data.vault.message
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.EmptyState
@@ -291,7 +292,11 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
         }
         state.error?.let {
             Spacer(Modifier.height(Spacing.m))
-            Text(failureText(it, state.retryUntil), color = MaterialTheme.colorScheme.error, modifier = Modifier.testTag("failure"))
+            Text(
+                failureText(it, state.retryUntil, state.limit),
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.testTag("failure"),
+            )
         }
     }
     if (state.confirmBlock) {
@@ -306,10 +311,18 @@ fun ApprovalDetailScreen(state: ApprovalDetailUiState, actions: DecisionActions,
     }
 }
 
-/** A refusal in words; a password backoff counts down to its end. */
+/** A refusal in words; a password backoff counts down to its end; a named limit (0.21.0 §10.1) says which. */
 @Composable
-private fun failureText(kind: com.vettid.core.data.vault.FailureKind, retryUntil: java.time.Instant?): String {
-    if (kind != com.vettid.core.data.vault.FailureKind.BACKOFF || retryUntil == null) return stringResource(kind.messageRes())
+private fun failureText(
+    kind: com.vettid.core.data.vault.FailureKind,
+    retryUntil: java.time.Instant?,
+    limit: com.vettid.core.data.vault.VaultLimit? = null,
+): String {
+    val resources = androidx.compose.ui.platform.LocalResources.current
+    val named = limit?.takeIf { kind == com.vettid.core.data.vault.FailureKind.LIMIT }?.message(resources)
+    if (named != null || kind != com.vettid.core.data.vault.FailureKind.BACKOFF || retryUntil == null) {
+        return named ?: stringResource(kind.messageRes())
+    }
     var now by androidx.compose.runtime.remember { androidx.compose.runtime.mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(retryUntil) {
         while (now < retryUntil.toEpochMilli()) {
@@ -355,7 +368,10 @@ private fun GrantFacts(a: Approval.GrantRequest, state: ApprovalDetailUiState, a
     Label(stringResource(R.string.approvals_items_asked))
     val chosen = state.grantIndexes
     a.entries.forEachIndexed { i, e ->
-        val item = if (e.kind == "item") state.items.firstOrNull { it.itemId == e.ref } else null
+        // The member's own item as their vault names it (0.21.0: name, category, labels on the entry); an older vault
+        // sends only the id, which the item list names.
+        val local = if (e.kind == "item" && e.name == null) state.items.firstOrNull { it.itemId == e.ref } else null
+        val itemName = e.name ?: local?.name
         val answer = state.grantAnswers[i]?.let { id -> state.items.firstOrNull { it.itemId == id } }
         val grantable = (e.kind == "item" && e.available) || answer != null
         Row(
@@ -371,13 +387,23 @@ private fun GrantFacts(a: Approval.GrantRequest, state: ApprovalDetailUiState, a
             Column(Modifier.weight(1f)) {
                 val title = when {
                     e.kind == "category" -> stringResource(R.string.approvals_grant_category, e.label ?: e.ref)
-                    item != null -> item.name
+                    e.available && itemName != null -> itemName
                     else -> stringResource(R.string.approvals_grant_item_missing, e.label ?: e.ref)
                 }
                 Text(title, style = MaterialTheme.typography.bodyLarge)
                 val theirs = e.label
-                if (e.kind == "item" && theirs != null && item != null) {
+                val named = e.kind == "item" && e.available && itemName != null
+                if (named && theirs != null) {
                     Text(stringResource(R.string.approvals_grant_their_words, theirs), style = MaterialTheme.typography.bodySmall)
+                }
+                val fields = e.labels
+                if (e.kind == "item" && e.available && !fields.isNullOrEmpty()) {
+                    Text(
+                        stringResource(R.string.approvals_grant_fields, fields.joinToString(", ") { it.label }),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.testTag("grant_fields_$i"),
+                    )
                 }
                 if (e.kind == "category") {
                     AnswerPicker(i, e.ref, answer?.name, state, actions)
@@ -676,6 +702,11 @@ private fun Facts(a: Approval) {
             Value(a.connectionName ?: stringResource(R.string.approvals_a_connection))
             Label(stringResource(R.string.approvals_critical_item))
             Value("${a.itemName} · ${a.fieldLabel}")
+            a.kind?.let { k ->
+                Label(stringResource(R.string.approvals_critical_kind))
+                Value(kindText(k))
+            }
+            SuitabilityNotice(a)
             Label(stringResource(R.string.approvals_critical_operation))
             Value(stringResource(if (a.operation == "auth") R.string.approvals_operation_auth else R.string.approvals_operation_sign))
             a.context?.let {
@@ -728,3 +759,46 @@ private fun Facts(a: Approval) {
         }
     }
 }
+
+/**
+ * Whether the field can serve the use (VAULT-MESSAGING 0.21.0 §10.13 Suitability), said before the password: a field
+ * of another kind cannot hold an Ed25519 seed (a 0.21.0 vault refuses those at once and never asks); a suitable one
+ * still works only if it holds a seed, which the vault finds at the use. Nothing from a vault that gives no kind.
+ */
+@Composable
+private fun SuitabilityNotice(a: Approval.CriticalUse) {
+    when (a.suitable) {
+        false -> NoticeCard(
+            kind = NoticeKind.URGENT,
+            title = stringResource(R.string.approvals_critical_unsuitable_title),
+            body = stringResource(R.string.approvals_critical_unsuitable_kind),
+            modifier = Modifier.testTag("critical_unsuitable"),
+        )
+        true -> Text(
+            stringResource(R.string.approvals_critical_suitable_note),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("critical_suitable"),
+        )
+        null -> Unit
+    }
+}
+
+/** A field kind in the member's words (§10.7 kinds). */
+@Composable
+@Suppress("CyclomaticComplexMethod") // one label per kind
+private fun kindText(kind: String): String = stringResource(
+    when (kind) {
+        "password" -> R.string.approvals_kind_password
+        "text" -> R.string.approvals_kind_text
+        "multiline" -> R.string.approvals_kind_multiline
+        "number" -> R.string.approvals_kind_number
+        "date" -> R.string.approvals_kind_date
+        "email" -> R.string.approvals_kind_email
+        "phone" -> R.string.approvals_kind_phone
+        "url" -> R.string.approvals_kind_url
+        "otp" -> R.string.approvals_kind_otp
+        "address" -> R.string.approvals_kind_address
+        else -> R.string.approvals_kind_other
+    },
+)
