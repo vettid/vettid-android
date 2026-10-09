@@ -166,6 +166,30 @@ class HistoryViewModelTest {
         assertEquals(950L, vault.calls.last()["before_seq"])
     }
 
+    /**
+     * Owner, 2026-10-09: after an export, History (reopened, or back from the export) did not show "History exported"
+     * until a search; the ViewModel only read the log when it was created. Shown again, it reads the newest page.
+     */
+    @Test
+    fun shownAgainHistoryReadsTheNewestPageAndPutsNewEntriesOnTop() = runTest(main.dispatcher) {
+        val vault = Vault(
+            { AuditPage(listOf(entry(5, "vault.unlocked", null), entry(4, "vault.unlocked", null)), seq = 5) },
+            // After the export: the vault recorded `audit.exported`.
+            { AuditPage(listOf(entry(6, "audit.exported", null), entry(5, "vault.unlocked", null)), seq = 6, nextBeforeSeq = 5) },
+        )
+        val model = vm(vault, connectionId = null)
+        // The screen's first refresh while the first page loads is that load.
+        model.refresh()
+        settle(model, ::idle)
+        assertEquals(1, vault.calls.size)
+        model.refresh()
+        val s = settle(model) { idle(it) && it.entries.size == 3 }
+        assertNull(vault.calls.last()["before_seq"])
+        assertEquals(listOf(6L, 5L, 4L), s.entries.map { it.seq })
+        assertEquals("audit.exported", s.entries.first().kind)
+        assertTrue(s.end)
+    }
+
     @Test
     fun aFailureIsShownNotSpunOn() = runTest(main.dispatcher) {
         val model = vm(Vault({ throw VaultOpException("connection.audit.list", "internal") }))
