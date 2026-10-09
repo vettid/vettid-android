@@ -40,8 +40,8 @@ import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
 
 /**
- * Main top bar (Proton inbox): menu, large start-aligned title, optional search,
- * and the member's avatar tile which opens the account sheet.
+ * Main top bar (Proton inbox): menu, large start-aligned title, optional search, the Notifications [bell]
+ * (ANDROID-PLAN 0.1.23) and the member's avatar tile which opens the account sheet.
  */
 @Composable
 fun VettIdTopAppBar(
@@ -56,6 +56,7 @@ fun VettIdTopAppBar(
     searchLabel: String? = null,
     /** Icon actions before the avatar (History's ⋯ menu). */
     actions: @Composable RowScope.() -> Unit = {},
+    bell: NotificationBell? = null,
 ) {
     Row(
         modifier = modifier
@@ -84,6 +85,7 @@ fun VettIdTopAppBar(
             }
         }
         actions()
+        if (bell != null) NotificationBellButton(bell)
         val avatarLabel = stringResource(R.string.core_ui_cd_account, accountName)
         // Not an IconButton: its circular clip would cut the tile's corners.
         Box(

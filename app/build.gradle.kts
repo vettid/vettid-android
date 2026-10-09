@@ -180,6 +180,7 @@ dependencies {
     implementation(projects.feature.history)
     implementation(projects.feature.credential)
     implementation(projects.feature.settings)
+    implementation(projects.feature.notifications)
     implementation(projects.feature.onboarding)
 
     implementation(libs.androidx.core.ktx)

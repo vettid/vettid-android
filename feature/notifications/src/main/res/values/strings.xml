@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="notifications_title">Notifications</string>
+    <string name="notifications_archived_title">Archived</string>
+    <string name="notifications_more">More actions</string>
+    <string name="notifications_mark_all_read">Mark all as read</string>
+    <string name="notifications_filter_unread">Unread</string>
+    <string name="notifications_needs_attention">Needs attention</string>
+    <string name="notifications_today">Today</string>
+    <string name="notifications_yesterday">Yesterday</string>
+    <string name="notifications_undated">Earlier</string>
+    <string name="notifications_archive">Archive</string>
+    <string name="notifications_archived_snackbar">Notification archived</string>
+    <string name="notifications_undo">Undo</string>
+    <string name="notifications_mark_read">Mark as read</string>
+    <string name="notifications_mark_unread">Mark as unread</string>
+    <string name="notifications_move_back">Move to Notifications</string>
+    <string name="notifications_delete">Delete</string>
+    <string name="notifications_delete_title">Delete this notification?</string>
+    <string name="notifications_delete_body">Delete this notification on all your devices?</string>
+    <string name="notifications_delete_batch">Later requests from %1$s will start a new notification.</string>
+    <string name="notifications_state_unread">Unread</string>
+    <string name="notifications_state_important">Important</string>
+    <string name="notifications_state_urgent">Urgent</string>
+    <string name="notifications_empty_title">No notifications</string>
+    <string name="notifications_empty_body">What happens in your vault appears here</string>
+    <string name="notifications_empty_unread_title">Nothing unread</string>
+    <string name="notifications_empty_unread_body">You have read every notification</string>
+    <string name="notifications_empty_archived_title">Nothing archived</string>
+    <string name="notifications_empty_archived_body">Notifications you archive appear here</string>
+    <string name="notifications_load_failed">Your notifications could not be read.</string>
+    <string name="notifications_retry">Try again</string>
+    <string name="notifications_sheet_time">When</string>
+    <string name="notifications_sheet_connection">Connection</string>
+    <string name="notifications_sheet_item">Item</string>
+    <string name="notifications_sheet_kind">Kind</string>
+    <string name="notifications_sheet_no_longer_waiting">This is no longer waiting.</string>
+    <string name="notifications_sheet_gone">What this was about is no longer there.</string>
+    <string name="notifications_sheet_not_available">Not available in this version of the app.</string>
+    <string name="notifications_sheet_unknown">A newer kind of notification. Update VettID to see more.</string>
+</resources>

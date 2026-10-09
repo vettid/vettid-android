@@ -7,6 +7,7 @@ import com.vettid.app.net.ConnectivityGate
 import com.vettid.core.data.account.SetupLinkInbox
 import com.vettid.core.data.social.InviteLinkInbox
 import com.vettid.core.data.env.AppEnvironment
+import com.vettid.core.data.feed.FeedRepository
 import com.vettid.core.data.lock.AppLock
 import com.vettid.core.data.lock.FileWrappedKeyFile
 import com.vettid.core.data.lock.KeystoreAppLockKeys
@@ -155,6 +156,9 @@ object AppModule {
 
     @Provides
     fun sharingRepository(m: VaultManager): SharingRepository = m.sharing
+
+    @Provides
+    fun feedRepository(m: VaultManager): FeedRepository = m.feed
 
     @Provides
     fun canaryManifestRepository(m: VaultManager): CanaryManifestRepository = m.canary

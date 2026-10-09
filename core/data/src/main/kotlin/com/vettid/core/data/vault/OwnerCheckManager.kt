@@ -33,11 +33,6 @@ interface OwnerCheckOps {
     suspend fun settingsGet(): Settings
 
     suspend fun settingsSet(version: Long, set: Map<String, JsonElement>)
-
-    /** Active feed items, newest first. */
-    suspend fun feedActive(): List<FeedItem>
-
-    suspend fun feedRead(itemId: String)
 }
 
 /**
@@ -55,6 +50,8 @@ class OwnerCheckManager(
     private val persist: (ByteArray) -> Unit,
     /** After a passed check: catch up on what the vault held back (§3.6.3: `sync.since`, `feed.list`, `message.list`). */
     private val onPassed: () -> Unit,
+    /** Marks feed items read (the feed's `FeedManager`, the one source of the notices, ANDROID-PLAN 0.1.23). */
+    private val readNotices: suspend (List<String>) -> Unit = {},
     private val now: () -> Instant = Instant::now,
 ) : OwnerCheckRepository {
     private val saved = restore()
@@ -73,7 +70,7 @@ class OwnerCheckManager(
 
     // --- what the vault tells ---
 
-    /** Events the manager follows: `vault.held`, `sync.event{owner_check}`, `vault.locking`, `feed.event`. */
+    /** Events the manager follows: `vault.held`, `sync.event{owner_check}`, `vault.locking` (the notices come from [onFeed]). */
     fun onEvent(m: VaultMessage) {
         when (m.type) {
             "vault.held" -> onHeld(m)
@@ -86,7 +83,6 @@ class OwnerCheckManager(
                 "settings.changed" -> scope.launch { runCatching { refreshOwnerCheck() } }
             }
             "vault.locking" -> if (VaultJson.str(m.body, "reason") == REASON_OWNER_CHECK) locked.value = true
-            "feed.event" -> runCatching { VaultJson.decode(FeedItem.serializer(), m.body) }.getOrNull()?.let { addNotice(it) }
         }
     }
 
@@ -112,12 +108,9 @@ class OwnerCheckManager(
         scope.launch { runCatching { refreshOwnerCheck() } }
     }
 
-    /** The vault opened (an unlock, or the app started with it unlocked): re-read the check and the notices. */
+    /** The vault opened (an unlock, or the app started with it unlocked): re-read the check (the notices come with the feed). */
     fun onOpened() {
-        scope.launch {
-            runCatching { refreshOwnerCheck() }
-            runCatching { loadNotices() }
-        }
+        scope.launch { runCatching { refreshOwnerCheck() } }
     }
 
     /**
@@ -179,7 +172,6 @@ class OwnerCheckManager(
                 ),
             )
             onPassed()
-            scope.launch { runCatching { loadNotices() } }
             OwnerCheckOutcome.Passed
         } catch (e: VaultFailure) {
             failed(e)
@@ -244,17 +236,16 @@ class OwnerCheckManager(
     override suspend fun dismissNotices() {
         val items = noticeFlow.value
         noticeFlow.value = emptyList()
-        vaultGuard { items.forEach { ops().feedRead(it.itemId) } }
+        readNotices(items.map { it.itemId })
     }
 
-    private suspend fun loadNotices() {
-        val items = vaultGuard { ops().feedActive() }
+    /**
+     * The feed as `FeedManager` holds it (one source, ANDROID-PLAN 0.1.23, 6): the banner shows its unread
+     * `owner_check.*` items, so reading one in the Notifications list closes the banner, and closing the banner reads
+     * them there.
+     */
+    fun onFeed(items: List<FeedItem>) {
         noticeFlow.value = items.mapNotNull { notice(it) }.sortedByDescending { it.at }
-    }
-
-    private fun addNotice(item: FeedItem) {
-        val n = notice(item) ?: return
-        noticeFlow.value = (noticeFlow.value.filter { it.itemId != n.itemId } + n).sortedByDescending { it.at }
     }
 
     private fun notice(item: FeedItem): OwnerCheckNotice? {

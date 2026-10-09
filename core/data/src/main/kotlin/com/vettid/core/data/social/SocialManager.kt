@@ -57,6 +57,11 @@ class SocialManager(
     private val clock: Clock = Clock.systemUTC(),
     /** The member's items by id (the Vault list): names for the share decisions read from the rules (§10.12). */
     private val itemNames: () -> Map<String, ShareItem> = { emptyMap() },
+    /**
+     * Marks feed items read (ANDROID-PLAN 0.1.23): an ask decided here ([com.vettid.core.data.feed.FeedAsks], by kind
+     * and `ref`), a conversation opened (its `message.received` items, by connection).
+     */
+    private val feedRead: (kinds: Set<String>, ref: String?, connectionId: String?) -> Unit = { _, _, _ -> },
 ) : ConnectionsRepository, MessagesRepository, ApprovalsRepository {
     private val mutex = Mutex()
     private var local: Local = load()
@@ -638,6 +643,7 @@ class SocialManager(
     }
 
     override suspend fun markRead(connectionId: String) {
+        feedRead(setOf(com.vettid.core.data.feed.FeedAsks.MESSAGE_RECEIVED), null, connectionId)
         val unread = messagesFlow.value[connectionId].orEmpty().filter { !it.outgoing && !it.read }
         if (unread.isEmpty()) return
         vaultGuard {
@@ -765,6 +771,12 @@ class SocialManager(
         }
         dropApproval(key)
         listedFlow.update { l -> l.filterNot { it.key == key } }
+        decided(key)
+    }
+
+    /** Deciding an ask marks its feed item read (ANDROID-PLAN 0.1.23, §9 question 2). */
+    private fun decided(key: String) {
+        com.vettid.core.data.feed.FeedAsks.of(key)?.let { (kinds, ref) -> feedRead(kinds, ref, null) }
     }
 
     /** Runs a decision on a connection request; `not_found` means it already ended. */
@@ -775,6 +787,7 @@ class SocialManager(
             if (e.kind == FailureKind.NOT_FOUND) endRequest(id, null)
             throw e
         }
+        decided("connection:$id")
     }
 
     private fun markApproved(id: String) = patchRequest(id) { a ->

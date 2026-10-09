@@ -153,6 +153,21 @@ fun GalleryScreen(
                 )
             }
 
+            Section("Notifications bell (0.1.23): none, 3 unread, urgent")
+            Frame {
+                Column {
+                    listOf(0 to false, 3 to false, 2 to true).forEach { (n, urgent) ->
+                        VettIdTopAppBar(
+                            title = "Messages",
+                            onMenuClick = {},
+                            accountName = "Mesmer",
+                            onAvatarClick = {},
+                            bell = com.vettid.core.ui.components.NotificationBell(n, urgent) {},
+                        )
+                    }
+                }
+            }
+
             Section("Top bar search")
             Frame {
                 com.vettid.core.ui.components.SearchTopBar(

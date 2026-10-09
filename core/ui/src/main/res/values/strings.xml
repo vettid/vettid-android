@@ -13,6 +13,15 @@
         <item quantity="one">%1$d pending</item>
         <item quantity="other">%1$d pending</item>
     </plurals>
+    <string name="core_ui_notifications">Notifications</string>
+    <plurals name="core_ui_notifications_unread">
+        <item quantity="one">Notifications, %1$d unread</item>
+        <item quantity="other">Notifications, %1$d unread</item>
+    </plurals>
+    <plurals name="core_ui_notifications_unread_urgent">
+        <item quantity="one">Notifications, %1$d unread, urgent</item>
+        <item quantity="other">Notifications, %1$d unread, one is urgent</item>
+    </plurals>
     <string name="core_ui_filter_on">%1$s filter on</string>
     <string name="core_ui_filter_off">%1$s filter off</string>
     <string name="core_ui_brand_name">VettID</string>

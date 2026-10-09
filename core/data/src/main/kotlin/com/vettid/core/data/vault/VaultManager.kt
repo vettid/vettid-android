@@ -25,6 +25,8 @@ import com.vettid.core.data.items.VaultItemsOps
 import com.vettid.core.data.items.SharingManager
 import com.vettid.core.data.items.VaultSharingOps
 import com.vettid.core.data.env.AppEnvironment
+import com.vettid.core.data.feed.FeedManager
+import com.vettid.core.data.feed.VaultFeedOps
 import com.vettid.core.data.wipe.LocalWipe
 import com.vettid.core.keystore.AndroidKeys
 import com.vettid.core.keystore.DeviceAttestationKey
@@ -155,6 +157,17 @@ class VaultManager(
                 i.itemId to com.vettid.core.data.social.ShareItem(i.itemId, i.name, i.category, i.sensitivity.wire)
             }
         },
+        feedRead = { kinds, ref, connectionId -> feed.markReadWhere(kinds, ref, connectionId) },
+    )
+
+    /**
+     * The vault's feed (ANDROID-PLAN 0.1.23, VAULT-MESSAGING §10.9): the Notifications screen and the bell. Read
+     * while the vault is open and not held; in memory only.
+     */
+    val feed = FeedManager(
+        scope,
+        ops = { VaultFeedOps(session().api) },
+        gated = { ownerCheck.ownerCheck.value?.gated(Instant.now()) == true },
     )
 
     /**
@@ -189,8 +202,9 @@ class VaultManager(
             ops = { VaultOwnerCheckOps(session().api) },
             load = { runCatching { f.load() }.getOrNull() },
             persist = { f.save(it) },
-            // §3.6.3: nothing held back is replayed as events; the lists are read again.
+            // §3.6.3: nothing held back is replayed as events; the lists are read again (the feed: below, in init).
             onPassed = { social.refreshAllQuietly() },
+            readNotices = { ids -> ids.forEach { feed.setStatus(it, FeedManager.STATUS_READ) } },
         )
     }
 
@@ -207,15 +221,29 @@ class VaultManager(
                 if (it == AppPhase.Unlocked) {
                     social.refreshAllQuietly()
                     items.refreshQuietly()
+                    feed.open()
                     launch { refreshAccount() }
                     launch { runCatching { profile.refreshProfile() } }
                     // The proactive release notice (owner decision 2026-10-09): the manifest, read after every unlock.
                     launch { releaseUpdate.refreshOffer() }
                 } else if (it != AppPhase.Starting) {
-                    // Locked or signed out: no item metadata is kept outside an open vault.
+                    // Locked or signed out: no item metadata and no feed item is kept outside an open vault.
                     items.clear()
                     sharing.clear()
+                    feed.clear()
                 }
+            }
+        }
+        // The feed's owner-check items are the shell's notices (one source, ANDROID-PLAN 0.1.23, 6).
+        scope.launch { feed.items.collect { ownerCheck.onFeed(it) } }
+        // Held or due (§3.6.3): no cached feed content is shown; after the check (here or on another device), a full read.
+        scope.launch {
+            var held = false
+            ownerCheck.ownerCheck.collect { v ->
+                val now = v != null && v.state != OwnerCheckState.OK
+                if (now && !held) feed.clear()
+                if (!now && held && phaseFlow.value == AppPhase.Unlocked) feed.open()
+                held = now
             }
         }
     }
@@ -306,6 +334,7 @@ class VaultManager(
             windowFlow.value = null
             social.clear()
             items.clear()
+            feed.clear()
             ownerCheck.clear()
             saveLocal(local.copy(setupComplete = false, snapshot = null))
         }
@@ -320,6 +349,8 @@ class VaultManager(
             CollectorSupervisor(this, restart = {
                 android.util.Log.i("VaultManager", "restarting the mailbox collector after ${s.device.collectionEnded.value}")
                 s.device.start(scope)
+                // A relay reconnect: what changed in the feed meanwhile (ANDROID-PLAN 0.1.23, 2).
+                if (phaseFlow.value == AppPhase.Unlocked) feed.catchUp()
             }).watch(s.device.collectionEnded)
             launch { s.device.vaultRefusals.collect { n -> refusals.onRefusals(n, phaseFlow.value) } }
             launch { s.device.ownerCheckRequired.collect { ownerCheck.onRequired() } }
@@ -329,6 +360,7 @@ class VaultManager(
                     items.onEvent(m)
                     sharing.onEvent(m)
                     social.onEvent(m)
+                    feed.onEvent(m)
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: RuntimeException) {
@@ -393,7 +425,10 @@ class VaultManager(
         val t = Instant.now()
         val due = ownerCheck.ownerCheck.value?.let { it.gated(t) || it.warning(t) } == true
         if (due && phaseFlow.value is AppPhase.Unlocked) ownerCheck.onOpened()
-        if (phaseFlow.value is AppPhase.Unlocked) scope.launch { releaseUpdate.refreshOffer() }
+        if (phaseFlow.value is AppPhase.Unlocked) {
+            scope.launch { releaseUpdate.refreshOffer() }
+            feed.catchUp()
+        }
     }
 
     override suspend fun refresh() {
@@ -1133,6 +1168,7 @@ class VaultManager(
         history.clear()
         items.clear()
         sharing.clear()
+        feed.clear()
         canary.removeCanaryManifest()
         transferStartedAt = null
         openTransferId = null

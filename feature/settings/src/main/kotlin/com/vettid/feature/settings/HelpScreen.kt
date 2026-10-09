@@ -25,18 +25,23 @@ import kotlinx.serialization.Serializable
 @Serializable
 data object HelpRoute
 
-fun NavGraphBuilder.helpDestination(onBack: () -> Unit) {
-    composable<HelpRoute> { HelpScreen(onBack = onBack) }
+fun NavGraphBuilder.helpDestination(onBack: () -> Unit, bell: com.vettid.core.ui.components.NotificationBell? = null) {
+    composable<HelpRoute> { HelpScreen(onBack = onBack, bell = bell) }
 }
 
 /** Help: links to the website's explanations and contact page. */
 @Composable
-fun HelpScreen(onBack: () -> Unit, modifier: Modifier = Modifier) {
+fun HelpScreen(onBack: () -> Unit, modifier: Modifier = Modifier, bell: com.vettid.core.ui.components.NotificationBell? = null) {
     val uri = LocalUriHandler.current
     val about = stringResource(R.string.help_url_about)
     val security = stringResource(R.string.help_url_security)
     val contact = stringResource(R.string.help_url_contact)
-    DetailScaffold(onBackClick = onBack, modifier = modifier, background = VettIdTheme.colors.groupedBackground) {
+    DetailScaffold(
+        onBackClick = onBack,
+        modifier = modifier,
+        background = VettIdTheme.colors.groupedBackground,
+        actions = { bell?.let { com.vettid.core.ui.components.NotificationBellButton(it) } },
+    ) {
         Column(Modifier.verticalScroll(rememberScrollState())) {
             LargeTitle(stringResource(R.string.help_title))
             SettingsSectionHeader(stringResource(R.string.help_section_learn))
