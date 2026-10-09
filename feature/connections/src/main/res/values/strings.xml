@@ -158,9 +158,9 @@
     <string name="connections_share_out_title_unnamed">You share with this connection</string>
     <string name="connections_share_out_empty">You’re not sharing anything with %1$s yet.</string>
     <string name="connections_share_out_empty_unnamed">You’re not sharing anything with this connection yet.</string>
-    <string name="connections_share_out_rules">Share rules</string>
+    <string name="connections_share_out_rules">Rules</string>
     <string name="connections_share_out_items">Items they can see now</string>
-    <string name="connections_share_out_action">Share items…</string>
+    <string name="connections_share_out_action">Add a rule</string>
     <string name="connections_share_out_manage">Manage what you share</string>
     <plurals name="connections_share_out_count">
         <item quantity="one">%d item shared</item>
@@ -181,17 +181,29 @@
         <item quantity="other">You asked for %d things; waiting for an answer.</item>
     </plurals>
     <string name="connections_share_unavailable">Sharing could not be read just now.</string>
-    <string name="connections_share_rule_ask">Asks you for each new item</string>
-    <string name="connections_share_rule_auto">Shares new items automatically</string>
-    <string name="connections_share_rule_all">Needs all these tags</string>
+    <string name="connections_share_rule_ask">Asks you each time</string>
+    <string name="connections_share_rule_auto">Shared automatically</string>
+    <string name="connections_share_rule_all">Items with all of these tags</string>
+    <string name="connections_share_rule_any">Items with any of these tags</string>
+    <string name="connections_share_no_limit">no fetch limit</string>
+    <string name="connections_share_no_end">no end date</string>
+    <plurals name="connections_share_rule_included">
+        <item quantity="one">%d item shared now</item>
+        <item quantity="other">%d items shared now</item>
+    </plurals>
+    <string name="connections_share_rule_also">Also covered by: %1$s</string>
+    <string name="connections_share_rule_delete">Delete this rule</string>
+    <string name="connections_share_rule_delete_title">Delete this sharing rule?</string>
+    <string name="connections_share_rule_delete_body">%1$s can no longer fetch the items this rule shared. Items another rule shares stay shared.</string>
+    <string name="connections_share_rule_delete_unnamed">This connection can no longer fetch the items this rule shared. Items another rule shares stay shared.</string>
     <string name="connections_share_rule_open">Change this rule</string>
     <plurals name="connections_share_rule_pending">
         <item quantity="one">%d waiting for you</item>
         <item quantity="other">%d waiting for you</item>
     </plurals>
     <plurals name="connections_share_uses">
-        <item quantity="one">%d use</item>
-        <item quantity="other">%d uses</item>
+        <item quantity="one">up to %d fetch of each item</item>
+        <item quantity="other">up to %d fetches of each item</item>
     </plurals>
     <plurals name="connections_share_uses_left">
         <item quantity="one">%d use left</item>

@@ -12,23 +12,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.ui.semantics.Role
-import androidx.compose.material3.RadioButton
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -37,8 +28,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -46,7 +35,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.items.FieldValue
 import com.vettid.core.data.items.GrantView
-import com.vettid.core.data.items.Sensitivity
 import com.vettid.core.data.items.ShareMode
 import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.items.SharedContent
@@ -55,7 +43,6 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.DetailCard
 import com.vettid.core.ui.components.DetailScaffold
-import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.LargeTitle
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
@@ -94,13 +81,14 @@ data class SharedWithYouRoute(val connectionId: String, val ask: Boolean = false
 
 /** The connection's name inside a sentence (bidi-isolated, §10.8), or a neutral placeholder. */
 @Composable
-private fun nameOf(n: String?): String = n?.let { AccountNames.isolate(it) } ?: stringResource(R.string.items_sharing_this_connection)
+internal fun sharingNameOf(n: String?): String =
+    n?.let { AccountNames.isolate(it) } ?: stringResource(R.string.items_sharing_this_connection)
 
 @Composable
 private fun Section(text: String) = SettingsSectionHeader(text)
 
 @Composable
-private fun ErrorNotice(e: FailureKind?, limit: com.vettid.core.data.vault.VaultLimit?, onDismiss: () -> Unit) {
+internal fun SharingErrorNotice(e: FailureKind?, limit: com.vettid.core.data.vault.VaultLimit?, onDismiss: () -> Unit) {
     e ?: return
     NoticeCard(
         NoticeKind.WARNING,
@@ -147,7 +135,7 @@ data class ConnectionSharingActions(
  */
 @Composable
 fun ConnectionSharingScreen(state: ConnectionSharingUiState, actions: ConnectionSharingActions, modifier: Modifier = Modifier) {
-    val name = nameOf(state.connectionName)
+    val name = sharingNameOf(state.connectionName)
     DetailScaffold(onBackClick = actions.onBack, modifier = modifier.testTag("connection_sharing")) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = Spacing.xxl)) {
             LargeTitle(stringResource(R.string.items_sharing_title, name))
@@ -157,26 +145,13 @@ fun ConnectionSharingScreen(state: ConnectionSharingUiState, actions: Connection
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = Spacing.gutter),
             )
-            ErrorNotice(state.error, state.limit, actions.onDismissError)
+            SharingErrorNotice(state.error, state.limit, actions.onDismissError)
             if (state.loading && state.rules.isEmpty()) {
                 Box(Modifier.fillMaxWidth().padding(Spacing.xl), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
                 }
             }
-            Section(stringResource(R.string.items_sharing_rules))
-            if (!state.loading && state.rules.isEmpty()) {
-                Text(
-                    stringResource(R.string.items_sharing_no_rules, name),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = Spacing.gutter).testTag("sharing_no_rules"),
-                )
-            }
-            state.rules.forEach { r -> RuleCard(r, actions.onOpenRule) }
-            SecondaryButton(
-                stringResource(R.string.items_sharing_new_rule),
-                actions.onNewRule,
-                modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s).testTag("sharing_new_rule"),
-            )
+            RulesSection(state, name, actions)
             if (state.pendingCount > 0) {
                 NoticeCard(
                     NoticeKind.INFO,
@@ -218,21 +193,42 @@ fun ConnectionSharingScreen(state: ConnectionSharingUiState, actions: Connection
     }
 }
 
+/** The connection's rules, each with its own settings (§10.12), and "Add a rule" up to 64. */
 @Composable
-private fun RuleCard(r: ShareRule, onOpen: (String) -> Unit) {
-    DetailCard(Modifier.padding(vertical = Spacing.xs).testTag("rule_${r.ruleId}")) {
+private fun RulesSection(state: ConnectionSharingUiState, name: String, actions: ConnectionSharingActions) {
+    Section(stringResource(R.string.items_sharing_rules))
+    if (!state.loading && state.rules.isEmpty()) {
+        Text(
+            stringResource(R.string.items_sharing_no_rules, name),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = Spacing.gutter).testTag("sharing_no_rules"),
+        )
+    }
+    state.rules.forEach { r -> RuleCard(r, state.overlaps[r.ruleId].orEmpty(), actions.onOpenRule) }
+    if (state.atRuleLimit) RuleLimitNotice(Modifier.padding(horizontal = Spacing.s))
+    SecondaryButton(
+        stringResource(R.string.items_sharing_new_rule),
+        actions.onNewRule,
+        enabled = !state.atRuleLimit,
+        modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s).testTag("sharing_new_rule"),
+    )
+}
+
+/** A rule of this connection: its tags, mode, limits, end, what it shares now and the other rules covering the same. */
+@Composable
+private fun RuleCard(r: ShareRule, overlaps: List<ShareRule>, onOpen: (String) -> Unit) {
+    DetailCard(Modifier.padding(vertical = Spacing.xs).semantics(mergeDescendants = true) {}.testTag("rule_${r.ruleId}")) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) { r.tags.forEach { TagLabel(it) } }
         Spacer(Modifier.height(Spacing.s))
-        Text(
-            stringResource(if (r.match == TagMatch.ALL) R.string.items_rule_match_all_short else R.string.items_rule_match_any_short),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            stringResource(if (r.mode == ShareMode.ASK) R.string.items_rule_mode_ask else R.string.items_rule_mode_auto),
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.SemiBold,
-        )
+        if (r.tags.size > 1) {
+            Text(
+                stringResource(if (r.match == TagMatch.ALL) R.string.items_rule_match_all_short else R.string.items_rule_match_any_short),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(ruleModeText(r.mode), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
+        Text(ruleLimitsText(r), style = MaterialTheme.typography.bodySmall)
         Text(
             listOf(
                 pluralStringResource(R.plurals.items_rule_included, r.included.size, r.included.size),
@@ -241,16 +237,32 @@ private fun RuleCard(r: ShareRule, onOpen: (String) -> Unit) {
             ).joinToString(" · "),
             style = MaterialTheme.typography.bodySmall,
         )
-        val limits = listOfNotNull(
-            r.uses?.let { pluralStringResource(R.plurals.items_rule_uses, it, it) },
-            r.expiresAt?.let { stringResource(R.string.items_rule_until, Times.full(it)) },
-        )
-        if (limits.isNotEmpty()) Text(limits.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+        if (overlaps.isNotEmpty()) {
+            Text(
+                stringResource(R.string.items_rule_also_covered, overlaps.joinToString("; ") { it.tags.joinToString(", ") }),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.testTag("rule_also_${r.ruleId}"),
+            )
+        }
         TextButton(onClick = { onOpen(r.ruleId) }, modifier = Modifier.heightIn(min = Spacing.touchTarget)) {
             Text(stringResource(R.string.items_rule_change))
         }
     }
 }
+
+/** "Shared automatically" or "Asks you each time" (§10.12 `mode`). */
+@Composable
+internal fun ruleModeText(m: ShareMode): String =
+    stringResource(if (m == ShareMode.AUTO) R.string.items_rule_summary_auto else R.string.items_rule_summary_ask)
+
+/** The rule's limit and end: "up to 5 fetches of each item · until Dec 31, 2026", or "no fetch limit · no end date". */
+@Composable
+internal fun ruleLimitsText(r: ShareRule): String = listOf(
+    r.uses?.let { pluralStringResource(R.plurals.items_rule_uses, it, it) } ?: stringResource(R.string.items_rule_no_limit),
+    r.expiresAt?.let { stringResource(R.string.items_rule_until, Times.dayLabel(Times.day(it))) }
+        ?: stringResource(R.string.items_rule_no_end),
+).joinToString(" · ")
 
 @Composable
 private fun GrantRow(g: GrantView, actions: ConnectionSharingActions) {
@@ -272,206 +284,6 @@ private fun GrantRow(g: GrantView, actions: ConnectionSharingActions) {
         }
         TextButton(onClick = { actions.onAskRevoke(g) }) {
             Text(stringResource(R.string.items_sharing_revoke), color = MaterialTheme.colorScheme.error)
-        }
-    }
-}
-
-// --- the rule editor ---
-
-@Composable
-internal fun RuleEditRouteContent(host: ItemsHost) {
-    val vm: RuleEditViewModel = hiltViewModel()
-    val state by vm.uiState.collectAsStateWithLifecycle()
-    LaunchedEffect(state.done) { if (state.done) host.onBack() }
-    RuleEditScreen(
-        state,
-        RuleEditActions(
-            onBack = host.onBack, onTag = vm::toggleTag, onMatch = vm::setMatch, onMode = vm::setMode,
-            onIncludeExisting = vm::setIncludeExisting, onUses = vm::setUses, onExpiry = { vm.setExpiry(it) }, onSave = vm::save,
-            onAskDelete = vm::askDelete, onDelete = vm::delete, onDismissError = vm::dismissError,
-        ),
-    )
-}
-
-/** What the rule editor can ask for. */
-data class RuleEditActions(
-    val onBack: () -> Unit = {},
-    val onTag: (String) -> Unit = {},
-    val onMatch: (TagMatch) -> Unit = {},
-    val onMode: (ShareMode) -> Unit = {},
-    val onIncludeExisting: (Boolean) -> Unit = {},
-    val onUses: (String) -> Unit = {},
-    val onExpiry: (RuleExpiry) -> Unit = {},
-    val onSave: () -> Unit = {},
-    val onAskDelete: (Boolean) -> Unit = {},
-    val onDelete: () -> Unit = {},
-    val onDismissError: () -> Unit = {},
-)
-
-/**
- * A share rule (§10.12): which tags, any or all of them, ask or automatic (ask by default), counted uses, an end, and
- * whether the items that already match count. The vault's dry run lists what it matches before it is saved; critical
- * items are never readable, only usable.
- */
-@Composable
-@Suppress("CyclomaticComplexMethod")
-fun RuleEditScreen(state: RuleEditUiState, actions: RuleEditActions, modifier: Modifier = Modifier) {
-    val name = nameOf(state.connectionName)
-    val d = state.draft
-    FormScaffold(
-        title = stringResource(if (state.isNew) R.string.items_rule_new_title else R.string.items_rule_edit_title),
-        body = stringResource(R.string.items_rule_body, name),
-        primaryLabel = stringResource(R.string.items_rule_save),
-        onPrimary = actions.onSave,
-        primaryEnabled = state.canSave,
-        busy = state.busy,
-        onBack = actions.onBack,
-        secondaryLabel = if (state.isNew) null else stringResource(R.string.items_rule_delete),
-        onSecondary = { actions.onAskDelete(true) },
-        modifier = modifier.testTag("rule_edit"),
-        header = { HeaderGlyph(Icons.Outlined.Share) },
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
-            ErrorNotice(state.error, state.limit, actions.onDismissError)
-            Text(stringResource(R.string.items_rule_tags), style = MaterialTheme.typography.titleSmall)
-            if (state.tags.isEmpty() && !state.loading) {
-                Text(stringResource(R.string.items_rule_no_tags), color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.s), modifier = Modifier.testTag("rule_tags")) {
-                state.tags.forEach { t ->
-                    FilterChip(
-                        selected = t in d.tags,
-                        onClick = { actions.onTag(t) },
-                        label = { Text(t) },
-                        modifier = Modifier.testTag("rule_tag_$t"),
-                    )
-                }
-            }
-            if (d.tags.size > 1) {
-                Choice(R.string.items_rule_match_any, d.match == TagMatch.ANY, "rule_match_any") { actions.onMatch(TagMatch.ANY) }
-                Choice(R.string.items_rule_match_all, d.match == TagMatch.ALL, "rule_match_all") { actions.onMatch(TagMatch.ALL) }
-            }
-            Text(stringResource(R.string.items_rule_mode), style = MaterialTheme.typography.titleSmall)
-            Choice(R.string.items_rule_mode_ask, d.mode == ShareMode.ASK, "rule_mode_ask", R.string.items_rule_mode_ask_note) {
-                actions.onMode(ShareMode.ASK)
-            }
-            Choice(R.string.items_rule_mode_auto, d.mode == ShareMode.AUTO, "rule_mode_auto", R.string.items_rule_mode_auto_note) {
-                actions.onMode(ShareMode.AUTO)
-            }
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource(R.string.items_rule_existing), style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        stringResource(R.string.items_rule_existing_note),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Switch(
-                    checked = d.includeExisting,
-                    onCheckedChange = actions.onIncludeExisting,
-                    modifier = Modifier.testTag("rule_existing"),
-                )
-            }
-            OutlinedTextField(
-                value = state.usesText,
-                onValueChange = actions.onUses,
-                label = { Text(stringResource(R.string.items_rule_uses)) },
-                supportingText = {
-                    Text(stringResource(if (state.usesValid) R.string.items_rule_uses_note else R.string.items_rule_uses_bad))
-                },
-                isError = !state.usesValid,
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth().testTag("rule_uses"),
-            )
-            Text(stringResource(R.string.items_rule_expiry), style = MaterialTheme.typography.titleSmall)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) {
-                RuleExpiry.entries.filter { it != RuleExpiry.KEEP || state.expiry == RuleExpiry.KEEP }.forEach { e ->
-                    FilterChip(
-                        selected = state.expiry == e,
-                        onClick = { actions.onExpiry(e) },
-                        label = { Text(expiryLabel(e, d.expiresAt)) },
-                    )
-                }
-            }
-            Preview(state)
-        }
-    }
-    if (state.confirmDelete) {
-        ConfirmDialog(
-            title = stringResource(R.string.items_rule_delete_title),
-            text = stringResource(R.string.items_rule_delete_body, name),
-            confirmLabel = stringResource(R.string.items_rule_delete),
-            onConfirm = actions.onDelete,
-            onDismiss = { actions.onAskDelete(false) },
-            destructive = true,
-        )
-    }
-}
-
-@Composable
-private fun expiryLabel(e: RuleExpiry, at: java.time.Instant?): String = when (e) {
-    RuleExpiry.NEVER -> stringResource(R.string.items_rule_expiry_never)
-    RuleExpiry.MONTH -> stringResource(R.string.items_rule_expiry_month)
-    RuleExpiry.YEAR -> stringResource(R.string.items_rule_expiry_year)
-    RuleExpiry.KEEP -> at?.let { stringResource(R.string.items_rule_until, Times.full(it)) }
-        ?: stringResource(R.string.items_rule_expiry_never)
-}
-
-@Composable
-private fun Choice(label: Int, selected: Boolean, tag: String, note: Int? = null, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = Spacing.touchTarget)
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
-            .testTag(tag),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        RadioButton(selected = selected, onClick = null)
-        Spacer(Modifier.padding(start = Spacing.m))
-        Column {
-            Text(stringResource(label), style = MaterialTheme.typography.bodyLarge)
-            note?.let {
-                Text(stringResource(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-    }
-}
-
-/** The dry run (§10.12): how many items the rule matches and which; critical ones are only usable. */
-@Composable
-private fun Preview(state: RuleEditUiState) {
-    val p = state.preview
-    DetailCard(Modifier.testTag("rule_preview")) {
-        Text(stringResource(R.string.items_rule_preview), style = MaterialTheme.typography.titleSmall)
-        Spacer(Modifier.height(Spacing.xs))
-        when {
-            state.previewing -> CircularProgressIndicator(Modifier.heightIn(max = 24.dp), color = MaterialTheme.colorScheme.primary)
-            p == null -> Text(stringResource(R.string.items_rule_preview_none), color = MaterialTheme.colorScheme.onSurfaceVariant)
-            else -> {
-                val mode = state.draft.mode
-                Text(
-                    pluralStringResource(
-                        if (mode == ShareMode.ASK) R.plurals.items_rule_preview_ask else R.plurals.items_rule_preview_auto,
-                        p.total,
-                        p.total,
-                    ),
-                    modifier = Modifier.testTag("rule_preview_total"),
-                )
-                if (!state.draft.includeExisting && p.total > 0) {
-                    Text(stringResource(R.string.items_rule_preview_later), style = MaterialTheme.typography.bodySmall)
-                }
-                p.matches.forEachIndexed { i, m ->
-                    if (i > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    Text(
-                        if (m.sensitivity == Sensitivity.CRITICAL) stringResource(R.string.items_rule_preview_usable, m.name) else m.name,
-                        modifier = Modifier.padding(vertical = Spacing.xs),
-                    )
-                }
-                if (p.total > p.matches.size) Text(stringResource(R.string.items_rule_preview_more, p.total - p.matches.size))
-            }
         }
     }
 }
@@ -511,7 +323,7 @@ data class SharedWithYouActions(
  */
 @Composable
 fun SharedWithYouScreen(state: SharedWithYouUiState, actions: SharedWithYouActions, modifier: Modifier = Modifier) {
-    val name = nameOf(state.connectionName)
+    val name = sharingNameOf(state.connectionName)
     DetailScaffold(onBackClick = actions.onBack, modifier = modifier.testTag("shared_with_you")) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = Spacing.xxl)) {
             LargeTitle(stringResource(R.string.items_shared_title, name))
@@ -521,7 +333,7 @@ fun SharedWithYouScreen(state: SharedWithYouUiState, actions: SharedWithYouActio
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = Spacing.gutter),
             )
-            ErrorNotice(state.error, state.limit, actions.onDismissError)
+            SharingErrorNotice(state.error, state.limit, actions.onDismissError)
             Spacer(Modifier.height(Spacing.m))
             when {
                 state.loading && state.received.isEmpty() -> Box(

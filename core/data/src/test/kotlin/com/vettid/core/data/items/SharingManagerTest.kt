@@ -164,6 +164,68 @@ class SharingManagerTest {
         assertNull(replace["dry_run"])
     }
 
+    /**
+     * Owner feedback 2026-10-09 (rules per tag): `share.rule.set` for a connection carries exactly the §10.12 fields a
+     * connection rule takes — never `per_hour`, `per_day` or `status_ttl`, which are for agent rules only.
+     */
+    @Test
+    fun aSavedConnectionRuleSendsExactlyTheSpecFields() = runTest {
+        ops.ruleAnswer = o("""{"rule_id":"r7","version":1,"subject":{"connection_id":"c1"},"tags":["address"],"mode":"auto"}""")
+        val end = Instant.parse("2027-01-01T04:59:00Z")
+        m.saveRule(RuleDraft("c1", listOf("address", "home"), TagMatch.ANY, ShareMode.AUTO, uses = 25, expiresAt = end, includeExisting = false))
+        assertEquals(
+            """{"subject":{"connection_id":"c1"},"tags":["address","home"],"match":"any","access":"read","mode":"auto","uses":25,"expires_at":"2027-01-01T04:59:00.000Z","include_existing":false}""",
+            VaultJson.json.encodeToString(JsonObject.serializer(), ops.ruleSets.single()),
+        )
+        ops.ruleSets.clear()
+        m.saveRule(RuleDraft("c1", listOf("drivers-license"), ruleId = "r2", version = 3))
+        assertEquals(
+            """{"rule_id":"r2","version":3,"subject":{"connection_id":"c1"},"tags":["drivers-license"],"match":"any","access":"read","mode":"ask","include_existing":true}""",
+            VaultJson.json.encodeToString(JsonObject.serializer(), ops.ruleSets.single()),
+        )
+        listOf("per_hour", "per_day", "status_ttl").forEach { k -> assertNull(ops.ruleSets.single()[k]) }
+        // The dry run is the same body with dry_run (§10.12).
+        ops.ruleSets.clear()
+        ops.ruleAnswer = o("""{"matches":[],"total":0}""")
+        m.preview(RuleDraft("c1", listOf("drivers-license"), ruleId = "r2", version = 3))
+        assertEquals(
+            """{"rule_id":"r2","version":3,"subject":{"connection_id":"c1"},"tags":["drivers-license"],"match":"any","access":"read","mode":"ask","include_existing":true,"dry_run":true}""",
+            VaultJson.json.encodeToString(JsonObject.serializer(), ops.ruleSets.single()),
+        )
+    }
+
+    @Test
+    fun anEndAndUsesOutsideTheSpecRangesAreNotSent() = runTest {
+        val now = Instant.now()
+        assertTrue(RuleDraft("c1", listOf("a"), uses = 1).valid(now))
+        assertTrue(RuleDraft("c1", listOf("a"), uses = 10_000).valid(now))
+        assertFalse(RuleDraft("c1", listOf("a"), uses = 10_001).valid(now))
+        assertTrue(RuleDraft("c1", listOf("a"), expiresAt = now.plusSeconds(3_649L * 86_400)).valid(now))
+        assertFalse(RuleDraft("c1", listOf("a"), expiresAt = now.plusSeconds(3_651L * 86_400)).valid(now))
+        assertFalse(RuleDraft("c1", (1..17).map { "t$it" }).valid(now))
+        assertEquals(64, RuleDraft.MAX_RULES_PER_SUBJECT)
+        assertEquals(512, RuleDraft.MAX_RULES)
+    }
+
+    /** §10.12: no precedence between a connection's rules; overlaps are the same tag or the same item. */
+    @Test
+    fun overlapsAreRulesNamingTheSameTagOrHoldingTheSameItem() {
+        val address = ShareRule("r1", 1, "c1", tags = listOf("address"), mode = ShareMode.AUTO, included = listOf("i1"))
+        val license = ShareRule("r2", 1, "c1", tags = listOf("drivers-license"), included = listOf("i2"))
+        val travel = ShareRule("r3", 1, "c1", tags = listOf("travel", "drivers-license"), match = TagMatch.ALL, pending = listOf("i2"))
+        val home = ShareRule("r4", 1, "c1", tags = listOf("home"), included = listOf("i1"))
+        val o = RuleOverlaps.of(listOf(address, license, travel, home))
+        assertEquals(listOf("r4"), o.getValue("r1").map { it.ruleId }) // same item i1
+        assertEquals(listOf("r3"), o.getValue("r2").map { it.ruleId }) // same tag and item
+        assertEquals(listOf("r2"), o.getValue("r3").map { it.ruleId })
+        assertEquals(listOf("r1"), o.getValue("r4").map { it.ruleId })
+        // A draft: its own rule never counts; matched items count.
+        assertEquals(listOf("r3"), RuleOverlaps.forDraft("r2", listOf("drivers-license"), emptyList(), listOf(address, license, travel)).map { it.ruleId })
+        assertEquals(listOf("r1"), RuleOverlaps.forDraft(null, listOf("x"), listOf("i1"), listOf(address, license)).map { it.ruleId })
+        assertEquals(listOf("drivers-license"), RuleOverlaps.sharedTags(listOf("drivers-license", "x"), travel))
+        assertEquals(setOf("i2"), RuleOverlaps.sharedItems(listOf("i1", "i2"), travel))
+    }
+
     @Test
     fun aRuleIsParsedWithItsItemStates() {
         val r = SharingManager.rule(

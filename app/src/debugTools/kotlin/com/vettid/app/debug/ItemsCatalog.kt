@@ -138,7 +138,13 @@ internal object ItemsCatalog {
     private val rules = listOf(
         ShareRule("01JRULE1", 2, "c1", tags = listOf("medical"), included = listOf("i1", "i2"), pending = listOf("i3")),
         ShareRule("01JRULE2", 1, "c1", tags = listOf("travel", "identity"), match = com.vettid.core.data.items.TagMatch.ALL, mode = ShareMode.AUTO, uses = 5, expiresAt = Instant.now().plusSeconds(86_400 * 30L), included = listOf(passport.itemId)),
+        // Overlaps the first: the same tag, one item in both (each rule applies on its own, §10.12).
+        ShareRule("01JRULE3", 1, "c1", tags = listOf("medical", "money"), mode = ShareMode.AUTO, uses = 10, included = listOf("i1")),
     )
+
+    /** A connection at the most rules it can have (§10.12 `share_rules_subject`, 64). */
+    private val fullRules = (1..64).map { ShareRule("01JFULL%02d".format(it), 1, "c1", tags = listOf("tag$it")) }
+    private val tagNames = registry.tags.filterNot { it.reserved }.map { it.tag }
     private val givenGrants = listOf(
         GrantView("g1", "c1", GrantDirection.GIVEN, "i1", "Allergies", "medical", ruleId = "01JRULE1"),
         GrantView("g2", "c1", GrantDirection.GIVEN, passport.itemId, "Passport", "identity_document", ruleId = "01JRULE2", uses = 5, used = 2),
@@ -232,6 +238,32 @@ internal object ItemsCatalog {
                 RuleEditActions(),
             )
         },
+        // Owner feedback 2026-10-09: rules per tag, each with its own settings.
+        "items.rule_overlap" to { RuleEditScreen(RuleEditUiState(ruleDraft, "Dana Lee", tagNames, preview = rulePreview, rules = rules), RuleEditActions()) },
+        "items.rule_custom_end" to {
+            RuleEditScreen(
+                RuleEditUiState(ruleDraft.copy(expiresAt = Instant.parse("2026-12-31T22:59:00Z")), "Dana Lee", tagNames, com.vettid.feature.items.RuleExpiry.CUSTOM, "3", rulePreview),
+                RuleEditActions(),
+            )
+        },
+        "items.rule_custom_date" to {
+            RuleEditScreen(RuleEditUiState(ruleDraft, "Dana Lee", tagNames, preview = rulePreview, endPicker = com.vettid.feature.items.EndPicker.Date), RuleEditActions())
+        },
+        "items.rule_custom_time" to {
+            RuleEditScreen(
+                RuleEditUiState(ruleDraft, "Dana Lee", tagNames, preview = rulePreview, endPicker = com.vettid.feature.items.EndPicker.Time(Instant.parse("2026-12-31T00:00:00Z").toEpochMilli())),
+                RuleEditActions(),
+            )
+        },
+        "items.rule_end_bad" to { RuleEditScreen(RuleEditUiState(ruleDraft, "Dana Lee", tagNames, preview = rulePreview, endInvalid = true), RuleEditActions()) },
+        "items.rule_limit" to { RuleEditScreen(RuleEditUiState(RuleDraft("c1"), "Dana Lee", tagNames, rules = fullRules), RuleEditActions()) },
+        "items.rule_limit_error" to {
+            RuleEditScreen(
+                RuleEditUiState(ruleDraft, "Dana Lee", tagNames, preview = rulePreview, error = FailureKind.LIMIT, limit = com.vettid.core.data.vault.VaultLimit("share_rules", 512)),
+                RuleEditActions(),
+            )
+        },
+        "items.sharing_limit" to { ConnectionSharingScreen(ConnectionSharingUiState("c1", "Dana Lee", fullRules, loading = false), ConnectionSharingActions()) },
         "items.shared_with_you" to { SharedWithYouScreen(SharedWithYouUiState("c1", "Dana Lee", received, opened, mapOf("g6" to "exhausted"), loading = false), SharedWithYouActions()) },
         "items.shared_with_you_empty" to { SharedWithYouScreen(SharedWithYouUiState("c1", "Dana Lee", loading = false), SharedWithYouActions()) },
         "items.edit_share_impact" to {

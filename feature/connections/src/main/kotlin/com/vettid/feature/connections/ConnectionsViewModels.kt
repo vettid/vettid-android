@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.items.GrantAsk
 import com.vettid.core.data.items.GrantView
+import com.vettid.core.data.items.RuleDraft
+import com.vettid.core.data.items.RuleOverlaps
 import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.items.SharingRepository
 import com.vettid.core.data.social.Approval
@@ -493,6 +495,8 @@ data class ConnectionDetailUiState(
     val error: FailureKind? = null,
     /** Both directions of sharing with this connection (VAULT-ITEMS §6, VAULT-MESSAGING §10.12). */
     val sharing: DetailSharing = DetailSharing(),
+    /** A share rule the member asked to delete, waiting for the confirmation. */
+    val deleteRule: ShareRule? = null,
 )
 
 /**
@@ -518,6 +522,12 @@ data class DetailSharing(
     val outgoingEmpty: Boolean get() = rules.isEmpty() && given.isEmpty()
 
     val incomingEmpty: Boolean get() = received.isEmpty()
+
+    /** Each rule's id → the other rules of this connection covering the same tags or items (§10.12). */
+    val overlaps: Map<String, List<ShareRule>> get() = RuleOverlaps.of(rules)
+
+    /** The connection has the most rules it can have (§10.12 `share_rules_subject`, 64): no new one. */
+    val atRuleLimit: Boolean get() = rules.size >= RuleDraft.MAX_RULES_PER_SUBJECT
 }
 
 enum class DetailConfirm { REMOVE }
@@ -602,6 +612,19 @@ class ConnectionDetailViewModel @Inject constructor(
     }
 
     fun dismissNotice() = local.update { it.copy(notice = null, error = null) }
+
+    /** Asks to delete a share rule of this connection (null: never mind). */
+    fun askDeleteRule(rule: ShareRule?) = local.update { it.copy(deleteRule = rule) }
+
+    /** Deletes the rule asked about (`share.rule.delete`, §10.12): its items are withdrawn, then both directions are read again. */
+    fun deleteRule() {
+        val r = local.value.deleteRule ?: return
+        local.update { it.copy(deleteRule = null) }
+        act {
+            sharing.deleteRule(r.ruleId)
+            loadSharing()
+        }
+    }
 
     private fun act(block: suspend () -> Unit) {
         local.update { it.copy(busy = true, error = null) }

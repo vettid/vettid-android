@@ -362,13 +362,18 @@ object ScreenCatalog {
     /** Sharing with Samira both ways: a rule and two items out, one item in, one request waiting. */
     private val bothWays = DetailSharing(
         rules = listOf(
+            // Owner feedback 2026-10-09: a rule per tag, each with its own settings; r3 overlaps r2.
             com.vettid.core.data.items.ShareRule(
-                "r1", 1, "c1", tags = listOf("medical"), mode = com.vettid.core.data.items.ShareMode.ASK,
-                included = listOf("i1"), pending = listOf("i3"),
+                "r1", 1, "c1", tags = listOf("address"), mode = com.vettid.core.data.items.ShareMode.AUTO,
+                included = listOf("i1"),
             ),
             com.vettid.core.data.items.ShareRule(
-                "r2", 1, "c1", tags = listOf("travel"), mode = com.vettid.core.data.items.ShareMode.AUTO, uses = 5,
-                expiresAt = Instant.parse("2027-04-30T00:00:00Z"), included = listOf("i2"),
+                "r2", 1, "c1", tags = listOf("drivers-license"), mode = com.vettid.core.data.items.ShareMode.ASK, uses = 5,
+                expiresAt = Instant.parse("2026-12-31T12:00:00Z"), included = listOf("i2"), pending = listOf("i3"),
+            ),
+            com.vettid.core.data.items.ShareRule(
+                "r3", 1, "c1", tags = listOf("drivers-license", "travel"), match = com.vettid.core.data.items.TagMatch.ALL,
+                mode = com.vettid.core.data.items.ShareMode.AUTO, uses = 1, included = listOf("i2"),
             ),
         ),
         given = listOf(
@@ -783,6 +788,21 @@ object ScreenCatalog {
         },
         "connections.detail_not_shared" to {
             ConnectionDetailScreen(ConnectionDetailUiState("c4", riley, null, loading = false, sharing = DetailSharing(loaded = true)), DetailActions())
+        },
+        "connections.detail_rule_delete" to {
+            ConnectionDetailScreen(
+                ConnectionDetailUiState("c1", sam, null, loading = false, sharing = bothWays, deleteRule = bothWays.rules[1]),
+                DetailActions(),
+            )
+        },
+        "connections.detail_rule_limit" to {
+            ConnectionDetailScreen(
+                ConnectionDetailUiState(
+                    "c1", sam, null, loading = false,
+                    sharing = DetailSharing((1..64).map { com.vettid.core.data.items.ShareRule("f$it", 1, "c1", tags = listOf("tag$it")) }, loaded = true),
+                ),
+                DetailActions(),
+            )
         },
         "connections.detail_remove" to { ConnectionDetailScreen(ConnectionDetailUiState("c1", sam, loading = false, confirm = DetailConfirm.REMOVE), DetailActions()) },
         "invite.choose" to { InviteScreen(InviteUiState(ttls = InviteTtl.entries.toList()), InviteActions()) },
