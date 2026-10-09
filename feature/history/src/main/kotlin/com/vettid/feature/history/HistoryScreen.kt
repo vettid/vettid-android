@@ -140,9 +140,18 @@ fun NavGraphBuilder.historyDestination(chrome: ShellChrome, host: HistoryHost) {
 }
 
 @Composable
-private fun HistoryRouteContent(chrome: ShellChrome, host: HistoryHost, onBack: (() -> Unit)?) {
-    val vm: HistoryViewModel = hiltViewModel()
-    val exportVm: HistoryExportViewModel = hiltViewModel()
+private fun HistoryRouteContent(chrome: ShellChrome, host: HistoryHost, onBack: (() -> Unit)?) =
+    HistoryContent(hiltViewModel(), hiltViewModel(), chrome, host, onBack)
+
+/** History and its export over [vm] and [exportVm] (the destination's; tests pass their own). */
+@Composable
+internal fun HistoryContent(
+    vm: HistoryViewModel,
+    exportVm: HistoryExportViewModel,
+    chrome: ShellChrome,
+    host: HistoryHost,
+    onBack: (() -> Unit)?,
+) {
     val state by vm.uiState.collectAsStateWithLifecycle()
     val exportStep by exportVm.step.collectAsStateWithLifecycle()
     val dates = if (state.filter.since != null || state.filter.until != null) dateLabel(state) else null
@@ -528,6 +537,16 @@ private fun ChoiceRow(label: String, selected: Boolean, onClick: () -> Unit) {
 @Composable
 private fun EntryList(state: HistoryUiState, actions: HistoryActions) {
     val list = rememberLazyListState()
+    // New entries on top (a refresh, e.g. `audit.exported` after an export): the rows are keyed by `seq` and a
+    // LazyColumn keeps its first visible key in place when rows are inserted above it, so they would sit above the
+    // screen's top (owner, 2026-10-09). A list that showed its top shows the new top. Asked during composition, before
+    // the list measures the new rows (requestScrollToItem's purpose), so no frame shows the old position.
+    val head = state.entries.firstOrNull()?.seq
+    val shownHead = remember { arrayOf(head) }
+    if (head != shownHead[0]) {
+        if (list.firstVisibleItemIndex == 0) list.requestScrollToItem(0)
+        shownHead[0] = head
+    }
     // Infinite scroll: the next page once the last rows come into view.
     val nearEnd by remember {
         derivedStateOf {

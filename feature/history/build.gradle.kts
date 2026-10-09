@@ -15,6 +15,10 @@ dependencies {
     testImplementation(projects.core.testing)
     // The ViewModel's Context (strings) under Robolectric.
     testImplementation(libs.robolectric)
+    // History rendered in a NavHost under Robolectric (the drawer's saved and restored destination).
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
+    testImplementation(libs.androidx.compose.ui.test.manifest)
 }
 
 android {
