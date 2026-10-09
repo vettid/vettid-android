@@ -68,9 +68,7 @@ object ApprovalParser {
                     ruleId = rule,
                     subjectConnectionId = subject?.s("connection_id"),
                     subjectAgentId = subject?.s("agent_id"),
-                    items = body.a("items").mapNotNull { i ->
-                        i.s("item_id")?.let { ShareItem(it, i.s("name") ?: "", i.s("category") ?: "other", i.s("sensitivity") ?: "data") }
-                    },
+                    items = body.a("items").mapNotNull(::shareItem),
                     reason = body.s("reason"),
                     receivedAt = at,
                 )
@@ -83,6 +81,15 @@ object ApprovalParser {
             Approval.DeviceRequest(type, it, body.s("name"), body.s("role"), null, at, instant(body.s("exp")))
         }
         else -> null
+    }
+
+    /** An item of `share.pending` or an entry of `share.pending.list` (§10.12; 0.23.0 `ask_rule_id`, `shared`). */
+    fun shareItem(i: JsonObject): ShareItem? = i.s("item_id")?.let {
+        ShareItem(
+            it, i.s("name") ?: "", i.s("category") ?: "other", i.s("sensitivity") ?: "data",
+            askRuleId = i.s("ask_rule_id")?.takeIf { r -> r.isNotEmpty() },
+            shared = i.b("shared") ?: false,
+        )
     }
 
     /**
@@ -202,6 +209,7 @@ object ApprovalParser {
             keyFingerprint = IkFingerprint.formatB64(c.ik),
             createdAt = instant(c.createdAt),
             lastActiveAt = instant(c.lastActiveAt),
+            asks = c.asks?.let { AskState(it.muted, it.paused, instant(it.pausedAt), it.cooldowns.coerceAtLeast(0)) },
         )
     }
 

@@ -205,6 +205,7 @@ class SharingManager(
             RuleMatch(
                 id, VaultJson.str(m, "name") ?: "", VaultJson.str(m, "category") ?: "other",
                 Sensitivity.of(VaultJson.str(m, "sensitivity")), VaultJson.str(m, "state"),
+                outcome = VaultJson.str(m, "outcome"), askRuleId = VaultJson.str(m, "ask_rule_id"),
             )
         }
         return RulePreview(matches, (VaultJson.long(o, "total") ?: matches.size.toLong()).toInt())
@@ -264,7 +265,7 @@ class SharingManager(
     @Suppress("ReturnCount")
     override suspend fun fetchShared(grantId: String): FetchOutcome {
         val r = vaultGuard { ops().grantFetch(grantId) }
-        r.error?.let { return FetchOutcome.Refused(it) }
+        r.error?.let { return FetchOutcome.Refused(it, r.retryAfter?.takeIf { s -> s > 0 }) }
         val pt = r.content ?: return FetchOutcome.Refused("unavailable")
         return try {
             FetchOutcome.Shared(content(pt, r.usesLeft))
@@ -324,6 +325,8 @@ class SharingManager(
                 uses = VaultJson.long(o, "uses")?.toInt(),
                 expiresAt = instant(VaultJson.str(o, "expires_at")),
                 includeExisting = bool(o, "include_existing") ?: true,
+                perHour = VaultJson.long(o, "per_hour")?.toInt(),
+                perDay = VaultJson.long(o, "per_day")?.toInt(),
                 included = strings(o, "included"),
                 pending = strings(o, "pending"),
                 declined = strings(o, "declined"),
@@ -332,7 +335,7 @@ class SharingManager(
             )
         }
 
-        /** `share.rule.set`'s body (§10.12): a connection subject, read access. */
+        /** `share.rule.set`'s body (§10.12): a connection subject, read access; `per_hour`/`per_day` only when set (0.23.0). */
         fun ruleBody(d: RuleDraft, dryRun: Boolean): JsonObject = buildJsonObject {
             d.ruleId?.let { put("rule_id", it) }
             if (d.ruleId != null) d.version?.let { put("version", it) }
@@ -342,6 +345,8 @@ class SharingManager(
             put("access", "read")
             put("mode", d.mode.wire)
             d.uses?.let { put("uses", it) }
+            d.perHour?.let { put("per_hour", it) }
+            d.perDay?.let { put("per_day", it) }
             d.expiresAt?.let { put("expires_at", Timestamps.formatMillis(it)) }
             put("include_existing", d.includeExisting)
             if (dryRun) put("dry_run", true)
@@ -370,8 +375,13 @@ class SharingManager(
                 state = VaultJson.str(o, "state") ?: GrantView.STATE_ACTIVE,
                 createdAt = instant(VaultJson.str(o, "created_at")),
                 labels = labels(o),
+                perHour = limit(o, "per_hour"),
+                perDay = limit(o, "per_day"),
             )
         }
+
+        /** A grant's `limits` member [k] (0.23.0 §10.12: `{per_hour?, per_day?}`); null when absent. */
+        private fun limit(o: JsonObject, k: String): Int? = (o["limits"] as? JsonObject)?.let { VaultJson.long(it, k)?.toInt() }
 
         /** `labels: [{field_id, label, kind}]` (§10.12: a received grant's, a grant request entry's); malformed entries are skipped. */
         fun labels(o: JsonObject): List<FieldLabel> = arr(o, "labels").mapNotNull { l ->

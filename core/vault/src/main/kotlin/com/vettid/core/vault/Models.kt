@@ -81,6 +81,17 @@ data class Connection(
     val tags: List<String> = emptyList(),
     val favorite: Boolean = false,
     val archived: Boolean = false,
+    /** The connection's asks (VAULT-MESSAGING 0.23.0 §10.4.1); absent from an older vault. */
+    val asks: ConnectionAsks? = null,
+)
+
+/** `<connection>.asks` (§10.4.1, 0.23.0): muted, paused (since [pausedAt]) and the number of cooldowns in force. */
+@Serializable
+data class ConnectionAsks(
+    val muted: Boolean = false,
+    val paused: Boolean = false,
+    @SerialName("paused_at") val pausedAt: String? = null,
+    val cooldowns: Int = 0,
 )
 
 /** `connection.invite.create` (§10.4): the link to show as a QR code or share. */
@@ -421,6 +432,13 @@ data class AccountView(
  * after use) and the uses left, or the member's vault's refusal [error] (`not_found`, `revoked`, `expired`,
  * `exhausted`, `unavailable`).
  */
-class GrantFetched(val grantId: String, val content: ByteArray?, val usesLeft: Long?, val error: String?) {
+class GrantFetched(
+    val grantId: String,
+    val content: ByteArray?,
+    val usesLeft: Long?,
+    val error: String?,
+    /** With `rate_limited` (0.23.0 §10.12): whole seconds until the fetch can succeed again. */
+    val retryAfter: Long? = null,
+) {
     override fun toString(): String = "GrantFetched($grantId, error=$error)"
 }

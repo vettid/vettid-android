@@ -87,6 +87,7 @@ fun NavGraphBuilder.approvalsDestination(chrome: ShellChrome, navigate: (Any) ->
             onOpen = { navigate(ApprovalDetailRoute(it)) },
             onRetry = vm::refresh,
             onDismissPeerDecline = vm::dismissPeerDecline,
+            paused = PausedActions(onResume = vm::resumeAsks, onAskRemove = vm::askRemove, onRemove = vm::remove),
         )
     }
     composable<ApprovalDetailRoute> {
@@ -112,8 +113,20 @@ fun NavGraphBuilder.approvalsDestination(chrome: ShellChrome, navigate: (Any) ->
     }
 }
 
-/** Approvals (ANDROID-PLAN §4): one typed row per request. */
+/** What a paused connection's notice can ask for (0.23.0 §10.4.1): resume its asks, or remove it (confirmed). */
+data class PausedActions(
+    val onResume: (String) -> Unit = {},
+    val onAskRemove: (com.vettid.core.data.social.ConnectionInfo?) -> Unit = {},
+    val onRemove: () -> Unit = {},
+)
+
+/**
+ * Approvals (ANDROID-PLAN §4): one typed row per request; a connection's asks within 10 minutes are one row ("Dr Lee
+ * asks for 3 things", 0.23.0 §10.4.1) that lists them; a connection whose asks are paused after several declines is
+ * a notice with "Resume requests" and "Remove connection".
+ */
 @Composable
+@Suppress("LongParameterList")
 fun ApprovalsScreen(
     state: ApprovalsUiState,
     chrome: ShellChrome,
@@ -121,10 +134,12 @@ fun ApprovalsScreen(
     onOpen: (String) -> Unit = {},
     onRetry: () -> Unit = {},
     onDismissPeerDecline: (String) -> Unit = {},
+    paused: PausedActions = PausedActions(),
 ) {
+    var expanded by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableStateOf(emptyList<String>()) }
     TopLevelScaffold(title = stringResource(R.string.approvals_title), chrome = chrome, modifier = modifier) {
         val error = state.error
-        val nothing = state.approvals.isEmpty() && state.peerDeclines.isEmpty()
+        val nothing = state.approvals.isEmpty() && state.peerDeclines.isEmpty() && state.paused.isEmpty()
         when {
             state.loading && nothing -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
@@ -154,21 +169,101 @@ fun ApprovalsScreen(
                         modifier = Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s),
                     )
                 }
-                items(state.approvals, key = { it.key }) { a ->
-                    val who = whoOf(a)
-                    VettIdListRow(
-                        title = titleOf(a),
-                        supporting = listOfNotNull(who, summaryOf(a)).joinToString(" · "),
-                        meta = Times.short(a.receivedAt),
-                        tileName = who ?: "?",
-                        emphasized = a.needsDecision,
-                        onClick = { onOpen(a.key) },
-                        modifier = Modifier.testTag("approval_${a.key}"),
-                    )
+                // 0.23.0 §10.4.1: paused after several declines, with the actions that end it.
+                items(state.paused, key = { "paused-${it.id}" }) { c ->
+                    PausedNotice(c, state.busy, paused, Modifier.padding(horizontal = Spacing.gutter, vertical = Spacing.s))
+                }
+                items(state.entries, key = { it.key }) { e ->
+                    when (e) {
+                        is ApprovalEntry.One -> ApprovalRow(e.approval, onOpen)
+                        is ApprovalEntry.Batch -> BatchRow(e, e.key in expanded, onOpen) {
+                            expanded = if (e.key in expanded) expanded - e.key else expanded + e.key
+                        }
+                    }
                 }
             }
         }
     }
+    state.confirmRemove?.let { c ->
+        val name = c.displayName.ifBlank { stringResource(R.string.approvals_a_connection) }
+        ConfirmDialog(
+            title = stringResource(R.string.approvals_remove_title, com.vettid.core.data.account.AccountNames.isolate(name)),
+            text = stringResource(R.string.approvals_remove_body),
+            confirmLabel = stringResource(R.string.approvals_paused_remove),
+            onConfirm = paused.onRemove,
+            onDismiss = { paused.onAskRemove(null) },
+            destructive = true,
+        )
+    }
+}
+
+@Composable
+private fun ApprovalRow(a: Approval, onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
+    val who = whoOf(a)
+    VettIdListRow(
+        title = titleOf(a),
+        supporting = listOfNotNull(who, summaryOf(a)).joinToString(" · "),
+        meta = Times.short(a.receivedAt),
+        tileName = who ?: "?",
+        emphasized = a.needsDecision,
+        onClick = { onOpen(a.key) },
+        modifier = modifier.testTag("approval_${a.key}"),
+    )
+}
+
+/** One entry for a batch of a connection's asks (§10.4.1): "Dr Lee asks for 3 things", listing them when opened. */
+@Composable
+private fun BatchRow(b: ApprovalEntry.Batch, open: Boolean, onOpen: (String) -> Unit, onToggle: () -> Unit) {
+    val who = b.connectionName ?: stringResource(R.string.approvals_a_connection)
+    Column(Modifier.testTag("approval_${b.key}")) {
+        VettIdListRow(
+            title = pluralStringResource(R.plurals.approvals_batch_title, b.asks.size, who, b.asks.size),
+            supporting = b.asks.map { titleOf(it) }.distinct().joinToString(" · "),
+            meta = Times.short(b.receivedAt),
+            tileName = who,
+            emphasized = true,
+            onClick = onToggle,
+        )
+        TextButton(
+            onClick = onToggle,
+            modifier = Modifier
+                .padding(start = Spacing.gutter)
+                .heightIn(min = Spacing.touchTarget)
+                .testTag("approval_batch_toggle_${b.key}"),
+        ) { Text(stringResource(if (open) R.string.approvals_batch_hide else R.string.approvals_batch_show)) }
+        if (open) {
+            b.asks.forEach { a -> ApprovalRow(a, onOpen, Modifier.padding(start = Spacing.xl)) }
+        }
+    }
+}
+
+/** "<First>'s requests are paused" (§10.4.1): resume them, or remove the connection (confirmed). */
+@Composable
+private fun PausedNotice(
+    c: com.vettid.core.data.social.ConnectionInfo,
+    busy: Boolean,
+    actions: PausedActions,
+    modifier: Modifier = Modifier,
+) {
+    val name = c.displayName.takeIf { it.isNotBlank() }?.let { com.vettid.core.data.account.AccountNames.isolate(it) }
+    NoticeCard(
+        kind = NoticeKind.WARNING,
+        title = if (name != null) {
+            stringResource(R.string.approvals_paused_title, name)
+        } else {
+            stringResource(R.string.approvals_paused_title_unnamed)
+        },
+        body = stringResource(R.string.approvals_paused_body),
+        modifier = modifier.testTag("paused_${c.id}"),
+        actions = {
+            TextButton(onClick = { actions.onResume(c.id) }, enabled = !busy, modifier = Modifier.testTag("paused_resume_${c.id}")) {
+                Text(stringResource(R.string.approvals_paused_resume))
+            }
+            TextButton(onClick = { actions.onAskRemove(c) }, enabled = !busy, modifier = Modifier.testTag("paused_remove_${c.id}")) {
+                Text(stringResource(R.string.approvals_paused_remove), color = MaterialTheme.colorScheme.error)
+            }
+        },
+    )
 }
 
 /** The kind of request, as a row title. */
@@ -489,6 +584,10 @@ private const val DEFAULT_GRANT_SECONDS = WEEK_SECONDS
  */
 @Composable
 private fun ShareFacts(a: Approval.ShareDecision, excluded: Set<String>, onToggle: (String) -> Unit) {
+    val names = com.vettid.core.data.items.RuleNames.of(a.rules)
+    val who = a.connectionName?.let { com.vettid.core.data.account.AccountNames.isolate(it) }
+        ?: a.subjectAgentId?.let { stringResource(R.string.approvals_an_agent) }
+        ?: stringResource(R.string.approvals_a_connection)
     if (a.tags.isNotEmpty()) {
         Label(stringResource(R.string.approvals_share_tags))
         Value(a.tags.joinToString(", "))
@@ -522,6 +621,7 @@ private fun ShareFacts(a: Approval.ShareDecision, excluded: Set<String>, onToggl
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                ShareItemNotes(i, a, names, who)
             }
         }
     }
@@ -531,6 +631,78 @@ private fun ShareFacts(a: Approval.ShareDecision, excluded: Set<String>, onToggl
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+    if (a.items.any { it.alsoIn.isNotEmpty() || it.askRuleId != null || it.shared }) {
+        Text(
+            stringResource(R.string.approvals_share_one_answer, who),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("share_one_answer"),
+        )
+    }
+}
+
+/** Why an item is asked and what an answer does (0.23.0 §10.12), one line each. */
+@Composable
+private fun ShareItemNotes(
+    i: com.vettid.core.data.social.ShareItem,
+    a: Approval.ShareDecision,
+    names: Map<String, com.vettid.core.data.items.RuleNames.Name>,
+    who: String,
+) {
+    ShareExplanations.of(i, a).forEach { line ->
+        Text(
+            shareLine(line, a, names, who),
+            style = MaterialTheme.typography.bodySmall,
+            color = if (line is ShareExplanations.Line.AlreadyShared) {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            modifier = Modifier.testTag("share_item_note_${i.itemId}"),
+        )
+    }
+}
+
+/** One explanation line of a share question's item, in the member's words (§10.12, rules named by their tags). */
+@Composable
+private fun shareLine(
+    line: ShareExplanations.Line,
+    a: Approval.ShareDecision,
+    names: Map<String, com.vettid.core.data.items.RuleNames.Name>,
+    who: String,
+): String {
+    val id = when (line) {
+        is ShareExplanations.Line.AsksFirst -> line.ruleId
+        is ShareExplanations.Line.AlsoCovered -> line.ruleId
+        ShareExplanations.Line.AlreadyShared -> null
+    }
+    val rule = id?.let { r -> a.rules.firstOrNull { it.ruleId == r } }
+    val named = if (rule != null) ruleNameText(rule, names) else stringResource(R.string.approvals_another_rule)
+    return when (line) {
+        is ShareExplanations.Line.AsksFirst -> stringResource(R.string.approvals_share_also_asks, named)
+        is ShareExplanations.Line.AlsoCovered -> stringResource(R.string.approvals_share_also, named)
+        ShareExplanations.Line.AlreadyShared -> stringResource(R.string.approvals_share_already, who)
+    }
+}
+
+/** "your “medical” rule" (§10.12: a rule is named by its tags), told apart when two of the subject read the same. */
+@Composable
+private fun ruleNameText(r: com.vettid.core.data.items.ShareRule, names: Map<String, com.vettid.core.data.items.RuleNames.Name>): String {
+    val n = names[r.ruleId] ?: com.vettid.core.data.items.RuleNames.Name(com.vettid.core.data.items.RuleNames.text(r))
+    return when (val q = n.qualifier) {
+        null -> stringResource(R.string.approvals_rule_name, n.text)
+        is com.vettid.core.data.items.RuleNames.Qualifier.Mode -> stringResource(
+            if (q.mode == com.vettid.core.data.items.ShareMode.ASK) {
+                R.string.approvals_rule_name_asks
+            } else {
+                R.string.approvals_rule_name_auto
+            },
+            n.text,
+        )
+        is com.vettid.core.data.items.RuleNames.Qualifier.Ends ->
+            q.at?.let { stringResource(R.string.approvals_rule_name_until, n.text, Times.dayLabel(Times.day(it))) }
+                ?: stringResource(R.string.approvals_rule_name_no_end, n.text)
+    }
 }
 
 @Composable

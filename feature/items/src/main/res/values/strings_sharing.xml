@@ -69,24 +69,42 @@
     <!-- A share rule -->
     <string name="items_rule_new_title">New sharing rule</string>
     <string name="items_rule_edit_title">Sharing rule</string>
-    <string name="items_rule_body">Items with these tags can be read by %1$s. Each rule has its own settings: add another rule for tags you want shared differently. Your tags stay private.</string>
-    <string name="items_rule_tags">Tags</string>
+    <string name="items_rule_body">Each rule shares one tag with %1$s and has its own settings. Your tags stay private.</string>
+    <string name="items_rule_tag_title">Select the tag to share</string>
+    <string name="items_rule_tag_hint">Items with this tag will be shared with %1$s</string>
+    <string name="items_rule_tag_taken_title">Already shared</string>
+    <string name="items_rule_tag_taken">Already shared — edit its rule</string>
+    <string name="items_rule_tag_taken_cd">%1$s: already shared — edit its rule</string>
+    <string name="items_rule_multi_title">This rule names several tags</string>
+    <string name="items_rule_multi_body">Rules now share one tag each. This rule stays as it is: you can delete it and add a rule for each tag instead.</string>
+    <string name="items_rule_discard_title">Discard changes to this rule?</string>
     <string name="items_rule_no_tags">Add tags to your items first: a rule shares by tag.</string>
-    <string name="items_rule_match_any">Items with any of these tags</string>
-    <string name="items_rule_match_all">Only items with all of these tags</string>
     <string name="items_rule_match_any_short">Any of these tags</string>
     <string name="items_rule_match_all_short">All of these tags</string>
-    <string name="items_rule_mode">When an item gets one of these tags</string>
+    <string name="items_rule_mode">When an item gets this tag</string>
     <string name="items_rule_mode_ask">Ask me each time</string>
     <string name="items_rule_mode_ask_note">You decide about each item in Approvals before it is shared</string>
     <string name="items_rule_mode_auto">Share automatically</string>
-    <string name="items_rule_mode_auto_note">New items with these tags are shared at once</string>
-    <string name="items_rule_existing">Include items that already have these tags</string>
-    <string name="items_rule_existing_note">Off: only items that get these tags from now on</string>
+    <string name="items_rule_mode_auto_note">New items with this tag are shared at once, unless another of your rules for them asks first</string>
+    <string name="items_rule_existing">Include items that already have this tag</string>
+    <string name="items_rule_existing_note">Off: only items that get this tag from now on</string>
     <string name="items_rule_limits">Limits</string>
     <string name="items_rule_uses">Fetches of each item (optional)</string>
     <string name="items_rule_uses_note">Empty: no limit. Every fetch is recorded.</string>
     <string name="items_rule_uses_bad">Between 1 and 10,000</string>
+    <string name="items_rule_per_hour">Fetches per hour (optional)</string>
+    <string name="items_rule_per_day">Fetches per day (optional)</string>
+    <string name="items_rule_per_note">All of this rule\'s items together. Empty: no limit.</string>
+    <string name="items_rule_per_hour_bad">Between 1 and 3,600</string>
+    <string name="items_rule_per_day_bad">Between 1 and 86,400</string>
+    <plurals name="items_rule_per_hour_summary">
+        <item quantity="one">up to %1$d an hour</item>
+        <item quantity="other">up to %1$d an hour</item>
+    </plurals>
+    <plurals name="items_rule_per_day_summary">
+        <item quantity="one">up to %1$d a day</item>
+        <item quantity="other">up to %1$d a day</item>
+    </plurals>
     <string name="items_rule_expiry">Ends</string>
     <string name="items_rule_expiry_never">Never</string>
     <string name="items_rule_expiry_day">1 day</string>
@@ -105,15 +123,39 @@
     <string name="items_rule_summary_ask">Asks you each time</string>
     <string name="items_rule_no_limit">no fetch limit</string>
     <string name="items_rule_no_end">no end date</string>
-    <string name="items_rule_also_covered">Also covered by: %1$s</string>
-    <string name="items_rule_overlap_title">Also covered by</string>
+    <string name="items_rule_overlaps">Overlaps %1$s</string>
+    <string name="items_rule_asks_first_for">Asks you first for the items %1$s also covers</string>
+    <string name="items_rule_overlap_title">Your other rules for these items</string>
     <string name="items_rule_overlap_tags">also names %1$s</string>
     <plurals name="items_rule_overlap_items">
         <item quantity="one">%1$d of these items is in it</item>
         <item quantity="other">%1$d of these items are in it</item>
     </plurals>
-    <string name="items_rule_overlap_note">Each rule works on its own: an item is shared while any of these rules shares it. If one shares automatically and another asks, the item is shared without asking. Each rule\'s fetch limit and end apply to what it shares.</string>
-    <string name="items_rule_preview_also">Also in another rule for this connection</string>
+    <string name="items_rule_overlap_note">When rules overlap, asking wins: an item that any of them asks about is shared only after you approve it, and your answer counts for all of them. The strictest fetch limits apply.</string>
+    <string name="items_rule_name">your “%1$s” rule</string>
+    <string name="items_rule_name_asks">your “%1$s” rule (asks first)</string>
+    <string name="items_rule_name_auto">your “%1$s” rule (shares automatically)</string>
+    <string name="items_rule_name_until">your “%1$s” rule (until %2$s)</string>
+    <string name="items_rule_name_no_end">your “%1$s” rule (no end date)</string>
+    <string name="items_rule_outcome_ask_because">Asks you first because %1$s covers it</string>
+    <string name="items_rule_outcome_include">Shared at once</string>
+    <string name="items_rule_outcome_ask">You will be asked</string>
+    <string name="items_rule_state_included">Already shared</string>
+    <string name="items_rule_state_pending">Waiting for your decision</string>
+    <string name="items_rule_state_declined">Not shared: you declined it</string>
+    <plurals name="items_rule_preview_match">
+        <item quantity="one">%1$d item matches</item>
+        <item quantity="other">%1$d items match</item>
+    </plurals>
+    <plurals name="items_rule_preview_outcome_include">
+        <item quantity="one">%1$d shared at once</item>
+        <item quantity="other">%1$d shared at once</item>
+    </plurals>
+    <plurals name="items_rule_preview_outcome_ask">
+        <item quantity="one">%1$d asks you first</item>
+        <item quantity="other">%1$d ask you first</item>
+    </plurals>
+    <string name="items_rule_preview_outcomes">%1$s: %2$s.</string>
     <string name="items_rule_until">until %1$s</string>
     <plurals name="items_rule_uses">
         <item quantity="one">up to %1$d fetch of each item</item>
@@ -135,9 +177,9 @@
     <string name="items_rule_save">Save rule</string>
     <string name="items_rule_delete">Delete rule</string>
     <string name="items_rule_delete_title">Delete this sharing rule?</string>
-    <string name="items_rule_delete_body">%1$s can no longer fetch the items it shared.</string>
+    <string name="items_rule_delete_body">%1$s can no longer fetch the items it shared. Items another rule shares stay shared, and nothing becomes shared because this rule is gone.</string>
     <string name="items_rule_preview">What it matches now</string>
-    <string name="items_rule_preview_none">Choose at least one tag</string>
+    <string name="items_rule_preview_none">Choose a tag</string>
     <plurals name="items_rule_preview_ask">
         <item quantity="one">%1$d item matches: you will be asked about it.</item>
         <item quantity="other">%1$d items match: you will be asked about each.</item>
@@ -154,6 +196,7 @@
     <string name="items_impact_title">Sharing</string>
     <string name="items_impact_auto">Saving shares this item with %1$s automatically.</string>
     <string name="items_impact_ask">You will be asked whether to share this item with %1$s.</string>
+    <string name="items_impact_ask_because">Asks you first because %1$s for %2$s covers it.</string>
     <string name="items_impact_usable">%1$s will be able to ask you to use this item, never read it.</string>
     <string name="items_shared_holds">Holds: %1$s</string>
     <string name="items_ask_entry_category">%1$s (any item)</string>
@@ -175,6 +218,23 @@
     <string name="items_shared_refused_expired">The sharing ended.</string>
     <string name="items_shared_refused_exhausted">No fetches are left.</string>
     <string name="items_shared_refused_unavailable">It is not available any more.</string>
+    <string name="items_shared_refused_rate_limited">Opened as often as %1$s allows for now.</string>
+    <plurals name="items_shared_retry_minutes">
+        <item quantity="one">Try again in %1$d minute.</item>
+        <item quantity="other">Try again in %1$d minutes.</item>
+    </plurals>
+    <plurals name="items_shared_retry_hours">
+        <item quantity="one">Try again in %1$d hour.</item>
+        <item quantity="other">Try again in %1$d hours.</item>
+    </plurals>
+    <plurals name="items_grant_per_hour">
+        <item quantity="one">up to %1$d time an hour</item>
+        <item quantity="other">up to %1$d times an hour</item>
+    </plurals>
+    <plurals name="items_grant_per_day">
+        <item quantity="one">up to %1$d time a day</item>
+        <item quantity="other">up to %1$d times a day</item>
+    </plurals>
 
     <!-- Asking a connection for something (§10.12 grant.request) -->
     <string name="items_ask_title">Ask for something</string>
@@ -188,5 +248,6 @@
     <string name="items_ask_row">%1$s: %2$s</string>
     <string name="items_ask_state_pending">waiting</string>
     <string name="items_ask_state_granted">shared</string>
-    <string name="items_ask_state_denied">declined</string>
+    <!-- 0.23.0 §10.4.1: every refusal of the member's own ask is shown neutrally, never as declined by the other member. -->
+    <string name="items_ask_state_denied">not accepted</string>
 </resources>

@@ -33,9 +33,12 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.data.account.AccountNames
+import com.vettid.core.data.items.FetchOutcome
 import com.vettid.core.data.items.FieldValue
 import com.vettid.core.data.items.GrantView
 import com.vettid.core.data.items.ShareMode
+import com.vettid.core.data.items.RuleNames
+import com.vettid.core.data.items.RuleOverlaps
 import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.items.SharedContent
 import com.vettid.core.data.items.TagMatch
@@ -48,7 +51,7 @@ import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.SecondaryButton
 import com.vettid.core.ui.components.SettingsSectionHeader
-import com.vettid.core.ui.components.TagLabel
+import com.vettid.core.ui.components.TagChip
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.theme.Spacing
 import kotlinx.serialization.Serializable
@@ -204,7 +207,8 @@ private fun RulesSection(state: ConnectionSharingUiState, name: String, actions:
             modifier = Modifier.padding(horizontal = Spacing.gutter).testTag("sharing_no_rules"),
         )
     }
-    state.rules.forEach { r -> RuleCard(r, state.overlaps[r.ruleId].orEmpty(), actions.onOpenRule) }
+    val names = RuleNames.of(state.rules)
+    state.rules.forEach { r -> RuleCard(r, state.overlaps[r.ruleId].orEmpty(), names, actions.onOpenRule) }
     if (state.atRuleLimit) RuleLimitNotice(Modifier.padding(horizontal = Spacing.s))
     SecondaryButton(
         stringResource(R.string.items_sharing_new_rule),
@@ -214,11 +218,16 @@ private fun RulesSection(state: ConnectionSharingUiState, name: String, actions:
     )
 }
 
-/** A rule of this connection: its tags, mode, limits, end, what it shares now and the other rules covering the same. */
+/**
+ * A rule of this connection: its tag (in the tag's colour), mode, limits, end, what it shares now and the other rules
+ * covering the same items, named by their tags with the 0.23.0 rule (asking wins).
+ */
 @Composable
-private fun RuleCard(r: ShareRule, overlaps: List<ShareRule>, onOpen: (String) -> Unit) {
+private fun RuleCard(r: ShareRule, overlaps: List<ShareRule>, names: Map<String, RuleNames.Name>, onOpen: (String) -> Unit) {
     DetailCard(Modifier.padding(vertical = Spacing.xs).semantics(mergeDescendants = true) {}.testTag("rule_${r.ruleId}")) {
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.s)) { r.tags.forEach { TagLabel(it) } }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.s), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+            r.tags.forEach { TagChip(it) }
+        }
         Spacer(Modifier.height(Spacing.s))
         if (r.tags.size > 1) {
             Text(
@@ -237,9 +246,9 @@ private fun RuleCard(r: ShareRule, overlaps: List<ShareRule>, onOpen: (String) -
             ).joinToString(" · "),
             style = MaterialTheme.typography.bodySmall,
         )
-        if (overlaps.isNotEmpty()) {
+        overlapText(r, overlaps, names)?.let {
             Text(
-                stringResource(R.string.items_rule_also_covered, overlaps.joinToString("; ") { it.tags.joinToString(", ") }),
+                it,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.testTag("rule_also_${r.ruleId}"),
@@ -251,15 +260,41 @@ private fun RuleCard(r: ShareRule, overlaps: List<ShareRule>, onOpen: (String) -
     }
 }
 
+/**
+ * How a rule meets the subject's other rules (§10.12 Overlapping rules, 0.23.0): an `auto` rule "Asks you first for
+ * the items your “medical” rule also covers" when an `ask` rule overlaps it; otherwise "Overlaps your “x” rule".
+ * Null without overlaps.
+ */
+@Composable
+internal fun overlapText(r: ShareRule, overlaps: List<ShareRule>, names: Map<String, RuleNames.Name>): String? {
+    if (overlaps.isEmpty()) return null
+    val askers = RuleOverlaps.asksFirst(r.mode, overlaps)
+    val others = overlaps - askers.toSet()
+    return listOfNotNull(
+        askers.takeIf { it.isNotEmpty() }?.let { a ->
+            stringResource(R.string.items_rule_asks_first_for, a.map { ruleName(it, names) }.joinToString(", "))
+        },
+        others.takeIf { it.isNotEmpty() }?.let { o ->
+            stringResource(R.string.items_rule_overlaps, o.map { ruleName(it, names) }.joinToString(", "))
+        },
+    ).joinToString(". ")
+}
+
 /** "Shared automatically" or "Asks you each time" (§10.12 `mode`). */
 @Composable
 internal fun ruleModeText(m: ShareMode): String =
     stringResource(if (m == ShareMode.AUTO) R.string.items_rule_summary_auto else R.string.items_rule_summary_ask)
 
-/** The rule's limit and end: "up to 5 fetches of each item · until Dec 31, 2026", or "no fetch limit · no end date". */
+/**
+ * The rule's limits and end: "up to 5 fetches of each item · up to 5 an hour · up to 20 a day · until Dec 31, 2026",
+ * or "no fetch limit · no end date" (0.23.0: per hour and per day of all its items together).
+ */
 @Composable
-internal fun ruleLimitsText(r: ShareRule): String = listOf(
-    r.uses?.let { pluralStringResource(R.plurals.items_rule_uses, it, it) } ?: stringResource(R.string.items_rule_no_limit),
+internal fun ruleLimitsText(r: ShareRule): String = listOfNotNull(
+    r.uses?.let { pluralStringResource(R.plurals.items_rule_uses, it, it) }
+        ?: stringResource(R.string.items_rule_no_limit).takeIf { r.perHour == null && r.perDay == null },
+    r.perHour?.let { pluralStringResource(R.plurals.items_rule_per_hour_summary, it, it) },
+    r.perDay?.let { pluralStringResource(R.plurals.items_rule_per_day_summary, it, it) },
     r.expiresAt?.let { stringResource(R.string.items_rule_until, Times.dayLabel(Times.day(it))) }
         ?: stringResource(R.string.items_rule_no_end),
 ).joinToString(" · ")
@@ -371,12 +406,7 @@ private fun ReceivedCard(g: GrantView, state: SharedWithYouUiState, name: String
     DetailCard(Modifier.padding(vertical = Spacing.xs).testTag("received_${g.grantId}")) {
         Text(content?.name ?: g.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
         Text(
-            listOfNotNull(
-                ItemsText.category(content?.category ?: g.category),
-                stringResource(R.string.items_shared_by, name),
-                g.usesLeft?.let { pluralStringResource(R.plurals.items_grant_uses_left, it, it) },
-                g.expiresAt?.let { stringResource(R.string.items_rule_until, Times.full(it)) },
-            ).joinToString(" · "),
+            receivedLabel(g, content?.category, name),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.testTag("received_label_${g.grantId}"),
@@ -390,7 +420,12 @@ private fun ReceivedCard(g: GrantView, state: SharedWithYouUiState, name: String
             )
         }
         state.refused[g.grantId]?.let { r ->
-            Text(refusalText(r), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                listOfNotNull(refusalText(r, name), state.retryAt[g.grantId]?.let { retryText(it) }).joinToString(" "),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.testTag("received_refused_${g.grantId}"),
+            )
         }
         if (content != null) {
             Spacer(Modifier.height(Spacing.s))
@@ -506,9 +541,11 @@ private const val ASK_REASON_CHARS = 256
 
 @Composable
 private fun SharedFields(c: SharedContent) {
+    val region = phoneRegion()
     c.fields.forEach { f ->
         val text = when (val v = f.value) {
-            is FieldValue.Text -> v.text
+            // A phone number as the member's own are shown (#95: formatted for the phone's region).
+            is FieldValue.Text -> if (f.kind == com.vettid.core.data.items.FieldKinds.PHONE) PhoneInput.display(v.text, region) else v.text
             is FieldValue.Address -> v.address.lines().joinToString("\n")
             null -> ""
         }
@@ -525,10 +562,67 @@ private fun SharedFields(c: SharedContent) {
     }
 }
 
+/** A received grant's line: its category, whose it is, uses left, the rule's rate limits (0.23.0) and its end. */
 @Composable
-private fun refusalText(r: String): String = when (r) {
+private fun receivedLabel(g: GrantView, category: String?, name: String): String = listOfNotNull(
+    ItemsText.category(category ?: g.category),
+    stringResource(R.string.items_shared_by, name),
+    g.usesLeft?.let { pluralStringResource(R.plurals.items_grant_uses_left, it, it) },
+    g.perHour?.let { pluralStringResource(R.plurals.items_grant_per_hour, it, it) },
+    g.perDay?.let { pluralStringResource(R.plurals.items_grant_per_day, it, it) },
+    g.expiresAt?.let { stringResource(R.string.items_rule_until, Times.full(it)) },
+).joinToString(" · ")
+
+@Composable
+private fun refusalText(r: String, name: String): String = when (r) {
+    FetchOutcome.RATE_LIMITED -> stringResource(R.string.items_shared_refused_rate_limited, name)
     "revoked" -> stringResource(R.string.items_shared_refused_revoked)
     "expired" -> stringResource(R.string.items_shared_refused_expired)
     "exhausted" -> stringResource(R.string.items_shared_refused_exhausted)
     else -> stringResource(R.string.items_shared_refused_unavailable)
+}
+
+/**
+ * A rule as the member reads it (§10.12, owner's review of #181): by its tags, "your “medical” rule" ("medical + id"
+ * for all, "medical or id" for any), with what tells it apart from another rule of the subject that reads the same.
+ */
+@Composable
+internal fun ruleName(r: ShareRule, names: Map<String, RuleNames.Name> = emptyMap()): String {
+    val n = names[r.ruleId] ?: RuleNames.Name(RuleNames.text(r))
+    return when (val q = n.qualifier) {
+        null -> stringResource(R.string.items_rule_name, n.text)
+        is RuleNames.Qualifier.Mode ->
+            stringResource(if (q.mode == ShareMode.ASK) R.string.items_rule_name_asks else R.string.items_rule_name_auto, n.text)
+        is RuleNames.Qualifier.Ends -> q.at?.let { stringResource(R.string.items_rule_name_until, n.text, Times.dayLabel(Times.day(it))) }
+            ?: stringResource(R.string.items_rule_name_no_end, n.text)
+    }
+}
+
+/**
+ * "Try again in 12 minutes." from a `rate_limited` refusal's end (0.23.0 §10.12 `retry_after`): whole minutes rounded
+ * up, in hours from 90 minutes.
+ */
+@Composable
+internal fun retryText(until: java.time.Instant, now: java.time.Instant = java.time.Instant.now()): String {
+    val (unit, n) = RetryIn.of(java.time.Duration.between(now, until).seconds)
+    return if (unit == RetryIn.Scale.HOURS) {
+        pluralStringResource(R.plurals.items_shared_retry_hours, n, n)
+    } else {
+        pluralStringResource(R.plurals.items_shared_retry_minutes, n, n)
+    }
+}
+
+/** How long until a refused fetch can succeed, as the member reads it. */
+internal object RetryIn {
+    enum class Scale { MINUTES, HOURS }
+
+    private const val MINUTE = 60L
+    private const val HOURS_FROM_MINUTES = 90L
+
+    /** [seconds] (at least 1) as whole minutes rounded up, or whole hours rounded up from 90 minutes. */
+    fun of(seconds: Long): Pair<Scale, Int> {
+        val minutes = (seconds.coerceAtLeast(1) + MINUTE - 1) / MINUTE
+        if (minutes < HOURS_FROM_MINUTES) return Scale.MINUTES to minutes.toInt()
+        return Scale.HOURS to ((minutes + MINUTE - 1) / MINUTE).toInt()
+    }
 }

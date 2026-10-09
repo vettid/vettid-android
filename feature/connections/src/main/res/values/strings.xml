@@ -137,7 +137,8 @@
     <string name="connections_auth_never">You have not asked %1$s to authenticate yet.</string>
     <string name="connections_auth_waiting">Waiting for %1$s to approve on their phone (up to 10 minutes).</string>
     <string name="connections_auth_ok">%1$s authenticated with their credential, %2$s.</string>
-    <string name="connections_auth_denied">%1$s declined the last request.</string>
+    <!-- 0.23.0 §10.4.1: a refusal of the member's own ask is shown neutrally, never as declined by the other member. -->
+    <string name="connections_auth_denied">Not accepted.</string>
     <string name="connections_auth_bad">The last answer from %1$s did not verify. Do not trust it.</string>
     <string name="connections_auth_key_changed">The credential key of %1$s changed since their last authentication. Check with them before you trust it.</string>
     <string name="connections_auth_explain">Asks them to approve with their credential password, which proves the member themselves is present, not only their vault.</string>
@@ -191,11 +192,51 @@
         <item quantity="one">%d item shared now</item>
         <item quantity="other">%d items shared now</item>
     </plurals>
-    <string name="connections_share_rule_also">Also covered by: %1$s</string>
+    <string name="connections_share_rule_overlaps">Overlaps %1$s</string>
+    <string name="connections_share_rule_asks_first_for">Asks you first for the items %1$s also covers</string>
+    <string name="connections_rule_name">your “%1$s” rule</string>
+    <string name="connections_rule_name_asks">your “%1$s” rule (asks first)</string>
+    <string name="connections_rule_name_auto">your “%1$s” rule (shares automatically)</string>
+    <string name="connections_rule_name_until">your “%1$s” rule (until %2$s)</string>
+    <string name="connections_rule_name_no_end">your “%1$s” rule (no end date)</string>
+    <plurals name="connections_share_per_hour">
+        <item quantity="one">up to %d an hour</item>
+        <item quantity="other">up to %d an hour</item>
+    </plurals>
+    <plurals name="connections_share_per_day">
+        <item quantity="one">up to %d a day</item>
+        <item quantity="other">up to %d a day</item>
+    </plurals>
+    <plurals name="connections_share_received_per_hour">
+        <item quantity="one">up to %d time an hour</item>
+        <item quantity="other">up to %d times an hour</item>
+    </plurals>
+    <plurals name="connections_share_received_per_day">
+        <item quantity="one">up to %d time a day</item>
+        <item quantity="other">up to %d times a day</item>
+    </plurals>
+    <!-- A connection's asks (VAULT-MESSAGING 0.23.0 §10.4.1): mute, pause, resume. -->
+    <string name="connections_asks_title">Requests from %1$s</string>
+    <string name="connections_asks_title_unnamed">Requests from this connection</string>
+    <string name="connections_asks_normal">%1$s can ask you for things: to see items, to use a critical item, to authenticate, to introduce someone or for your location. You decide each time.</string>
+    <string name="connections_asks_paused_title">Requests paused</string>
+    <string name="connections_asks_paused">%1$s’s requests are paused after you declined several. They are refused without asking you until you resume them.</string>
+    <string name="connections_asks_paused_since">Paused %1$s</string>
+    <string name="connections_asks_muted_title">Requests muted</string>
+    <string name="connections_asks_muted">You muted %1$s’s requests: they are refused without asking you. Messages, profile updates and sharing go on.</string>
+    <plurals name="connections_asks_cooldowns">
+        <item quantity="one">%d request you declined is refused for 7 days.</item>
+        <item quantity="other">%d requests you declined are refused for 7 days.</item>
+    </plurals>
+    <string name="connections_asks_neutral">%1$s is not told whether you declined, muted or paused: they only see that a request was not accepted.</string>
+    <string name="connections_asks_mute">Mute requests</string>
+    <string name="connections_asks_unmute">Unmute requests</string>
+    <string name="connections_asks_resume">Resume requests</string>
+    <string name="connections_asks_allow_again">Allow declined requests again</string>
     <string name="connections_share_rule_delete">Delete this rule</string>
     <string name="connections_share_rule_delete_title">Delete this sharing rule?</string>
-    <string name="connections_share_rule_delete_body">%1$s can no longer fetch the items this rule shared. Items another rule shares stay shared.</string>
-    <string name="connections_share_rule_delete_unnamed">This connection can no longer fetch the items this rule shared. Items another rule shares stay shared.</string>
+    <string name="connections_share_rule_delete_body">%1$s can no longer fetch the items this rule shared. Items another rule shares stay shared, and nothing becomes shared because this rule is gone.</string>
+    <string name="connections_share_rule_delete_unnamed">This connection can no longer fetch the items this rule shared. Items another rule shares stay shared, and nothing becomes shared because this rule is gone.</string>
     <string name="connections_share_rule_open">Change this rule</string>
     <plurals name="connections_share_rule_pending">
         <item quantity="one">%d waiting for you</item>

@@ -156,14 +156,20 @@ internal object ItemsCatalog {
         4,
         listOf(
             TagView("@profile", 1), TagView("crypto", 1), TagView("identity", 1, description = "Passports and IDs"),
-            TagView("medical", 3, listOf("01JRULE1")), TagView("money", 1), TagView("travel", 1, listOf("01JRULE2")),
+            TagView("insurance", 1, listOf("01JRULE3")), TagView("medical", 3, listOf("01JRULE1")), TagView("money", 1),
+            TagView("travel", 1, listOf("01JRULE2", "01JRULE4")),
         ),
     )
+    // One tag per rule (owner decision 2026-10-09); the last names two, as rules made before it may.
     private val rules = listOf(
-        ShareRule("01JRULE1", 2, "c1", tags = listOf("medical"), included = listOf("i1", "i2"), pending = listOf("i3")),
-        ShareRule("01JRULE2", 1, "c1", tags = listOf("travel", "identity"), match = com.vettid.core.data.items.TagMatch.ALL, mode = ShareMode.AUTO, uses = 5, expiresAt = Instant.now().plusSeconds(86_400 * 30L), included = listOf(passport.itemId)),
-        // Overlaps the first: the same tag, one item in both (each rule applies on its own, §10.12).
-        ShareRule("01JRULE3", 1, "c1", tags = listOf("medical", "money"), mode = ShareMode.AUTO, uses = 10, included = listOf("i1")),
+        ShareRule("01JRULE1", 2, "c1", tags = listOf("medical"), perDay = 20, included = listOf("i1", "i2"), pending = listOf("i3")),
+        ShareRule(
+            "01JRULE2", 1, "c1", tags = listOf("travel"), mode = ShareMode.AUTO, uses = 5, perHour = 5,
+            expiresAt = Instant.now().plusSeconds(86_400 * 30L), included = listOf(passport.itemId),
+        ),
+        // Overlaps the first: an item tagged both, which asks first (0.23.0: `ask` wins).
+        ShareRule("01JRULE3", 1, "c1", tags = listOf("insurance"), mode = ShareMode.AUTO, uses = 10, included = listOf("i1")),
+        ShareRule("01JRULE4", 1, "c1", tags = listOf("travel", "identity"), match = com.vettid.core.data.items.TagMatch.ALL, mode = ShareMode.AUTO),
     )
 
     /** A connection at the most rules it can have (§10.12 `share_rules_subject`, 64). */
@@ -191,6 +197,16 @@ internal object ItemsCatalog {
     )
     private val ruleDraft = RuleDraft("c1", listOf("medical"))
     private val rulePreview = RulePreview(listOf(RuleMatch("i1", "Allergies", "medical", Sensitivity.DATA), RuleMatch("i2", "Blood type", "medical", Sensitivity.DATA), RuleMatch("i9", "Signing key", "crypto_wallet", Sensitivity.CRITICAL)), 3)
+
+    /** A new `auto` rule for "money": the dry run says what each item does (0.23.0 `outcome`, `ask_rule_id`). */
+    private val moneyDraft = RuleDraft("c1", listOf("money"), mode = ShareMode.AUTO, perHour = 5, perDay = 20)
+    private val askWinsPreview = RulePreview(
+        listOf(
+            RuleMatch("i4", "Bank account", "bank_account", Sensitivity.DATA, outcome = RuleMatch.OUTCOME_INCLUDE),
+            RuleMatch("i1", "Allergies", "medical", Sensitivity.DATA, outcome = RuleMatch.OUTCOME_ASK, askRuleId = "01JRULE1"),
+        ),
+        2,
+    )
 
     val screens: Map<String, @Composable () -> Unit> = linkedMapOf(
         "items" to { ItemsScreen(ItemsUiState(list, load = ListLoad.LOADED), chrome, ItemsActions()) },
@@ -262,10 +278,30 @@ internal object ItemsCatalog {
         "items.tags_in_use" to { TagsScreen(TagsUiState(registry, loading = false, error = FailureKind.IN_USE), TagsActions()) },
         "items.sharing" to { ConnectionSharingScreen(ConnectionSharingUiState("c1", "Dana Lee", rules, givenGrants, mapOf(passport.itemId to passport.summary), loading = false), ConnectionSharingActions()) },
         "items.sharing_empty" to { ConnectionSharingScreen(ConnectionSharingUiState("c1", "Dana Lee", loading = false), ConnectionSharingActions()) },
-        "items.rule_new" to { RuleEditScreen(RuleEditUiState(ruleDraft, "Dana Lee", registry.tags.filterNot { it.reserved }.map { it.tag }, preview = rulePreview), RuleEditActions()) },
+        "items.rule_new" to { RuleEditScreen(RuleEditUiState(RuleDraft("c1"), "Dana Lee", tagNames, rules = rules), RuleEditActions()) },
+        // One tag per rule (owner decision 2026-10-09): the chosen tag with a gold outline and a check mark.
+        "items.rule_selected" to {
+            RuleEditScreen(RuleEditUiState(RuleDraft("c1", listOf("money")), "Dana Lee", tagNames, rules = rules, dirty = true), RuleEditActions())
+        },
+        // 0.23.0: per hour and per day, and `ask` wins in the dry run.
+        "items.rule_ask_wins" to {
+            RuleEditScreen(
+                RuleEditUiState(moneyDraft, "Dana Lee", tagNames, perHourText = "5", perDayText = "20", preview = askWinsPreview, rules = rules, dirty = true),
+                RuleEditActions(),
+            )
+        },
+        "items.rule_limits_bad" to {
+            RuleEditScreen(RuleEditUiState(moneyDraft, "Dana Lee", tagNames, perHourText = "5000", perDayText = "0", rules = rules, dirty = true), RuleEditActions())
+        },
+        "items.rule_read_only" to {
+            RuleEditScreen(RuleEditUiState(RuleDraft.of(rules[3]), "Dana Lee", tagNames, rules = rules, readOnly = true), RuleEditActions())
+        },
+        "items.rule_discard" to {
+            RuleEditScreen(RuleEditUiState(moneyDraft, "Dana Lee", tagNames, rules = rules, dirty = true, confirmDiscard = true), RuleEditActions())
+        },
         "items.rule_edit" to {
             RuleEditScreen(
-                RuleEditUiState(RuleDraft.of(rules[1]), "Dana Lee", registry.tags.filterNot { it.reserved }.map { it.tag }, com.vettid.feature.items.RuleExpiry.KEEP, "5", RulePreview(listOf(RuleMatch(passport.itemId, "Passport", "identity_document", Sensitivity.DATA)), 1)),
+                RuleEditUiState(RuleDraft.of(rules[1]), "Dana Lee", registry.tags.filterNot { it.reserved }.map { it.tag }, com.vettid.feature.items.RuleExpiry.KEEP, "5", preview = RulePreview(listOf(RuleMatch(passport.itemId, "Passport", "identity_document", Sensitivity.DATA)), 1)),
                 RuleEditActions(),
             )
         },
@@ -273,7 +309,7 @@ internal object ItemsCatalog {
         "items.rule_overlap" to { RuleEditScreen(RuleEditUiState(ruleDraft, "Dana Lee", tagNames, preview = rulePreview, rules = rules), RuleEditActions()) },
         "items.rule_custom_end" to {
             RuleEditScreen(
-                RuleEditUiState(ruleDraft.copy(expiresAt = Instant.parse("2026-12-31T22:59:00Z")), "Dana Lee", tagNames, com.vettid.feature.items.RuleExpiry.CUSTOM, "3", rulePreview),
+                RuleEditUiState(ruleDraft.copy(expiresAt = Instant.parse("2026-12-31T22:59:00Z")), "Dana Lee", tagNames, com.vettid.feature.items.RuleExpiry.CUSTOM, "3", preview = rulePreview),
                 RuleEditActions(),
             )
         },
@@ -296,11 +332,26 @@ internal object ItemsCatalog {
         },
         "items.sharing_limit" to { ConnectionSharingScreen(ConnectionSharingUiState("c1", "Dana Lee", fullRules, loading = false), ConnectionSharingActions()) },
         "items.shared_with_you" to { SharedWithYouScreen(SharedWithYouUiState("c1", "Dana Lee", received, opened, mapOf("g6" to "exhausted"), loading = false), SharedWithYouActions()) },
+        "items.shared_rate_limited" to {
+            SharedWithYouScreen(
+                SharedWithYouUiState(
+                    "c1", "Dana Lee", received.map { if (it.grantId == "g6") it.copy(perHour = 5, perDay = 20) else it },
+                    refused = mapOf("g6" to "rate_limited"), retryAt = mapOf("g6" to Instant.now().plusSeconds(12 * 60)), loading = false,
+                ),
+                SharedWithYouActions(),
+            )
+        },
         "items.shared_with_you_empty" to { SharedWithYouScreen(SharedWithYouUiState("c1", "Dana Lee", loading = false), SharedWithYouActions()) },
         "items.edit_share_impact" to {
             ItemEditScreen(
                 edit(ItemDraft.of(passport), isNew = false).copy(
-                    shareImpact = listOf(ShareImpact("Dana Lee", ShareMode.AUTO), ShareImpact("Alex Kim", ShareMode.ASK), ShareImpact("Jo Park", ShareMode.ASK, withdrawn = true)),
+                    shareImpact = listOf(
+                        ShareImpact("Dana Lee", ShareMode.AUTO),
+                        ShareImpact("Alex Kim", ShareMode.ASK),
+                        ShareImpact("Jo Park", ShareMode.ASK, withdrawn = true),
+                        // 0.23.0: `ask` wins — an `auto` rule asks first while the `ask` rule holds the item.
+                        ShareImpact("Dana Lee", ShareMode.AUTO, askRule = rules[0]),
+                    ),
                 ),
                 ItemEditActions(),
             )

@@ -593,6 +593,32 @@ class ItemEditViewModelTest {
         assertTrue(again.uiState.value.draft.fields[i].monthYear)
     }
 
+    /**
+     * VAULT-ITEMS 0.1.2 (VAULT-MESSAGING 0.23.0 §10.7): the month picker follows the template field's `"format":
+     * "month"`, not the template's id; a stored value's form decides when editing (`YYYY-MM` a month, a day a day).
+     */
+    @Test
+    fun theMonthPickerFollowsTheTemplatesFormatHint() {
+        val months = ItemTemplates.all.flatMap { t -> t.fields.filter { it.format == TemplateField.FORMAT_MONTH }.map { t.id to it } }
+        assertEquals(listOf("payment_card"), months.map { it.first })
+        assertTrue(months.single().second.monthYear)
+        // The hint only means something on a `date` field.
+        assertFalse(TemplateField(R.string.items_label_expires, "text", TemplateField.FORMAT_MONTH).monthYear)
+        assertFalse(TemplateField(R.string.items_label_expires, "date").monthYear)
+        // Editing: an empty field takes the hint; a stored value's form decides.
+        val labels = setOf("Expires")
+        assertTrue(ItemTemplates.monthHint("date", "", "Expires", labels))
+        assertFalse(ItemTemplates.monthHint("date", "2031-04-30", "Expires", labels))
+        assertFalse(ItemTemplates.monthHint("date", "", "Issued", labels))
+        assertFalse(ItemTemplates.monthHint("text", "", "Expires", labels))
+        // A full date stored under a month-hinted field stays a day; a month stays a month (stored as is, YYYY-MM).
+        val day = com.vettid.core.data.items.DraftField.of(com.vettid.core.data.items.ItemFieldView("f1", "Expires", "date", FieldValue.Text("2031-04-30")))
+        val month = com.vettid.core.data.items.DraftField.of(com.vettid.core.data.items.ItemFieldView("f1", "Expires", "date", FieldValue.Text("2031-04")))
+        assertFalse(day.monthYear)
+        assertTrue(month.monthYear)
+        assertEquals("2031-04", month.text)
+    }
+
     private fun editing(id: String, sensitivity: Sensitivity, tags: List<String> = emptyList()): ItemEditViewModel {
         items.add(FakeItems.item(id, "Item", sensitivity, tags = tags))
         return vm(itemId = id)

@@ -126,4 +126,15 @@
     <string name="history_kind_profile_core_missing">Profile not sent: your names were missing</string>
     <string name="history_kind_settings_changed">Settings changed</string>
     <string name="history_kind_drop_suppressed">More blocked messages not logged</string>
+    <!-- VAULT-MESSAGING 0.23.0 §10.4.1: a connection's asks; §10.12: a connection's fetch past a rule's rate limit. -->
+    <string name="history_kind_connection_asks_paused">Requests paused after several declines</string>
+    <string name="history_kind_connection_asks_resumed">Requests resumed</string>
+    <string name="history_kind_connection_asks_muted">Requests muted</string>
+    <string name="history_kind_connection_asks_unmuted">Requests unmuted</string>
+    <string name="history_kind_drop_ask_muted">Request refused: muted</string>
+    <string name="history_kind_drop_ask_paused">Request refused: requests paused</string>
+    <string name="history_kind_drop_ask_cooldown">Request refused: you declined it in the last 7 days</string>
+    <string name="history_kind_drop_ask_pending">Request refused: too many waiting</string>
+    <string name="history_kind_drop_ask_rate">Request refused: too many in 24 hours</string>
+    <string name="history_kind_drop_grant_rate_limited">Fetch refused: a rule\'s rate limit</string>
 </resources>

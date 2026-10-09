@@ -78,6 +78,10 @@ data class DetailActions(
     val onDeleteRule: () -> Unit = {},
     /** "Ask for something": a `grant.request` of this connection (§10.12). */
     val onAskForSomething: () -> Unit = {},
+    /** Mutes or unmutes the connection's asks (0.23.0 §10.4.1). */
+    val onMuteAsks: (Boolean) -> Unit = {},
+    /** Resumes paused asks, or allows declined ones again (`connection.asks.resume`). */
+    val onResumeAsks: () -> Unit = {},
 )
 
 /**
@@ -194,6 +198,10 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
                 actions = { TextButton(onClick = actions.onDismissNotice) { Text(stringResource(R.string.connections_ok)) } },
             )
         }
+        // A connection's asks (0.23.0 §10.4.1): paused or muted comes first, with the action that ends it.
+        val asks = AsksView.of(c.asks)?.takeIf { c.state == ConnectionState.ACTIVE }
+        val asksName = sharingName(c)?.let { AccountNames.isolate(it) }
+        if (asks?.prominent == true) AsksCard(asks, asksName, state.busy, actions.onMuteAsks, actions.onResumeAsks)
         ProfileCard(c)
         if (c.state == ConnectionState.ACTIVE) {
             // Two directions, two cards (owner request 2026-10-08): what goes out of the vault, what comes in.
@@ -201,6 +209,7 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
             OutgoingSharingCard(state.sharing, first, actions.onShareItems, actions.onOpenRule, actions.onSharing, actions.onAskDeleteRule)
             IncomingSharingCard(state.sharing, first, actions.onAskForSomething, actions.onSharedWithYou)
         }
+        if (asks != null && !asks.prominent) AsksCard(asks, asksName, state.busy, actions.onMuteAsks, actions.onResumeAsks)
         AuthCard(state.auth, name, state.busy, c.state == ConnectionState.ACTIVE, actions.onAuthenticate)
         DetailCard {
             CardTitle(stringResource(R.string.connections_detail_about))

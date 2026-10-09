@@ -53,6 +53,8 @@ data class ConnectionInfo(
     val keyFingerprint: String? = null,
     val createdAt: Instant? = null,
     val lastActiveAt: Instant? = null,
+    /** Whether the connection's asks are muted or paused (`<connection>.asks`, 0.23.0 §10.4.1); null from an older vault. */
+    val asks: AskState? = null,
 ) {
     /** "First Last" from the names on the peer's account; null before they arrived (§10.8). */
     val accountName: String? get() = AccountNames.full(firstName, lastName)
@@ -65,6 +67,23 @@ data class ConnectionInfo(
 
     /** The peer's display name when it adds something to the title (non-empty and different), for secondary text. */
     val secondaryName: String? get() = name.takeIf { it.isNotBlank() && it != displayName && it != accountName }
+}
+
+/**
+ * A connection's asks as the member's vault holds them (VAULT-MESSAGING 0.23.0 §10.4.1): [muted] by the member,
+ * [paused] (since [pausedAt]) after three declines within 30 days, and [cooldowns] declined asks that are refused for
+ * 7 days. Muting and a pause only stop asks (grant requests, critical-item uses, actions that prompt, authentication
+ * challenges, introductions, location requests); messages, profile updates, grants and shares go on.
+ */
+data class AskState(val muted: Boolean = false, val paused: Boolean = false, val pausedAt: Instant? = null, val cooldowns: Int = 0) {
+    /** What the connection page offers: unmute (or mute), and resume while paused or with cooldowns. */
+    val canResume: Boolean get() = paused || cooldowns > 0
+
+    /** After `connection.asks.mute{muted}`: unmuting does not resume a pause (§10.4.1). */
+    fun muted(on: Boolean): AskState = copy(muted = on)
+
+    /** After `connection.asks.resume`: the pause ends and the declines and cooldowns are cleared; a mute stays. */
+    fun resumed(): AskState = copy(paused = false, pausedAt = null, cooldowns = 0)
 }
 
 /** One `@profile` item of a peer's shared profile (§10.8): self-asserted. */
@@ -214,8 +233,20 @@ data class GrantEntry(
     val labels: List<com.vettid.core.data.items.FieldLabel>? = null,
 )
 
-/** An item waiting for a share decision (§10.12 `share.pending`). */
-data class ShareItem(val itemId: String, val name: String, val category: String, val sensitivity: String)
+/**
+ * An item waiting for a share decision (§10.12 `share.pending`). Since 0.23.0: [askRuleId] names the `ask` rule of
+ * the same subject that holds it in an `auto` rule (`ask` wins), and [shared] says another rule of the subject already
+ * shares it, which a decline stops. [alsoIn] are the subject's other rules where it waits too (one answer for all).
+ */
+data class ShareItem(
+    val itemId: String,
+    val name: String,
+    val category: String,
+    val sensitivity: String,
+    val askRuleId: String? = null,
+    val shared: Boolean = false,
+    val alsoIn: List<String> = emptyList(),
+)
 
 /**
  * Something that needs the member's decision (ANDROID-PLAN §4 Approvals).
@@ -351,8 +382,13 @@ sealed interface Approval {
         override val connectionName: String? = null,
         /** The rule's tags (from `share.rule.list`; the event does not carry them). */
         val tags: List<String> = emptyList(),
+        /** The subject's rules (this one included), to name the rule that asks (§10.12, 0.23.0); empty when unknown. */
+        val rules: List<com.vettid.core.data.items.ShareRule> = emptyList(),
     ) : Approval {
         override val key: String get() = "share:$ruleId"
+
+        /** This rule, when the subject's rules are known. */
+        val rule: com.vettid.core.data.items.ShareRule? get() = rules.firstOrNull { it.ruleId == ruleId }
     }
 
     /**

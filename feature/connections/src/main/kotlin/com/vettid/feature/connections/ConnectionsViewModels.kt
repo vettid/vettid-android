@@ -595,6 +595,12 @@ class ConnectionDetailViewModel @Inject constructor(
         act { repo.setFavorite(id, !c.favorite) }
     }
 
+    /** Mutes or unmutes this connection's asks (`connection.asks.mute`, 0.23.0 §10.4.1). */
+    fun muteAsks(muted: Boolean) = act { repo.setAsksMuted(id, muted) }
+
+    /** Resumes paused asks and clears the cooldowns of declined ones (`connection.asks.resume`, §10.4.1). */
+    fun resumeAsks() = act { repo.resumeAsks(id) }
+
     fun requestAuthentication() = act {
         repo.requestAuthentication(id, null)
         local.update { it.copy(notice = DetailNotice.AUTH_REQUESTED) }

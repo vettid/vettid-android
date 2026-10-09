@@ -317,4 +317,97 @@ class SharingManagerTest {
             assertEquals(FailureKind.OTHER, e.kind)
         }
     }
+
+    // --- VAULT-MESSAGING 0.23.0 ---
+
+    /** §10.12: one tag, and `per_hour`/`per_day` on a connection rule only when set (absent: no limit). */
+    @Test
+    fun aConnectionRuleSendsItsOneTagAndItsRateLimits() = runTest {
+        val d = RuleDraft("c1", listOf("medical"), mode = ShareMode.AUTO, uses = 3, perHour = 5, perDay = 20)
+        assertEquals(
+            """{"subject":{"connection_id":"c1"},"tags":["medical"],"match":"any","access":"read","mode":"auto","uses":3,"per_hour":5,"per_day":20,"include_existing":true}""",
+            VaultJson.json.encodeToString(JsonObject.serializer(), SharingManager.ruleBody(d, dryRun = false)),
+        )
+        val bare = SharingManager.ruleBody(RuleDraft("c1", listOf("medical")), dryRun = true)
+        assertFalse("per_hour" in bare)
+        assertFalse("per_day" in bare)
+        // The ranges as for agents: 1-3,600 and 1-86,400.
+        val now = Instant.parse("2026-10-09T10:00:00Z")
+        assertTrue(d.copy(perHour = 3_600, perDay = 86_400).valid(now))
+        assertFalse(d.copy(perHour = 3_601).valid(now))
+        assertFalse(d.copy(perHour = 0).valid(now))
+        assertFalse(d.copy(perDay = 86_401).valid(now))
+        // A rule as listed carries its limits.
+        val r = SharingManager.rule(o("""{"rule_id":"r1","version":2,"subject":{"connection_id":"c1"},"tags":["medical"],"per_hour":5,"per_day":20}"""))!!
+        assertEquals(5, r.perHour)
+        assertEquals(20, r.perDay)
+        assertEquals(5, RuleDraft.of(r).perHour)
+        assertNull(SharingManager.rule(o("""{"rule_id":"r2","tags":["x"]}"""))!!.perHour)
+    }
+
+    /** §10.12 dry run (0.23.0): `outcome` and `ask_rule_id` per match; an older vault's matches have neither. */
+    @Test
+    fun theDryRunSaysWhatSavingDoesToEachItem() = runTest {
+        ops.ruleAnswer = o(
+            """{"matches":[{"item_id":"i1","name":"Allergies","category":"medical","sensitivity":"data","outcome":"ask","ask_rule_id":"r1"},{"item_id":"i2","name":"Bank","category":"bank_account","sensitivity":"data","outcome":"include"},{"item_id":"i3","name":"Old","category":"note","sensitivity":"data","state":"included"}],"total":3}""",
+        )
+        val p = m.preview(RuleDraft("c1", listOf("money"), mode = ShareMode.AUTO))
+        assertEquals(listOf("ask", "include", null), p.matches.map { it.outcome })
+        assertEquals(listOf("r1", null, null), p.matches.map { it.askRuleId })
+        assertEquals("included", p.matches[2].state)
+        assertEquals("true", ops.ruleSets.last()["dry_run"].toString())
+    }
+
+    /** §10.12: a grant's `limits` (the rule's, as of issue for a received one); a `rate_limited` fetch's `retry_after`. */
+    @Test
+    fun grantsCarryTheirRateLimitsAndARefusalItsRetry() = runTest {
+        val g = SharingManager.grant(
+            o("""{"grant_id":"g1","connection_id":"c1","direction":"received","ref":"x","name":"Card","category":"insurance","limits":{"per_hour":5,"per_day":20}}"""),
+            GrantDirection.RECEIVED,
+        )!!
+        assertEquals(5, g.perHour)
+        assertEquals(20, g.perDay)
+        val none = SharingManager.grant(o("""{"grant_id":"g2","connection_id":"c1","ref":"x","name":"Card"}"""), GrantDirection.RECEIVED)!!
+        assertNull(none.perHour)
+        assertNull(none.perDay)
+        ops.fetched = GrantFetched("g1", null, null, "rate_limited", 720)
+        assertEquals(FetchOutcome.Refused("rate_limited", 720), m.fetchShared("g1"))
+        // An older vault's unknown error has no retry.
+        ops.fetched = GrantFetched("g1", null, null, "exhausted")
+        assertEquals(FetchOutcome.Refused("exhausted"), m.fetchShared("g1"))
+    }
+
+    /** §10.12 (owner's review of #181): a rule is named by its tags; two that read the same differ by mode, then end. */
+    @Test
+    fun rulesAreNamedByTheirTags() {
+        assertEquals("medical", RuleNames.text(listOf("medical"), TagMatch.ANY))
+        assertEquals("medical + id", RuleNames.text(listOf("medical", "id"), TagMatch.ALL))
+        assertEquals("medical or id", RuleNames.text(listOf("medical", "id"), TagMatch.ANY))
+        val a = ShareRule("r1", 1, "c1", tags = listOf("medical"))
+        val b = ShareRule("r2", 1, "c1", tags = listOf("medical"), mode = ShareMode.AUTO)
+        val c = ShareRule("r3", 1, "c1", tags = listOf("money"))
+        val names = RuleNames.of(listOf(a, b, c))
+        assertEquals(RuleNames.Name("medical", RuleNames.Qualifier.Mode(ShareMode.ASK)), names["r1"])
+        assertEquals(RuleNames.Name("medical", RuleNames.Qualifier.Mode(ShareMode.AUTO)), names["r2"])
+        assertEquals(RuleNames.Name("money"), names["r3"])
+        val end = Instant.parse("2027-01-01T00:00:00Z")
+        val same = RuleNames.of(listOf(a, a.copy(ruleId = "r4", expiresAt = end)))
+        assertEquals(RuleNames.Qualifier.Ends(null), same.getValue("r1").qualifier)
+        assertEquals(RuleNames.Qualifier.Ends(end), same.getValue("r4").qualifier)
+    }
+
+    /** §10.12 Overlapping rules (0.23.0): an `auto` rule asks first for what an overlapping `ask` rule covers. */
+    @Test
+    fun anAutoRuleAsksFirstWhereAnAskRuleOverlaps() {
+        val ask = ShareRule("r1", 1, "c1", tags = listOf("medical"), included = listOf("i1"))
+        val auto = ShareRule("r2", 1, "c1", tags = listOf("insurance"), mode = ShareMode.AUTO, included = listOf("i1"))
+        val other = ShareRule("r3", 1, "c1", tags = listOf("money"), mode = ShareMode.AUTO)
+        val o = RuleOverlaps.of(listOf(ask, auto, other))
+        assertEquals(listOf("r2"), o.getValue("r1").map { it.ruleId })
+        assertEquals(listOf("r1"), RuleOverlaps.asksFirst(ShareMode.AUTO, o.getValue("r2")).map { it.ruleId })
+        assertTrue(RuleOverlaps.asksFirst(ShareMode.ASK, o.getValue("r1")).isEmpty())
+        assertTrue(o.getValue("r3").isEmpty())
+        assertTrue(ShareRule("r9", 1, "c1", tags = listOf("a", "b")).multiTag)
+        assertFalse(ask.multiTag)
+    }
 }

@@ -7,6 +7,8 @@ import com.vettid.core.data.vault.vaultGuard
 import com.vettid.core.keystore.KeystoreException
 import com.vettid.core.vault.DeviceStateStore
 import com.vettid.core.vault.VaultApi
+import com.vettid.core.vault.connectionAsksMute
+import com.vettid.core.vault.connectionAsksResume
 import com.vettid.core.vault.VaultJson
 import com.vettid.core.vault.VaultMessage
 import kotlinx.coroutines.CoroutineScope
@@ -564,6 +566,23 @@ class SocialManager(
         rid
     }
 
+    override suspend fun setAsksMuted(id: String, muted: Boolean) {
+        vaultGuard { api().connectionAsksMute(id, muted) }
+        patchAsks(id) { it.muted(muted) }
+        runCatching { refresh() }
+    }
+
+    override suspend fun resumeAsks(id: String) {
+        vaultGuard { api().connectionAsksResume(id) }
+        patchAsks(id) { it.resumed() }
+        runCatching { refresh() }
+    }
+
+    /** The answer is in: shown at once, before `sync.event{connection.changed}` and the list say so (§10.4.1). */
+    private fun patchAsks(id: String, f: (AskState) -> AskState) {
+        connectionsFlow.update { l -> l.map { c -> if (c.id == id) c.copy(asks = f(c.asks ?: AskState())) else c } }
+    }
+
     // --- MessagesRepository ---
 
     override fun messages(connectionId: String): Flow<List<MessageInfo>> =
@@ -700,7 +719,15 @@ class SocialManager(
             val l = listedShares[e.key]
             if (e is Approval.ShareDecision && l != null) {
                 val named = e.items.associateBy { it.itemId }
-                e.copy(items = l.items.map { named[it.itemId] ?: it }, tags = l.tags)
+                val items = l.items.map { li ->
+                    val ev = named[li.itemId] ?: return@map li
+                    li.copy(
+                        name = li.name.ifBlank { ev.name },
+                        askRuleId = li.askRuleId ?: ev.askRuleId,
+                        shared = li.shared || ev.shared,
+                    )
+                }
+                e.copy(items = items, tags = l.tags, rules = l.rules)
             } else {
                 e
             }
@@ -708,7 +735,8 @@ class SocialManager(
         val all = (events + listed.filter { l -> events.none { it.key == l.key } })
             .filter { a -> a.exp?.isAfter(now) ?: true }
             .distinctBy { it.key }
-        return all.map { a -> withName(a, names) }.sortedByDescending { it.receivedAt }
+        // One question per item and subject (0.23.0 §10.12).
+        return ShareQuestions.dedupe(all.map { a -> withName(a, names) }).sortedByDescending { it.receivedAt }
     }
 
     private fun withName(a: Approval, names: Map<String, String>): Approval = when (a) {

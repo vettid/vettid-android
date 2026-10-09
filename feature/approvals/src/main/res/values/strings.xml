@@ -111,6 +111,31 @@
     <string name="approvals_share_unnamed">An item in your vault</string>
     <string name="approvals_share_usable">Critical: they can ask to use it, never read it</string>
     <string name="approvals_share_note">Unticked items are not shared and you are not asked about them again unless their tags change.</string>
+    <!-- 0.23.0 §10.12 Overlapping rules: ask wins, one answer per item and connection, rules named by their tags. -->
+    <string name="approvals_share_also_asks">Also covered by %1$s, which asks you first</string>
+    <string name="approvals_share_also">Also covered by %1$s</string>
+    <string name="approvals_share_already">Already shared with %1$s by another rule. Not sharing it stops that sharing.</string>
+    <string name="approvals_share_one_answer">Your answer counts for every rule for %1$s that covers the item.</string>
+    <string name="approvals_rule_name">your “%1$s” rule</string>
+    <string name="approvals_rule_name_asks">your “%1$s” rule (asks first)</string>
+    <string name="approvals_rule_name_auto">your “%1$s” rule (shares automatically)</string>
+    <string name="approvals_rule_name_until">your “%1$s” rule (until %2$s)</string>
+    <string name="approvals_rule_name_no_end">your “%1$s” rule (no end date)</string>
+    <string name="approvals_another_rule">another of your rules</string>
+    <!-- 0.23.0 §10.4.1: a connection's asks within 10 minutes are one entry. -->
+    <plurals name="approvals_batch_title">
+        <item quantity="one">%1$s asks for %2$d thing</item>
+        <item quantity="other">%1$s asks for %2$d things</item>
+    </plurals>
+    <string name="approvals_batch_show">Show the requests</string>
+    <string name="approvals_batch_hide">Hide the requests</string>
+    <string name="approvals_paused_title">%1$s’s requests are paused</string>
+    <string name="approvals_paused_title_unnamed">A connection’s requests are paused</string>
+    <string name="approvals_paused_body">Paused after you declined several. Their requests are refused without asking you until you resume them.</string>
+    <string name="approvals_paused_resume">Resume requests</string>
+    <string name="approvals_paused_remove">Remove connection</string>
+    <string name="approvals_remove_title">Remove %1$s?</string>
+    <string name="approvals_remove_body">The connection ends and they are told it was removed. Connecting again needs a new invitation.</string>
     <string name="approvals_device_body">A desktop or agent of yours asks for a decision.</string>
     <string name="approvals_device">Device</string>
     <string name="approvals_request">Request</string>

@@ -2,6 +2,7 @@ package com.vettid.core.testing
 
 import com.vettid.core.data.social.AcceptedConnection
 import com.vettid.core.data.social.Approval
+import com.vettid.core.data.social.AskState
 import com.vettid.core.data.social.ApprovalsRepository
 import com.vettid.core.data.social.AuthenticationState
 import com.vettid.core.data.social.ConnectionInfo
@@ -133,6 +134,16 @@ class FakeSocial : ConnectionsRepository, MessagesRepository, ApprovalsRepositor
         call("requestAuthentication")
         authentication.update { it + (id to AuthenticationState(id, lastResult = "requested")) }
         return "auth-request"
+    }
+
+    override suspend fun setAsksMuted(id: String, muted: Boolean) {
+        call("asksMute:$id:$muted")
+        connections.value = connections.value.map { if (it.id == id) it.copy(asks = (it.asks ?: AskState()).muted(muted)) else it }
+    }
+
+    override suspend fun resumeAsks(id: String) {
+        call("asksResume:$id")
+        connections.value = connections.value.map { if (it.id == id) it.copy(asks = (it.asks ?: AskState()).resumed()) else it }
     }
 
     override fun messages(connectionId: String): Flow<List<MessageInfo>> = messageMap.map { it[connectionId].orEmpty() }
