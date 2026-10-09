@@ -38,8 +38,6 @@ class OwnerCheckManagerTest {
         var checkErrorBody: JsonObject? = null
         val checks = mutableListOf<List<Any?>>()
         val sets = mutableListOf<Map<String, JsonElement>>()
-        var feed = listOf<FeedItem>()
-        val read = mutableListOf<String>()
 
         override suspend fun status() = status
 
@@ -54,13 +52,9 @@ class OwnerCheckManagerTest {
         override suspend fun settingsSet(version: Long, set: Map<String, JsonElement>) {
             sets += set
         }
-
-        override suspend fun feedActive() = feed
-
-        override suspend fun feedRead(itemId: String) {
-            read += itemId
-        }
     }
+
+    private val read = mutableListOf<String>()
 
     private fun TestScope.manager(ops: Ops) = OwnerCheckManager(
         this,
@@ -68,6 +62,7 @@ class OwnerCheckManagerTest {
         load = { stored },
         persist = { stored = it },
         onPassed = { passedCalls++ },
+        readNotices = { read += it },
         now = { now },
     )
 
@@ -253,29 +248,28 @@ class OwnerCheckManagerTest {
         assertEquals(1, ops.checks.size)
     }
 
+    /** The notices are the feed's unread `owner_check.*` items (one source: the feed, ANDROID-PLAN 0.1.23, 6). */
     @Test
     fun noticesAreTheOwnerCheckFeedItems() = runTest {
-        val ops = Ops().apply {
-            status = OwnerCheckStatus("ok", "2026-10-07T00:00:00Z", 86_400)
-            feed = listOf(
-                FeedItem("i1", 1, "owner_check.failed", "2026-10-06T10:00:00Z", "active", "high", ref = "pin"),
-                FeedItem("i2", 2, "message.received", "2026-10-06T10:01:00Z", "active"),
-                FeedItem("i3", 3, "owner_check.locked", "2026-10-06T10:02:00Z", "active", "urgent", ref = "10"),
-                FeedItem("i4", 4, "owner_check.hold_changed", "2026-10-06T09:00:00Z", "read", "high", ref = "off"),
-            )
-        }
-        val m = manager(ops)
-        m.onOpened()
-        settle { m.notices.value.isNotEmpty() }
+        val m = manager(Ops().apply { status = OwnerCheckStatus("ok", "2026-10-07T00:00:00Z", 86_400) })
+        val feed = listOf(
+            FeedItem("i1", 1, "owner_check.failed", "2026-10-06T10:00:00Z", "active", "high", ref = "pin"),
+            FeedItem("i2", 2, "message.received", "2026-10-06T10:01:00Z", "active"),
+            FeedItem("i3", 3, "owner_check.locked", "2026-10-06T10:02:00Z", "active", "urgent", ref = "10"),
+            FeedItem("i4", 4, "owner_check.hold_changed", "2026-10-06T09:00:00Z", "read", "high", ref = "off"),
+        )
+        m.onFeed(feed)
         assertEquals(listOf("i3", "i1"), m.notices.value.map { it.itemId })
         assertTrue(m.notices.value.first().urgent)
-        val i5 = """{"item_id":"i5","seq":5,"kind":"owner_check.hold_changed","at":"2026-10-06T11:00:00Z",""" +
-            """"status":"active","priority":"high","ref":"on:expired"}"""
-        m.onEvent(event("feed.event", i5))
+        val i5 = FeedItem("i5", 5, "owner_check.hold_changed", "2026-10-06T11:00:00Z", "active", "high", ref = "on:expired")
+        m.onFeed(feed + i5)
         assertEquals("i5", m.notices.value.first().itemId)
+        // Read in the Notifications list: the banner closes.
+        m.onFeed(feed.map { if (it.itemId == "i3") it.copy(status = "read") else it } + i5)
+        assertEquals(listOf("i5", "i1"), m.notices.value.map { it.itemId })
         m.dismissNotices()
         assertTrue(m.notices.value.isEmpty())
-        assertEquals(listOf("i5", "i3", "i1"), ops.read)
+        assertEquals(listOf("i5", "i1"), read)
     }
 
     @Test

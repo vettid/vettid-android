@@ -20,6 +20,8 @@ data class ShellChrome(
     val onAvatarClick: () -> Unit,
     /** The member's own profile photo (§10.8), shown in the avatar tile when set. */
     val accountPhoto: androidx.compose.ui.graphics.ImageBitmap? = null,
+    /** The Notifications bell (ANDROID-PLAN 0.1.23); null hides it (the vault held, or no vault). */
+    val bell: NotificationBell? = null,
 )
 
 /**
@@ -51,6 +53,7 @@ fun TopLevelScaffold(
                 accountPhoto = chrome.accountPhoto,
                 searchLabel = search?.label,
                 actions = actions,
+                bell = chrome.bell,
             )
         }
         Box(Modifier.weight(1f).fillMaxSize(), content = content)

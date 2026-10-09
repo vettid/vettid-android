@@ -24,7 +24,17 @@ import com.vettid.app.BuildConfig
 import com.vettid.app.R
 import com.vettid.app.debug.DebugHost
 import com.vettid.app.debug.debugTools
+import com.vettid.core.data.feed.FeedTarget
 import com.vettid.core.ui.components.DrawerItem
+import com.vettid.core.ui.components.NotificationBell
+import com.vettid.feature.approvals.ApprovalDetailRoute
+import com.vettid.feature.connections.ConnectionsRoute
+import com.vettid.feature.history.HistoryRoute
+import com.vettid.feature.notifications.NotificationsHost
+import com.vettid.feature.notifications.NotificationsRoute
+import com.vettid.feature.notifications.notificationsDestination
+import com.vettid.feature.settings.SettingsRoute
+import com.vettid.feature.settings.VaultStatusRoute
 import com.vettid.core.ui.components.ShellChrome
 import com.vettid.core.ui.components.rememberProfilePhoto
 import com.vettid.core.ui.components.VettIdDrawerSheet
@@ -111,14 +121,7 @@ fun AppShell(
     val shell: ShellViewModel = hiltViewModel()
     val ownPhoto by shell.photo.collectAsStateWithLifecycle()
     val photo = rememberProfilePhoto(ownPhoto)
-    val chrome = remember(accountName, photo) {
-        ShellChrome(
-            accountName = accountName,
-            onMenuClick = { scope.launch { drawerState.open() } },
-            onAvatarClick = { showAccount = true },
-            accountPhoto = photo,
-        )
-    }
+    val feedBadge by shell.feedBadge.collectAsStateWithLifecycle()
 
     val backStackEntry by navController.currentBackStackEntryAsState()
     val current = backStackEntry?.destination
@@ -160,6 +163,22 @@ fun AppShell(
                 ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
             if (granted) releaseVm.markAsked() else askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+    }
+
+    // The Notifications bell (ANDROID-PLAN 0.1.23) on every drawer screen; none while the vault is held or due (§3.6.3).
+    val bell = if (gate.gated) {
+        null
+    } else {
+        NotificationBell(feedBadge.unread, feedBadge.urgent) { navController.navigate(NotificationsRoute()) { launchSingleTop = true } }
+    }
+    val chrome = remember(accountName, photo, bell?.unread, bell?.urgent, bell == null) {
+        ShellChrome(
+            accountName = accountName,
+            onMenuClick = { scope.launch { drawerState.open() } },
+            onAvatarClick = { showAccount = true },
+            accountPhoto = photo,
+            bell = bell,
+        )
     }
 
     val onList = current?.let { d -> TopLevelDestination.entries.any { t -> d.hierarchy.any { it.hasRoute(t.routeClass) } } } ?: true
@@ -299,10 +318,18 @@ fun AppShell(
                                 onOwnerCheck = { holdOff -> asked = if (holdOff) OwnerCheckMode.HOLD_OFF else OwnerCheckMode.VOLUNTARY },
                                 onOpenItem = { id -> navController.navigate(ItemDetailRoute(id)) { launchSingleTop = true } },
                                 onReleaseUpdate = { navController.navigate(ReleaseUpdateRoute) { launchSingleTop = true } },
+                                bell = bell,
                             ),
                         )
                         releaseUpdateDestination(onBack = { navController.popBackStack() })
-                        helpDestination(onBack = { navController.popBackStack() })
+                        helpDestination(onBack = { navController.popBackStack() }, bell = bell)
+                        notificationsDestination(
+                            NotificationsHost(
+                                onBack = back,
+                                onOpenArchived = { navController.navigate(NotificationsRoute(archived = true)) { launchSingleTop = true } },
+                                onOpen = { t -> navController.openFeedTarget(t) },
+                            ),
+                        )
                         debugTools.register(
                             this,
                             DebugHost(theme.mode, theme.set, onBack = { navController.popBackStack() }),
@@ -389,6 +416,29 @@ private fun selectedKey(current: NavDestination?, debugItems: List<DrawerItem>):
     return topLevel ?: debugItems.firstOrNull { item ->
         debugTools.routeFor(item.key)?.let { isCurrent(it::class) } ?: false
     }?.key
+}
+
+/** The screen a notification opens (ANDROID-PLAN 0.1.23, 4); the sheet is the Notifications screen's own. */
+internal fun NavHostController.openFeedTarget(t: FeedTarget) {
+    when (t) {
+        FeedTarget.Connections -> navigateTopLevel(ConnectionsRoute)
+        FeedTarget.History -> navigateTopLevel(HistoryRoute)
+        FeedTarget.Security -> navigateTopLevel(SettingsRoute)
+        else -> feedRoute(t)?.let { navigate(it) { launchSingleTop = true } }
+    }
+}
+
+private fun feedRoute(t: FeedTarget): Any? = when (t) {
+    is FeedTarget.ApprovalEntry -> ApprovalDetailRoute(t.key)
+    is FeedTarget.Connection -> ConnectionDetailRoute(t.connectionId)
+    is FeedTarget.Conversation -> ConversationRoute(t.connectionId)
+    is FeedTarget.SharedWithYou -> SharedWithYouRoute(t.connectionId)
+    is FeedTarget.ShareRule -> RuleEditRoute(t.connectionId, t.ruleId)
+    is FeedTarget.Item -> ItemDetailRoute(t.itemId)
+    FeedTarget.Devices -> VaultStatusRoute
+    FeedTarget.Alarm -> CredentialAlarmRoute
+    FeedTarget.Credential -> CredentialRoute
+    else -> null
 }
 
 /** Drawer navigation: one copy of each top-level screen, state saved per destination. */

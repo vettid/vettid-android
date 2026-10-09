@@ -275,6 +275,8 @@ data class FeedItem(
     @SerialName("connection_id") val connectionId: String? = null,
     @SerialName("device_id") val deviceId: String? = null,
     val ref: String? = null,
+    /** The number of asks a batch's item stands for (0.23.0 §10.4.1), from 2; null for every other item. */
+    val count: Int? = null,
     val title: String? = null,
     val body: String? = null,
 )

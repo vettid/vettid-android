@@ -120,6 +120,8 @@ data class SettingsHost(
     val onOpenItem: (String) -> Unit = {},
     /** Opens the update screen (ANDROID-PLAN 0.1.19): Settings → Vault → "Update available". */
     val onReleaseUpdate: () -> Unit = {},
+    /** The Notifications bell (ANDROID-PLAN 0.1.23): Settings is a drawer screen; null hides it. */
+    val bell: com.vettid.core.ui.components.NotificationBell? = null,
 )
 
 /** Registers Settings and its sub-screens. */
@@ -177,6 +179,7 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 dismissOffer = ocVm::dismissOffer,
                 dismissError = ocVm::dismissError,
             ),
+            bell = host.bell,
         )
     }
     composable<SharedProfileRoute> {
@@ -386,12 +389,17 @@ fun SettingsContent(
     actions: SettingsActions,
     ownerCheck: OwnerCheckSettingsUiState = OwnerCheckSettingsUiState(),
     ownerCheckActions: OwnerCheckSettingsActions = OwnerCheckSettingsActions(),
+    bell: com.vettid.core.ui.components.NotificationBell? = null,
 ) {
     var confirmLock by rememberSaveable { mutableStateOf(false) }
     var themePicker by rememberSaveable { mutableStateOf(false) }
     var timeoutPicker by rememberSaveable { mutableStateOf(false) }
     var methodPicker by rememberSaveable { mutableStateOf(false) }
-    DetailScaffold(onBackClick = actions.back, background = VettIdTheme.colors.groupedBackground) {
+    DetailScaffold(
+        onBackClick = actions.back,
+        background = VettIdTheme.colors.groupedBackground,
+        actions = { bell?.let { com.vettid.core.ui.components.NotificationBellButton(it) } },
+    ) {
         Column(Modifier.verticalScroll(rememberScrollState())) {
             LargeTitle(stringResource(R.string.settings_title))
             SettingsGroup { AccountCard(state, actions.account) }
