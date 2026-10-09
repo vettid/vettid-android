@@ -12,7 +12,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
@@ -128,6 +132,16 @@ class FeedManager(
     override val load: StateFlow<ListLoad> = loadState.asStateFlow()
     override val badge: StateFlow<FeedBadge> = badgeFlow.asStateFlow()
 
+    private val arrivalFlow =
+        MutableSharedFlow<FeedItem>(extraBufferCapacity = ARRIVAL_BUFFER, onBufferOverflow = BufferOverflow.DROP_OLDEST)
+
+    /**
+     * New and changed unread items as they arrive (`feed.event`, and the items of a catch-up), never from a full read:
+     * the notifications' source (ANDROID-PLAN 0.1.23, Notification modes 7), so that nothing missed while locked or
+     * held is replayed as a notification. A batch's later ask arrives again (its `count` changed).
+     */
+    val arrivals: SharedFlow<FeedItem> = arrivalFlow.asSharedFlow()
+
     /** The highest `seq` applied (tests). */
     val seq: Long get() = synchronized(lock) { cursor }
 
@@ -172,6 +186,7 @@ class FeedManager(
             if (next) cursor = item.seq
             next
         }
+        if (item.status == STATUS_ACTIVE) arrivalFlow.tryEmit(item)
         if (!inOrder) catchUp()
     }
 
@@ -204,12 +219,15 @@ class FeedManager(
         try {
             if (full) readRetention()
             val (changed, seq) = pages(if (full) 0L else synchronized(lock) { cursor })
-            synchronized(lock) {
+            val arrived = synchronized(lock) {
                 if (gen != generation) return
+                val before = if (full) emptyMap() else byId
                 if (full) byId = emptyMap()
                 apply(changed)
                 cursor = maxOf(if (full) 0 else cursor, seq)
+                if (full) emptyList() else newUnread(changed, before)
             }
+            arrived.distinctBy { it.itemId }.forEach { arrivalFlow.tryEmit(byIdNow(it.itemId) ?: it) }
             loadState.value = ListLoad.LOADED
         } catch (e: VaultFailure) {
             if (full && synchronized(lock) { gen == generation }) loadState.value = ListLoad.FAILED
@@ -236,6 +254,12 @@ class FeedManager(
         val d = runCatching { vaultGuard { ops().retentionDays() } }.getOrNull() ?: return
         if (d in 1..MAX_RETENTION_DAYS) retentionDays = d
     }
+
+    /** What a catch-up brought that is new or changed, and unread (a full read brings nothing new). */
+    private fun newUnread(changed: List<FeedItem>, before: Map<String, FeedItem>): List<FeedItem> =
+        changed.filter { c -> c.status == STATUS_ACTIVE && (before[c.itemId]?.seq ?: 0) < c.seq }
+
+    private fun byIdNow(id: String): FeedItem? = synchronized(lock) { byId[id] }
 
     /** Replaces each item by id, removes the deleted ones, drops what is past retention, and publishes. Under [lock]. */
     private fun apply(changed: List<FeedItem>) {
@@ -356,6 +380,7 @@ class FeedManager(
         /** The feed keeps at most 1,000 live items (§10.9); deleted ones come too, so a few pages more. */
         private const val MAX_PAGES = 8
         private const val MARK_ALL_IN_FLIGHT = 4
+        private const val ARRIVAL_BUFFER = 64
 
         /** An item's `at`; null when it does not parse. */
         fun at(item: FeedItem): Instant? = try {

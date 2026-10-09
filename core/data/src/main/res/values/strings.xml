@@ -113,6 +113,7 @@
     <string name="data_feed_critical_use">%1$s asks to use %2$s</string>
     <string name="data_feed_critical_use_any">%1$s asks to use a critical item</string>
     <string name="data_feed_item_revealed">%1$s was revealed</string>
+    <string name="data_feed_item_revealed_any">A critical item was revealed</string>
     <string name="data_feed_device_pair_pending">A device asks to pair</string>
     <string name="data_feed_device_paired">A device was paired</string>
     <string name="data_feed_device_unlinked">A device was removed</string>

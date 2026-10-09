@@ -93,7 +93,7 @@ class VaultManager(
     private val scope: CoroutineScope,
     private val deviceName: String,
     private val wiper: LocalWipe,
-) : AccountRepository, VaultRepository, CredentialRepository, MoveRepository {
+) : AccountRepository, VaultRepository, CredentialRepository, MoveRepository, BackgroundVault {
     private val app = context.applicationContext
     private val http = env.http(baseHttp)
     private val gateway: MemberGateway = env.memberGateway(app, http) { session?.device?.vaultId ?: local.vaultId.ifEmpty { null } }
@@ -116,6 +116,21 @@ class VaultManager(
     private val windowFlow = MutableStateFlow<Instant?>(null)
     private val pausedFlow = MutableStateFlow(false)
     private val deletionFlow = MutableStateFlow<DeletionView?>(null)
+    private val lockedElsewhereFlow = MutableStateFlow(false)
+
+    /** The member locked the vault on this phone (until the next unlock): no "Your vault is locked" notification. */
+    @Volatile
+    private var lockedHere = false
+
+    /** The relay connection is closed by the notification service while the vault is locked ([pauseRelay]). */
+    @Volatile
+    private var relayPaused = false
+
+    /**
+     * The vault locked without the member locking it on this phone (`vault.locking` from another device or by
+     * itself, an unsignalled lock found by a status read): ANDROID-PLAN 0.1.23, "Your vault is locked".
+     */
+    val lockedElsewhere: StateFlow<Boolean> = lockedElsewhereFlow.asStateFlow()
     override val pendingDeletion: StateFlow<DeletionView?> = deletionFlow.asStateFlow()
 
     override val phase: StateFlow<AppPhase> = phaseFlow.asStateFlow()
@@ -217,8 +232,15 @@ class VaultManager(
         scope.launch { io { runCatching { File(app.noBackupFilesDir, LEGACY_SESSION_FILE).delete() } } }
         scope.launch {
             // Lists are re-read whenever the vault opens (unlock, end of onboarding, app start while unlocked).
+            var previous: AppPhase = AppPhase.Starting
             phaseFlow.collect {
+                // Open, then locked, and not by the member here: "Your vault is locked" (not at a cold start).
+                if (it == AppPhase.Locked && previous == AppPhase.Unlocked && !lockedHere) lockedElsewhereFlow.value = true
+                previous = it
                 if (it == AppPhase.Unlocked) {
+                    lockedHere = false
+                    lockedElsewhereFlow.value = false
+                    resumeRelay() // after an unlock the notification service's connection comes back
                     social.refreshAllQuietly()
                     items.refreshQuietly()
                     feed.open()
@@ -744,6 +766,7 @@ class VaultManager(
     }
 
     override suspend fun lock() = guard {
+        lockedHere = true
         val s = session()
         val viaRelay = try {
             withTimeoutOrNull(LOCK_TIMEOUT_MS) { s.api.lock() } != null
@@ -1174,12 +1197,41 @@ class VaultManager(
         openTransferId = null
         alarmFlow.value = null
         windowFlow.value = null
+        relayPaused = false
+        lockedElsewhereFlow.value = false
         wiper.resetMemory()
         io { if (wiper.erase()) wiper.finish() }
         local = LocalAccount()
         accountFlow.value = null
         generation++
         phaseFlow.value = AppPhase.SignedOut
+    }
+
+    // --- BackgroundVault: the notification service (ANDROID-PLAN 0.1.23) ---
+
+    /** This phone holds a vault (its setup finished): the notification service may start after a reboot. */
+    val enrolledOnThisPhone: Boolean get() = local.setupComplete && local.replaced == null
+
+    override fun held(): Boolean = ownerCheck.ownerCheck.value?.let { it.state != OwnerCheckState.OK } == true
+
+    override fun pauseRelay() {
+        if (phaseFlow.value != AppPhase.Locked || relayPaused) return
+        val d = session?.device ?: return
+        relayPaused = true
+        d.stop()
+    }
+
+    override fun resumeRelay() {
+        if (!relayPaused) return
+        relayPaused = false
+        session?.device?.start(scope)
+    }
+
+    override fun reconnectNow() {
+        val d = session?.device ?: return
+        if (relayPaused || phaseFlow.value != AppPhase.Unlocked) return
+        d.stop()
+        d.start(scope)
     }
 
     // --- helpers ---

@@ -73,6 +73,9 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var releaseUpdates: ReleaseUpdateInbox
 
+    @Inject
+    lateinit var notificationTaps: com.vettid.core.notify.NotificationOpenInbox
+
     /** The CancellationSignal of a prompt this activity shows ([AppLock.prompts] says whether one is in flight). */
     private var promptCancel: CancellationSignal? = null
 
@@ -135,6 +138,14 @@ class MainActivity : ComponentActivity() {
         when (intent?.action) {
             // A tap on the "Vault updates" notification: the update screen, once the vault is open.
             ReleaseUpdateNotifier.ACTION_OPEN_UPDATE -> releaseUpdates.offer()
+            // A feed item's notification (ANDROID-PLAN 0.1.23): the shell marks it read and opens its target.
+            com.vettid.core.notify.NotifyIntents.ACTION_OPEN_ITEM ->
+                intent.getStringExtra(com.vettid.core.notify.NotifyIntents.EXTRA_ITEM_ID)?.let {
+                    notificationTaps.offer(com.vettid.core.notify.NotificationOpenInbox.Open.Item(it))
+                }
+            // The on-phone service's own notification: Settings → Notifications.
+            com.vettid.core.notify.NotifyIntents.ACTION_OPEN_SETTINGS ->
+                notificationTaps.offer(com.vettid.core.notify.NotificationOpenInbox.Open.Settings)
             Intent.ACTION_SEND -> receiveCanaryManifest(intent)
             Intent.ACTION_VIEW -> intent.dataString?.let { data ->
                 if (InviteLinks.isConnectUri(data)) invites.offer(data) else inbox.offer(data)

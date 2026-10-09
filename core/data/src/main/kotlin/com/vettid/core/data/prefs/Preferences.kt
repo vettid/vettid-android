@@ -42,6 +42,16 @@ enum class AppLockTimeout(val seconds: Int) {
  */
 enum class AppLockMethod { BIOMETRICS, SCREEN_LOCK }
 
+/**
+ * How notifications reach this phone (ANDROID-PLAN 0.1.23 D7): [SERVICE] the on-phone service (recommended, the
+ * default), [PUSH] Google push (FCM, not available yet), [OFF] none (not recommended). A device preference: it
+ * describes this phone, not the vault.
+ */
+enum class NotificationMode { SERVICE, PUSH, OFF }
+
+/** What notifications show (ANDROID-PLAN 0.1.23, Notification modes 8): names (the default), names and message text, nothing. */
+enum class NotificationPreviews { NAMES, NAMES_AND_TEXT, NOTHING }
+
 /** Non-secret preferences of this device (DataStore). Nothing here is vault data. */
 data class AppPreferences(
     val theme: ThemePreference = ThemePreference.SYSTEM,
@@ -55,11 +65,20 @@ data class AppPreferences(
     val releaseNotified: Long = 0,
     /** The notification permission (API 33+) was asked for once; never again. */
     val notificationsAsked: Boolean = false,
-)
+    /** Null: never chosen, which is [NotificationMode.SERVICE] for new and updated installs (§9 question 13). */
+    val notificationMode: NotificationMode? = null,
+    val notificationPreviews: NotificationPreviews = NotificationPreviews.NAMES,
+    /** The one-time note "VettID now notifies you in the background" was shown. */
+    val notificationsNoteShown: Boolean = false,
+) {
+    /** The mode in effect. */
+    val effectiveNotificationMode: NotificationMode get() = notificationMode ?: NotificationMode.SERVICE
+}
 
 /** A dismissed release notice: [release] and [kind] (`UpdateNoticeKind` name) at [atMs] (epoch milliseconds). */
 data class ReleaseNoticeDismissal(val release: Long, val kind: String, val atMs: Long)
 
+@Suppress("TooManyFunctions") // one setter per preference
 interface PreferencesRepository {
     val preferences: Flow<AppPreferences>
 
@@ -77,6 +96,12 @@ interface PreferencesRepository {
 
     suspend fun setNotificationsAsked()
 
+    suspend fun setNotificationMode(mode: NotificationMode)
+
+    suspend fun setNotificationPreviews(previews: NotificationPreviews)
+
+    suspend fun setNotificationsNoteShown()
+
     /** Back to the defaults of a fresh install (the wipe of a replaced phone). */
     suspend fun clear()
 }
@@ -84,6 +109,7 @@ interface PreferencesRepository {
 private val Context.vettIdPrefs: DataStore<Preferences> by preferencesDataStore(name = "vettid_preferences")
 
 /** [PreferencesRepository] on Jetpack DataStore. */
+@Suppress("TooManyFunctions")
 class DataStorePreferencesRepository(context: Context) : PreferencesRepository {
     private val store = context.applicationContext.vettIdPrefs
 
@@ -98,7 +124,23 @@ class DataStorePreferencesRepository(context: Context) : PreferencesRepository {
             },
             releaseNotified = p[RELEASE_NOTIFIED] ?: 0,
             notificationsAsked = p[NOTIFICATIONS_ASKED] ?: false,
+            notificationMode = p[NOTIFICATION_MODE]?.let { runCatching { NotificationMode.valueOf(it) }.getOrNull() },
+            notificationPreviews = p[NOTIFICATION_PREVIEWS]?.let { runCatching { NotificationPreviews.valueOf(it) }.getOrNull() }
+                ?: NotificationPreviews.NAMES,
+            notificationsNoteShown = p[NOTIFICATIONS_NOTE] ?: false,
         )
+    }
+
+    override suspend fun setNotificationMode(mode: NotificationMode) {
+        store.edit { it[NOTIFICATION_MODE] = mode.name }
+    }
+
+    override suspend fun setNotificationPreviews(previews: NotificationPreviews) {
+        store.edit { it[NOTIFICATION_PREVIEWS] = previews.name }
+    }
+
+    override suspend fun setNotificationsNoteShown() {
+        store.edit { it[NOTIFICATIONS_NOTE] = true }
     }
 
     override suspend fun setAppLockMethod(method: AppLockMethod) {
@@ -147,10 +189,14 @@ class DataStorePreferencesRepository(context: Context) : PreferencesRepository {
         val RELEASE_DISMISSED_AT = longPreferencesKey("release_notice_dismissed_at_ms")
         val RELEASE_NOTIFIED = longPreferencesKey("release_notified")
         val NOTIFICATIONS_ASKED = booleanPreferencesKey("notifications_asked")
+        val NOTIFICATION_MODE = stringPreferencesKey("notification_mode")
+        val NOTIFICATION_PREVIEWS = stringPreferencesKey("notification_previews")
+        val NOTIFICATIONS_NOTE = booleanPreferencesKey("notifications_note_shown")
     }
 }
 
 /** In memory (tests and previews). */
+@Suppress("TooManyFunctions")
 class InMemoryPreferencesRepository(initial: AppPreferences = AppPreferences()) : PreferencesRepository {
     private val state = MutableStateFlow(initial)
     val current: StateFlow<AppPreferences> = state.asStateFlow()
@@ -169,6 +215,12 @@ class InMemoryPreferencesRepository(initial: AppPreferences = AppPreferences()) 
     override suspend fun setReleaseNotified(release: Long) = state.update { it.copy(releaseNotified = release) }
 
     override suspend fun setNotificationsAsked() = state.update { it.copy(notificationsAsked = true) }
+
+    override suspend fun setNotificationMode(mode: NotificationMode) = state.update { it.copy(notificationMode = mode) }
+
+    override suspend fun setNotificationPreviews(previews: NotificationPreviews) = state.update { it.copy(notificationPreviews = previews) }
+
+    override suspend fun setNotificationsNoteShown() = state.update { it.copy(notificationsNoteShown = true) }
 
     override suspend fun clear() {
         state.value = AppPreferences()

@@ -30,6 +30,8 @@ include(":core:altchan")
 include(":core:vault")
 include(":core:data")
 include(":core:testing")
+include(":core:notify")
+include(":core:push-fcm")
 
 include(":feature:onboarding")
 include(":feature:messages")

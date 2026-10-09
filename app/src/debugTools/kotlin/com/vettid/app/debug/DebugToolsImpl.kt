@@ -60,7 +60,10 @@ internal val debugTools: DebugTools = object : DebugTools {
         intent.getStringExtra(EXTRA_START)
             ?.takeIf { it.startsWith(CATALOG_PREFIX) }
             ?.removePrefix(CATALOG_PREFIX)
-            ?.let { ScreenCatalog.screens[it] ?: ItemsCatalog.screens[it] ?: PhotoCatalog.screens[it] ?: NotificationsCatalog.screens[it] }
+            ?.let {
+                ScreenCatalog.screens[it] ?: ItemsCatalog.screens[it] ?: PhotoCatalog.screens[it] ?: NotificationsCatalog.screens[it]
+                    ?: NotificationSettingsCatalog.screens[it]
+            }
 
     override fun startRoute(intent: Intent): Any? {
         val start = intent.getStringExtra(EXTRA_START)

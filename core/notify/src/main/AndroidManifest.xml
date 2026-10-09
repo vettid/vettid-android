@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The on-phone service (ANDROID-PLAN 0.1.23, Notification modes 3): a foreground service of type specialUse. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- Started again after the phone starts (sent after the first unlock; no direct-boot receiver). -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Notifications (Android 13+), asked for in context. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application>
+        <!-- Not dataSync (Android 15 limits it to 6 hours a day and forbids starting it from BOOT_COMPLETED) and not
+             remoteMessaging (continuing a messaging task on another device): specialUse, with the Play Console
+             declaration (ANDROID-PLAN 0.1.23, §9 question 11). -->
+        <service
+            android:name=".VaultConnectionService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the user's own end-to-end encrypted message connection open to show notifications on devices without a push service" />
+        </service>
+
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

@@ -166,12 +166,15 @@ object FeedKinds {
             d.rule?.tags?.firstOrNull() ?: d.tags.firstOrNull()
         }
 
-    /** The row's title (the label of the plan's table). */
+    /**
+     * The row's title (the label of the plan's table). [details] false (a notification with "Names", ANDROID-PLAN
+     * 0.1.23, Notification modes 8): the connection's or device's name and the kind only, no item names or tags.
+     */
     @Suppress("CyclomaticComplexMethod", "LongMethod") // one label per kind
-    fun title(item: FeedItem, names: FeedNames): FeedText {
+    fun title(item: FeedItem, names: FeedNames, details: Boolean = true): FeedText {
         val who = connectionName(item, names)
         val first = firstName(item, names)
-        val thing = itemName(item, names)
+        val thing = if (details) itemName(item, names) else null
         val count = item.count ?: 0
         return when (item.kind) {
             "connection.request" -> FeedText(R.string.data_feed_connection_request, listOf(who))
@@ -190,15 +193,13 @@ object FeedKinds {
             }
             "grant.shared" -> FeedText(R.string.data_feed_grant_shared, listOf(first))
             "grant.revoked" -> FeedText(R.string.data_feed_grant_revoked, listOf(first))
-            "share.pending" -> ruleTag(item, names)?.let { FeedText(R.string.data_feed_share_pending, listOf(it, first)) }
+            "share.pending" -> ruleTag(item, names)?.takeIf { details }
+                ?.let { FeedText(R.string.data_feed_share_pending, listOf(it, first)) }
                 ?: FeedText(R.string.data_feed_share_pending_any, listOf(first))
             "share.rate_limited" -> FeedText(R.string.data_feed_share_rate_limited, listOf(first))
             "critical-secret.use.request" -> thing?.let { FeedText(R.string.data_feed_critical_use, listOf(first, it)) }
                 ?: FeedText(R.string.data_feed_critical_use_any, listOf(first))
-            "item.revealed" -> {
-                val name = thing?.let { FeedText(literal = it) } ?: FeedText(R.string.data_feed_deleted_item)
-                FeedText(R.string.data_feed_item_revealed, listOf(name))
-            }
+            "item.revealed" -> revealed(thing, details)
             "device.pair.pending" -> FeedText(R.string.data_feed_device_pair_pending)
             "device.paired" -> FeedText(R.string.data_feed_device_paired)
             "device.unlinked" -> FeedText(R.string.data_feed_device_unlinked)
@@ -231,6 +232,15 @@ object FeedKinds {
             "wallet.signed" -> FeedText(R.string.data_feed_wallet_signed)
             else -> if (item.kind.startsWith("leash.")) FeedText(R.string.data_feed_leash) else unknown(item.kind)
         }
+    }
+
+    /** `item.revealed`: the item's name, "Deleted item", or (no details) none. */
+    private fun revealed(thing: String?, details: Boolean): FeedText = when {
+        !details -> FeedText(R.string.data_feed_item_revealed_any)
+        else -> FeedText(
+            R.string.data_feed_item_revealed,
+            listOf(thing?.let { FeedText(literal = it) } ?: FeedText(R.string.data_feed_deleted_item)),
+        )
     }
 
     /** A kind this app does not know: the kind itself. */

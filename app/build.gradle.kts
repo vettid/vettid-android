@@ -173,6 +173,8 @@ androidComponents {
 dependencies {
     implementation(projects.core.ui)
     implementation(projects.core.data)
+    implementation(projects.core.notify)
+    implementation(projects.core.pushFcm)
     implementation(projects.feature.messages)
     implementation(projects.feature.connections)
     implementation(projects.feature.approvals)
