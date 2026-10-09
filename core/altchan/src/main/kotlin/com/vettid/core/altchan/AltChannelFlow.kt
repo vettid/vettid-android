@@ -127,8 +127,13 @@ class AltChannelFlow(
         null
     }
 
-    private suspend fun enclaveFor(release: String?, m: ReleaseManifest, enroll: Boolean): Pair<EnclaveInfo, VerifiedEnclave> {
-        val info = api.enclaveWait(release)
+    private suspend fun enclaveFor(
+        release: String?,
+        m: ReleaseManifest,
+        enroll: Boolean,
+        onStarting: ((Long) -> Unit)? = null,
+    ): Pair<EnclaveInfo, VerifiedEnclave> {
+        val info = api.enclaveWait(release, onStarting)
         val e = verifyEnclave(info.descriptor(), info.attestation(), m, enroll, Instant.now(clock))
         if (e.descriptor.instanceId != info.instanceId) throw AltChannelException("descriptor names another instance")
         return info to e
@@ -176,8 +181,11 @@ class AltChannelFlow(
         }
     }
 
-    /** Unlocks the vault (§11.4); [release] (a PCR0) only to abandon an unconfirmed move. */
-    @Suppress("CyclomaticComplexMethod") // one branch per §11.9 retry rule, as in the reference client
+    /**
+     * Unlocks the vault (§11.4); [release] (a PCR0) only to abandon an unconfirmed move. [onStarting] hears each
+     * `503 release_starting` while the routed release starts (§11.10.5).
+     */
+    @Suppress("CyclomaticComplexMethod", "LongParameterList") // one branch per §11.9 retry rule, as in the reference client
     suspend fun unlock(
         party: AltParty,
         userGuid: String,
@@ -185,13 +193,14 @@ class AltChannelFlow(
         attester: Attester,
         options: UnlockOptions = UnlockOptions(),
         release: String? = null,
+        onStarting: ((Long) -> Unit)? = null,
     ): UnlockOutcome {
         val vaultId = party.vaultId() ?: throw AltRefusedException(AltRefusedException.Reason.NOT_PAIRED)
         var m = manifest(party.manifestSerialSeen())
         var refetched = false
         var attempt = 1
         while (true) {
-            val (info, e) = enclaveFor(release, m, enroll = false)
+            val (info, e) = enclaveFor(release, m, enroll = false, onStarting)
             val built = party.prepareUnlock(userGuid, pin, e, m, attester, options)
             var err: MemberApiException? = null
             var slot: Slot? = null

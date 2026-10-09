@@ -194,6 +194,9 @@ class VaultManager(
         )
     }
 
+    /** The release update the shell offers, and the one-step update (ANDROID-PLAN 0.1.19). */
+    val releaseUpdate = ReleaseUpdateManager(scope, UpdateOps())
+
     init {
         scope.launch { runCatching { canary.load() } }
         // Before MEMBER-API 2.0.0 the app kept the account site's session cookies here; it never signs in now.
@@ -206,6 +209,8 @@ class VaultManager(
                     items.refreshQuietly()
                     launch { refreshAccount() }
                     launch { runCatching { profile.refreshProfile() } }
+                    // The proactive release notice (owner decision 2026-10-09): the manifest, read after every unlock.
+                    launch { releaseUpdate.refreshOffer() }
                 } else if (it != AppPhase.Starting) {
                     // Locked or signed out: no item metadata is kept outside an open vault.
                     items.clear()
@@ -388,6 +393,7 @@ class VaultManager(
         val t = Instant.now()
         val due = ownerCheck.ownerCheck.value?.let { it.gated(t) || it.warning(t) } == true
         if (due && phaseFlow.value is AppPhase.Unlocked) ownerCheck.onOpened()
+        if (phaseFlow.value is AppPhase.Unlocked) scope.launch { releaseUpdate.refreshOffer() }
     }
 
     override suspend fun refresh() {
@@ -560,24 +566,49 @@ class VaultManager(
      * `unknown_device` then means a transfer (§6.7.1) or a recovery (§11.11.5) replaced it, and it is wiped.
      * A failure before the sealed result (network, HTTP status, timeout, unreadable result) never wipes.
      */
-    @Suppress("ReturnCount", "CyclomaticComplexMethod") // one answer per §11.4 result code
     private suspend fun unlockOnce(
         pin: String,
         approve: ReleaseView?,
         cancelRecovery: Boolean,
         holderApp: Boolean = false,
         beforeOpen: suspend () -> Unit = {},
-    ): UnlockAttempt {
+    ): UnlockAttempt = unlockStep(
+        pin,
+        UnlockOptions(approve = approve?.let { Approval(it.pcr0, it.number) }, cancelRecovery = cancelRecovery),
+        followMove = true,
+        holderApp = holderApp,
+        beforeOpen = beforeOpen,
+    ).attempt
+
+    /** One unlock's outcome; [moved]: the vault moved and locked itself (only without following the move). */
+    private class StepOutcome(val attempt: UnlockAttempt, val moved: Boolean = false, val abandoned: Boolean = false)
+
+    /**
+     * One unlock (§11.4). [followMove]: after `update: moved` unlock again at once (§11.10.6), as the unlock screen
+     * does; without it the move is reported and the vault stays locked. [release] routes to a given release (only
+     * to abandon an unconfirmed move, §11.10.5). [onStarting] hears `503 release_starting`.
+     */
+    @Suppress("ReturnCount", "CyclomaticComplexMethod", "LongParameterList") // one answer per §11.4 result code
+    private suspend fun unlockStep(
+        pin: String,
+        opts: UnlockOptions,
+        followMove: Boolean,
+        holderApp: Boolean = false,
+        release: String? = null,
+        onStarting: ((Long) -> Unit)? = null,
+        beforeOpen: suspend () -> Unit = {},
+    ): StepOutcome {
         // §6.7.1 (0.17.0): a phone a transfer set up from an older vault release has no user_guid (§11.4 needs it).
-        if (local.userGuid.isEmpty()) return UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID)
+        if (local.userGuid.isEmpty()) return StepOutcome(UnlockAttempt.Failed(FailureKind.NOT_SUPPORTED, UnlockAttempt.CODE_NO_USER_GUID))
+        var moved = false
         val outcome = try {
             guard {
                 val s = session()
-                val opts = UnlockOptions(approve = approve?.let { Approval(it.pcr0, it.number) }, cancelRecovery = cancelRecovery)
-                var out: UnlockOutcome = s.alt.unlock(s.device, local.userGuid, pin, env.attester(), opts)
+                var out: UnlockOutcome = s.alt.unlock(s.device, local.userGuid, pin, env.attester(), opts, release, onStarting)
                 if (out.ok && out.result.update?.result == UPDATE_MOVED) {
+                    moved = true
                     // §11.10.6: after a move the vault is locked under the new release; unlock again, which reaches it.
-                    out = s.alt.unlock(s.device, local.userGuid, pin, env.attester())
+                    if (followMove) out = s.alt.unlock(s.device, local.userGuid, pin, env.attester(), onStarting = onStarting)
                 }
                 // A sealed result: the enclave knows this phone; earlier relay refusals no longer count (RefusalWatch).
                 s.device.clearVaultRefusals()
@@ -586,21 +617,25 @@ class VaultManager(
             }
         } catch (e: VaultFailure) {
             holder.onFailure(e) // never proof (a 503, paused or not, included)
-            return UnlockAttempt.Failed(e.kind, e.code, e.retryAfterSeconds)
+            return StepOutcome(UnlockAttempt.Failed(e.kind, e.code, e.retryAfterSeconds))
         }
         val r = outcome.result
         if (!r.ok) {
-            if (holderApp && holder.onSealedUnlockResult(r)) return UnlockAttempt.Failed(FailureKind.OTHER, r.code)
-            return when (r.code) {
-                "bad_pin" -> UnlockAttempt.BadPin(r.retryAfterSeconds)
-                "backoff" -> UnlockAttempt.Backoff(r.retryAfterSeconds)
-                "recovery_pending" -> UnlockAttempt.RecoveryPending
-                "state_rollback" -> UnlockAttempt.StateRollback
-                "attestation" -> UnlockAttempt.Failed(FailureKind.ATTESTATION, r.code)
-                "manifest" -> UnlockAttempt.Failed(FailureKind.MANIFEST, r.code)
-                else -> UnlockAttempt.Failed(FailureKind.OTHER, r.code)
-            }
+            if (holderApp && holder.onSealedUnlockResult(r)) return StepOutcome(UnlockAttempt.Failed(FailureKind.OTHER, r.code))
+            return StepOutcome(
+                when (r.code) {
+                    "bad_pin" -> UnlockAttempt.BadPin(r.retryAfterSeconds)
+                    "backoff" -> UnlockAttempt.Backoff(r.retryAfterSeconds)
+                    "recovery_pending" -> UnlockAttempt.RecoveryPending
+                    "state_rollback" -> UnlockAttempt.StateRollback
+                    "attestation" -> UnlockAttempt.Failed(FailureKind.ATTESTATION, r.code)
+                    "manifest" -> UnlockAttempt.Failed(FailureKind.MANIFEST, r.code)
+                    else -> UnlockAttempt.Failed(FailureKind.OTHER, r.code)
+                },
+            )
         }
+        // The vault moved and locked itself (§11.10.4 step 8); the caller unlocks again.
+        if (moved && !followMove) return StepOutcome(UnlockAttempt.Success, moved = true)
         val refused = r.update?.takeIf { it.result == "refused" }
         val gen = generation
         val s = session()
@@ -608,7 +643,69 @@ class VaultManager(
         if (!s.device.recovering) beforeOpen()
         val p = afterUnlocked(s)
         if (gen == generation) phaseFlow.value = p
-        return if (refused != null) UnlockAttempt.UpdateRefused(refused.code ?: "refused") else UnlockAttempt.Success
+        val attempt = if (refused != null) UnlockAttempt.UpdateRefused(refused.code ?: "refused") else UnlockAttempt.Success
+        return StepOutcome(attempt, abandoned = r.update?.result == UPDATE_ABANDONED)
+    }
+
+    // --- the proactive release update (owner decision 2026-10-09) ---
+
+    private inner class UpdateOps : ReleaseUpdateOps {
+        override suspend fun offer(): ReleaseUpdateOffer? = guard {
+            val s = session()
+            val st = s.device.altState
+            if (st.releaseNumber == 0L) return@guard null
+            val m = s.alt.manifest(st.manifestSerial)
+            val sealed = (st.release.takeIf { it.isNotEmpty() }?.let { m.byPcr0(it) } ?: m.byNumber(st.releaseNumber))
+                ?.takeIf { it.number == st.releaseNumber }
+            ReleaseUpdateOffer.of(sealed?.let { view(it) }, m.newest()?.let { view(it) })
+        }
+
+        override fun ownerCheckDue(): Boolean =
+            ownerCheck.ownerCheck.value?.gated(Instant.now()) == true || ownerCheck.lockedByOwnerCheck.value
+
+        override suspend fun lock() {
+            this@VaultManager.lock()
+            // The next unlock goes to the instance that holds the vault: wait (bounded) until its lease is gone.
+            withTimeoutOrNull(LOCKED_WAIT_MS) {
+                while (runCatching { guard { vaultStatus(session()) } }.getOrNull()?.state == "unlocked") {
+                    kotlinx.coroutines.delay(LOCKED_POLL_MS)
+                }
+            }
+        }
+
+        override suspend fun unlock(pin: String, approve: ReleaseView?, abandon: Boolean, onStarting: (Long) -> Unit): UpdateStepResult {
+            val previous = session?.device?.altState?.previousRelease?.takeIf { it.isNotEmpty() }
+            val opts = UnlockOptions(approve = approve?.let { Approval(it.pcr0, it.number) }, abandon = abandon)
+            val release = if (abandon) {
+                previous ?: return UpdateStepResult.Failed(FailureKind.NOT_SUPPORTED, "no_previous_release")
+            } else {
+                null
+            }
+            var o = unlockStep(pin, opts, followMove = false, holderApp = true, release = release, onStarting = onStarting)
+            val a = o.attempt
+            if (abandon && a is UnlockAttempt.Failed && a.code == MemberApiException.VAULT_BUSY) {
+                // §11.10.5: an instance of the new release holds the vault; lock it first, then return.
+                runCatching { this@VaultManager.lock() }
+                o = unlockStep(pin, opts, followMove = false, holderApp = true, release = release, onStarting = onStarting)
+            }
+            return o.toStepResult()
+        }
+
+        override fun canAbandon(): Boolean = session?.device?.altState?.previousRelease?.isNotEmpty() == true
+    }
+
+    private fun StepOutcome.toStepResult(): UpdateStepResult = when {
+        moved -> UpdateStepResult.Moved
+        abandoned -> UpdateStepResult.Abandoned
+        else -> when (val a = attempt) {
+            UnlockAttempt.Success -> UpdateStepResult.Opened
+            is UnlockAttempt.UpdateRefused -> UpdateStepResult.Refused(a.code)
+            is UnlockAttempt.BadPin -> UpdateStepResult.BadPin(a.retryAfterSeconds)
+            is UnlockAttempt.Backoff -> UpdateStepResult.Backoff(a.retryAfterSeconds)
+            is UnlockAttempt.Failed -> UpdateStepResult.Failed(a.kind, a.code, a.retryAfterSeconds)
+            UnlockAttempt.RecoveryPending -> UpdateStepResult.Failed(FailureKind.OTHER, "recovery_pending")
+            UnlockAttempt.StateRollback -> UpdateStepResult.Failed(FailureKind.ROLLBACK, "state_rollback")
+        }
     }
 
     override suspend fun lock() = guard {
@@ -1104,6 +1201,9 @@ class VaultManager(
         private const val SYNC_PROFILE_CHANGED = "profile.changed"
         private const val CODE_NO_RECOVERY = "no_recovery"
         private const val UPDATE_MOVED = "moved"
+        private const val UPDATE_ABANDONED = "abandoned"
+        private const val LOCKED_WAIT_MS = 15_000L
+        private const val LOCKED_POLL_MS = 1_000L
         private const val KEY_BACKUP = "credential.backup"
         private const val KEY_TTL = "credential.unlock_ttl_seconds"
         private const val DEFAULT_TTL = 300

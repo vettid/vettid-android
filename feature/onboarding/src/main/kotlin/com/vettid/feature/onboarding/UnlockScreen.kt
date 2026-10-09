@@ -30,6 +30,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.vettid.core.data.prefs.AppLockMethod
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.PreflightInfo
 import com.vettid.core.data.vault.UnlockAttempt
@@ -241,12 +242,14 @@ private fun NotRecognisedNotice(erasing: Boolean, onErase: () -> Unit) {
     }
 }
 
-/** The biometric app lock's screen (D6): the prompt opens on its own; the button opens it again. */
+/** The app lock's screen (D6): the prompt opens on its own; the button opens it again. Its text follows [method]. */
 @Composable
-fun AppLockScreen(onUnlock: () -> Unit) {
+fun AppLockScreen(onUnlock: () -> Unit, method: AppLockMethod = AppLockMethod.BIOMETRICS) {
     FormScaffold(
         title = stringResource(R.string.app_lock_title),
-        body = stringResource(R.string.app_lock_body),
+        body = stringResource(
+            if (method == AppLockMethod.SCREEN_LOCK) R.string.app_lock_body_screen_lock else R.string.app_lock_body,
+        ),
         primaryLabel = stringResource(R.string.app_lock_unlock),
         onPrimary = onUnlock,
         header = {

@@ -1,6 +1,15 @@
 package com.vettid.feature.settings
 
+import android.app.KeyguardManager
+import android.content.Context
+import android.content.Intent
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
+import com.vettid.core.data.prefs.AppLockMethod
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -20,12 +29,15 @@ import androidx.compose.material.icons.outlined.DeleteForever
 import androidx.compose.material.icons.outlined.Fingerprint
 import androidx.compose.material.icons.outlined.Key
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.LockOpen
+import androidx.compose.material.icons.outlined.Pin
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.Password
 import androidx.compose.material.icons.outlined.PhonelinkSetup
 import androidx.compose.material.icons.outlined.Restore
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Storage
+import androidx.compose.material.icons.outlined.SystemUpdate
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material3.AlertDialog
@@ -49,6 +61,7 @@ import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import com.vettid.core.data.prefs.AppLockTimeout
 import com.vettid.core.data.prefs.ThemePreference
+import com.vettid.core.data.vault.UpdateNoticeKind
 import com.vettid.core.data.vault.messageRes
 import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.DetailScaffold
@@ -94,14 +107,19 @@ data class SettingsHost(
     val onBack: () -> Unit,
     val navigate: (Any) -> Unit,
     val onOpenCredential: () -> Unit,
-    /** Turns the app lock on through the activity's BiometricPrompt. */
-    val onEnableAppLock: () -> Unit,
+    /**
+     * Turns the app lock on with a method, or changes the method of a lock that is on, through the activity's
+     * BiometricPrompt (a new key, asked for at once).
+     */
+    val onEnableAppLock: (AppLockMethod) -> Unit,
     val onAccountClick: () -> Unit,
     val onOpenAccountSite: () -> Unit,
     /** Opens the owner check (VAULT-MESSAGING §3.6.5): [holdOff] true turns the hold off with it (§3.6.7). */
     val onOwnerCheck: (holdOff: Boolean) -> Unit = {},
     /** Opens an item of the Vault (items feature): the shared profile's `@profile` items. */
     val onOpenItem: (String) -> Unit = {},
+    /** Opens the update screen (ANDROID-PLAN 0.1.19): Settings → Vault → "Update available". */
+    val onReleaseUpdate: () -> Unit = {},
 )
 
 /** Registers Settings and its sub-screens. */
@@ -109,9 +127,14 @@ data class SettingsHost(
 fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
     composable<SettingsRoute> {
         val vm: SettingsViewModel = hiltViewModel()
-        val state by vm.uiState.collectAsStateWithLifecycle()
+        val loaded by vm.uiState.collectAsStateWithLifecycle()
         val ocVm: OwnerCheckSettingsViewModel = hiltViewModel()
         val ownerCheck by ocVm.uiState.collectAsStateWithLifecycle()
+        // "Phone screen lock" needs a screen lock on the phone; read again on return from the system settings.
+        val context = LocalContext.current
+        var screenLockSet by remember { mutableStateOf(screenLockSet(context)) }
+        LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { screenLockSet = screenLockSet(context) }
+        val state = loaded.copy(screenLockSet = screenLockSet)
         SettingsContent(
             state,
             SettingsActions(
@@ -124,7 +147,19 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 recovery = { host.navigate(RecoveryRoute) },
                 transfer = { host.navigate(TransferOutRoute) },
                 attestation = { host.navigate(AttestationRoute) },
-                setAppLock = { on -> if (on) host.onEnableAppLock() else vm.disableAppLock() },
+                setAppLock = { on -> if (on) host.onEnableAppLock(state.appLockMethod) else vm.disableAppLock() },
+                setAppLockMethod = { m ->
+                    when {
+                        m == state.appLockMethod -> Unit
+                        state.appLockOn -> host.onEnableAppLock(m)
+                        else -> vm.chooseAppLockMethod(m)
+                    }
+                },
+                openSecuritySettings = {
+                    runCatching {
+                        context.startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    }
+                },
                 acknowledgeInvalidated = vm::acknowledgeInvalidated,
                 setTimeout = vm::setAppLockTimeout,
                 setTheme = vm::setTheme,
@@ -132,6 +167,7 @@ fun NavGraphBuilder.settingsDestination(host: SettingsHost) {
                 deleteVault = { host.navigate(DeleteVaultRoute) },
                 dismissError = vm::dismissError,
                 sharedProfile = { host.navigate(SharedProfileRoute) },
+                releaseUpdate = host.onReleaseUpdate,
             ),
             ownerCheck = ownerCheck,
             ownerCheckActions = OwnerCheckSettingsActions(
@@ -299,6 +335,8 @@ data class SettingsActions(
     val transfer: () -> Unit = {},
     val attestation: () -> Unit = {},
     val setAppLock: (Boolean) -> Unit = {},
+    val setAppLockMethod: (AppLockMethod) -> Unit = {},
+    val openSecuritySettings: () -> Unit = {},
     val acknowledgeInvalidated: () -> Unit = {},
     val setTimeout: (AppLockTimeout) -> Unit = {},
     val setTheme: (ThemePreference) -> Unit = {},
@@ -306,6 +344,7 @@ data class SettingsActions(
     val deleteVault: () -> Unit = {},
     val dismissError: () -> Unit = {},
     val sharedProfile: () -> Unit = {},
+    val releaseUpdate: () -> Unit = {},
 )
 
 /**
@@ -351,6 +390,7 @@ fun SettingsContent(
     var confirmLock by rememberSaveable { mutableStateOf(false) }
     var themePicker by rememberSaveable { mutableStateOf(false) }
     var timeoutPicker by rememberSaveable { mutableStateOf(false) }
+    var methodPicker by rememberSaveable { mutableStateOf(false) }
     DetailScaffold(onBackClick = actions.back, background = VettIdTheme.colors.groupedBackground) {
         Column(Modifier.verticalScroll(rememberScrollState())) {
             LargeTitle(stringResource(R.string.settings_title))
@@ -374,6 +414,22 @@ fun SettingsContent(
 
             SettingsSectionHeader(stringResource(R.string.settings_section_vault))
             SettingsGroup {
+                // The proactive release update (owner decision 2026-10-09): while the vault has one to approve.
+                state.update?.let { o ->
+                    SettingsRow(
+                        stringResource(R.string.settings_vault_update),
+                        actions.releaseUpdate,
+                        icon = Icons.Outlined.SystemUpdate,
+                        supporting = stringResource(R.string.settings_vault_update_body, o.target.number.toInt(), o.current.number.toInt()),
+                        iconTint = if (o.kind == UpdateNoticeKind.AVAILABLE) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                        modifier = Modifier.testTag("release_update_row"),
+                    )
+                    SettingsDivider()
+                }
                 SettingsRow(stringResource(R.string.settings_vault_status), actions.vaultStatus, icon =
                     Icons.Outlined.Storage, modifier = Modifier.testTag("vault_status"))
                 SettingsDivider()
@@ -406,11 +462,23 @@ fun SettingsContent(
                 SettingsDivider()
                 SettingsSwitchRow(
                     label = stringResource(R.string.settings_security_app_lock),
-                    supporting = stringResource(R.string.settings_security_app_lock_body),
+                    supporting = stringResource(
+                        if (state.appLockMethod == AppLockMethod.SCREEN_LOCK) {
+                            R.string.settings_security_app_lock_body_screen_lock
+                        } else {
+                            R.string.settings_security_app_lock_body
+                        },
+                    ),
                     checked = state.appLockOn,
                     onCheckedChange = actions.setAppLock,
-                    icon = Icons.Outlined.Fingerprint,
+                    icon = if (state.appLockMethod == AppLockMethod.SCREEN_LOCK) Icons.Outlined.Pin else Icons.Outlined.Fingerprint,
                     modifier = Modifier.testTag("app_lock"),
+                )
+                SettingsDivider()
+                SettingsRow(
+                    stringResource(R.string.settings_security_lock_method), { methodPicker = true },
+                    icon = Icons.Outlined.LockOpen, supporting = methodLabel(state.appLockMethod),
+                    modifier = Modifier.testTag("app_lock_method"),
                 )
                 if (state.appLockOn) {
                     SettingsDivider()
@@ -488,6 +556,15 @@ fun SettingsContent(
             onDismiss = { themePicker = false },
         )
     }
+    if (methodPicker) {
+        AppLockMethodDialog(
+            selected = state.appLockMethod,
+            screenLockSet = state.screenLockSet,
+            onPick = { actions.setAppLockMethod(it); methodPicker = false },
+            onOpenSecuritySettings = { actions.openSecuritySettings(); methodPicker = false },
+            onDismiss = { methodPicker = false },
+        )
+    }
     if (timeoutPicker) {
         ChoiceDialog(
             title = stringResource(R.string.settings_security_lock_timeout),
@@ -523,6 +600,85 @@ fun <T> ChoiceDialog(title: String, options: List<T>, selected: T, label: @Compo
                         Text(label(o))
                     }
                 }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.settings_cancel)) } },
+    )
+}
+
+/** Whether the phone has a screen lock (PIN, pattern or password): "Phone screen lock" needs one. */
+private fun screenLockSet(context: Context): Boolean =
+    context.getSystemService(KeyguardManager::class.java)?.isDeviceSecure == true
+
+@Composable
+private fun methodLabel(m: AppLockMethod): String = stringResource(
+    when (m) {
+        AppLockMethod.BIOMETRICS -> R.string.settings_lock_method_biometrics
+        AppLockMethod.SCREEN_LOCK -> R.string.settings_lock_method_screen_lock
+    },
+)
+
+/**
+ * The app lock's method (owner request 2026-10-09): Biometrics (fingerprint or face, the screen lock as the
+ * fallback) or Phone screen lock (the phone's PIN, pattern or password only). Without a screen lock on the phone the
+ * second is unavailable, with the reason and the system security settings.
+ */
+@Composable
+fun AppLockMethodDialog(
+    selected: AppLockMethod,
+    screenLockSet: Boolean,
+    onPick: (AppLockMethod) -> Unit,
+    onOpenSecuritySettings: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+        modifier = Modifier.testTag("app_lock_method_dialog"),
+        title = { Text(stringResource(R.string.settings_security_lock_method), style = MaterialTheme.typography.titleMedium) },
+        text = {
+            Column(Modifier.selectableGroup()) {
+                AppLockMethod.entries.forEach { m ->
+                    val enabled = m != AppLockMethod.SCREEN_LOCK || screenLockSet
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = Spacing.touchTarget)
+                            .selectable(selected = m == selected, enabled = enabled, role = Role.RadioButton, onClick = { onPick(m) })
+                            .testTag("app_lock_method_${m.name.lowercase()}"),
+                    ) {
+                        RadioButton(selected = m == selected, onClick = null, enabled = enabled)
+                        Spacer(Modifier.width(Spacing.m))
+                        Column(Modifier.weight(1f)) {
+                            val colors = MaterialTheme.colorScheme
+                            Text(methodLabel(m), color = if (enabled) colors.onSurface else colors.onSurfaceVariant)
+                            Text(
+                                stringResource(
+                                    when {
+                                        !enabled -> R.string.settings_lock_method_screen_lock_unavailable
+                                        m == AppLockMethod.BIOMETRICS -> R.string.settings_lock_method_biometrics_body
+                                        else -> R.string.settings_lock_method_screen_lock_body
+                                    },
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+                if (!screenLockSet) {
+                    TextButton(onClick = onOpenSecuritySettings, modifier = Modifier.testTag("app_lock_security_settings")) {
+                        Text(stringResource(R.string.settings_lock_method_open_security))
+                    }
+                }
+                Spacer(Modifier.height(Spacing.s))
+                Text(
+                    stringResource(R.string.settings_lock_method_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         },
         confirmButton = {},

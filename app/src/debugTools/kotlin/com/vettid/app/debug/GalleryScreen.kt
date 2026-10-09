@@ -491,6 +491,11 @@ private fun NoticesGallery() {
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
         com.vettid.core.ui.components.UrgentBanner("Your credential was presented by another device", "Review", {})
         com.vettid.core.ui.components.InfoBanner("The vault service is paused for maintenance. Try again later.")
+        com.vettid.core.ui.components.InfoBanner(
+            "A new vault release is available (release 5).",
+            actionLabel = "Update now",
+            onDismiss = {},
+        )
         Column(Modifier.padding(horizontal = Spacing.gutter), verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
             com.vettid.core.ui.components.NoticeKind.entries.forEach { k ->
                 com.vettid.core.ui.components.NoticeCard(k, "Notice: ${k.name.lowercase()}", "One or two lines of explanation.")

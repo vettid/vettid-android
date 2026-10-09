@@ -27,6 +27,9 @@ import com.vettid.core.data.vault.OwnerCheckRepository
 import com.vettid.core.data.vault.HistoryExportRepository
 import com.vettid.core.data.vault.HistoryRepository
 import com.vettid.core.data.vault.ProfileRepository
+import com.vettid.core.data.vault.ReleaseUpdateInbox
+import com.vettid.core.data.vault.ReleaseUpdateRepository
+import com.vettid.app.notify.ReleaseUpdateNotifier
 import com.vettid.core.data.vault.VaultManager
 import com.vettid.core.data.vault.VaultRepository
 import com.vettid.core.data.wipe.AndroidWipeTargets
@@ -110,6 +113,7 @@ object AppModule {
         setupLinks: SetupLinkInbox,
         inviteLinks: InviteLinkInbox,
         canaryManifests: CanaryManifestInbox,
+        releaseUpdates: ReleaseUpdateInbox,
     ): LocalWipe = LocalWipe(
         AndroidWipeTargets(context),
         hooks = listOf(
@@ -118,6 +122,7 @@ object AppModule {
             { setupLinks.consume() },
             { inviteLinks.consume() },
             { canaryManifests.consume() },
+            { releaseUpdates.consume() },
         ),
     )
 
@@ -153,6 +158,22 @@ object AppModule {
 
     @Provides
     fun canaryManifestRepository(m: VaultManager): CanaryManifestRepository = m.canary
+
+    @Provides
+    fun releaseUpdateRepository(m: VaultManager): ReleaseUpdateRepository = m.releaseUpdate
+
+    @Provides
+    @Singleton
+    fun releaseUpdateInbox(): ReleaseUpdateInbox = ReleaseUpdateInbox()
+
+    @Provides
+    @Singleton
+    fun releaseUpdateNotifier(
+        @ApplicationContext context: Context,
+        updates: ReleaseUpdateRepository,
+        prefs: PreferencesRepository,
+        @AppScope scope: CoroutineScope,
+    ): ReleaseUpdateNotifier = ReleaseUpdateNotifier(context, updates, prefs, scope)
 
     @Provides
     fun connectionsRepository(m: VaultManager): ConnectionsRepository = m.social

@@ -13,7 +13,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
 import com.vettid.app.BuildConfig
@@ -34,6 +33,7 @@ import com.vettid.core.ui.components.FullScreenProgress
 import com.vettid.core.ui.components.InfoBanner
 import com.vettid.feature.onboarding.AppLockScreen
 import com.vettid.feature.onboarding.OnboardingFlow
+import com.vettid.feature.onboarding.ReleaseUpdateFlowRoute
 import com.vettid.feature.onboarding.UnlockRoute
 import kotlinx.serialization.Serializable
 
@@ -52,6 +52,10 @@ private data object UnlockDest
 @Serializable
 private data object MainDest
 
+/** The one-step release update (owner decision 2026-10-09): it locks and unlocks the vault, so it is above the phases. */
+@Serializable
+private data object UpdateDest
+
 private fun destinationOf(phase: AppPhase): Any = when (phase) {
     AppPhase.Starting -> StartingDest
     is AppPhase.Unreachable -> UnreachableDest
@@ -63,14 +67,15 @@ private fun destinationOf(phase: AppPhase): Any = when (phase) {
 /**
  * The root of the UI: one destination per vault phase (onboarding, unlock,
  * the app), each with its own ViewModels, so that leaving a phase forgets its
- * state (PINs and passwords included). The biometric app lock (D6) covers
- * everything while locked; what is under it stays composed but hidden from
- * accessibility services.
+ * state (PINs and passwords included). The app lock (D6) replaces
+ * everything while locked ([AppLockGate]): nothing under it is composed, so
+ * nothing there keeps focus or receives keys.
  */
 @Composable
 fun VettIdApp(
-    onUnlockApp: () -> Unit,
-    onEnableAppLock: () -> Unit,
+    /** Asks for the app lock's prompt; true when automatic (shown, resumed), false from the "Unlock" button. */
+    onUnlockApp: (auto: Boolean) -> Unit,
+    onEnableAppLock: (com.vettid.core.data.prefs.AppLockMethod) -> Unit,
     launchRoute: Any?,
     viewModel: RootViewModel = hiltViewModel(),
 ) {
@@ -89,53 +94,66 @@ fun VettIdApp(
     val uri = LocalUriHandler.current
     val portal = viewModel.portalUrl
     val nav = rememberNavController()
-    val target = destinationOf(phase)
+    val update by viewModel.updateProgress.collectAsStateWithLifecycle()
+    val target = if (update != null) UpdateDest else destinationOf(phase)
 
-    LaunchedEffect(target) {
+    val locked = lock == AppLockState.LOCKED
+    // While the app lock shows, nothing of the app (the NavHost included) is composed; it navigates on unlock.
+    LaunchedEffect(target, locked) {
+        if (locked) return@LaunchedEffect
         nav.navigate(target) {
             popUpTo(0) { inclusive = true }
             launchSingleTop = true
         }
     }
 
-    val locked = lock == AppLockState.LOCKED
     // Debug builds expose test tags as resource ids, so that adb (uiautomator) can drive two phones at once.
     val root = if (BuildConfig.DEBUG) Modifier.fillMaxSize().semantics { testTagsAsResourceId = true } else Modifier.fillMaxSize()
     Box(root) {
-        Column(if (locked) Modifier.fillMaxSize().clearAndSetSemantics {} else Modifier.fillMaxSize()) {
-            // MEMBER-API 1.2.0: the vault service is paused for maintenance. Non-blocking: every screen stays usable
-            // below it, and only the generic text is shown (never the operator's reason).
-            if (paused) InfoBanner(stringResource(R.string.root_service_paused), Modifier.testTag("service_paused_banner"))
-            Box(
-                Modifier
-                    .weight(1f)
-                    .fillMaxSize()
-                    .then(if (paused) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
-            ) {
-                NavHost(nav, startDestination = StartingDest) {
-                    composable<StartingDest> { FullScreenProgress(stringResource(R.string.root_starting)) }
-                    composable<UnreachableDest> {
-                        val kind = (phase as? AppPhase.Unreachable)?.failure
-                        FormScaffold(
-                            title = stringResource(R.string.root_unreachable_title),
-                            body = kind?.let { stringResource(it.messageRes()) },
-                            primaryLabel = stringResource(R.string.root_retry),
-                            onPrimary = viewModel::retry,
-                        ) {}
-                    }
-                    composable<OnboardingDest> { OnboardingFlow(onOpenAccountSite = { uri.openUri(portal) }) }
-                    composable<UnlockDest> { UnlockRoute() }
-                    composable<MainDest> {
-                        AppShell(
-                            launchRoute = launchRoute,
-                            accountName = account?.fullName ?: account?.displayEmail
-                                ?: stringResource(R.string.account_placeholder_name),
-                            account = account,
-                            portalUrl = portal,
-                            alarm = alarm,
-                            onLockVault = viewModel::lockVault,
-                            onEnableAppLock = onEnableAppLock,
-                        )
+        AppLockGate(
+            locked = locked,
+            onAutoPrompt = { onUnlockApp(true) },
+            lockScreen = {
+                val method by viewModel.lockMethod.collectAsStateWithLifecycle()
+                AppLockScreen(onUnlock = { onUnlockApp(false) }, method = method)
+            },
+        ) {
+            Column(Modifier.fillMaxSize()) {
+                // MEMBER-API 1.2.0: the vault service is paused for maintenance. Non-blocking: every screen stays usable
+                // below it, and only the generic text is shown (never the operator's reason).
+                if (paused) InfoBanner(stringResource(R.string.root_service_paused), Modifier.testTag("service_paused_banner"))
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxSize()
+                        .then(if (paused) Modifier.consumeWindowInsets(WindowInsets.statusBars) else Modifier),
+                ) {
+                    NavHost(nav, startDestination = StartingDest) {
+                        composable<StartingDest> { FullScreenProgress(stringResource(R.string.root_starting)) }
+                        composable<UnreachableDest> {
+                            val kind = (phase as? AppPhase.Unreachable)?.failure
+                            FormScaffold(
+                                title = stringResource(R.string.root_unreachable_title),
+                                body = kind?.let { stringResource(it.messageRes()) },
+                                primaryLabel = stringResource(R.string.root_retry),
+                                onPrimary = viewModel::retry,
+                            ) {}
+                        }
+                        composable<OnboardingDest> { OnboardingFlow(onOpenAccountSite = { uri.openUri(portal) }) }
+                        composable<UnlockDest> { UnlockRoute() }
+                        composable<UpdateDest> { ReleaseUpdateFlowRoute() }
+                        composable<MainDest> {
+                            AppShell(
+                                launchRoute = launchRoute,
+                                accountName = account?.fullName ?: account?.displayEmail
+                                    ?: stringResource(R.string.account_placeholder_name),
+                                account = account,
+                                portalUrl = portal,
+                                alarm = alarm,
+                                onLockVault = viewModel::lockVault,
+                                onEnableAppLock = onEnableAppLock,
+                            )
+                        }
                     }
                 }
             }
@@ -144,10 +162,6 @@ fun VettIdApp(
         // A canary manifest shared to the app (VAULT-RELEASES §10.1 step 9): asked about only while the app is open.
         if (!locked && lock != AppLockState.PENDING) {
             canaryPrompt?.let { CanaryManifestDialog(it, canaryVm::confirm, canaryVm::dismiss) }
-        }
-        if (locked) {
-            AppLockScreen(onUnlock = onUnlockApp)
-            LaunchedEffect(Unit) { onUnlockApp() }
         }
     }
 }

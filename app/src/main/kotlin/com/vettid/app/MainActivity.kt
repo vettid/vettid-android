@@ -1,5 +1,6 @@
 package com.vettid.app
 
+import android.app.KeyguardManager
 import android.content.Intent
 import android.net.Uri
 import android.graphics.Color
@@ -26,8 +27,13 @@ import com.vettid.app.ui.VettIdApp
 import com.vettid.core.data.account.SetupLinkInbox
 import com.vettid.core.data.social.InviteLinkInbox
 import com.vettid.core.data.vault.CanaryManifestInbox
+import com.vettid.core.data.vault.ReleaseUpdateInbox
+import com.vettid.app.notify.ReleaseUpdateNotifier
 import com.vettid.core.data.social.InviteLinks
 import com.vettid.core.data.lock.AppLock
+import com.vettid.core.data.lock.PromptOutcome
+import com.vettid.core.data.lock.authenticators
+import com.vettid.core.data.prefs.AppLockMethod
 import com.vettid.core.data.prefs.AppPreferences
 import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.data.prefs.ThemePreference
@@ -64,7 +70,11 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var canaryManifests: CanaryManifestInbox
 
-    private var prompting = false
+    @Inject
+    lateinit var releaseUpdates: ReleaseUpdateInbox
+
+    /** The CancellationSignal of a prompt this activity shows ([AppLock.prompts] says whether one is in flight). */
+    private var promptCancel: CancellationSignal? = null
 
     /** Secret items are revealed after the phone's biometric or screen lock (ANDROID-PLAN D6; [UserPresence]). */
     private val presence = UserPresence { title, subtitle -> confirmPresence(title, subtitle) }
@@ -119,10 +129,12 @@ class MainActivity : ComponentActivity() {
      * `vettid://connect#…`, §6.4) goes to the connect flow, which asks the member
      * before anything is sent; the account portal's setup link (`/vault/enroll/#s=…`, VAULT-MESSAGING §11.12.1) to
      * onboarding, which redeems it only while this phone has no vault. A shared file is a canary manifest
-     * ([receiveCanaryManifest]).
+     * ([receiveCanaryManifest]). The "Vault updates" notification opens the update screen.
      */
     private fun receiveLink(intent: Intent?) {
         when (intent?.action) {
+            // A tap on the "Vault updates" notification: the update screen, once the vault is open.
+            ReleaseUpdateNotifier.ACTION_OPEN_UPDATE -> releaseUpdates.offer()
             Intent.ACTION_SEND -> receiveCanaryManifest(intent)
             Intent.ACTION_VIEW -> intent.dataString?.let { data ->
                 if (InviteLinks.isConnectUri(data)) invites.offer(data) else inbox.offer(data)
@@ -153,26 +165,51 @@ class MainActivity : ComponentActivity() {
         appLock.onForeground()
     }
 
+    override fun onDestroy() {
+        // A prompt this activity showed ends with it; its callback will not come (a recreated activity may ask again).
+        promptCancel?.cancel()
+        promptCancel = null
+        if (appLock.prompts.ownerGone(this)) appLock.authenticating = false
+        super.onDestroy()
+    }
+
     override fun onStop() {
         appLock.onBackground()
         super.onStop()
     }
 
-    // --- biometric app lock (D6): BiometricPrompt, class 3 or the device credential, with a CryptoObject ---
+    // --- the app lock (D6; 0.1.19: Biometrics, or Phone screen lock only): BiometricPrompt with a CryptoObject ---
 
-    private fun promptUnlock() {
-        if (prompting) return
+    /**
+     * The app lock's prompt: [auto] when the lock shows or the app returns while locked, false from "Unlock". One at a
+     * time ([com.vettid.core.data.lock.UnlockPromptGate]): a prompt already showing (or restored) is never doubled,
+     * and none starts by itself after the member cancelled one. Its device-credential fallback (the phone's PIN)
+     * unlocks like a biometric: the same authenticated cipher.
+     */
+    private fun promptUnlock(auto: Boolean) {
+        if (appLock.state.value != com.vettid.core.data.lock.AppLockState.LOCKED) return
+        if (!appLock.prompts.tryStart(auto, this)) return
         lifecycleScope.launch {
-            val cipher = appLock.cipherToUnlock() ?: return@launch
-            authenticate(cipher) { c -> appLock.completeUnlock(c) }
+            val cipher = appLock.cipherToUnlock()
+            if (cipher == null) {
+                appLock.prompts.finished(PromptOutcome.DISMISSED)
+                return@launch
+            }
+            authenticate(cipher, appLock.method.value) { c -> appLock.completeUnlock(c) }
         }
     }
 
+    /** Turns the lock on with [method], or changes the method of a lock that is on (a new key, asked for at once). */
     @Suppress("ReturnCount")
-    private fun promptEnable() {
-        if (prompting) return
+    private fun promptEnable(method: AppLockMethod) {
+        if (!appLock.prompts.tryStart(auto = false, owner = this)) return
+        if (method == AppLockMethod.SCREEN_LOCK && getSystemService(KeyguardManager::class.java)?.isDeviceSecure != true) {
+            appLock.prompts.finished(PromptOutcome.DISMISSED)
+            enableFailed() // no screen lock on this phone (Settings says so before offering the choice)
+            return
+        }
         val cipher = try {
-            appLock.cipherToEnable()
+            appLock.cipherToEnable(method)
         } catch (_: GeneralSecurityException) {
             enableFailed()
             return
@@ -183,7 +220,9 @@ class MainActivity : ComponentActivity() {
             enableFailed() // no biometric and no screen lock on this phone
             return
         }
-        authenticate(cipher) { c -> lifecycleScope.launch { appLock.completeEnable(c) } }
+        authenticate(cipher, method, onCancel = { lifecycleScope.launch { appLock.enableCancelled() } }) { c ->
+            lifecycleScope.launch { appLock.completeEnable(c) }
+        }
     }
 
     /**
@@ -195,9 +234,8 @@ class MainActivity : ComponentActivity() {
         val allowed = Authenticators.BIOMETRIC_STRONG or Authenticators.DEVICE_CREDENTIAL
         val bm = getSystemService(android.hardware.biometrics.BiometricManager::class.java)
         if (bm == null || bm.canAuthenticate(allowed) != android.hardware.biometrics.BiometricManager.BIOMETRIC_SUCCESS) return true
-        if (prompting) return false
+        if (!appLock.prompts.tryStart(auto = false, owner = this)) return false
         return suspendCancellableCoroutine { cont ->
-            prompting = true
             appLock.authenticating = true
             val cancel = CancellationSignal()
             val prompt = BiometricPrompt.Builder(this)
@@ -206,7 +244,7 @@ class MainActivity : ComponentActivity() {
                 .setAllowedAuthenticators(allowed)
                 .build()
             fun done(ok: Boolean) {
-                prompting = false
+                appLock.prompts.finished(PromptOutcome.SUCCEEDED) // a presence check never holds back the lock's prompt
                 appLock.authenticating = false
                 if (cont.isActive) cont.resume(ok)
             }
@@ -224,31 +262,43 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun enableFailed() {
+        appLock.prompts.finished(PromptOutcome.DISMISSED)
         Toast.makeText(this, R.string.app_lock_enable_failed, Toast.LENGTH_LONG).show()
     }
 
-    private fun authenticate(cipher: Cipher, onSuccess: (Cipher) -> Unit) {
-        prompting = true
+    /** The app lock's prompt; the caller passed [AppLock.prompts]' tryStart. */
+    private fun authenticate(cipher: Cipher, method: AppLockMethod, onCancel: () -> Unit = {}, onSuccess: (Cipher) -> Unit) {
         appLock.authenticating = true
+        val cancel = CancellationSignal()
+        promptCancel = cancel
+        val subtitle = when (method) {
+            AppLockMethod.BIOMETRICS -> OnboardingR.string.app_lock_prompt_subtitle
+            AppLockMethod.SCREEN_LOCK -> OnboardingR.string.app_lock_prompt_subtitle_screen_lock
+        }
         val prompt = BiometricPrompt.Builder(this)
             .setTitle(getString(OnboardingR.string.app_lock_prompt_title))
-            .setSubtitle(getString(OnboardingR.string.app_lock_prompt_subtitle))
-            .setAllowedAuthenticators(Authenticators.BIOMETRIC_STRONG or Authenticators.DEVICE_CREDENTIAL)
+            .setSubtitle(getString(subtitle))
+            .setAllowedAuthenticators(method.authenticators())
             .build()
         prompt.authenticate(
             BiometricPrompt.CryptoObject(cipher),
-            CancellationSignal(),
+            cancel,
             mainExecutor,
             object : BiometricPrompt.AuthenticationCallback() {
+                // A biometric or the device-credential fallback (the phone's PIN): either unlocks, once.
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                    done()
+                    done(PromptOutcome.SUCCEEDED)
                     result.cryptoObject?.cipher?.let(onSuccess)
                 }
 
-                override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) = done()
+                override fun onAuthenticationError(errorCode: Int, errString: CharSequence?) {
+                    done(PromptOutcome.ofError(errorCode))
+                    onCancel()
+                }
 
-                private fun done() {
-                    prompting = false
+                private fun done(outcome: PromptOutcome) {
+                    if (promptCancel === cancel) promptCancel = null
+                    appLock.prompts.finished(outcome)
                     appLock.authenticating = false
                 }
             },

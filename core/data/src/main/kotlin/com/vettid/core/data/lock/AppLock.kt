@@ -3,6 +3,8 @@ package com.vettid.core.data.lock
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import com.vettid.core.crypto.Bytes
 import com.vettid.core.crypto.Randomness
+import android.hardware.biometrics.BiometricManager.Authenticators
+import com.vettid.core.data.prefs.AppLockMethod
 import com.vettid.core.data.prefs.AppLockTimeout
 import com.vettid.core.data.prefs.PreferencesRepository
 import com.vettid.core.keystore.AppDataKey
@@ -30,9 +32,19 @@ enum class AppLockState {
     UNLOCKED,
 }
 
-/** The biometric-gated Keystore key (`:core:keystore` [AppDataKey]); an interface so tests can use a software key. */
+/**
+ * What BiometricPrompt allows for [this] method: a class 3 biometric or the phone's screen lock, or the screen lock
+ * only (BiometricPrompt with a CryptoObject and DEVICE_CREDENTIAL alone needs API 30; minSdk is 31).
+ */
+fun AppLockMethod.authenticators(): Int = when (this) {
+    AppLockMethod.BIOMETRICS -> Authenticators.BIOMETRIC_STRONG or Authenticators.DEVICE_CREDENTIAL
+    AppLockMethod.SCREEN_LOCK -> Authenticators.DEVICE_CREDENTIAL
+}
+
+/** The user-authenticated Keystore key (`:core:keystore` [AppDataKey]); an interface so tests can use a software key. */
 interface AppLockKeys {
-    fun create()
+    /** A fresh key for [method]: biometric or screen lock, or the screen lock only. */
+    fun create(method: AppLockMethod)
 
     fun exists(): Boolean
 
@@ -43,10 +55,13 @@ interface AppLockKeys {
     fun delete()
 }
 
-/** [AppLockKeys] on the Android Keystore: class 3 biometric or device credential, per use, invalidated by a new biometric. */
+/**
+ * [AppLockKeys] on the Android Keystore, per use: [AppLockMethod.BIOMETRICS] class 3 biometric or device credential,
+ * invalidated by a new biometric; [AppLockMethod.SCREEN_LOCK] the device credential only.
+ */
 class KeystoreAppLockKeys(private val key: AppDataKey = AppDataKey()) : AppLockKeys {
-    override fun create() {
-        key.create(authTimeoutSeconds = 0, allowDeviceCredential = true)
+    override fun create(method: AppLockMethod) {
+        key.create(authTimeoutSeconds = 0, allowDeviceCredential = true, allowBiometric = method == AppLockMethod.BIOMETRICS)
     }
 
     override fun exists(): Boolean = key.exists()
@@ -81,9 +96,10 @@ class FileWrappedKeyFile(private val file: File) : WrappedKeyFile {
 }
 
 /**
- * The biometric app lock (ANDROID-PLAN D6). When on, opening the app, and
- * returning to it after [AppLockTimeout], asks for a class 3 biometric or the
- * device credential through BiometricPrompt, whose CryptoObject unwraps the
+ * The app lock (ANDROID-PLAN D6; 0.1.19: "App lock" with a [method]). When on, opening the app, and
+ * returning to it after [AppLockTimeout], asks through BiometricPrompt for a class 3 biometric or the
+ * device credential ([AppLockMethod.BIOMETRICS]) or the device credential only ([AppLockMethod.SCREEN_LOCK]),
+ * whose CryptoObject unwraps the
  * app-data key: a random 32-byte key that the app's local caches are
  * encrypted under (Room caches arrive with A4/A5). A convenience layer only:
  * it never replaces the vault PIN or the credential password, and nothing of
@@ -91,9 +107,10 @@ class FileWrappedKeyFile(private val file: File) : WrappedKeyFile {
  *
  * The activity hands the ciphers from [cipherToEnable] / [cipherToUnlock] to
  * BiometricPrompt and the authenticated cipher back to [completeEnable] /
- * [completeUnlock]. A biometric enrolled since the key was made invalidates
+ * [completeUnlock]. A biometric enrolled since a [AppLockMethod.BIOMETRICS] key was made invalidates
  * it: the lock then turns itself off ([invalidated]) and the member can turn
- * it on again.
+ * it on again. A screen-lock key that no longer opens (the screen lock was removed) turns the lock off too,
+ * without that notice.
  */
 @Suppress("TooManyFunctions")
 class AppLock(
@@ -107,12 +124,23 @@ class AppLock(
 
     private val invalidatedFlow = MutableStateFlow(false)
 
-    /** True once the key was invalidated by a biometric change and the lock turned itself off. */
+    /** True once the key was invalidated by a biometric change and the lock turned itself off (Biometrics only). */
     val invalidated: StateFlow<Boolean> = invalidatedFlow.asStateFlow()
+
+    private val methodFlow = MutableStateFlow(AppLockMethod.BIOMETRICS)
+
+    /** How the lock asks; the chosen one also while the lock is off. */
+    val method: StateFlow<AppLockMethod> = methodFlow.asStateFlow()
+
+    /** The method of the key [cipherToEnable] made, saved by [completeEnable]. */
+    private var enabling: AppLockMethod? = null
 
     private var dataKey: ByteArray? = null
     private var backgroundAt: Long? = null
     private var timeout: AppLockTimeout = AppLockTimeout.DEFAULT
+
+    /** One prompt at a time, and no automatic prompt after one the member dismissed ([UnlockPromptGate]). */
+    val prompts = UnlockPromptGate()
 
     /** Set while a prompt is showing: the device-credential screen sends the app to the background. */
     @Volatile
@@ -122,6 +150,10 @@ class AppLock(
     suspend fun start() {
         val p = prefs.preferences.first()
         timeout = p.appLockTimeout
+        // A lock turned on before the method could be chosen was the biometric one: it stays "Biometrics".
+        if (p.appLockMethod == null && p.appLockEnabled) prefs.setAppLockMethod(AppLockMethod.BIOMETRICS)
+        methodFlow.value = p.appLockMethod ?: AppLockMethod.BIOMETRICS
+        prompts.newLock()
         stateFlow.value = if (p.appLockEnabled && keys.exists() && wrapped.read() != null) AppLockState.LOCKED else AppLockState.DISABLED
         if (p.appLockEnabled && stateFlow.value == AppLockState.DISABLED) prefs.setAppLockEnabled(false)
     }
@@ -130,11 +162,35 @@ class AppLock(
         timeout = t
     }
 
-    /** A fresh key and its encrypt cipher, to authenticate with BiometricPrompt before [completeEnable]. */
-    fun cipherToEnable(): Cipher {
-        keys.create()
+    /**
+     * A fresh key for [method] and its encrypt cipher, to authenticate with BiometricPrompt (with
+     * [AppLockMethod.authenticators]) before [completeEnable]. Also how the method of a lock that is on changes.
+     */
+    fun cipherToEnable(method: AppLockMethod = methodFlow.value): Cipher {
+        keys.create(method)
+        enabling = method
         return keys.encryptCipher()
     }
+
+    /**
+     * The prompt of [cipherToEnable] was cancelled or failed. Its fresh key replaced any earlier one, so a lock that
+     * was on (a change of method) cannot open any more: it is turned off, without the biometric notice.
+     */
+    suspend fun enableCancelled() {
+        if (enabling == null) return
+        enabling = null
+        disable()
+    }
+
+    /** Chooses the method while the lock is off (it applies when the lock is turned on). */
+    suspend fun chooseMethod(method: AppLockMethod) {
+        if (stateFlow.value == AppLockState.UNLOCKED || stateFlow.value == AppLockState.LOCKED) return
+        prefs.setAppLockMethod(method)
+        methodFlow.value = method
+    }
+
+    /** What BiometricPrompt allows for the current method. */
+    fun authenticators(): Int = methodFlow.value.authenticators()
 
     /** Wraps a new app-data key with the authenticated [cipher] and turns the lock on. */
     suspend fun completeEnable(cipher: Cipher) {
@@ -147,6 +203,10 @@ class AppLock(
         }
         wrapped.write(Bytes.concat(byteArrayOf(FORMAT), cipher.iv, ct))
         prefs.setAppLockEnabled(true)
+        val m = enabling ?: methodFlow.value
+        enabling = null
+        prefs.setAppLockMethod(m)
+        methodFlow.value = m
         dataKey?.let { Bytes.wipe(it) }
         dataKey = k
         invalidatedFlow.value = false
@@ -160,17 +220,19 @@ class AppLock(
      */
     suspend fun cipherToUnlock(): Cipher? {
         val blob = wrapped.read()
+        // The "new fingerprint or face" notice is the biometric method's only.
+        val notice = methodFlow.value == AppLockMethod.BIOMETRICS
         if (blob == null || blob.size < 1 + IV + TAG || blob[0] != FORMAT) {
-            disable(invalidated = true)
+            disable(invalidated = notice)
             return null
         }
         return try {
             keys.decryptCipher(blob.copyOfRange(1, 1 + IV))
         } catch (_: KeyPermanentlyInvalidatedException) {
-            disable(invalidated = true)
+            disable(invalidated = notice)
             null
         } catch (_: KeystoreException) {
-            disable(invalidated = true)
+            disable(invalidated = notice)
             null
         }
     }
@@ -203,6 +265,8 @@ class AppLock(
     /** As on a fresh install (the wipe of a replaced phone): off, no key, the default timeout. */
     suspend fun reset() {
         disable()
+        methodFlow.value = AppLockMethod.BIOMETRICS
+        enabling = null
         timeout = AppLockTimeout.DEFAULT
         backgroundAt = null
         authenticating = false
@@ -217,6 +281,7 @@ class AppLock(
         if (stateFlow.value != AppLockState.UNLOCKED) return
         dataKey?.let { Bytes.wipe(it) }
         dataKey = null
+        prompts.newLock()
         stateFlow.value = AppLockState.LOCKED
     }
 

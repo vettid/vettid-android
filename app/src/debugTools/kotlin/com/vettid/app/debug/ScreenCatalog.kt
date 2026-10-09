@@ -29,6 +29,17 @@ import com.vettid.feature.history.HistoryEntryUiState
 import com.vettid.feature.history.HistoryScreen
 import com.vettid.feature.history.HistoryUiState
 import com.vettid.app.ui.OwnerCheckBanners
+import com.vettid.app.ui.ReleaseBannerState
+import com.vettid.app.ui.ReleaseUpdateBanner
+import com.vettid.core.data.vault.ReleaseUpdateOffer
+import com.vettid.core.data.vault.UpdateProgress
+import com.vettid.core.data.vault.UpdateStep
+import com.vettid.feature.onboarding.ReleaseUpdateActions
+import com.vettid.feature.onboarding.ReleaseUpdateContent
+import com.vettid.feature.onboarding.ReleaseUpdateFlowActions
+import com.vettid.feature.onboarding.ReleaseUpdateFlowContent
+import com.vettid.feature.onboarding.ReleaseUpdateFlowUiState
+import com.vettid.feature.onboarding.ReleaseUpdateUiState
 import com.vettid.app.ui.PendingDeletionBanner
 import com.vettid.core.data.vault.DeletionView
 import com.vettid.app.ui.OwnerCheckGateState
@@ -278,6 +289,26 @@ object ScreenCatalog {
     private const val EMAIL = "sam@example.org"
     private fun release(n: Long, status: String = "active") =
         ReleaseView(n, "%02d".format(n).repeat(48), status, null, "https://vettid.org/security/releases/$n")
+
+    private object NoUpdate : ReleaseUpdateActions, ReleaseUpdateFlowActions {
+        override fun setPin(v: String) = Unit
+        override fun approve() = Unit
+        override fun retry() = Unit
+        override fun askAbandon() = Unit
+        override fun dismissAbandon() = Unit
+        override fun confirmAbandon() = Unit
+        override fun finish() = Unit
+    }
+
+    /** The proactive release update (ANDROID-PLAN 0.1.19): release 5 offered to a vault on release 4. */
+    private val updateOffer = ReleaseUpdateOffer(release(4), release(5))
+    private val updateEnding = ReleaseUpdateOffer(
+        release(4, "retired").copy(endsAt = Instant.parse("2026-11-30T00:00:00Z")),
+        release(5),
+    )
+
+    private fun updateFlow(step: UpdateStep, f: (UpdateProgress) -> UpdateProgress = { it }) =
+        ReleaseUpdateFlowUiState(progress = f(UpdateProgress(step, release(4), release(5))))
 
     private val canaryView = CanaryManifestView(2, "4353463f85c4012f", "ab".repeat(32), listOf(release(1, "deprecated"), release(2)))
 
@@ -591,6 +622,23 @@ object ScreenCatalog {
         "owner_check.hold_off" to { OwnerCheckContent(OwnerCheckUiState(OwnerCheckMode.HOLD_OFF, okView), NoOwnerCheck) {} },
         "unlock.ended" to { UnlockContent(UnlockUiState(loading = false, email = EMAIL, preflightError = FailureKind.RELEASE_ENDED), NoUnlock) },
         "app_lock" to { AppLockScreen(onUnlock = {}) },
+        // The app lock's method (owner request 2026-10-09, ANDROID-PLAN 0.1.19).
+        "app_lock.screen_lock" to { AppLockScreen(onUnlock = {}, method = com.vettid.core.data.prefs.AppLockMethod.SCREEN_LOCK) },
+        "settings.app_lock_screen_lock" to {
+            SettingsContent(
+                SettingsUiState(
+                    account = sampleAccount, appLockOn = true, appLockMethod = com.vettid.core.data.prefs.AppLockMethod.SCREEN_LOCK,
+                    preferences = AppPreferences(ThemePreference.SYSTEM, true, AppLockTimeout.FIVE_MINUTES),
+                ),
+                SettingsActions(),
+            )
+        },
+        "settings.app_lock_method" to {
+            com.vettid.feature.settings.AppLockMethodDialog(com.vettid.core.data.prefs.AppLockMethod.BIOMETRICS, true, {}, {}, {})
+        },
+        "settings.app_lock_method_no_screen_lock" to {
+            com.vettid.feature.settings.AppLockMethodDialog(com.vettid.core.data.prefs.AppLockMethod.BIOMETRICS, false, {}, {}, {})
+        },
         "credential" to { CredentialContent(CredentialUiState(loading = false, status = credential, windowUntil = Instant.now().plusSeconds(240)), chrome, CredentialActions()) },
         "credential.alarm_banner" to {
             Column(Modifier.fillMaxSize()) {
@@ -967,6 +1015,61 @@ object ScreenCatalog {
                 ),
                 SharedProfileActions(),
             )
+        },
+        // The proactive release update (owner decision 2026-10-09, ANDROID-PLAN 0.1.19).
+        "shell.release_banner" to {
+            Column {
+                ReleaseUpdateBanner(ReleaseBannerState(updateOffer, visible = true), first = true, onUpdate = {}, onDismiss = {})
+            }
+        },
+        "shell.release_banner_ending" to {
+            Column {
+                ReleaseUpdateBanner(ReleaseBannerState(updateEnding, visible = true), first = true, onUpdate = {}, onDismiss = {})
+            }
+        },
+        "shell.release_banner_ended" to {
+            Column {
+                ReleaseUpdateBanner(
+                    ReleaseBannerState(ReleaseUpdateOffer(release(3, "removed"), release(5)), visible = true),
+                    first = true, onUpdate = {}, onDismiss = {},
+                )
+            }
+        },
+        "release_update" to { ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateOffer, pin = "2468"), NoUpdate) {} },
+        "release_update.ending" to { ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateEnding), NoUpdate) {} },
+        "release_update.check_first" to {
+            ReleaseUpdateContent(ReleaseUpdateUiState(loading = false, offer = updateOffer, checkDue = true), NoUpdate) {}
+        },
+        "release_update.none" to { ReleaseUpdateContent(ReleaseUpdateUiState(loading = false), NoUpdate) {} },
+        "release_update.progress" to { ReleaseUpdateFlowContent(updateFlow(UpdateStep.APPROVING), NoUpdate) },
+        "release_update.starting" to { ReleaseUpdateFlowContent(updateFlow(UpdateStep.REOPENING) { it.copy(starting = true) }, NoUpdate) },
+        "release_update.done" to { ReleaseUpdateFlowContent(updateFlow(UpdateStep.DONE) { it.copy(vaultOpen = true) }, NoUpdate) },
+        "release_update.refused" to {
+            ReleaseUpdateFlowContent(updateFlow(UpdateStep.REFUSED) { it.copy(refusal = "seal_key", vaultOpen = true) }, NoUpdate)
+        },
+        "release_update.bad_pin" to {
+            ReleaseUpdateFlowContent(updateFlow(UpdateStep.BAD_PIN) { it.copy(failure = FailureKind.BAD_PIN) }.copy(waitSeconds = 30), NoUpdate)
+        },
+        "release_update.failed" to {
+            ReleaseUpdateFlowContent(updateFlow(UpdateStep.FAILED) { it.copy(failure = FailureKind.NETWORK) }, NoUpdate)
+        },
+        "release_update.new_failed" to {
+            ReleaseUpdateFlowContent(
+                updateFlow(UpdateStep.NEW_RELEASE_FAILED) { it.copy(failure = FailureKind.NO_RESPONSE, canAbandon = true) }.copy(pin = "2468"),
+                NoUpdate,
+            )
+        },
+        "release_update.abandon_confirm" to {
+            ReleaseUpdateFlowContent(
+                updateFlow(UpdateStep.NEW_RELEASE_FAILED) { it.copy(failure = FailureKind.NO_RESPONSE, canAbandon = true) }
+                    .copy(pin = "2468", abandonConfirm = true),
+                NoUpdate,
+            )
+        },
+        "release_update.abandoning" to { ReleaseUpdateFlowContent(updateFlow(UpdateStep.ABANDONING), NoUpdate) },
+        "release_update.abandoned" to { ReleaseUpdateFlowContent(updateFlow(UpdateStep.ABANDONED) { it.copy(vaultOpen = true) }, NoUpdate) },
+        "settings.release_update_row" to {
+            SettingsContent(SettingsUiState(account = sampleAccount, update = updateOffer), SettingsActions())
         },
         "account_sheet.waiting" to { AccountSheet(AccountInfo("s***@example.org"), "https://account.vettid.org", onDismiss = {}, onLockVault = {}) },
     )
