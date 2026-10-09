@@ -24,7 +24,13 @@ import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.testing.FakeItems
 import com.vettid.core.testing.FakeSharing
 import com.vettid.core.testing.FakeSocial
+import com.vettid.core.data.items.RuleDraft
+import com.vettid.core.data.items.SharingManager
+import com.vettid.core.data.vault.VaultFailure
+import com.vettid.core.data.vault.VaultLimit
+import com.vettid.core.vault.VaultJson
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.serialization.json.JsonObject
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -33,6 +39,10 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.ZoneOffset
 
 /** Tags, share rules and what connections share (VAULT-MESSAGING §10.8, §10.12). */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -125,14 +135,14 @@ class SharingViewModelsTest {
         assertFalse(vm.uiState.value.canSave)
         vm.setUses("12")
         vm.setMode(ShareMode.AUTO)
-        vm.setExpiry(RuleExpiry.MONTH)
+        vm.setExpiry(RuleExpiry.MONTH, Instant.parse("2026-10-09T10:00:00Z"), ZoneOffset.UTC)
         vm.save()
         advanceUntilIdle()
         val d = sharing.saved.single()
         assertEquals(listOf("medical"), d.tags)
         assertEquals(12, d.uses)
         assertEquals(ShareMode.AUTO, d.mode)
-        assertTrue(d.expiresAt!!.isAfter(java.time.Instant.now().plusSeconds(29L * 86_400)))
+        assertEquals(Instant.parse("2026-11-09T10:00:00Z"), d.expiresAt)
         assertTrue(vm.uiState.value.done)
     }
 
@@ -149,6 +159,232 @@ class SharingViewModelsTest {
         advanceUntilIdle()
         assertTrue("deleteRule" in sharing.calls)
         assertTrue(vm.uiState.value.done)
+    }
+
+    // --- owner feedback 2026-10-09: rules per tag, each with its own settings ---
+
+    private val now = Instant.parse("2026-10-09T10:00:00Z")
+
+    @Test
+    fun eachEndPresetCountsFromNowInTheMembersZone() = runTest {
+        val vm = ruleVm()
+        advanceUntilIdle()
+        vm.toggleTag("medical")
+        val ny = ZoneId.of("America/New_York")
+        val expected = mapOf(
+            RuleExpiry.NEVER to null,
+            RuleExpiry.DAY to "2026-10-10T10:00:00Z",
+            RuleExpiry.WEEK to "2026-10-16T10:00:00Z",
+            // Calendar months in the member's zone: across the clock change of 2026-11-01 the local time (06:00) stays.
+            RuleExpiry.MONTH to "2026-11-09T11:00:00Z",
+            RuleExpiry.THREE_MONTHS to "2027-01-09T11:00:00Z",
+            RuleExpiry.YEAR to "2027-10-09T10:00:00Z",
+        )
+        expected.forEach { (e, at) ->
+            vm.setExpiry(e, now, ny)
+            assertEquals(e, vm.uiState.value.expiry)
+            assertEquals("$e", at?.let(Instant::parse), vm.uiState.value.draft.expiresAt)
+        }
+        assertEquals(RuleExpiry.PRESETS + RuleExpiry.CUSTOM, RuleExpiry.entries.filter { it != RuleExpiry.KEEP })
+    }
+
+    /** "Custom…": the date picker's day (UTC midnight) and a local time become one UTC `expires_at` (§10.12). */
+    @Test
+    fun aCustomEndIsAPickedDayAndTimeInLocalTimeSentAsUtc() = runTest {
+        val vm = ruleVm()
+        advanceUntilIdle()
+        vm.toggleTag("medical")
+        vm.setExpiry(RuleExpiry.DAY, now, ZoneOffset.UTC)
+        vm.setExpiry(RuleExpiry.CUSTOM)
+        assertEquals(EndPicker.Date, vm.uiState.value.endPicker)
+        assertEquals(RuleExpiry.DAY, vm.uiState.value.expiry) // nothing changes until a time is picked
+        val day = LocalDate.of(2026, 12, 31).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        vm.pickEndDate(day)
+        assertEquals(EndPicker.Time(day), vm.uiState.value.endPicker)
+        vm.pickEndTime(23, 59, ZoneId.of("America/New_York"), now)
+        val s = vm.uiState.value
+        assertNull(s.endPicker)
+        assertFalse(s.endInvalid)
+        assertEquals(RuleExpiry.CUSTOM, s.expiry)
+        assertEquals(Instant.parse("2027-01-01T04:59:00Z"), s.draft.expiresAt)
+        assertEquals("2027-01-01T04:59:00.000Z", VaultJson.str(SharingManager.ruleBody(s.draft, dryRun = false), "expires_at"))
+        // Cancelling a second pick keeps the end.
+        vm.setExpiry(RuleExpiry.CUSTOM)
+        vm.cancelEndPicker()
+        assertNull(vm.uiState.value.endPicker)
+        assertEquals(Instant.parse("2027-01-01T04:59:00Z"), vm.uiState.value.draft.expiresAt)
+    }
+
+    @Test
+    fun aCustomEndMustBeInTheFutureAndWithinTenYears() = runTest {
+        val vm = ruleVm()
+        advanceUntilIdle()
+        vm.toggleTag("medical")
+        val today = LocalDate.of(2026, 10, 9).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+        vm.setExpiry(RuleExpiry.CUSTOM)
+        vm.pickEndDate(today)
+        vm.pickEndTime(9, 0, ZoneOffset.UTC, now) // an hour ago
+        assertTrue(vm.uiState.value.endInvalid)
+        assertNull(vm.uiState.value.draft.expiresAt)
+        assertEquals(RuleExpiry.NEVER, vm.uiState.value.expiry)
+        vm.setExpiry(RuleExpiry.CUSTOM)
+        vm.pickEndDate(today)
+        vm.pickEndTime(10, 30, ZoneOffset.UTC, now) // later today
+        assertFalse(vm.uiState.value.endInvalid)
+        assertEquals(Instant.parse("2026-10-09T10:30:00Z"), vm.uiState.value.draft.expiresAt)
+        // The calendar offers today up to 3,650 days ahead, in the member's zone.
+        val day = { d: LocalDate -> d.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli() }
+        assertTrue(RuleEnds.selectable(day(LocalDate.of(2026, 10, 9)), now, ZoneOffset.UTC))
+        assertFalse(RuleEnds.selectable(day(LocalDate.of(2026, 10, 8)), now, ZoneOffset.UTC))
+        assertTrue(RuleEnds.selectable(day(LocalDate.of(2036, 10, 6)), now, ZoneOffset.UTC))
+        assertFalse(RuleEnds.selectable(day(LocalDate.of(2036, 10, 7)), now, ZoneOffset.UTC))
+        assertFalse(RuleEnds.allowed(now.plusSeconds(3_650L * 86_400), now))
+        assertTrue(RuleEnds.allowed(now.plusSeconds(3_650L * 86_400 - 60), now))
+        assertEquals(day(LocalDate.of(2026, 10, 8)), RuleEnds.pickerDay(Instant.parse("2026-10-09T02:00:00Z"), ZoneId.of("America/New_York")))
+    }
+
+    @Test
+    fun fetchesOfEachItemAreDigitsWithinTheSpecRange() = runTest {
+        val vm = ruleVm()
+        advanceUntilIdle()
+        vm.toggleTag("medical")
+        val cases = mapOf("" to true, "0" to false, "1" to true, "10000" to true, "10001" to false, "5a0" to true, "123456" to false)
+        cases.forEach { (typed, ok) ->
+            vm.setUses(typed)
+            assertEquals(typed, ok, vm.uiState.value.usesValid)
+            assertEquals(typed, ok, vm.uiState.value.canSave)
+        }
+        vm.setUses("5a0")
+        assertEquals("50", vm.uiState.value.usesText)
+        assertEquals(50, vm.uiState.value.draft.uses)
+        vm.setUses("123456")
+        assertEquals("12345", vm.uiState.value.usesText)
+        vm.setUses("")
+        assertNull(vm.uiState.value.draft.uses)
+    }
+
+    /** Every field of the editor reaches `share.rule.set` (§10.12), and an edit keeps the rule's id and version. */
+    @Test
+    fun everyFieldIsSavedAndAnEditReplacesTheRule() = runTest {
+        sharing.registry = sharing.registry.copy(tags = sharing.registry.tags + TagView("address") + TagView("drivers-license"))
+        val vm = ruleVm()
+        advanceUntilIdle()
+        vm.toggleTag("drivers-license")
+        vm.toggleTag("travel")
+        vm.setMatch(TagMatch.ALL)
+        vm.setMode(ShareMode.AUTO)
+        vm.setMode(ShareMode.ASK)
+        vm.setUses("3")
+        vm.setIncludeExisting(false)
+        vm.setExpiry(RuleExpiry.WEEK, now, ZoneOffset.UTC)
+        vm.toggleTag("travel")
+        vm.toggleTag("travel")
+        vm.save()
+        advanceUntilIdle()
+        assertEquals(
+            """{"subject":{"connection_id":"c1"},"tags":["drivers-license","travel"],"match":"all","access":"read","mode":"ask","uses":3,"expires_at":"2026-10-16T10:00:00.000Z","include_existing":false}""",
+            VaultJson.json.encodeToString(JsonObject.serializer(), SharingManager.ruleBody(sharing.saved.single(), dryRun = false)),
+        )
+        // Edit it: the end is kept unless changed; mode and uses change; the id and version go with it.
+        val saved = sharing.rulesStored.single()
+        val edit = ruleVm(saved.ruleId)
+        advanceUntilIdle()
+        assertEquals(RuleExpiry.KEEP, edit.uiState.value.expiry)
+        assertFalse(edit.uiState.value.isNew)
+        edit.setMode(ShareMode.AUTO)
+        edit.setUses("")
+        edit.save()
+        advanceUntilIdle()
+        val d = sharing.saved.last()
+        assertEquals(saved.ruleId, d.ruleId)
+        assertEquals(saved.version, d.version)
+        assertEquals(ShareMode.AUTO, d.mode)
+        assertNull(d.uses)
+        assertEquals(Instant.parse("2026-10-16T10:00:00Z"), d.expiresAt)
+        assertEquals(1, sharing.rulesStored.size)
+    }
+
+    @Test
+    fun theEditorShowsTheConnectionsOtherRulesCoveringTheSameTagsOrItems() = runTest {
+        sharing.rulesStored += ShareRule("r1", 1, "c1", tags = listOf("medical"), mode = ShareMode.AUTO, included = listOf("i1"))
+        sharing.rulesStored += ShareRule("r2", 1, "c1", tags = listOf("travel"), included = listOf("i5"))
+        sharing.rulesStored += ShareRule("r3", 1, "c1", tags = listOf("money"), pending = listOf("i7"))
+        sharing.rulesStored += ShareRule("r9", 1, "c2", tags = listOf("medical"), included = listOf("i1")) // another connection
+        sharing.preview = RulePreview(listOf(RuleMatch("i5", "Passport", "identity_document", Sensitivity.DATA)), 1)
+        val vm = ruleVm()
+        advanceUntilIdle()
+        assertEquals(listOf("r1", "r2", "r3"), vm.uiState.value.rules.map { it.ruleId })
+        assertTrue(vm.uiState.value.overlaps.isEmpty())
+        vm.toggleTag("medical")
+        advanceUntilIdle()
+        // r1 names the tag; r2 holds the matched item; r3 neither.
+        assertEquals(listOf("r1", "r2"), vm.uiState.value.overlaps.map { it.ruleId })
+        // Editing r1 itself: it is not its own overlap.
+        val edit = ruleVm("r1")
+        advanceUntilIdle()
+        assertEquals(listOf("r2"), edit.uiState.value.overlaps.map { it.ruleId })
+    }
+
+    @Test
+    fun theDryRunPreviewFollowsTheDraft() = runTest {
+        sharing.preview = RulePreview(listOf(RuleMatch("i1", "Allergies", "medical", Sensitivity.DATA), RuleMatch("i9", "Signing key", "crypto_wallet", Sensitivity.CRITICAL)), 4)
+        val vm = ruleVm()
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.preview)
+        vm.toggleTag("medical")
+        vm.setMode(ShareMode.AUTO) // debounced: one dry run for both changes
+        advanceUntilIdle()
+        assertEquals(1, sharing.calls.count { it == "preview" })
+        assertEquals(4, vm.uiState.value.preview?.total)
+        assertFalse(vm.uiState.value.previewing)
+        vm.toggleTag("medical")
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.preview) // no tag, no dry run
+        assertEquals(1, sharing.calls.count { it == "preview" })
+    }
+
+    /** §10.12: 64 rules per connection (`share_rules_subject`); the vault's named limit is shown as it says. */
+    @Test
+    fun aConnectionAtSixtyFourRulesTakesNoNewOneAndTheLimitIsNamed() = runTest {
+        repeat(RuleDraft.MAX_RULES_PER_SUBJECT) { sharing.rulesStored += ShareRule("f$it", 1, "c1", tags = listOf("medical")) }
+        val vm = ruleVm()
+        advanceUntilIdle()
+        vm.toggleTag("travel")
+        assertTrue(vm.uiState.value.atRuleLimit)
+        assertFalse(vm.uiState.value.canSave)
+        vm.save()
+        advanceUntilIdle()
+        assertTrue("saveRule" !in sharing.calls)
+        // An existing rule can still be changed.
+        val edit = ruleVm("f0")
+        advanceUntilIdle()
+        assertFalse(edit.uiState.value.atRuleLimit)
+        assertTrue(edit.uiState.value.canSave)
+        // The vault's own refusal (512 in all) names its limit.
+        sharing.rulesStored.clear()
+        sharing.fail["saveRule"] = VaultFailure(FailureKind.LIMIT, "limit", limit = VaultLimit("share_rules", 512))
+        val again = ruleVm()
+        advanceUntilIdle()
+        again.toggleTag("travel")
+        again.save()
+        advanceUntilIdle()
+        assertEquals(FailureKind.LIMIT, again.uiState.value.error)
+        assertEquals(VaultLimit("share_rules", 512), again.uiState.value.limit)
+        assertFalse(again.uiState.value.done)
+    }
+
+    @Test
+    fun theManageScreenNamesOverlapsAndTheRuleLimit() = runTest {
+        sharing.rulesStored += ShareRule("r1", 1, "c1", tags = listOf("medical"), included = listOf("i1"))
+        sharing.rulesStored += ShareRule("r2", 1, "c1", tags = listOf("medical", "travel"), match = TagMatch.ALL)
+        sharing.rulesStored += ShareRule("r3", 1, "c1", tags = listOf("money"))
+        val vm = ConnectionSharingViewModel(SavedStateHandle(mapOf(ConnectionSharingRoute.ARG to "c1")), sharing, items, social)
+        advanceUntilIdle()
+        val s = vm.uiState.value
+        assertEquals(listOf("r2"), s.overlaps.getValue("r1").map { it.ruleId })
+        assertTrue(s.overlaps.getValue("r3").isEmpty())
+        assertFalse(s.atRuleLimit)
+        assertTrue(s.copy(rules = (1..64).map { ShareRule("f$it", 1, "c1", tags = listOf("x$it")) }).atRuleLimit)
     }
 
     private val given = GrantView("g1", "c1", GrantDirection.GIVEN, "i1", "Allergies", "medical", ruleId = "r1", uses = 3, used = 1)

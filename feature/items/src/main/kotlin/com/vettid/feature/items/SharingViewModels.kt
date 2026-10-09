@@ -8,6 +8,7 @@ import com.vettid.core.data.items.GrantView
 import com.vettid.core.data.items.ItemSummary
 import com.vettid.core.data.items.ItemsRepository
 import com.vettid.core.data.items.RuleDraft
+import com.vettid.core.data.items.RuleOverlaps
 import com.vettid.core.data.items.RulePreview
 import com.vettid.core.data.items.ShareMode
 import com.vettid.core.data.items.ShareRule
@@ -27,6 +28,11 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.Duration
 import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.LocalTime
+import java.time.ZoneId
+import java.time.ZoneOffset
 import javax.inject.Inject
 
 /** The connection's title for the sharing screens: its display name (the account's "First Last", or the placeholder), null when blank. */
@@ -61,6 +67,12 @@ data class ConnectionSharingUiState(
             .filter { items[it]?.sensitivity == com.vettid.core.data.items.Sensitivity.CRITICAL }
 
     val pendingCount: Int get() = rules.sumOf { it.pending.size }
+
+    /** Each rule's id → the other rules of this connection covering the same tags or items (§10.12). */
+    val overlaps: Map<String, List<ShareRule>> get() = RuleOverlaps.of(rules)
+
+    /** The connection has the most rules it can have (§10.12 `share_rules_subject`, 64): no new one. */
+    val atRuleLimit: Boolean get() = rules.size >= com.vettid.core.data.items.RuleDraft.MAX_RULES_PER_SUBJECT
 }
 
 /**
@@ -120,15 +132,73 @@ class ConnectionSharingViewModel @Inject constructor(
 
 // --- a share rule ---
 
-/** How long a rule lasts (§10.12 `expires_at`, at most 3,650 days ahead). */
-@Suppress("MagicNumber") // the presets' days
-enum class RuleExpiry(val days: Long?) {
-    NEVER(null),
-    MONTH(30),
-    YEAR(365),
+/**
+ * How long a rule lasts (§10.12 `expires_at`: in the future, at most 3,650 days ahead; absent, until deleted). The
+ * presets count from now in the member's time zone; [CUSTOM] is a date and time the member picked.
+ */
+enum class RuleExpiry {
+    NEVER,
+    DAY,
+    WEEK,
+    MONTH,
+    THREE_MONTHS,
+    YEAR,
+
+    /** A date and time the member picked with the date and time pickers (local time, sent as UTC). */
+    CUSTOM,
 
     /** An existing rule's own end, kept as it is. */
-    KEEP(null),
+    KEEP,
+    ;
+
+    /** The end this preset gives from [now] in [zone]; null for [NEVER] (and for [CUSTOM] and [KEEP], which carry their own). */
+    @Suppress("MagicNumber") // three months
+    fun endFrom(now: Instant, zone: ZoneId): Instant? {
+        val z = now.atZone(zone)
+        return when (this) {
+            DAY -> z.plusDays(1)
+            WEEK -> z.plusWeeks(1)
+            MONTH -> z.plusMonths(1)
+            THREE_MONTHS -> z.plusMonths(3)
+            YEAR -> z.plusYears(1)
+            NEVER, CUSTOM, KEEP -> null
+        }?.toInstant()
+    }
+
+    companion object {
+        /** The choices offered, in order ("Custom…" after them). */
+        val PRESETS: List<RuleExpiry> = listOf(NEVER, DAY, WEEK, MONTH, THREE_MONTHS, YEAR)
+    }
+}
+
+/** The custom end of a rule (§10.12 `expires_at`): a day from the Material3 date picker and a time in the member's zone. */
+object RuleEnds {
+    /** The date picker's day (UTC midnight of that day, as Material3 gives it) at [hour]:[minute] in [zone], as an instant. */
+    fun of(dateUtcMillis: Long, hour: Int, minute: Int, zone: ZoneId): Instant =
+        LocalDateTime.of(day(dateUtcMillis), LocalTime.of(hour, minute)).atZone(zone).toInstant()
+
+    /** Whether [at] can end a rule: in the future and at most 3,650 days ahead (§10.12). */
+    fun allowed(at: Instant, now: Instant): Boolean = at.isAfter(now) && at.isBefore(now.plus(Duration.ofDays(RuleDraft.MAX_EXPIRY_DAYS)))
+
+    /** Whether the date picker offers this day: today (in [zone]) up to the last day 3,650 days ahead. */
+    fun selectable(dateUtcMillis: Long, now: Instant, zone: ZoneId): Boolean {
+        val d = day(dateUtcMillis)
+        val today = now.atZone(zone).toLocalDate()
+        val last = now.plus(Duration.ofDays(RuleDraft.MAX_EXPIRY_DAYS)).atZone(zone).toLocalDate()
+        return !d.isBefore(today) && !d.isAfter(last)
+    }
+
+    /** The day the date picker shows for [at] in [zone] (UTC midnight millis). */
+    fun pickerDay(at: Instant, zone: ZoneId): Long = at.atZone(zone).toLocalDate().atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+
+    private fun day(dateUtcMillis: Long): LocalDate = Instant.ofEpochMilli(dateUtcMillis).atZone(ZoneOffset.UTC).toLocalDate()
+}
+
+/** The custom end being picked: the day first, then the time on it. */
+sealed interface EndPicker {
+    data object Date : EndPicker
+
+    data class Time(val dateUtcMillis: Long) : EndPicker
 }
 
 /** Immutable UI state of the share-rule editor. */
@@ -148,18 +218,33 @@ data class RuleEditUiState(
     val limit: com.vettid.core.data.vault.VaultLimit? = null,
     val confirmDelete: Boolean = false,
     val done: Boolean = false,
+    /** Every rule of this connection as last listed (the edited one included). */
+    val rules: List<ShareRule> = emptyList(),
+    /** The custom end's pickers, while open. */
+    val endPicker: EndPicker? = null,
+    /** The custom end picked was not in the future or more than 3,650 days ahead. */
+    val endInvalid: Boolean = false,
 ) {
     val isNew: Boolean get() = draft.ruleId == null
 
     val usesValid: Boolean get() = usesText.isBlank() || usesText.toIntOrNull()?.let { it in 1..RuleDraft.MAX_USES } == true
 
-    val canSave: Boolean get() = draft.tags.isNotEmpty() && usesValid && !busy
+    /** A new rule while the connection has the most it can have (§10.12 `share_rules_subject`, 64). */
+    val atRuleLimit: Boolean get() = isNew && rules.size >= RuleDraft.MAX_RULES_PER_SUBJECT
+
+    val canSave: Boolean get() = draft.tags.isNotEmpty() && usesValid && !busy && !atRuleLimit
+
+    /** The connection's other rules covering the same tags or matched items (§10.12: each rule applies on its own). */
+    val overlaps: List<ShareRule>
+        get() = RuleOverlaps.forDraft(draft.ruleId, draft.tags, preview?.matches?.map { it.itemId }.orEmpty(), rules)
 }
 
 /**
- * A share rule for one connection (§10.12): the tags it names (any or all), its mode — "Ask me for each new item"
- * (the default, owner decision 2026-10-03) or "Share automatically" — counted uses, an end, and whether items that
- * already carry the tags count. The vault's dry run shows what it would match before it is saved.
+ * One share rule for one connection (§10.12; a connection has up to 64, each with its own settings): the tags it
+ * names (any or all), its mode — "Ask me each time" (the default, owner decision 2026-10-03) or "Share automatically"
+ * — fetches of each item, an end (presets or a date and time picked), and whether items that already carry the tags
+ * count. The vault's dry run shows what it would match, and the connection's other rules covering the same tags or
+ * items are shown before it is saved. Per-hour and per-day limits are for agent rules only (§10.12) and not offered.
  */
 @HiltViewModel
 @Suppress("TooManyFunctions")
@@ -170,9 +255,7 @@ class RuleEditViewModel @Inject constructor(
 ) : ViewModel() {
     private val connectionId: String = checkNotNull(saved[RuleEditRoute.ARG_CONNECTION])
     private val ruleId: String? = saved[RuleEditRoute.ARG_RULE]
-    private val state = MutableStateFlow(
-        RuleEditUiState(RuleDraft(connectionId), connections.nameOf(connectionId), loading = ruleId != null),
-    )
+    private val state = MutableStateFlow(RuleEditUiState(RuleDraft(connectionId), connections.nameOf(connectionId), loading = true))
     val uiState: StateFlow<RuleEditUiState> = state.asStateFlow()
     private var previewJob: Job? = null
 
@@ -181,8 +264,10 @@ class RuleEditViewModel @Inject constructor(
             try {
                 val reg = sharing.tags.value ?: sharing.refreshTags()
                 state.update { it.copy(tags = reg.tags.filterNot { t -> t.reserved }.map { t -> t.tag }.sorted()) }
+                val rules = sharing.rules(connectionId).filter { it.connectionId == connectionId }
+                state.update { it.copy(rules = rules, loading = ruleId != null) }
                 if (ruleId != null) {
-                    val r = sharing.rules(connectionId).firstOrNull { it.ruleId == ruleId } ?: throw VaultFailure(FailureKind.NOT_FOUND)
+                    val r = rules.firstOrNull { it.ruleId == ruleId } ?: throw VaultFailure(FailureKind.NOT_FOUND)
                     state.update {
                         it.copy(
                             draft = RuleDraft.of(r).copy(connectionId = connectionId),
@@ -213,19 +298,41 @@ class RuleEditViewModel @Inject constructor(
 
     fun setIncludeExisting(on: Boolean) = change { it.copy(includeExisting = on) }
 
+    /** Fetches of each item (§10.12 `uses`, 1–10,000; empty for none): digits only. */
     fun setUses(v: String) {
         val digits = v.filter { it.isDigit() }.take(USES_DIGITS)
         state.update { it.copy(usesText = digits) }
         change { it.copy(uses = digits.toIntOrNull()) }
     }
 
-    fun setExpiry(e: RuleExpiry, now: Instant = Instant.now()) {
-        state.update { it.copy(expiry = e) }
+    /** A preset end from [now] in [zone]; [RuleExpiry.CUSTOM] opens the date picker (the end changes once a time is picked). */
+    fun setExpiry(e: RuleExpiry, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()) {
         when (e) {
-            RuleExpiry.KEEP -> Unit
-            else -> change { it.copy(expiresAt = e.days?.let { d -> now.plus(Duration.ofDays(d)) }) }
+            RuleExpiry.KEEP -> state.update { it.copy(expiry = e, endInvalid = false) }
+            RuleExpiry.CUSTOM -> state.update { it.copy(endPicker = EndPicker.Date, endInvalid = false) }
+            else -> {
+                state.update { it.copy(expiry = e, endInvalid = false) }
+                change { it.copy(expiresAt = e.endFrom(now, zone)) }
+            }
         }
     }
+
+    /** The custom end's day was picked (UTC midnight millis, as the date picker gives it): now the time. */
+    fun pickEndDate(dateUtcMillis: Long) = state.update { it.copy(endPicker = EndPicker.Time(dateUtcMillis)) }
+
+    /**
+     * The custom end's time was picked: the day at [hour]:[minute] in [zone] becomes the end, sent as UTC (§10.12). An
+     * end not in the future, or more than 3,650 days ahead, is refused ([RuleEditUiState.endInvalid]) and the end stays.
+     */
+    fun pickEndTime(hour: Int, minute: Int, zone: ZoneId = ZoneId.systemDefault(), now: Instant = Instant.now()) {
+        val p = state.value.endPicker as? EndPicker.Time ?: return
+        val at = RuleEnds.of(p.dateUtcMillis, hour, minute, zone)
+        if (!RuleEnds.allowed(at, now)) return state.update { it.copy(endPicker = null, endInvalid = true) }
+        state.update { it.copy(endPicker = null, endInvalid = false, expiry = RuleExpiry.CUSTOM) }
+        change { it.copy(expiresAt = at) }
+    }
+
+    fun cancelEndPicker() = state.update { it.copy(endPicker = null) }
 
     private fun schedulePreview() {
         previewJob?.cancel()

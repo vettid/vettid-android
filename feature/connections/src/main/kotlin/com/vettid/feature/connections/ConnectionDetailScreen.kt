@@ -35,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.vettid.core.data.account.AccountNames
+import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.social.AuthenticationState
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConnectionState
@@ -72,6 +73,9 @@ data class DetailActions(
     val onShareItems: () -> Unit = {},
     /** A share rule of this connection's, to change. */
     val onOpenRule: (String) -> Unit = {},
+    /** Asks to delete a share rule (null: never mind); [onDeleteRule] deletes it once confirmed. */
+    val onAskDeleteRule: (ShareRule?) -> Unit = {},
+    val onDeleteRule: () -> Unit = {},
     /** "Ask for something": a `grant.request` of this connection (§10.12). */
     val onAskForSomething: () -> Unit = {},
 )
@@ -194,7 +198,7 @@ private fun DetailContent(state: ConnectionDetailUiState, c: ConnectionInfo, tit
         if (c.state == ConnectionState.ACTIVE) {
             // Two directions, two cards (owner request 2026-10-08): what goes out of the vault, what comes in.
             val first = sharingName(c)
-            OutgoingSharingCard(state.sharing, first, actions.onShareItems, actions.onOpenRule, actions.onSharing)
+            OutgoingSharingCard(state.sharing, first, actions.onShareItems, actions.onOpenRule, actions.onSharing, actions.onAskDeleteRule)
             IncomingSharingCard(state.sharing, first, actions.onAskForSomething, actions.onSharedWithYou)
         }
         AuthCard(state.auth, name, state.busy, c.state == ConnectionState.ACTIVE, actions.onAuthenticate)
@@ -325,6 +329,22 @@ private fun DetailDialogs(state: ConnectionDetailUiState, name: String, actions:
             destructive = true,
         )
         null -> Unit
+    }
+    state.deleteRule?.let {
+        val first = state.connection?.let(::sharingName)?.let { n -> AccountNames.isolate(n) }
+        ConfirmDialog(
+            title = stringResource(R.string.connections_share_rule_delete_title),
+            text = if (first != null) {
+                stringResource(R.string.connections_share_rule_delete_body, first)
+            } else {
+                stringResource(R.string.connections_share_rule_delete_unnamed)
+            },
+            confirmLabel = stringResource(R.string.connections_share_rule_delete),
+            onConfirm = actions.onDeleteRule,
+            onDismiss = { actions.onAskDeleteRule(null) },
+            destructive = true,
+            modifier = Modifier.testTag("sharing_rule_delete_confirm"),
+        )
     }
 }
 

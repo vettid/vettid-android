@@ -6,7 +6,13 @@ package com.vettid.feature.connections
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
@@ -22,6 +28,7 @@ import com.vettid.core.data.items.GrantDirection
 import com.vettid.core.data.items.GrantView
 import com.vettid.core.data.items.ShareMode
 import com.vettid.core.data.items.ShareRule
+import com.vettid.core.data.items.TagMatch
 import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.social.ConnectionState
 import com.vettid.core.data.vault.FailureKind
@@ -79,7 +86,7 @@ class ConnectionSharingCardsTest {
         rule.onNodeWithTag("sharing_in_edge").assertExists()
         rule.onNodeWithTag("sharing_rule_r1").assertTextContains("medical", substring = true)
         rule.onNodeWithTag("sharing_rule_r1").assertTextContains("automatically", substring = true)
-        rule.onNodeWithTag("sharing_rule_r1").assertTextContains("5 uses", substring = true)
+        rule.onNodeWithTag("sharing_rule_r1").assertTextContains("up to 5 fetches of each item", substring = true)
         rule.onNodeWithTag("sharing_given_g1").assertTextContains("Allergies", substring = true)
         // What comes in is read-only and labelled as theirs.
         rule.onNodeWithTag("sharing_received_g3").assertTextContains("Home address", substring = true)
@@ -158,6 +165,90 @@ class ConnectionSharingCardsTest {
         vm.loadSharing()
         advanceUntilIdle()
         assertTrue(vm.uiState.value.sharing.incomingEmpty)
+    }
+
+    // --- owner feedback 2026-10-09: a rule per tag, each with its own settings ---
+
+    private val address = ShareRule("r1", 1, "c1", tags = listOf("address"), mode = ShareMode.AUTO, included = listOf("i1"))
+    private val license = ShareRule("r2", 1, "c1", tags = listOf("drivers-license"), uses = 5, expiresAt = java.time.Instant.parse("2026-12-31T12:00:00Z"), included = listOf("i2"), pending = listOf("i3"))
+    private val travel = ShareRule("r3", 1, "c1", tags = listOf("drivers-license", "travel"), match = TagMatch.ALL, mode = ShareMode.AUTO, uses = 1, included = listOf("i2", "i4"))
+
+    @Test
+    fun everyRuleIsARowWithItsOwnSettings() {
+        detail(ada, DetailSharing(listOf(address, license, travel), loaded = true))
+        rule.onNodeWithTag("sharing_rule_r1").assertTextContains("address", substring = true)
+        rule.onNodeWithTag("sharing_rule_r1").assertTextContains("Shared automatically", substring = true)
+        rule.onNodeWithTag("sharing_rule_r1").assertTextContains("no fetch limit · no end date", substring = true)
+        rule.onNodeWithTag("sharing_rule_r1").assertTextContains("1 item shared now", substring = true)
+        rule.onNodeWithTag("sharing_rule_r2").assertTextContains("Asks you each time", substring = true)
+        rule.onNodeWithTag("sharing_rule_r2").assertTextContains("up to 5 fetches of each item · until Dec 31, 2026", substring = true)
+        rule.onNodeWithTag("sharing_rule_r2").assertTextContains("1 item shared now · 1 waiting for you", substring = true)
+        rule.onNodeWithTag("sharing_rule_r3").assertTextContains("Items with all of these tags", substring = true)
+        rule.onNodeWithTag("sharing_rule_r3").assertTextContains("up to 1 fetch of each item", substring = true)
+        rule.onNodeWithTag("sharing_rule_r3").assertTextContains("2 items shared now", substring = true)
+        // Overlaps: the same tag and item in r2 and r3; none for r1.
+        rule.onNodeWithTag("sharing_rule_also_r2", useUnmergedTree = true).assertTextEquals("Also covered by: drivers-license, travel")
+        rule.onNodeWithTag("sharing_rule_also_r3", useUnmergedTree = true).assertTextEquals("Also covered by: drivers-license")
+        rule.onNodeWithTag("sharing_rule_also_r1", useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithTag("sharing_out_share").assertTextEquals("Add a rule").assertIsEnabled()
+        rule.onNodeWithTag("sharing_out_limit").assertDoesNotExist()
+    }
+
+    @Test
+    fun eachRuleOpensItsEditorOrIsDeletedAfterAConfirmation() {
+        val asked = mutableListOf<String>()
+        var state by mutableStateOf(ConnectionDetailUiState("c1", ada, null, loading = false, sharing = DetailSharing(listOf(address, license), loaded = true)))
+        rule.setContent {
+            ConnectionDetailScreen(
+                state,
+                DetailActions(
+                    onOpenRule = { asked += "open:$it" },
+                    onAskDeleteRule = { r -> asked += "ask:${r?.ruleId}"; state = state.copy(deleteRule = r) },
+                    onDeleteRule = { asked += "delete" },
+                ),
+            )
+        }
+        rule.onNodeWithTag("sharing_rule_r2").performSemanticsAction(SemanticsActions.OnClick)
+        rule.onNodeWithTag("sharing_rule_delete_r2").assertContentDescriptionEquals("Delete this rule")
+        rule.onNodeWithTag("sharing_rule_delete_r2").performSemanticsAction(SemanticsActions.OnClick)
+        rule.onNodeWithText("Delete this sharing rule?").assertExists()
+        rule.onNodeWithText("$ada1 can no longer fetch the items this rule shared. Items another rule shares stay shared.").assertExists()
+        rule.onNodeWithTag("confirm_button").performSemanticsAction(SemanticsActions.OnClick)
+        assertEquals(listOf("open:r2", "ask:r2", "delete"), asked)
+    }
+
+    @Test
+    fun aRuleIsDeletedOnlyOnceConfirmedAndTheCardIsReadAgain() = runTest {
+        val social = FakeSocial().apply { seed(listOf(FakeSocial.connection("c1", "Ada"))) }
+        val sharing = FakeSharing().apply { rulesStored += listOf(address, license) }
+        val vm = ConnectionDetailViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), social, sharing)
+        advanceUntilIdle()
+        vm.askDeleteRule(license)
+        advanceUntilIdle()
+        assertEquals("r2", vm.uiState.value.deleteRule?.ruleId)
+        vm.askDeleteRule(null)
+        vm.deleteRule()
+        advanceUntilIdle()
+        assertTrue("deleteRule" !in sharing.calls)
+        vm.askDeleteRule(license)
+        vm.deleteRule()
+        advanceUntilIdle()
+        assertTrue("deleteRule" in sharing.calls)
+        assertEquals(null, vm.uiState.value.deleteRule)
+        assertEquals(listOf("r1"), vm.uiState.value.sharing.rules.map { it.ruleId })
+        // A refusal shows on the detail.
+        sharing.fail["deleteRule"] = VaultFailure(FailureKind.NETWORK)
+        vm.askDeleteRule(address)
+        vm.deleteRule()
+        advanceUntilIdle()
+        assertEquals(FailureKind.NETWORK, vm.uiState.value.error)
+    }
+
+    @Test
+    fun atSixtyFourRulesTheCardNamesTheLimitAndAddsNoRule() {
+        detail(ada, DetailSharing((1..64).map { ShareRule("f$it", 1, "c1", tags = listOf("t$it")) }, loaded = true))
+        rule.onNodeWithTag("sharing_out_limit").assertTextEquals("This connection has the most share rules it can have (64).")
+        rule.onNodeWithTag("sharing_out_share").assertIsNotEnabled()
     }
 
     @Test

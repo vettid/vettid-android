@@ -178,6 +178,8 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
                 onSharedWithYou = { host.onOpenShared(state.connectionId) },
                 onShareItems = { host.onNewShareRule(state.connectionId) },
                 onOpenRule = { host.onOpenShareRule(state.connectionId, it) },
+                onAskDeleteRule = vm::askDeleteRule,
+                onDeleteRule = vm::deleteRule,
                 onAskForSomething = { host.onAskFor(state.connectionId) },
             ),
         )

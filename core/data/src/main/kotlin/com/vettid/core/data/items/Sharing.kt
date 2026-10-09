@@ -99,6 +99,10 @@ data class RuleDraft(
         const val MAX_EXPIRY_DAYS = 3_650L
         private const val DAY_SECONDS = 86_400L
 
+        /** A vault holds at most 64 share rules per subject (limit `share_rules_subject`) and 512 in all (`share_rules`), §10.12. */
+        const val MAX_RULES_PER_SUBJECT = 64
+        const val MAX_RULES = 512
+
         fun of(r: ShareRule): RuleDraft = RuleDraft(
             r.connectionId ?: "", r.tags, r.match, r.mode, r.uses, r.expiresAt, r.includeExisting, r.ruleId, r.version,
         )
@@ -108,6 +112,36 @@ data class RuleDraft(
     fun valid(now: Instant): Boolean = tags.size in 1..MAX_TAGS && tags.none { it.startsWith("@") } &&
         (uses == null || uses in 1..MAX_USES) &&
         (expiresAt == null || (expiresAt.isAfter(now) && expiresAt.isBefore(now.plusSeconds(MAX_EXPIRY_DAYS * DAY_SECONDS))))
+}
+
+/**
+ * Where share rules for one subject cover the same tags or items (§10.12). The vault keeps no precedence between them:
+ * each rule matches, asks about and includes items on its own (one inclusion state and one grant per rule and item), so
+ * an item covered by several rules is readable while any of them includes it — an `auto` rule shares it even when an
+ * `ask` rule for the same connection would ask, and the most permissive uses and end apply in effect.
+ */
+object RuleOverlaps {
+    /** Each rule's id → the other rules that name one of its tags or hold one of its items (included or pending). */
+    fun of(rules: List<ShareRule>): Map<String, List<ShareRule>> = rules.associate { r ->
+        r.ruleId to rules.filter { o -> o.ruleId != r.ruleId && overlap(r.tags, r.included + r.pending, o) }
+    }
+
+    /**
+     * The saved rules (other than the draft's own) that cover the draft's [tags] or one of [itemIds] (the dry run's
+     * matches), in the order given.
+     */
+    fun forDraft(ruleId: String?, tags: List<String>, itemIds: Collection<String>, rules: List<ShareRule>): List<ShareRule> =
+        rules.filter { o -> o.ruleId != ruleId && overlap(tags, itemIds, o) }
+
+    /** The tags [a] shares with [b]. */
+    fun sharedTags(a: List<String>, b: ShareRule): List<String> = a.filter { it in b.tags }
+
+    /** The items of [itemIds] that [rule] already includes or asks about. */
+    fun sharedItems(itemIds: Collection<String>, rule: ShareRule): Set<String> =
+        itemIds.filter { it in rule.included || it in rule.pending }.toSet()
+
+    private fun overlap(tags: List<String>, items: Collection<String>, o: ShareRule): Boolean =
+        tags.any { it in o.tags } || items.any { it in o.included || it in o.pending }
 }
 
 /** An item a rule matches, from `share.rule.set{dry_run}` (§10.12); [state] for a replaced rule. */

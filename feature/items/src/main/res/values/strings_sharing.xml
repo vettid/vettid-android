@@ -45,7 +45,7 @@
     <string name="items_sharing_body">%1$s sees only the items you share, never your tags or rules.</string>
     <string name="items_sharing_rules">Sharing by tag</string>
     <string name="items_sharing_no_rules">You share nothing with %1$s by tag.</string>
-    <string name="items_sharing_new_rule">Share items by tag</string>
+    <string name="items_sharing_new_rule">Add a rule</string>
     <string name="items_sharing_pending_title">Waiting for you</string>
     <plurals name="items_sharing_pending_body">
         <item quantity="one">%1$d item waits for your decision in Approvals.</item>
@@ -67,9 +67,9 @@
     </plurals>
 
     <!-- A share rule -->
-    <string name="items_rule_new_title">Share by tag</string>
+    <string name="items_rule_new_title">New sharing rule</string>
     <string name="items_rule_edit_title">Sharing rule</string>
-    <string name="items_rule_body">Items with these tags can be read by %1$s. Your tags stay private.</string>
+    <string name="items_rule_body">Items with these tags can be read by %1$s. Each rule has its own settings: add another rule for tags you want shared differently. Your tags stay private.</string>
     <string name="items_rule_tags">Tags</string>
     <string name="items_rule_no_tags">Add tags to your items first: a rule shares by tag.</string>
     <string name="items_rule_match_any">Items with any of these tags</string>
@@ -77,23 +77,47 @@
     <string name="items_rule_match_any_short">Any of these tags</string>
     <string name="items_rule_match_all_short">All of these tags</string>
     <string name="items_rule_mode">When an item gets one of these tags</string>
-    <string name="items_rule_mode_ask">Ask me for each new item</string>
-    <string name="items_rule_mode_ask_note">You decide in Approvals before anything is shared</string>
+    <string name="items_rule_mode_ask">Ask me each time</string>
+    <string name="items_rule_mode_ask_note">You decide about each item in Approvals before it is shared</string>
     <string name="items_rule_mode_auto">Share automatically</string>
     <string name="items_rule_mode_auto_note">New items with these tags are shared at once</string>
     <string name="items_rule_existing">Include items that already have these tags</string>
     <string name="items_rule_existing_note">Off: only items that get these tags from now on</string>
-    <string name="items_rule_uses">Fetches per item (optional)</string>
-    <string name="items_rule_uses_note">Empty: no limit; every fetch is recorded</string>
+    <string name="items_rule_limits">Limits</string>
+    <string name="items_rule_uses">Fetches of each item (optional)</string>
+    <string name="items_rule_uses_note">Empty: no limit. Every fetch is recorded.</string>
     <string name="items_rule_uses_bad">Between 1 and 10,000</string>
     <string name="items_rule_expiry">Ends</string>
     <string name="items_rule_expiry_never">Never</string>
-    <string name="items_rule_expiry_month">In 30 days</string>
-    <string name="items_rule_expiry_year">In a year</string>
+    <string name="items_rule_expiry_day">1 day</string>
+    <string name="items_rule_expiry_week">1 week</string>
+    <string name="items_rule_expiry_month">1 month</string>
+    <string name="items_rule_expiry_three_months">3 months</string>
+    <string name="items_rule_expiry_year">1 year</string>
+    <string name="items_rule_expiry_custom">Custom…</string>
+    <string name="items_rule_ends_never">No end date: the rule lasts until you delete it.</string>
+    <string name="items_rule_ends_at">Ends %1$s (your time)</string>
+    <string name="items_rule_end_bad">Pick a time in the future, at most 10 years ahead.</string>
+    <string name="items_rule_end_next">Next</string>
+    <string name="items_rule_end_time">Ends at</string>
+    <string name="items_rule_limit_title">No more rules for this connection</string>
+    <string name="items_rule_summary_auto">Shared automatically</string>
+    <string name="items_rule_summary_ask">Asks you each time</string>
+    <string name="items_rule_no_limit">no fetch limit</string>
+    <string name="items_rule_no_end">no end date</string>
+    <string name="items_rule_also_covered">Also covered by: %1$s</string>
+    <string name="items_rule_overlap_title">Also covered by</string>
+    <string name="items_rule_overlap_tags">also names %1$s</string>
+    <plurals name="items_rule_overlap_items">
+        <item quantity="one">%1$d of these items is in it</item>
+        <item quantity="other">%1$d of these items are in it</item>
+    </plurals>
+    <string name="items_rule_overlap_note">Each rule works on its own: an item is shared while any of these rules shares it. If one shares automatically and another asks, the item is shared without asking. Each rule\'s fetch limit and end apply to what it shares.</string>
+    <string name="items_rule_preview_also">Also in another rule for this connection</string>
     <string name="items_rule_until">until %1$s</string>
     <plurals name="items_rule_uses">
-        <item quantity="one">%1$d fetch per item</item>
-        <item quantity="other">%1$d fetches per item</item>
+        <item quantity="one">up to %1$d fetch of each item</item>
+        <item quantity="other">up to %1$d fetches of each item</item>
     </plurals>
     <plurals name="items_rule_included">
         <item quantity="one">%1$d shared</item>
