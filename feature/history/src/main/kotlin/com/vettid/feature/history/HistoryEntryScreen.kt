@@ -78,7 +78,12 @@ private fun EntryDetail(e: AuditRecord, state: HistoryEntryUiState, onOpenConnec
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Spacer(Modifier.height(Spacing.l))
-        InitialTile(name = e.kind, size = 72, icon = categoryIcon(e.category))
+        InitialTile(
+            name = e.kind,
+            size = 72,
+            icon = categoryIcon(e.category),
+            colors = com.vettid.core.ui.theme.categoryColor(categoryHue(e.category)),
+        )
         CenteredTitle(HistoryText.title(e.kind), Modifier.testTag("history_entry_title"))
         DetailCard(Modifier.padding(horizontal = Spacing.s)) {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {

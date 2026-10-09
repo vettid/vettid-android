@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vettid.core.data.social.Approval
 import com.vettid.core.data.social.ApprovalsRepository
+import com.vettid.core.data.social.ConnectionInfo
+import com.vettid.core.data.social.ConnectionsRepository
 import com.vettid.core.data.social.GrantDecision
 import com.vettid.core.data.items.ItemSummary
 import com.vettid.core.data.items.ItemsRepository
@@ -31,16 +33,28 @@ data class ApprovalsUiState(
     /** Requests the other member declined (0.10.5): told once, until dismissed. */
     val peerDeclines: List<PeerDecline> = emptyList(),
     val error: FailureKind? = null,
-)
+    /** Connections whose asks are paused after several declines (0.23.0 §10.4.1): resume, or remove the connection. */
+    val paused: List<ConnectionInfo> = emptyList(),
+    /** A paused connection the member asked to remove (confirmed first). */
+    val confirmRemove: ConnectionInfo? = null,
+    val busy: Boolean = false,
+) {
+    /** The rows: one per approval, a connection's asks within 10 minutes as one batch (§10.4.1). */
+    val entries: List<ApprovalEntry> get() = AskBatches.group(approvals)
+}
 
 /** Approvals (ANDROID-PLAN §4): everything waiting for the member's decision, newest first. */
 @HiltViewModel
-class ApprovalsViewModel @Inject constructor(private val repo: ApprovalsRepository) : ViewModel() {
+class ApprovalsViewModel @Inject constructor(
+    private val repo: ApprovalsRepository,
+    private val connections: ConnectionsRepository,
+) : ViewModel() {
     private val local = MutableStateFlow(ApprovalsUiState())
 
     val uiState: StateFlow<ApprovalsUiState> =
-        combine(local, repo.approvals, repo.peerDeclines) { s, list, declines -> s.copy(approvals = list, peerDeclines = declines) }
-            .stateIn(viewModelScope, SharingStarted.Eagerly, ApprovalsUiState())
+        combine(local, repo.approvals, repo.peerDeclines, connections.connections) { s, list, declines, cs ->
+            s.copy(approvals = list, peerDeclines = declines, paused = cs.filter { it.asks?.paused == true })
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, ApprovalsUiState())
 
     init {
         refresh()
@@ -54,6 +68,30 @@ class ApprovalsViewModel @Inject constructor(private val repo: ApprovalsReposito
                 local.update { it.copy(loading = false) }
             } catch (e: VaultFailure) {
                 local.update { it.copy(loading = false, error = e.kind) }
+            }
+        }
+    }
+
+    /** Resumes a paused connection's asks (`connection.asks.resume`, 0.23.0 §10.4.1). */
+    fun resumeAsks(connectionId: String) = act { connections.resumeAsks(connectionId) }
+
+    fun askRemove(c: ConnectionInfo?) = local.update { it.copy(confirmRemove = c) }
+
+    /** Removes the paused connection the member confirmed (§10.4.1 offers it with the pause). */
+    fun remove() {
+        val c = local.value.confirmRemove ?: return
+        local.update { it.copy(confirmRemove = null) }
+        act { connections.remove(c.id) }
+    }
+
+    private fun act(block: suspend () -> Unit) {
+        local.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            try {
+                block()
+                local.update { it.copy(busy = false) }
+            } catch (e: VaultFailure) {
+                local.update { it.copy(busy = false, error = e.kind) }
             }
         }
     }

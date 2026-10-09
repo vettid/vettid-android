@@ -24,10 +24,20 @@ import com.vettid.core.data.items.Sensitivity
 data class ItemCategory(val id: String, @param:StringRes val label: Int, val icon: ImageVector)
 
 /**
- * One field a template pre-fills: an English default label (translated in resources) and a kind; [monthYear] a
- * `date` entered as a month and year (`YYYY-MM`, §10.7), such as a payment card's expiry.
+ * One field a template pre-fills: an English default label (translated in resources), a kind, and the registry's
+ * presentation hint [format] (VAULT-ITEMS 0.1.2, VAULT-MESSAGING 0.23.0 §10.7): `"format": "month"` on a `date` field
+ * asks for a month and a year only and stores `YYYY-MM`, as for a payment card's expiry. The hint lives in the
+ * registry and the apps; it is not stored in the item and the vault never sees it.
  */
-data class TemplateField(@param:StringRes val label: Int, val kind: String, val monthYear: Boolean = false)
+data class TemplateField(@param:StringRes val label: Int, val kind: String, val format: String? = null) {
+    /** A `date` with `"format": "month"`: entered with the month picker. */
+    val monthYear: Boolean get() = kind == FieldKinds.DATE && format == FORMAT_MONTH
+
+    companion object {
+        /** The registry's month hint (vettid-vault `docs/item-templates.json` version 3). */
+        const val FORMAT_MONTH = "month"
+    }
+}
 
 /**
  * A template (§10.7: templates live in the apps): it suggests the name (as the name's placeholder: nothing is pre-typed,
@@ -85,7 +95,7 @@ object ItemTemplates {
     /** A member-defined category, as shown: `home_lab` → "Home lab". */
     fun customLabel(id: String): String = com.vettid.core.data.items.ItemCategories.humanize(id)
 
-    private fun f(@StringRes label: Int, kind: String, monthYear: Boolean = false) = TemplateField(label, kind, monthYear)
+    private fun f(@StringRes label: Int, kind: String, format: String? = null) = TemplateField(label, kind, format)
 
     val all: List<ItemTemplate> = listOf(
         ItemTemplate(
@@ -128,8 +138,8 @@ object ItemTemplates {
             "payment_card", R.string.items_template_payment_card, "payment_card", Sensitivity.SECRET, listOf("money"),
             listOf(
                 f(R.string.items_label_cardholder, FieldKinds.TEXT), f(R.string.items_label_number, FieldKinds.TEXT),
-                // A card expires in a month: entered as month and year, stored `YYYY-MM` (§10.7 allows it).
-                f(R.string.items_label_expires, FieldKinds.DATE, monthYear = true),
+                // The registry's `"format": "month"` (VAULT-ITEMS 0.1.2): a card expires in a month, stored `YYYY-MM`.
+                f(R.string.items_label_expires, FieldKinds.DATE, format = TemplateField.FORMAT_MONTH),
                 f(R.string.items_label_security_code, FieldKinds.PASSWORD),
                 f(R.string.items_label_pin, FieldKinds.PASSWORD),
             ),
@@ -232,19 +242,23 @@ object ItemTemplates {
     fun blank(): ItemDraft = ItemDraft()
 
     /**
-     * An item's draft with its template's entry hints: a month-and-year `date` of the template (matched by label) is
-     * entered so again when its value is kept or empty (a stored full date stays a day).
+     * An item's draft with its template's entry hints (§10.7, 0.23.0): a stored `date` is a month when its value is
+     * one (`YYYY-MM`, read from the value's form by [ItemDraft.of]) and a day otherwise, whatever the template says;
+     * an empty `date` takes the `"format": "month"` hint of its template's field of the same label.
      */
     @Suppress("ReturnCount")
     fun withHints(d: ItemDraft, context: Context): ItemDraft {
         val t = d.template?.let { template(it) } ?: return d
-        val monthLabels = t.fields.filter { it.monthYear }.map { context.getString(it.label) }.toSet()
+        val monthLabels = monthLabels(t, context)
         if (monthLabels.isEmpty()) return d
-        return d.copy(
-            fields = d.fields.map { f ->
-                val dayValue = f.text.isNotEmpty() && !f.monthYear
-                if (f.kind == FieldKinds.DATE && f.label in monthLabels && !dayValue) f.copy(monthYear = true) else f
-            },
-        )
+        return d.copy(fields = d.fields.map { f -> if (monthHint(f.kind, f.text, f.label, monthLabels)) f.copy(monthYear = true) else f })
     }
+
+    /** The labels (in the app's language) of [t]'s `date` fields with `"format": "month"`. */
+    fun monthLabels(t: ItemTemplate, context: Context): Set<String> =
+        t.fields.filter { it.monthYear }.map { context.getString(it.label) }.toSet()
+
+    /** Whether an empty `date` field labelled [label] takes the template's month hint (a stored value decides by its form). */
+    fun monthHint(kind: String, text: String, label: String, monthLabels: Set<String>): Boolean =
+        kind == FieldKinds.DATE && text.isEmpty() && label in monthLabels
 }

@@ -117,4 +117,26 @@ class SharePendingTest {
             assertEquals(FailureKind.LIMIT, e.kind)
         }
     }
+
+    /** 0.23.0: entries carry `ask_rule_id` and `shared`; each decision gets its subject's rules, to name the one that asks. */
+    @Test
+    fun entriesSayWhichRuleAsksAndWhatIsAlreadyShared() = runTest {
+        val two = o(
+            """{"rules":[{"rule_id":"01R1","subject":{"connection_id":"c1"},"tags":["medical"]},{"rule_id":"01R2","subject":{"connection_id":"c1"},"tags":["insurance"],"mode":"auto"},{"rule_id":"01R3","subject":{"connection_id":"c2"},"tags":["x"]}]}""",
+        )
+        val d = SharePending.decisions(
+            pendingPage = {
+                o("""{"pending":[{"rule_id":"01R2","subject":{"connection_id":"c1"},"item_id":"01I1","name":"Allergies","category":"medical","sensitivity":"data","ask_rule_id":"01R1","shared":false},{"rule_id":"01R2","subject":{"connection_id":"c1"},"item_id":"01I2","name":"Card","category":"insurance","sensitivity":"data","shared":true}]}""")
+            },
+            rulePage = { two },
+            names = emptyMap(),
+            t = t,
+        )
+        val r2 = d.single()
+        assertEquals(listOf("01R1", null), r2.items.map { it.askRuleId })
+        assertEquals(listOf(false, true), r2.items.map { it.shared })
+        assertEquals(listOf("01R1", "01R2"), r2.rules.map { it.ruleId }) // c1's rules only
+        assertEquals("01R2", r2.rule?.ruleId)
+        assertEquals(com.vettid.core.data.items.ShareMode.AUTO, r2.rule?.mode)
+    }
 }

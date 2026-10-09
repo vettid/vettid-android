@@ -51,6 +51,8 @@ import androidx.compose.ui.unit.dp
 import com.vettid.core.data.account.AccountNames
 import com.vettid.core.data.items.GrantView
 import com.vettid.core.data.items.RuleDraft
+import com.vettid.core.data.items.RuleNames
+import com.vettid.core.data.items.RuleOverlaps
 import com.vettid.core.data.items.ShareMode
 import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.items.TagMatch
@@ -58,7 +60,7 @@ import com.vettid.core.data.social.ConnectionInfo
 import com.vettid.core.data.vault.VaultLimit
 import com.vettid.core.data.vault.message
 import com.vettid.core.ui.components.SecondaryButton
-import com.vettid.core.ui.components.TagLabel
+import com.vettid.core.ui.components.TagChip
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.theme.Spacing
 import com.vettid.core.ui.theme.VettIdShape
@@ -116,9 +118,10 @@ internal fun OutgoingSharingCard(
         if (sharing.rules.isNotEmpty()) {
             SubHeading(stringResource(R.string.connections_share_out_rules))
             val overlaps = sharing.overlaps
+            val names = RuleNames.of(sharing.rules)
             sharing.rules.forEachIndexed { i, r ->
                 if (i > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                RuleLine(r, overlaps[r.ruleId].orEmpty(), onOpenRule, onDeleteRule)
+                RuleLine(r, overlaps[r.ruleId].orEmpty(), names, onOpenRule, onDeleteRule)
             }
         }
         if (sharing.given.isNotEmpty()) {
@@ -275,12 +278,20 @@ private fun Muted(text: String, tag: String) {
 }
 
 /**
- * A share rule for this connection, one row: its tags (any or all), ask or automatic, its fetch limit and end, how
- * many items it shares now (and waiting), and the other rules covering the same tags or items (§10.12: each rule
- * applies on its own). The row opens the rule editor; the bin deletes it after a confirmation.
+ * A share rule for this connection, one row: its tag in the tag's colour (an older rule may name several, any or all),
+ * ask or automatic, its fetch limits and end, how many items it shares now (and waiting), and the other rules
+ * covering the same items, named by their tags with the 0.23.0 rule: asking wins (§10.12 Overlapping rules). The row
+ * opens the rule editor; the bin deletes it after a confirmation.
  */
 @Composable
-private fun RuleLine(r: ShareRule, overlaps: List<ShareRule>, onOpen: (String) -> Unit, onDelete: (ShareRule) -> Unit) {
+@Suppress("LongParameterList")
+private fun RuleLine(
+    r: ShareRule,
+    overlaps: List<ShareRule>,
+    names: Map<String, RuleNames.Name>,
+    onOpen: (String) -> Unit,
+    onDelete: (ShareRule) -> Unit,
+) {
     Row(Modifier.fillMaxWidth().testTag("sharing_rule_row_${r.ruleId}"), verticalAlignment = Alignment.CenterVertically) {
         Column(
             Modifier
@@ -292,7 +303,7 @@ private fun RuleLine(r: ShareRule, overlaps: List<ShareRule>, onOpen: (String) -
                 .testTag("sharing_rule_${r.ruleId}"),
         ) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.xs), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
-                r.tags.forEach { TagLabel(it) }
+                r.tags.forEach { TagChip(it) }
             }
             if (r.tags.size > 1) {
                 Text(
@@ -311,9 +322,11 @@ private fun RuleLine(r: ShareRule, overlaps: List<ShareRule>, onOpen: (String) -
                 modifier = Modifier.padding(top = Spacing.xxs),
             )
             Text(
-                listOf(
+                listOfNotNull(
                     r.uses?.let { pluralStringResource(R.plurals.connections_share_uses, it, it) }
-                        ?: stringResource(R.string.connections_share_no_limit),
+                        ?: stringResource(R.string.connections_share_no_limit).takeIf { r.perHour == null && r.perDay == null },
+                    r.perHour?.let { pluralStringResource(R.plurals.connections_share_per_hour, it, it) },
+                    r.perDay?.let { pluralStringResource(R.plurals.connections_share_per_day, it, it) },
                     r.expiresAt?.let { stringResource(R.string.connections_share_until, Times.dayLabel(Times.day(it))) }
                         ?: stringResource(R.string.connections_share_no_end),
                 ).joinToString(" · "),
@@ -327,9 +340,9 @@ private fun RuleLine(r: ShareRule, overlaps: List<ShareRule>, onOpen: (String) -
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            if (overlaps.isNotEmpty()) {
+            overlapLine(r, overlaps, names)?.let {
                 Text(
-                    stringResource(R.string.connections_share_rule_also, overlaps.joinToString("; ") { it.tags.joinToString(", ") }),
+                    it,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.testTag("sharing_rule_also_${r.ruleId}"),
@@ -393,12 +406,49 @@ private fun ReceivedLine(g: GrantView, name: String?, onOpen: () -> Unit) {
                 listOfNotNull(
                     theirs,
                     g.usesLeft?.let { pluralStringResource(R.plurals.connections_share_uses_left, it, it) },
+                    g.perHour?.let { pluralStringResource(R.plurals.connections_share_received_per_hour, it, it) },
+                    g.perDay?.let { pluralStringResource(R.plurals.connections_share_received_per_day, it, it) },
                     g.expiresAt?.let { stringResource(R.string.connections_share_until, Times.full(it)) },
                 ).joinToString(" · "),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+/**
+ * How a rule meets this connection's other rules (§10.12 Overlapping rules, 0.23.0): an `auto` rule "Asks you first
+ * for the items your “medical” rule also covers" when an `ask` rule overlaps it; otherwise "Overlaps your “x” rule".
+ */
+@Composable
+internal fun overlapLine(r: ShareRule, overlaps: List<ShareRule>, names: Map<String, RuleNames.Name>): String? {
+    if (overlaps.isEmpty()) return null
+    val askers = RuleOverlaps.asksFirst(r.mode, overlaps)
+    val others = overlaps - askers.toSet()
+    return listOfNotNull(
+        askers.takeIf { it.isNotEmpty() }?.let { a ->
+            stringResource(R.string.connections_share_rule_asks_first_for, a.map { ruleName(it, names) }.joinToString(", "))
+        },
+        others.takeIf { it.isNotEmpty() }?.let { o ->
+            stringResource(R.string.connections_share_rule_overlaps, o.map { ruleName(it, names) }.joinToString(", "))
+        },
+    ).joinToString(". ")
+}
+
+/** A rule named by its tags (§10.12, owner's review of #181): "your “medical” rule", told apart when two read the same. */
+@Composable
+internal fun ruleName(r: ShareRule, names: Map<String, RuleNames.Name>): String {
+    val n = names[r.ruleId] ?: RuleNames.Name(RuleNames.text(r))
+    return when (val q = n.qualifier) {
+        null -> stringResource(R.string.connections_rule_name, n.text)
+        is RuleNames.Qualifier.Mode -> stringResource(
+            if (q.mode == ShareMode.ASK) R.string.connections_rule_name_asks else R.string.connections_rule_name_auto,
+            n.text,
+        )
+        is RuleNames.Qualifier.Ends -> q.at
+            ?.let { stringResource(R.string.connections_rule_name_until, n.text, Times.dayLabel(Times.day(it))) }
+            ?: stringResource(R.string.connections_rule_name_no_end, n.text)
     }
 }
 

@@ -380,7 +380,7 @@ class ItemsManager(
                 shares = arr("shares").mapNotNull { e ->
                     val r = VaultJson.str(e, "rule_id") ?: return@mapNotNull null
                     val usable = (e["usable"] as? JsonPrimitive)?.takeIf { !it.isString }?.content == "true"
-                    EffectShare(r, subject(e), ShareMode.of(VaultJson.str(e, "mode")), usable)
+                    EffectShare(r, subject(e), ShareMode.of(VaultJson.str(e, "mode")), usable, VaultJson.str(e, "ask_rule_id"))
                 },
                 withdrawals = arr("withdrawals").mapNotNull { e ->
                     val r = VaultJson.str(e, "rule_id") ?: return@mapNotNull null

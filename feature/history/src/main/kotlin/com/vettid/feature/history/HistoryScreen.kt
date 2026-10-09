@@ -1,5 +1,6 @@
 package com.vettid.feature.history
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -40,6 +41,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -65,11 +67,14 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.draw.clip
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavGraphBuilder
 import androidx.navigation.compose.composable
 import com.vettid.core.data.vault.AuditCategory
+import com.vettid.core.ui.theme.CategoryHue
+import com.vettid.core.ui.theme.categoryColor
 import com.vettid.core.data.vault.AuditFilter
 import com.vettid.core.data.vault.AuditRecord
 import com.vettid.core.data.vault.messageRes
@@ -183,7 +188,26 @@ data class HistoryActions(
     val onExport: () -> Unit = {},
 )
 
-/** The icon of each group, on the entry's tile. */
+/**
+ * The colour of each group (owner request 2026-10-09): unlocks green, security amber, blocked and dropped red,
+ * connections teal, messages blue, the vault gold, devices purple, agents orange, location indigo, account (and a
+ * kind this app does not know) grey. The same on the entry's tile, its screen and the filter chips.
+ */
+fun categoryHue(c: AuditCategory): CategoryHue = when (c) {
+    AuditCategory.VAULT_ACCESS -> CategoryHue.GREEN
+    AuditCategory.SECURITY -> CategoryHue.AMBER
+    AuditCategory.DEVICES -> CategoryHue.PURPLE
+    AuditCategory.CONNECTIONS -> CategoryHue.TEAL
+    AuditCategory.MESSAGES -> CategoryHue.BLUE
+    AuditCategory.ITEMS -> CategoryHue.GOLD
+    AuditCategory.AGENTS -> CategoryHue.ORANGE
+    AuditCategory.LOCATION -> CategoryHue.INDIGO
+    AuditCategory.ACCOUNT -> CategoryHue.GREY
+    AuditCategory.DROPPED -> CategoryHue.RED
+    AuditCategory.OTHER -> CategoryHue.GREY
+}
+
+/** The icon of each group, on the entry's tile (unchanged; the colour is [categoryHue]'s). */
 fun categoryIcon(c: AuditCategory): ImageVector = when (c) {
     AuditCategory.VAULT_ACCESS -> Icons.Outlined.LockOpen
     AuditCategory.SECURITY -> Icons.Outlined.Shield
@@ -378,10 +402,29 @@ private fun FilterRow(state: HistoryUiState, actions: HistoryActions) {
             modifier = Modifier.testTag("history_category_all"),
         )
         AuditCategory.filters.forEach { c ->
+            // Each chip in its group's colour (owner request 2026-10-09): the icon always, the fill when chosen.
+            val hue = categoryColor(categoryHue(c))
             FilterChip(
                 selected = state.filter.category == c,
                 onClick = { actions.onCategory(c) },
                 label = { Text(stringResource(AuditKinds.categoryLabel(c))) },
+                leadingIcon = {
+                    Icon(
+                        categoryIcon(c),
+                        contentDescription = null,
+                        tint = hue.onContainer,
+                        modifier = Modifier
+                            .size(FilterChipDefaults.IconSize + 4.dp)
+                            .clip(com.vettid.core.ui.theme.VettIdShape.pill)
+                            .background(hue.container)
+                            .padding(2.dp),
+                    )
+                },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = hue.container,
+                    selectedLabelColor = hue.onContainer,
+                    selectedLeadingIconColor = hue.onContainer,
+                ),
                 modifier = Modifier.testTag("history_category_${c.name.lowercase()}"),
             )
         }
@@ -538,6 +581,7 @@ private fun EntryRow(e: AuditRecord, names: Map<String, String>, itemNames: Map<
         supporting = listOfNotNull(item, connection).joinToString(" · ").ifEmpty { stringResource(AuditKinds.categoryLabel(e.category)) },
         meta = e.at?.let { Times.short(it) },
         tileIcon = categoryIcon(e.category),
+        tileColors = categoryColor(categoryHue(e.category)),
         onClick = { onOpen(e.seq) },
         modifier = Modifier.testTag("history_entry_${e.seq}"),
     )

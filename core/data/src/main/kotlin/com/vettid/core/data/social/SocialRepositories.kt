@@ -44,6 +44,12 @@ interface ConnectionsRepository {
 
     /** Asks the connection's member to prove presence (§10.4); returns the request id. */
     suspend fun requestAuthentication(id: String, context: String?): String
+
+    /** Mutes or unmutes the connection's asks (`connection.asks.mute`, VAULT-MESSAGING 0.23.0 §10.4.1). */
+    suspend fun setAsksMuted(id: String, muted: Boolean)
+
+    /** Resumes the connection's paused asks and clears its cooldowns (`connection.asks.resume`, §10.4.1). */
+    suspend fun resumeAsks(id: String)
 }
 
 /** Messages with connections (§10.5). */

@@ -296,6 +296,11 @@ data class ShareImpact(
     val mode: ShareMode,
     val usableOnly: Boolean = false,
     val withdrawn: Boolean = false,
+    /**
+     * 0.23.0 (§10.12 Overlapping rules): the `ask` rule of the same connection that holds the item, so that saving
+     * asks first although this rule is `auto` (`ask_rule_id`); null when none, or unknown to the app.
+     */
+    val askRule: com.vettid.core.data.items.ShareRule? = null,
 )
 
 /**
@@ -453,7 +458,11 @@ class ItemEditViewModel @Inject constructor(
         val e = items.shareEffect(s.itemId, s.version.takeIf { s.itemId != null }, sensitivity, tags)
         val names = connections.connections.value.associate { it.id to it.displayName }
         // v1 pairs no agents (D3): only connection rules are shown.
-        return e.shares.mapNotNull { x -> x.subject.connectionId?.let { ShareImpact(names[it].orEmpty(), x.mode, x.usable) } } +
+        val askers = e.shares.mapNotNull { it.askRuleId }
+        val known = if (askers.isEmpty()) emptyMap() else (rules ?: sharing.rules().also { rules = it }).associateBy { it.ruleId }
+        return e.shares.mapNotNull { x ->
+            x.subject.connectionId?.let { ShareImpact(names[it].orEmpty(), x.mode, x.usable, askRule = x.askRuleId?.let(known::get)) }
+        } +
             e.withdrawals.mapNotNull { x ->
                 x.subject.connectionId?.let { ShareImpact(names[it].orEmpty(), ShareMode.ASK, withdrawn = true) }
             }

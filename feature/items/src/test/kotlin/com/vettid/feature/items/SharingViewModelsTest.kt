@@ -128,7 +128,7 @@ class SharingViewModelsTest {
         assertEquals(listOf("medical", "travel"), s.tags) // no reserved tag
         assertEquals("Dana Lee", s.connectionName)
         assertFalse(s.canSave)
-        vm.toggleTag("medical")
+        vm.selectTag("medical")
         advanceUntilIdle()
         assertEquals(1, vm.uiState.value.preview?.total)
         vm.setUses("0")
@@ -169,7 +169,7 @@ class SharingViewModelsTest {
     fun eachEndPresetCountsFromNowInTheMembersZone() = runTest {
         val vm = ruleVm()
         advanceUntilIdle()
-        vm.toggleTag("medical")
+        vm.selectTag("medical")
         val ny = ZoneId.of("America/New_York")
         val expected = mapOf(
             RuleExpiry.NEVER to null,
@@ -193,7 +193,7 @@ class SharingViewModelsTest {
     fun aCustomEndIsAPickedDayAndTimeInLocalTimeSentAsUtc() = runTest {
         val vm = ruleVm()
         advanceUntilIdle()
-        vm.toggleTag("medical")
+        vm.selectTag("medical")
         vm.setExpiry(RuleExpiry.DAY, now, ZoneOffset.UTC)
         vm.setExpiry(RuleExpiry.CUSTOM)
         assertEquals(EndPicker.Date, vm.uiState.value.endPicker)
@@ -219,7 +219,7 @@ class SharingViewModelsTest {
     fun aCustomEndMustBeInTheFutureAndWithinTenYears() = runTest {
         val vm = ruleVm()
         advanceUntilIdle()
-        vm.toggleTag("medical")
+        vm.selectTag("medical")
         val today = LocalDate.of(2026, 10, 9).atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
         vm.setExpiry(RuleExpiry.CUSTOM)
         vm.pickEndDate(today)
@@ -247,7 +247,7 @@ class SharingViewModelsTest {
     fun fetchesOfEachItemAreDigitsWithinTheSpecRange() = runTest {
         val vm = ruleVm()
         advanceUntilIdle()
-        vm.toggleTag("medical")
+        vm.selectTag("medical")
         val cases = mapOf("" to true, "0" to false, "1" to true, "10000" to true, "10001" to false, "5a0" to true, "123456" to false)
         cases.forEach { (typed, ok) ->
             vm.setUses(typed)
@@ -269,20 +269,20 @@ class SharingViewModelsTest {
         sharing.registry = sharing.registry.copy(tags = sharing.registry.tags + TagView("address") + TagView("drivers-license"))
         val vm = ruleVm()
         advanceUntilIdle()
-        vm.toggleTag("drivers-license")
-        vm.toggleTag("travel")
-        vm.setMatch(TagMatch.ALL)
+        vm.selectTag("travel")
+        // One tag per rule (owner decision 2026-10-09): choosing another replaces it.
+        vm.selectTag("drivers-license")
         vm.setMode(ShareMode.AUTO)
         vm.setMode(ShareMode.ASK)
         vm.setUses("3")
+        vm.setPerHour("5")
+        vm.setPerDay("20")
         vm.setIncludeExisting(false)
         vm.setExpiry(RuleExpiry.WEEK, now, ZoneOffset.UTC)
-        vm.toggleTag("travel")
-        vm.toggleTag("travel")
         vm.save()
         advanceUntilIdle()
         assertEquals(
-            """{"subject":{"connection_id":"c1"},"tags":["drivers-license","travel"],"match":"all","access":"read","mode":"ask","uses":3,"expires_at":"2026-10-16T10:00:00.000Z","include_existing":false}""",
+            """{"subject":{"connection_id":"c1"},"tags":["drivers-license"],"match":"any","access":"read","mode":"ask","uses":3,"per_hour":5,"per_day":20,"expires_at":"2026-10-16T10:00:00.000Z","include_existing":false}""",
             VaultJson.json.encodeToString(JsonObject.serializer(), SharingManager.ruleBody(sharing.saved.single(), dryRun = false)),
         )
         // Edit it: the end is kept unless changed; mode and uses change; the id and version go with it.
@@ -309,20 +309,23 @@ class SharingViewModelsTest {
         sharing.rulesStored += ShareRule("r1", 1, "c1", tags = listOf("medical"), mode = ShareMode.AUTO, included = listOf("i1"))
         sharing.rulesStored += ShareRule("r2", 1, "c1", tags = listOf("travel"), included = listOf("i5"))
         sharing.rulesStored += ShareRule("r3", 1, "c1", tags = listOf("money"), pending = listOf("i7"))
+        // A rule from before one tag per rule: it names "id" too.
+        sharing.rulesStored += ShareRule("r4", 1, "c1", tags = listOf("medical", "id"), match = TagMatch.ALL)
         sharing.rulesStored += ShareRule("r9", 1, "c2", tags = listOf("medical"), included = listOf("i1")) // another connection
+        sharing.registry = sharing.registry.copy(tags = sharing.registry.tags + TagView("id"))
         sharing.preview = RulePreview(listOf(RuleMatch("i5", "Passport", "identity_document", Sensitivity.DATA)), 1)
         val vm = ruleVm()
         advanceUntilIdle()
-        assertEquals(listOf("r1", "r2", "r3"), vm.uiState.value.rules.map { it.ruleId })
+        assertEquals(listOf("r1", "r2", "r3", "r4"), vm.uiState.value.rules.map { it.ruleId })
         assertTrue(vm.uiState.value.overlaps.isEmpty())
-        vm.toggleTag("medical")
+        vm.selectTag("id")
         advanceUntilIdle()
-        // r1 names the tag; r2 holds the matched item; r3 neither.
-        assertEquals(listOf("r1", "r2"), vm.uiState.value.overlaps.map { it.ruleId })
-        // Editing r1 itself: it is not its own overlap.
+        // r4 names the tag; r2 holds the matched item; r1 and r3 neither.
+        assertEquals(listOf("r2", "r4"), vm.uiState.value.overlaps.map { it.ruleId })
+        // Editing r1 itself: it is not its own overlap (r4 names its tag, r2 holds the item).
         val edit = ruleVm("r1")
         advanceUntilIdle()
-        assertEquals(listOf("r2"), edit.uiState.value.overlaps.map { it.ruleId })
+        assertEquals(listOf("r2", "r4"), edit.uiState.value.overlaps.map { it.ruleId })
     }
 
     @Test
@@ -331,15 +334,14 @@ class SharingViewModelsTest {
         val vm = ruleVm()
         advanceUntilIdle()
         assertNull(vm.uiState.value.preview)
-        vm.toggleTag("medical")
+        vm.selectTag("medical")
         vm.setMode(ShareMode.AUTO) // debounced: one dry run for both changes
         advanceUntilIdle()
         assertEquals(1, sharing.calls.count { it == "preview" })
         assertEquals(4, vm.uiState.value.preview?.total)
         assertFalse(vm.uiState.value.previewing)
-        vm.toggleTag("medical")
+        vm.selectTag("medical") // the same tag again changes nothing
         advanceUntilIdle()
-        assertNull(vm.uiState.value.preview) // no tag, no dry run
         assertEquals(1, sharing.calls.count { it == "preview" })
     }
 
@@ -349,7 +351,7 @@ class SharingViewModelsTest {
         repeat(RuleDraft.MAX_RULES_PER_SUBJECT) { sharing.rulesStored += ShareRule("f$it", 1, "c1", tags = listOf("medical")) }
         val vm = ruleVm()
         advanceUntilIdle()
-        vm.toggleTag("travel")
+        vm.selectTag("travel")
         assertTrue(vm.uiState.value.atRuleLimit)
         assertFalse(vm.uiState.value.canSave)
         vm.save()
@@ -365,7 +367,7 @@ class SharingViewModelsTest {
         sharing.fail["saveRule"] = VaultFailure(FailureKind.LIMIT, "limit", limit = VaultLimit("share_rules", 512))
         val again = ruleVm()
         advanceUntilIdle()
-        again.toggleTag("travel")
+        again.selectTag("travel")
         again.save()
         advanceUntilIdle()
         assertEquals(FailureKind.LIMIT, again.uiState.value.error)
@@ -441,5 +443,135 @@ class SharingViewModelsTest {
         assertEquals(listOf("c1", "insurance", "Your insurance card", "For the trip"), sharing.requests.single())
         assertNull(vm.uiState.value.ask)
         assertTrue(vm.uiState.value.asked)
+    }
+
+    // --- one tag per rule (owner decision 2026-10-09) and VAULT-MESSAGING 0.23.0 ---
+
+    @Test
+    fun aRuleSharesOneTagAndATagAlreadySharedOpensItsRule() = runTest {
+        sharing.rulesStored += ShareRule("r1", 1, "c1", tags = listOf("medical"))
+        sharing.rulesStored += ShareRule("r9", 1, "c2", tags = listOf("travel")) // another connection's
+        val vm = ruleVm()
+        advanceUntilIdle()
+        val s = vm.uiState.value
+        assertEquals(mapOf("medical" to "r1"), s.taken)
+        assertEquals(listOf("travel"), s.freeTags)
+        assertNull(s.tag)
+        assertFalse(s.canSave) // Save waits for a tag
+        vm.selectTag("medical") // already shared: the screen opens r1 instead
+        assertNull(vm.uiState.value.tag)
+        assertFalse(vm.uiState.value.dirty)
+        vm.selectTag("travel")
+        assertEquals(listOf("travel"), vm.uiState.value.draft.tags)
+        assertEquals(TagMatch.ANY, vm.uiState.value.draft.match)
+        assertTrue(vm.uiState.value.canSave)
+        // Its own rule's tag is free to its editor.
+        val edit = ruleVm("r1")
+        advanceUntilIdle()
+        assertTrue(edit.uiState.value.taken.isEmpty())
+        assertEquals("medical", edit.uiState.value.tag)
+    }
+
+    /** A rule naming several tags (made before one tag per rule) is shown read-only: it can be deleted, not changed. */
+    @Test
+    fun aMultiTagRuleIsReadOnlyAndCanBeDeleted() = runTest {
+        sharing.rulesStored += ShareRule("r2", 1, "c1", tags = listOf("medical", "travel"), match = TagMatch.ALL)
+        val vm = ruleVm("r2")
+        advanceUntilIdle()
+        val s = vm.uiState.value
+        assertTrue(s.readOnly)
+        assertFalse(s.canSave)
+        // Its tags do not block a single-tag rule of either: only a rule of exactly one tag does.
+        assertTrue(s.taken.isEmpty())
+        vm.setMode(ShareMode.AUTO)
+        vm.setUses("3")
+        vm.setExpiry(RuleExpiry.WEEK, now, ZoneOffset.UTC)
+        assertEquals(ShareMode.ASK, vm.uiState.value.draft.mode)
+        assertNull(vm.uiState.value.draft.uses)
+        assertNull(vm.uiState.value.draft.expiresAt)
+        vm.save()
+        advanceUntilIdle()
+        assertTrue("saveRule" !in sharing.calls)
+        vm.askDelete(true)
+        vm.delete()
+        advanceUntilIdle()
+        assertTrue("deleteRule" in sharing.calls)
+        assertTrue(vm.uiState.value.done)
+    }
+
+    /** 0.23.0 §10.12: `per_hour` 1–3,600 and `per_day` 1–86,400 on a connection rule, digits only, optional. */
+    @Test
+    fun perHourAndPerDayAreDigitsWithinTheSpecRanges() = runTest {
+        val vm = ruleVm()
+        advanceUntilIdle()
+        vm.selectTag("medical")
+        mapOf("" to true, "0" to false, "1" to true, "3600" to true, "3601" to false, "6a0" to true).forEach { (typed, ok) ->
+            vm.setPerHour(typed)
+            assertEquals(typed, ok, vm.uiState.value.perHourValid)
+            assertEquals(typed, ok, vm.uiState.value.canSave)
+        }
+        vm.setPerHour("")
+        mapOf("0" to false, "86400" to true, "86401" to false, "20" to true).forEach { (typed, ok) ->
+            vm.setPerDay(typed)
+            assertEquals(typed, ok, vm.uiState.value.perDayValid)
+        }
+        assertEquals(20, vm.uiState.value.draft.perDay)
+        assertNull(vm.uiState.value.draft.perHour)
+        vm.setPerHour("123456")
+        assertEquals("1234", vm.uiState.value.perHourText)
+        // An existing rule's limits are shown.
+        sharing.rulesStored += ShareRule("r1", 1, "c1", tags = listOf("travel"), perHour = 5, perDay = 20)
+        val edit = ruleVm("r1")
+        advanceUntilIdle()
+        assertEquals("5", edit.uiState.value.perHourText)
+        assertEquals("20", edit.uiState.value.perDayText)
+    }
+
+    /** "Save rule" in the top bar: leaving with changes asks first; nothing changed, nothing to discard. */
+    @Test
+    fun leavingWithChangesAsksToDiscard() = runTest {
+        sharing.rulesStored += ShareRule("r1", 1, "c1", tags = listOf("medical"))
+        val vm = ruleVm("r1")
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.dirty)
+        vm.setMode(ShareMode.AUTO)
+        assertTrue(vm.uiState.value.dirty)
+        vm.askDiscard(true)
+        assertTrue(vm.uiState.value.confirmDiscard)
+        vm.askDiscard(false)
+        vm.save()
+        advanceUntilIdle()
+        assertFalse(vm.uiState.value.dirty)
+        assertTrue(vm.uiState.value.done)
+    }
+
+    /** 0.23.0 §10.12: a `rate_limited` refusal says when the item can be fetched again. */
+    @Test
+    fun aRateLimitedFetchSaysWhenToTryAgain() = runTest {
+        sharing.received += GrantView("g6", "c1", GrantDirection.RECEIVED, "x2", "Card", "insurance", perHour = 5)
+        sharing.refusals["g6"] = "rate_limited"
+        sharing.retryAfter["g6"] = 720
+        val vm = SharedWithYouViewModel(SavedStateHandle(mapOf(SharedWithYouRoute.ARG to "c1")), sharing, social)
+        vm.now = { now }
+        advanceUntilIdle()
+        assertEquals(5, vm.uiState.value.received.single().perHour)
+        vm.fetch("g6")
+        advanceUntilIdle()
+        assertEquals("rate_limited", vm.uiState.value.refused["g6"])
+        assertEquals(now.plusSeconds(720), vm.uiState.value.retryAt["g6"])
+        // Rounded up to whole minutes, in hours from 90 minutes.
+        assertEquals(RetryIn.Scale.MINUTES to 12, RetryIn.of(720))
+        assertEquals(RetryIn.Scale.MINUTES to 1, RetryIn.of(1))
+        assertEquals(RetryIn.Scale.MINUTES to 1, RetryIn.of(0))
+        assertEquals(RetryIn.Scale.MINUTES to 2, RetryIn.of(61))
+        assertEquals(RetryIn.Scale.MINUTES to 89, RetryIn.of(89 * 60))
+        assertEquals(RetryIn.Scale.HOURS to 2, RetryIn.of(90 * 60))
+        assertEquals(RetryIn.Scale.HOURS to 24, RetryIn.of(86_400))
+        // Another refusal has no retry.
+        sharing.refusals["g6"] = "revoked"
+        sharing.retryAfter.clear()
+        vm.fetch("g6")
+        advanceUntilIdle()
+        assertNull(vm.uiState.value.retryAt["g6"])
     }
 }

@@ -65,6 +65,9 @@ data class ShareRule(
     val uses: Int? = null,
     val expiresAt: Instant? = null,
     val includeExisting: Boolean = true,
+    /** How often the subject may fetch the rule's items in total, per hour and per day (§10.12; 0.23.0 for connections). */
+    val perHour: Int? = null,
+    val perDay: Int? = null,
     val included: List<String> = emptyList(),
     val pending: List<String> = emptyList(),
     val declined: List<String> = emptyList(),
@@ -76,6 +79,9 @@ data class ShareRule(
         TagMatch.ANY -> tags.any { it in itemTags }
         TagMatch.ALL -> tags.all { it in itemTags }
     }
+
+    /** One tag per rule (owner decision 2026-10-09): a rule naming several is shown, and can only be deleted. */
+    val multiTag: Boolean get() = tags.size > 1
 }
 
 /** A share rule as the member edits it; [ruleId] null for a new one. */
@@ -89,11 +95,18 @@ data class RuleDraft(
     val includeExisting: Boolean = true,
     val ruleId: String? = null,
     val version: Long? = null,
+    /** §10.12 (0.23.0): optional for a connection rule, absent means no limit. */
+    val perHour: Int? = null,
+    val perDay: Int? = null,
 ) {
     companion object {
         /** A rule names 1–16 tags, none reserved (§10.12). */
         const val MAX_TAGS = 16
         const val MAX_USES = 10_000
+
+        /** §10.12 (0.23.0): `per_hour` 1–3,600 and `per_day` 1–86,400, as for agents. */
+        const val MAX_PER_HOUR = 3_600
+        const val MAX_PER_DAY = 86_400
 
         /** At most 3,650 days ahead (§10.12). */
         const val MAX_EXPIRY_DAYS = 3_650L
@@ -105,20 +118,22 @@ data class RuleDraft(
 
         fun of(r: ShareRule): RuleDraft = RuleDraft(
             r.connectionId ?: "", r.tags, r.match, r.mode, r.uses, r.expiresAt, r.includeExisting, r.ruleId, r.version,
+            r.perHour, r.perDay,
         )
     }
 
     /** The rule's checks before it is sent (§10.12). */
     fun valid(now: Instant): Boolean = tags.size in 1..MAX_TAGS && tags.none { it.startsWith("@") } &&
         (uses == null || uses in 1..MAX_USES) &&
+        (perHour == null || perHour in 1..MAX_PER_HOUR) && (perDay == null || perDay in 1..MAX_PER_DAY) &&
         (expiresAt == null || (expiresAt.isAfter(now) && expiresAt.isBefore(now.plusSeconds(MAX_EXPIRY_DAYS * DAY_SECONDS))))
 }
 
 /**
- * Where share rules for one subject cover the same tags or items (§10.12). The vault keeps no precedence between them:
- * each rule matches, asks about and includes items on its own (one inclusion state and one grant per rule and item), so
- * an item covered by several rules is readable while any of them includes it — an `auto` rule shares it even when an
- * `ask` rule for the same connection would ask, and the most permissive uses and end apply in effect.
+ * Where share rules for one subject cover the same tags or items (§10.12 Overlapping rules, 0.23.0): `ask` wins. An
+ * item that any covering rule of the subject asks about is shared with that subject only after the member approves
+ * it, even when another covering rule is `auto`; one answer per item and subject; removing an `ask` rule never shares
+ * anything; and the strictest limits apply (a fetch counts in every including rule's windows and uses).
  */
 object RuleOverlaps {
     /** Each rule's id → the other rules that name one of its tags or hold one of its items (included or pending). */
@@ -140,12 +155,66 @@ object RuleOverlaps {
     fun sharedItems(itemIds: Collection<String>, rule: ShareRule): Set<String> =
         itemIds.filter { it in rule.included || it in rule.pending }.toSet()
 
+    /** Whether an `auto` rule overlapping [others] asks first for the items an `ask` one among them covers. */
+    fun asksFirst(mode: ShareMode, others: List<ShareRule>): List<ShareRule> =
+        if (mode == ShareMode.AUTO) others.filter { it.mode == ShareMode.ASK } else emptyList()
+
     private fun overlap(tags: List<String>, items: Collection<String>, o: ShareRule): Boolean =
         tags.any { it in o.tags } || items.any { it in o.included || it in o.pending }
 }
 
+/**
+ * How a rule is named to the member (§10.12, owner's review of #181): rules have no names, so a rule is its tags in
+ * the rule's order, joined by " + " for `match: all` and " or " for `any`. Two rules of one subject that would read
+ * the same are told apart by their mode, then their end ([Qualifier]).
+ */
+object RuleNames {
+    /** The words between a rule's tags. */
+    const val ALL_JOIN = " + "
+    const val ANY_JOIN = " or "
+
+    /** What tells two rules that read the same apart. */
+    sealed interface Qualifier {
+        data class Mode(val mode: ShareMode) : Qualifier
+
+        data class Ends(val at: Instant?) : Qualifier
+    }
+
+    data class Name(val text: String, val qualifier: Qualifier? = null)
+
+    /** [tags] as one name: "medical", "medical + id" (all), "medical or id" (any). */
+    fun text(tags: List<String>, match: TagMatch): String = tags.joinToString(if (match == TagMatch.ALL) ALL_JOIN else ANY_JOIN)
+
+    fun text(r: ShareRule): String = text(r.tags, r.match)
+
+    /** Every rule's name among [rules] (one subject), with what differs where two would read the same. */
+    fun of(rules: List<ShareRule>): Map<String, Name> = rules.groupBy { text(it) }.flatMap { (text, same) ->
+        if (same.size == 1) return@flatMap listOf(same[0].ruleId to Name(text))
+        val modes = same.map { it.mode }.distinct().size == same.size
+        same.map { r -> r.ruleId to Name(text, if (modes) Qualifier.Mode(r.mode) else Qualifier.Ends(r.expiresAt)) }
+    }.toMap()
+}
+
 /** An item a rule matches, from `share.rule.set{dry_run}` (§10.12); [state] for a replaced rule. */
-data class RuleMatch(val itemId: String, val name: String, val category: String, val sensitivity: Sensitivity, val state: String? = null)
+data class RuleMatch(
+    val itemId: String,
+    val name: String,
+    val category: String,
+    val sensitivity: Sensitivity,
+    val state: String? = null,
+    /**
+     * 0.23.0: what saving would do to the item in this rule, [OUTCOME_INCLUDE] (shared at once) or [OUTCOME_ASK]
+     * (the member is asked); null when its state would not change, or from an older vault.
+     */
+    val outcome: String? = null,
+    /** 0.23.0: an `auto` rule would ask because this `ask` rule of the same subject holds the item. */
+    val askRuleId: String? = null,
+) {
+    companion object {
+        const val OUTCOME_INCLUDE = "include"
+        const val OUTCOME_ASK = "ask"
+    }
+}
 
 data class RulePreview(val matches: List<RuleMatch>, val total: Int)
 
@@ -174,6 +243,12 @@ data class GrantView(
      * §10.12; not refreshed): what it holds before it is fetched. Empty for a given grant and from an older vault.
      */
     val labels: List<FieldLabel> = emptyList(),
+    /**
+     * The rate limits of the rule that gave it (`limits`, 0.23.0 §10.12): the rule's current ones for a given grant,
+     * as of issue for a received one; null when not limited.
+     */
+    val perHour: Int? = null,
+    val perDay: Int? = null,
 ) {
     val active: Boolean get() = state == STATE_ACTIVE
 
@@ -201,7 +276,14 @@ data class GrantAsk(val requestId: String, val connectionId: String, val entries
 data class ShareSubject(val connectionId: String? = null, val agentId: String? = null)
 
 /** A rule an item would gain (§10.7 Dry run): asked about (`ask`) or included at once (`auto`); [usable] for a critical item. */
-data class EffectShare(val ruleId: String, val subject: ShareSubject, val mode: ShareMode, val usable: Boolean = false)
+data class EffectShare(
+    val ruleId: String,
+    val subject: ShareSubject,
+    val mode: ShareMode,
+    val usable: Boolean = false,
+    /** 0.23.0: an `auto` rule that asks because this `ask` rule of the same subject holds the item (`ask` wins). */
+    val askRuleId: String? = null,
+)
 
 /** A rule an item would leave, where it is [state] `pending` or `included` (§10.7 Dry run). */
 data class EffectWithdrawal(val ruleId: String, val subject: ShareSubject, val state: String)
@@ -229,9 +311,16 @@ data class SharedContent(
     override fun toString(): String = "SharedContent($itemId)"
 }
 
-/** A fetch's outcome: the content, or the connection's vault's refusal (`revoked`, `expired`, `exhausted`, `unavailable`, `not_found`). */
+/**
+ * A fetch's outcome: the content, or the connection's vault's refusal (`revoked`, `expired`, `exhausted`,
+ * `unavailable`, `not_found`; 0.23.0 `rate_limited` with [Refused.retryAfter], whole seconds).
+ */
 sealed interface FetchOutcome {
     data class Shared(val content: SharedContent) : FetchOutcome
 
-    data class Refused(val reason: String) : FetchOutcome
+    data class Refused(val reason: String, val retryAfter: Long? = null) : FetchOutcome
+
+    companion object {
+        const val RATE_LIMITED = "rate_limited"
+    }
 }

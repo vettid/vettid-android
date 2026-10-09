@@ -17,7 +17,9 @@ import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
@@ -186,9 +188,12 @@ class ConnectionSharingCardsTest {
         rule.onNodeWithTag("sharing_rule_r3").assertTextContains("Items with all of these tags", substring = true)
         rule.onNodeWithTag("sharing_rule_r3").assertTextContains("up to 1 fetch of each item", substring = true)
         rule.onNodeWithTag("sharing_rule_r3").assertTextContains("2 items shared now", substring = true)
-        // Overlaps: the same tag and item in r2 and r3; none for r1.
-        rule.onNodeWithTag("sharing_rule_also_r2", useUnmergedTree = true).assertTextEquals("Also covered by: drivers-license, travel")
-        rule.onNodeWithTag("sharing_rule_also_r3", useUnmergedTree = true).assertTextEquals("Also covered by: drivers-license")
+        // Overlaps (0.23.0: `ask` wins, rules named by their tags): the same tag and item in r2 and r3; none for r1.
+        rule.onNodeWithTag("sharing_rule_also_r2", useUnmergedTree = true).assertTextEquals("Overlaps your “drivers-license + travel” rule")
+        rule.onNodeWithTag("sharing_rule_also_r3", useUnmergedTree = true).assertTextEquals("Asks you first for the items your “drivers-license” rule also covers")
+        // #95's TagChip: each tag in its own colour.
+        rule.onNodeWithTag("tag_chip_address", useUnmergedTree = true).assertExists()
+        rule.onAllNodesWithTag("tag_chip_drivers-license", useUnmergedTree = true).assertCountEquals(2) // r2 and r3
         rule.onNodeWithTag("sharing_rule_also_r1", useUnmergedTree = true).assertDoesNotExist()
         rule.onNodeWithTag("sharing_out_share").assertTextEquals("Add a rule").assertIsEnabled()
         rule.onNodeWithTag("sharing_out_limit").assertDoesNotExist()
@@ -212,7 +217,7 @@ class ConnectionSharingCardsTest {
         rule.onNodeWithTag("sharing_rule_delete_r2").assertContentDescriptionEquals("Delete this rule")
         rule.onNodeWithTag("sharing_rule_delete_r2").performSemanticsAction(SemanticsActions.OnClick)
         rule.onNodeWithText("Delete this sharing rule?").assertExists()
-        rule.onNodeWithText("$ada1 can no longer fetch the items this rule shared. Items another rule shares stay shared.").assertExists()
+        rule.onNodeWithText("$ada1 can no longer fetch the items this rule shared. Items another rule shares stay shared, and nothing becomes shared because this rule is gone.").assertExists()
         rule.onNodeWithTag("confirm_button").performSemanticsAction(SemanticsActions.OnClick)
         assertEquals(listOf("open:r2", "ask:r2", "delete"), asked)
     }
@@ -260,5 +265,92 @@ class ConnectionSharingCardsTest {
         assertTrue(vm.uiState.value.sharing.failed)
         assertEquals(null, vm.uiState.value.error)
         assertEquals("c1", vm.uiState.value.connection?.id)
+    }
+
+    // --- VAULT-MESSAGING 0.23.0 ---
+
+    @Test
+    fun aRulesRateLimitsAndAReceivedGrantsAreShown() {
+        val limited = ShareRule("r7", 1, "c1", tags = listOf("medical"), perHour = 5, perDay = 20)
+        detail(ada, DetailSharing(listOf(limited), received = listOf(inGrant.copy(perHour = 1, perDay = 3)), loaded = true))
+        rule.onNodeWithTag("sharing_rule_r7").assertTextContains("up to 5 an hour · up to 20 a day · no end date", substring = true)
+        rule.onNodeWithTag("sharing_received_g3").assertTextContains("up to 1 time an hour · up to 3 times a day", substring = true)
+    }
+
+    /** §10.4.1: the asks card follows the connection's state, with the action that ends each; none from an older vault. */
+    @Test
+    fun theAsksCardShowsMutedPausedAndTheActionsThatEndThem() {
+        val asked = mutableListOf<String>()
+        var c by mutableStateOf(ada)
+        rule.setContent {
+            ConnectionDetailScreen(
+                ConnectionDetailUiState(c.id, c, null, loading = false, sharing = DetailSharing(loaded = true)),
+                DetailActions(onMuteAsks = { asked += "mute:$it" }, onResumeAsks = { asked += "resume" }),
+            )
+        }
+        rule.onNodeWithTag("asks_card").assertDoesNotExist() // a vault before 0.23.0
+        c = ada.copy(asks = com.vettid.core.data.social.AskState())
+        rule.onNodeWithTag("asks_normal", useUnmergedTree = true).assertExists()
+        rule.onNodeWithTag("asks_resume").assertDoesNotExist()
+        rule.onNodeWithTag("asks_mute").performSemanticsAction(SemanticsActions.OnClick)
+        c = ada.copy(asks = com.vettid.core.data.social.AskState(muted = true, paused = true, cooldowns = 2))
+        rule.onNodeWithTag("asks_paused", useUnmergedTree = true).assertExists()
+        rule.onNodeWithTag("asks_muted", useUnmergedTree = true).assertExists()
+        rule.onNodeWithText("$ada1’s requests are paused after you declined several", substring = true).assertExists()
+        rule.onNodeWithTag("asks_resume").performSemanticsAction(SemanticsActions.OnClick)
+        rule.onNodeWithTag("asks_unmute").performSemanticsAction(SemanticsActions.OnClick)
+        c = ada.copy(asks = com.vettid.core.data.social.AskState(cooldowns = 2))
+        rule.onNodeWithTag("asks_cooldowns", useUnmergedTree = true).assertTextEquals("2 requests you declined are refused for 7 days.")
+        rule.onNodeWithTag("asks_allow_again").performSemanticsAction(SemanticsActions.OnClick)
+        assertEquals(listOf("mute:true", "resume", "mute:false", "resume"), asked)
+    }
+
+    @Test
+    fun theAsksStateMachineOffersWhatEndsEachState() {
+        assertEquals(null, AsksView.of(null))
+        assertEquals(listOf(AsksAction.MUTE), AsksView.of(com.vettid.core.data.social.AskState())!!.actions)
+        assertEquals(listOf(AsksAction.UNMUTE), AsksView.of(com.vettid.core.data.social.AskState(muted = true))!!.actions)
+        assertEquals(listOf(AsksAction.RESUME, AsksAction.MUTE), AsksView.of(com.vettid.core.data.social.AskState(paused = true, cooldowns = 3))!!.actions)
+        assertEquals(listOf(AsksAction.RESUME, AsksAction.UNMUTE), AsksView.of(com.vettid.core.data.social.AskState(muted = true, paused = true))!!.actions)
+        assertEquals(listOf(AsksAction.ALLOW_AGAIN, AsksAction.MUTE), AsksView.of(com.vettid.core.data.social.AskState(cooldowns = 1))!!.actions)
+        assertTrue(AsksView.of(com.vettid.core.data.social.AskState(paused = true))!!.prominent)
+        assertFalse(AsksView.of(com.vettid.core.data.social.AskState(cooldowns = 1))!!.prominent)
+    }
+
+    /** `connection.asks.mute` / `.resume` from the detail: unmuting keeps a pause, resuming keeps a mute. */
+    @Test
+    fun muteAndResumeGoToTheVaultAndShowAtOnce() = runTest {
+        val social = FakeSocial().apply {
+            seed(listOf(FakeSocial.connection("c1", "Ada").copy(asks = com.vettid.core.data.social.AskState(paused = true, cooldowns = 3))))
+        }
+        val vm = ConnectionDetailViewModel(SavedStateHandle(mapOf(ConnectionDetailRoute.ARG to "c1")), social, FakeSharing())
+        advanceUntilIdle()
+        vm.muteAsks(true)
+        advanceUntilIdle()
+        assertEquals(com.vettid.core.data.social.AskState(muted = true, paused = true, cooldowns = 3), vm.uiState.value.connection?.asks)
+        vm.muteAsks(false)
+        advanceUntilIdle()
+        assertEquals(true, vm.uiState.value.connection?.asks?.paused)
+        vm.muteAsks(true)
+        vm.resumeAsks()
+        advanceUntilIdle()
+        assertEquals(com.vettid.core.data.social.AskState(muted = true), vm.uiState.value.connection?.asks)
+        assertEquals(listOf("asksMute:c1:true", "asksMute:c1:false", "asksMute:c1:true", "asksResume:c1"), social.calls.filter { it.startsWith("asks") })
+        social.fail["asksResume:c1"] = VaultFailure(FailureKind.NETWORK)
+        vm.resumeAsks()
+        advanceUntilIdle()
+        assertEquals(FailureKind.NETWORK, vm.uiState.value.error)
+    }
+
+    /** §10.4.1: the member's own ask that was refused reads "Not accepted", never "declined by <First>". */
+    @Test
+    fun aRefusedAuthenticationReadsNotAccepted() {
+        rule.setContent {
+            ConnectionDetailScreen(
+                ConnectionDetailUiState("c1", ada, com.vettid.core.data.social.AuthenticationState("c1", lastResult = "denied"), loading = false, sharing = DetailSharing(loaded = true)),
+                DetailActions(),
+            )
+        }
+        rule.onNodeWithTag("auth_status").assertTextEquals("Not accepted.")
     }
 }

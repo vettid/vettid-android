@@ -540,6 +540,8 @@ private fun impactText(i: ShareImpact): String {
     return when {
         i.withdrawn -> stringResource(R.string.items_impact_withdrawn, who)
         i.usableOnly -> stringResource(R.string.items_impact_usable, who)
+        // 0.23.0: `ask` wins — an `auto` rule asks first while an `ask` rule of the same connection holds the item.
+        i.askRule != null -> stringResource(R.string.items_impact_ask_because, ruleName(i.askRule), who)
         i.mode == com.vettid.core.data.items.ShareMode.AUTO -> stringResource(R.string.items_impact_auto, who)
         else -> stringResource(R.string.items_impact_ask, who)
     }

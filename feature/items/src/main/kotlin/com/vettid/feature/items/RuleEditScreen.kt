@@ -1,6 +1,25 @@
 package com.vettid.feature.items
 
 import android.text.format.DateFormat
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material3.Icon
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.text.font.FontWeight
+import com.vettid.core.data.items.RuleMatch
+import com.vettid.core.data.items.RulePreview
+import com.vettid.core.ui.components.TagChip
+import com.vettid.core.ui.components.TopBarTextAction
+import com.vettid.core.ui.theme.VettIdShape
+import com.vettid.core.ui.theme.tagColor
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -58,7 +77,6 @@ import com.vettid.core.ui.components.DetailCard
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
-import com.vettid.core.ui.components.TagLabel
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.theme.Spacing
 import java.time.Instant
@@ -72,10 +90,18 @@ internal fun RuleEditRouteContent(host: ItemsHost) {
     RuleEditScreen(
         state,
         RuleEditActions(
-            onBack = host.onBack, onTag = vm::toggleTag, onMatch = vm::setMatch, onMode = vm::setMode,
-            onIncludeExisting = vm::setIncludeExisting, onUses = vm::setUses, onExpiry = { vm.setExpiry(it) },
-            onEndDate = vm::pickEndDate, onEndTime = { h, m -> vm.pickEndTime(h, m) }, onCancelEnd = vm::cancelEndPicker,
-            onSave = vm::save, onAskDelete = vm::askDelete, onDelete = vm::delete, onDismissError = vm::dismissError,
+            onBack = host.onBack, onTag = vm::selectTag, onMode = vm::setMode,
+            onIncludeExisting = vm::setIncludeExisting, onUses = vm::setUses, onPerHour = vm::setPerHour, onPerDay = vm::setPerDay,
+            onExpiry = { vm.setExpiry(it) }, onEndDate = vm::pickEndDate, onEndTime = { h, m -> vm.pickEndTime(h, m) },
+            onCancelEnd = vm::cancelEndPicker, onSave = vm::save, onAskDelete = vm::askDelete, onDelete = vm::delete,
+            onDismissError = vm::dismissError,
+            onOpenRule = { host.navigate(RuleEditRoute(state.draft.connectionId, it)) },
+            onAskDiscard = { vm.askDiscard(true) },
+            onDiscard = {
+                vm.askDiscard(false)
+                host.onBack()
+            },
+            onKeepEditing = { vm.askDiscard(false) },
         ),
     )
 }
@@ -83,11 +109,14 @@ internal fun RuleEditRouteContent(host: ItemsHost) {
 /** What the rule editor can ask for. */
 data class RuleEditActions(
     val onBack: () -> Unit = {},
+    /** Chooses the rule's one tag (owner decision 2026-10-09). */
     val onTag: (String) -> Unit = {},
-    val onMatch: (TagMatch) -> Unit = {},
     val onMode: (ShareMode) -> Unit = {},
     val onIncludeExisting: (Boolean) -> Unit = {},
     val onUses: (String) -> Unit = {},
+    /** 0.23.0 §10.12: fetches per hour and per day of all the rule's items together. */
+    val onPerHour: (String) -> Unit = {},
+    val onPerDay: (String) -> Unit = {},
     val onExpiry: (RuleExpiry) -> Unit = {},
     /** The custom end's day (UTC midnight millis, as the date picker gives it). */
     val onEndDate: (Long) -> Unit = {},
@@ -98,41 +127,70 @@ data class RuleEditActions(
     val onAskDelete: (Boolean) -> Unit = {},
     val onDelete: () -> Unit = {},
     val onDismissError: () -> Unit = {},
+    /** "Already shared — edit its rule": the rule of this connection that shares that tag. */
+    val onOpenRule: (String) -> Unit = {},
+    /** Back or up with changes: "Discard changes to this rule?". */
+    val onAskDiscard: () -> Unit = {},
+    val onDiscard: () -> Unit = {},
+    val onKeepEditing: () -> Unit = {},
 )
 
 /**
- * One share rule (§10.12): which tags, any or all of them, "Ask me each time" (the default) or "Share automatically",
- * fetches of each item, an end (presets, or "Custom…": a date and a time in the member's zone), and whether the items
- * that already match count. The connection's other rules covering the same tags or items are shown ("Also covered
- * by"), with how they combine; the vault's dry run lists what it matches before it is saved; critical items are never
- * readable, only usable.
+ * One share rule (§10.12): the one tag it shares (owner decision 2026-10-09; the chosen chip in its colour with a gold
+ * outline and a check mark, a tag another rule already shares opens that rule), "Ask me each time" (the default) or
+ * "Share automatically", fetches of each item and (0.23.0) per hour and per day of all its items, an end (presets, or
+ * "Custom…": a date and a time in the member's zone), and whether the items that already match count. The
+ * connection's other rules covering the same items are named by their tags, with the 0.23.0 rule: asking wins. The
+ * vault's dry run lists what it matches and what saving does to each item. "Save rule" is in the top bar (as the item
+ * editor's "Save item"); leaving with changes asks first. A rule that names several tags is shown read-only and can be
+ * deleted.
  */
 @Composable
 fun RuleEditScreen(state: RuleEditUiState, actions: RuleEditActions, modifier: Modifier = Modifier) {
     val name = sharingNameOf(state.connectionName)
+    val leave = { if (state.dirty) actions.onAskDiscard() else actions.onBack() }
+    BackHandler(enabled = state.dirty && !state.confirmDiscard) { actions.onAskDiscard() }
     FormScaffold(
         title = stringResource(if (state.isNew) R.string.items_rule_new_title else R.string.items_rule_edit_title),
         body = stringResource(R.string.items_rule_body, name),
-        primaryLabel = stringResource(R.string.items_rule_save),
-        onPrimary = actions.onSave,
-        primaryEnabled = state.canSave,
-        busy = state.busy,
-        onBack = actions.onBack,
-        secondaryLabel = if (state.isNew) null else stringResource(R.string.items_rule_delete),
-        onSecondary = { actions.onAskDelete(true) },
+        primaryLabel = null,
+        onPrimary = {},
+        onBack = leave,
         modifier = modifier.testTag("rule_edit"),
         header = { HeaderGlyph(Icons.Outlined.Share) },
+        topActions = {
+            if (!state.readOnly) {
+                TopBarTextAction(
+                    label = stringResource(R.string.items_rule_save),
+                    onClick = actions.onSave,
+                    enabled = state.canSave,
+                    busy = state.busy,
+                    modifier = Modifier.testTag("rule_save"),
+                )
+            }
+        },
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(Spacing.m)) {
             SharingErrorNotice(state.error, state.limit, actions.onDismissError)
             if (state.atRuleLimit) RuleLimitNotice()
-            TagsSection(state, actions)
-            ModeSection(state.draft.mode, actions.onMode)
-            LimitsSection(state, actions.onUses)
-            EndsSection(state, actions.onExpiry)
-            ExistingSwitch(state.draft.includeExisting, actions.onIncludeExisting)
+            if (state.readOnly) {
+                ReadOnlyRule(state)
+            } else {
+                TagsSection(state, name, actions)
+                ModeSection(state.draft.mode, actions.onMode)
+                LimitsSection(state, actions)
+                EndsSection(state, actions.onExpiry)
+                ExistingSwitch(state.draft.includeExisting, actions.onIncludeExisting)
+            }
             if (state.overlaps.isNotEmpty()) OverlapCard(state)
             Preview(state)
+            if (!state.isNew) {
+                TextButton(
+                    onClick = { actions.onAskDelete(true) },
+                    enabled = !state.busy,
+                    modifier = Modifier.fillMaxWidth().heightIn(min = Spacing.touchTarget).testTag("rule_delete"),
+                ) { Text(stringResource(R.string.items_rule_delete), color = MaterialTheme.colorScheme.error) }
+            }
         }
     }
     RuleEditDialogs(state, name, actions)
@@ -151,26 +209,111 @@ internal fun RuleLimitNotice(modifier: Modifier = Modifier) {
 
 internal const val RULE_LIMIT_NAME = "share_rules_subject"
 
+/** "Select the tag to share": one tag per rule; tags another rule of this connection shares open that rule. */
 @Composable
-private fun TagsSection(state: RuleEditUiState, actions: RuleEditActions) {
-    val d = state.draft
-    Text(stringResource(R.string.items_rule_tags), style = MaterialTheme.typography.titleSmall)
+private fun TagsSection(state: RuleEditUiState, name: String, actions: RuleEditActions) {
+    Text(stringResource(R.string.items_rule_tag_title), style = MaterialTheme.typography.titleSmall)
+    Text(
+        stringResource(R.string.items_rule_tag_hint, name),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
     if (state.tags.isEmpty() && !state.loading) {
         Text(stringResource(R.string.items_rule_no_tags), color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.s), modifier = Modifier.testTag("rule_tags")) {
-        state.tags.forEach { t ->
-            FilterChip(
-                selected = t in d.tags,
-                onClick = { actions.onTag(t) },
-                label = { Text(t) },
-                modifier = Modifier.testTag("rule_tag_$t"),
-            )
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(Spacing.s),
+        verticalArrangement = Arrangement.spacedBy(Spacing.s),
+        modifier = Modifier.selectableGroup().testTag("rule_tags"),
+    ) {
+        state.freeTags.forEach { t -> TagChoice(t, selected = t == state.tag) { actions.onTag(t) } }
+    }
+    val taken = state.taken.filterKeys { it in state.tags }
+    if (taken.isNotEmpty()) {
+        Text(stringResource(R.string.items_rule_tag_taken_title), style = MaterialTheme.typography.labelLarge)
+        taken.forEach { (t, ruleId) ->
+            val cd = stringResource(R.string.items_rule_tag_taken_cd, t)
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = Spacing.touchTarget)
+                    .clickable(role = Role.Button) { actions.onOpenRule(ruleId) }
+                    .semantics(mergeDescendants = true) { contentDescription = cd }
+                    .testTag("rule_tag_taken_$t"),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TagChip(t)
+                Spacer(Modifier.width(Spacing.m))
+                Text(
+                    stringResource(R.string.items_rule_tag_taken),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
         }
     }
-    if (d.tags.size > 1) {
-        Choice(R.string.items_rule_match_any, d.match == TagMatch.ANY, "rule_match_any") { actions.onMatch(TagMatch.ANY) }
-        Choice(R.string.items_rule_match_all, d.match == TagMatch.ALL, "rule_match_all") { actions.onMatch(TagMatch.ALL) }
+}
+
+/**
+ * A tag to choose: a pill in the tag's own colour ([tagColor]); chosen, it gets a gold outline and a check mark
+ * (owner request 2026-10-09). A radio choice for accessibility, at least 48dp tall to touch.
+ */
+@Composable
+internal fun TagChoice(tag: String, selected: Boolean, onClick: () -> Unit) {
+    val c = tagColor(tag)
+    Box(
+        Modifier
+            .heightIn(min = Spacing.touchTarget)
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
+            .testTag("rule_tag_$tag"),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            Modifier
+                .clip(VettIdShape.pill)
+                .background(c.container)
+                .then(if (selected) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, VettIdShape.pill) else Modifier)
+                .padding(horizontal = Spacing.m, vertical = Spacing.xs + Spacing.xxs),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (selected) {
+                Icon(
+                    Icons.Outlined.Check,
+                    contentDescription = null,
+                    tint = c.onContainer,
+                    modifier = Modifier.size(16.dp).testTag("rule_tag_check_$tag"),
+                )
+                Spacer(Modifier.width(Spacing.xs))
+            }
+            Text(tag, style = MaterialTheme.typography.labelLarge, color = c.onContainer)
+        }
+    }
+}
+
+/** A rule that names several tags (before one tag per rule): what it is, and that it can only be deleted. */
+@Composable
+private fun ReadOnlyRule(state: RuleEditUiState) {
+    NoticeCard(
+        NoticeKind.INFO,
+        stringResource(R.string.items_rule_multi_title),
+        stringResource(R.string.items_rule_multi_body),
+        modifier = Modifier.testTag("rule_read_only"),
+    )
+    val r = state.rules.firstOrNull { it.ruleId == state.draft.ruleId }
+    DetailCard {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.xs), verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
+            state.draft.tags.forEach { TagChip(it) }
+        }
+        Spacer(Modifier.height(Spacing.s))
+        Text(
+            stringResource(
+                if (state.draft.match == TagMatch.ALL) R.string.items_rule_match_all_short else R.string.items_rule_match_any_short,
+            ),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(ruleModeText(state.draft.mode), style = MaterialTheme.typography.bodyMedium)
+        if (r != null) Text(ruleLimitsText(r), style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -185,19 +328,39 @@ private fun ModeSection(mode: ShareMode, onMode: (ShareMode) -> Unit) {
     }
 }
 
-/** §10.12 `uses` (1–10,000) for a connection rule; `per_hour` and `per_day` are for agent rules only. */
+/**
+ * §10.12 `uses` (1–10,000, fetches of each item) and, since 0.23.0, `per_hour` (1–3,600) and `per_day` (1–86,400) for
+ * a connection rule: the connection's fetches of all the rule's items together; each optional.
+ */
 @Composable
-private fun LimitsSection(state: RuleEditUiState, onUses: (String) -> Unit) {
+private fun LimitsSection(state: RuleEditUiState, actions: RuleEditActions) {
     Text(stringResource(R.string.items_rule_limits), style = MaterialTheme.typography.titleSmall)
+    NumberField(
+        state.usesText, actions.onUses, R.string.items_rule_uses, state.usesValid,
+        R.string.items_rule_uses_note, R.string.items_rule_uses_bad, "rule_uses",
+    )
+    NumberField(
+        state.perHourText, actions.onPerHour, R.string.items_rule_per_hour, state.perHourValid,
+        R.string.items_rule_per_note, R.string.items_rule_per_hour_bad, "rule_per_hour",
+    )
+    NumberField(
+        state.perDayText, actions.onPerDay, R.string.items_rule_per_day, state.perDayValid,
+        R.string.items_rule_per_note, R.string.items_rule_per_day_bad, "rule_per_day",
+    )
+}
+
+@Composable
+@Suppress("LongParameterList")
+private fun NumberField(value: String, onChange: (String) -> Unit, label: Int, valid: Boolean, note: Int, bad: Int, tag: String) {
     OutlinedTextField(
-        value = state.usesText,
-        onValueChange = onUses,
-        label = { Text(stringResource(R.string.items_rule_uses)) },
-        supportingText = { Text(stringResource(if (state.usesValid) R.string.items_rule_uses_note else R.string.items_rule_uses_bad)) },
-        isError = !state.usesValid,
+        value = value,
+        onValueChange = onChange,
+        label = { Text(stringResource(label)) },
+        supportingText = { Text(stringResource(if (valid) note else bad)) },
+        isError = !valid,
         singleLine = true,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        modifier = Modifier.fillMaxWidth().testTag("rule_uses"),
+        modifier = Modifier.fillMaxWidth().testTag(tag),
     )
 }
 
@@ -265,9 +428,9 @@ private fun expiryLabel(e: RuleExpiry, at: Instant?): String = when (e) {
 }
 
 /**
- * "Also covered by": the connection's other rules naming one of these tags or holding one of the matched items. The
- * vault keeps no precedence between them (§10.12): each rule asks about and shares items on its own, so an item is
- * readable while any rule shares it.
+ * The connection's other rules covering the same tags or matched items, named by their tags (§10.12, owner's review
+ * of #181), with the 0.23.0 rule: asking wins (an item any of them asks about is shared only after the member
+ * approves it), one answer counts for all of them, and the strictest fetch limits apply.
  */
 @Composable
 private fun OverlapCard(state: RuleEditUiState) {
@@ -277,7 +440,7 @@ private fun OverlapCard(state: RuleEditUiState) {
         Spacer(Modifier.height(Spacing.xs))
         state.overlaps.forEach { o ->
             Column(Modifier.padding(vertical = Spacing.xs).semantics(mergeDescendants = true) {}.testTag("rule_overlap_${o.ruleId}")) {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) { o.tags.forEach { TagLabel(it) } }
+                Text(ruleName(o, state.names), style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
                 val common = RuleOverlaps.sharedTags(state.draft.tags, o)
                 val items = RuleOverlaps.sharedItems(matched, o).size
                 Text(
@@ -294,6 +457,7 @@ private fun OverlapCard(state: RuleEditUiState) {
             stringResource(R.string.items_rule_overlap_note),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.testTag("rule_overlap_note"),
         )
     }
 }
@@ -319,7 +483,11 @@ private fun Choice(label: Int, selected: Boolean, tag: String, note: Int? = null
     }
 }
 
-/** The dry run (§10.12): how many items the rule matches and which; critical ones are only usable. */
+/**
+ * The dry run (§10.12): how many items the rule matches and which; critical ones are only usable. Since 0.23.0 each
+ * item says what saving does to it (`outcome`): shared at once, or asked, and why ("Asks you first because your
+ * “medical” rule covers it", `ask_rule_id`); an item whose state does not change says what it is now.
+ */
 @Composable
 private fun Preview(state: RuleEditUiState) {
     val p = state.preview
@@ -330,19 +498,10 @@ private fun Preview(state: RuleEditUiState) {
             state.previewing -> CircularProgressIndicator(Modifier.heightIn(max = 24.dp), color = MaterialTheme.colorScheme.primary)
             p == null -> Text(stringResource(R.string.items_rule_preview_none), color = MaterialTheme.colorScheme.onSurfaceVariant)
             else -> {
-                val mode = state.draft.mode
-                Text(
-                    pluralStringResource(
-                        if (mode == ShareMode.ASK) R.plurals.items_rule_preview_ask else R.plurals.items_rule_preview_auto,
-                        p.total,
-                        p.total,
-                    ),
-                    modifier = Modifier.testTag("rule_preview_total"),
-                )
+                Text(previewTotal(p, state.draft.mode), modifier = Modifier.testTag("rule_preview_total"))
                 if (!state.draft.includeExisting && p.total > 0) {
                     Text(stringResource(R.string.items_rule_preview_later), style = MaterialTheme.typography.bodySmall)
                 }
-                val others = state.overlaps
                 p.matches.forEachIndexed { i, m ->
                     if (i > 0) HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     val label = if (m.sensitivity == Sensitivity.CRITICAL) {
@@ -350,15 +509,15 @@ private fun Preview(state: RuleEditUiState) {
                     } else {
                         m.name
                     }
-                    val covered = others.any { o -> m.itemId in o.included || m.itemId in o.pending }
                     val row = Modifier.padding(vertical = Spacing.xs).semantics(mergeDescendants = true) {}
                     Column(row.testTag("rule_match_${m.itemId}")) {
                         Text(label)
-                        if (covered) {
+                        matchNote(m, state)?.let {
                             Text(
-                                stringResource(R.string.items_rule_preview_also),
+                                it,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.testTag("rule_match_note_${m.itemId}"),
                             )
                         }
                     }
@@ -369,8 +528,53 @@ private fun Preview(state: RuleEditUiState) {
     }
 }
 
+/** "3 items match: 1 shared at once, 2 ask you first." (0.23.0 `outcome`s), or as before from the rule's mode. */
+@Composable
+private fun previewTotal(p: RulePreview, mode: ShareMode): String {
+    val include = p.matches.count { it.outcome == RuleMatch.OUTCOME_INCLUDE }
+    val ask = p.matches.count { it.outcome == RuleMatch.OUTCOME_ASK }
+    if (include + ask == 0) {
+        val res = if (mode == ShareMode.ASK) R.plurals.items_rule_preview_ask else R.plurals.items_rule_preview_auto
+        return pluralStringResource(res, p.total, p.total)
+    }
+    val parts = listOfNotNull(
+        include.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.items_rule_preview_outcome_include, it, it) },
+        ask.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.items_rule_preview_outcome_ask, it, it) },
+    ).joinToString(", ")
+    val total = pluralStringResource(R.plurals.items_rule_preview_match, p.total, p.total)
+    return stringResource(R.string.items_rule_preview_outcomes, total, parts)
+}
+
+/** What saving does to one matched item (0.23.0), or what it is now in this rule. */
+@Composable
+private fun matchNote(m: RuleMatch, state: RuleEditUiState): String? {
+    val asker = m.askRuleId?.let { id -> state.rules.firstOrNull { it.ruleId == id } }
+    return when {
+        m.outcome == RuleMatch.OUTCOME_ASK && asker != null ->
+            stringResource(R.string.items_rule_outcome_ask_because, ruleName(asker, state.names))
+        m.outcome == RuleMatch.OUTCOME_ASK -> stringResource(R.string.items_rule_outcome_ask)
+        m.outcome == RuleMatch.OUTCOME_INCLUDE -> stringResource(R.string.items_rule_outcome_include)
+        m.state == "included" -> stringResource(R.string.items_rule_state_included)
+        m.state == "pending" -> stringResource(R.string.items_rule_state_pending)
+        m.state == "declined" -> stringResource(R.string.items_rule_state_declined)
+        else -> null
+    }
+}
+
 @Composable
 private fun RuleEditDialogs(state: RuleEditUiState, name: String, actions: RuleEditActions) {
+    if (state.confirmDiscard) {
+        ConfirmDialog(
+            title = stringResource(R.string.items_rule_discard_title),
+            text = stringResource(R.string.items_discard_body),
+            confirmLabel = stringResource(R.string.items_discard),
+            onConfirm = actions.onDiscard,
+            onDismiss = actions.onKeepEditing,
+            destructive = true,
+            dismissLabel = stringResource(R.string.items_keep_editing),
+            modifier = Modifier.testTag("rule_edit_discard"),
+        )
+    }
     if (state.confirmDelete) {
         ConfirmDialog(
             title = stringResource(R.string.items_rule_delete_title),

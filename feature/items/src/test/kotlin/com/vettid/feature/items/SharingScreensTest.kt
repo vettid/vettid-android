@@ -81,8 +81,12 @@ class SharingScreensTest {
         rule.onNodeWithTag("rule_r2").assertTextContains("Asks you each time", substring = true)
         rule.onNodeWithTag("rule_r2").assertTextContains("up to 5 fetches of each item · until", substring = true)
         rule.onNodeWithTag("rule_r3").assertTextContains("All of these tags", substring = true)
-        rule.onNodeWithTag("rule_also_r2", useUnmergedTree = true).assertTextEquals("Also covered by: drivers-license, travel")
-        rule.onNodeWithTag("rule_also_r3", useUnmergedTree = true).assertTextEquals("Also covered by: drivers-license")
+        // 0.23.0: rules named by their tags, and an `auto` rule asks first where an `ask` rule overlaps it.
+        rule.onNodeWithTag("rule_also_r2", useUnmergedTree = true).assertTextEquals("Overlaps your “drivers-license + travel” rule")
+        rule.onNodeWithTag("rule_also_r3", useUnmergedTree = true).assertTextEquals("Asks you first for the items your “drivers-license” rule also covers")
+        // Tags in their own colours (#95's TagChip), not plain labels.
+        rule.onNodeWithTag("tag_chip_address", useUnmergedTree = true).assertExists()
+        rule.onNodeWithTag("tag_chip_travel", useUnmergedTree = true).assertExists()
         rule.onNodeWithTag("rule_also_r1", useUnmergedTree = true).assertDoesNotExist()
         rule.onNodeWithTag("sharing_new_rule").assertIsEnabled()
         rule.onNodeWithTag("rule_limit").assertDoesNotExist()
@@ -111,7 +115,9 @@ class SharingScreensTest {
         rule.onNodeWithTag("rule_ends_at").assertTextContains("Ends ", substring = true)
         rule.onNodeWithTag("rule_ends_at").assertTextContains("(your time)", substring = true)
         rule.onNodeWithText("Fetches of each item (optional)").assertExists()
-        rule.onNodeWithText("per hour", substring = true).assertDoesNotExist() // agent rules only (§10.12)
+        // 0.23.0 §10.12: connection rules take per-hour and per-day limits too.
+        rule.onNodeWithText("Fetches per hour (optional)").assertExists()
+        rule.onNodeWithText("Fetches per day (optional)").assertExists()
     }
 
     @Test
@@ -147,7 +153,7 @@ class SharingScreensTest {
 
     @Test
     fun theEditorShowsTheOtherRulesCoveringTheSameTagOrItem() {
-        val preview = RulePreview(listOf(RuleMatch("i2", "Driver’s license", "identity_document", Sensitivity.DATA), RuleMatch("i4", "Library card", "membership", Sensitivity.DATA)), 2)
+        val preview = RulePreview(listOf(RuleMatch("i2", "Driver’s license", "identity_document", Sensitivity.DATA, state = "included"), RuleMatch("i4", "Library card", "membership", Sensitivity.DATA)), 2)
         rule.setContent {
             RuleEditScreen(
                 RuleEditUiState(RuleDraft.of(license), "Dana Lee", tags = listOf("drivers-license", "travel"), expiry = RuleExpiry.KEEP, usesText = "5", preview = preview, rules = listOf(address, license, travel)),
@@ -155,11 +161,14 @@ class SharingScreensTest {
             )
         }
         rule.onNodeWithTag("rule_overlaps").assertExists()
+        rule.onNodeWithTag("rule_overlap_r3").assertTextContains("your “drivers-license + travel” rule", substring = true)
         rule.onNodeWithTag("rule_overlap_r3").assertTextContains("Shared automatically · also names drivers-license · 1 of these items is in it", substring = true)
         rule.onNodeWithTag("rule_overlap_r1").assertDoesNotExist()
         rule.onNodeWithTag("rule_overlap_r2").assertDoesNotExist() // not its own overlap
-        rule.onNodeWithText("Each rule works on its own", substring = true).assertExists()
-        rule.onNodeWithTag("rule_match_i2").assertTextContains("Also in another rule for this connection", substring = true)
+        // 0.23.0: the 0.22 wording ("each rule works on its own") is gone: asking wins.
+        rule.onNodeWithText("Each rule works on its own", substring = true).assertDoesNotExist()
+        rule.onNodeWithTag("rule_overlap_note", useUnmergedTree = true).assertTextContains("asking wins", substring = true)
+        rule.onNodeWithTag("rule_match_i2").assertTextContains("Already shared", substring = true)
         rule.onNodeWithTag("rule_match_i4").assertTextEquals("Library card")
         rule.onNodeWithTag("rule_end_keep").assertIsSelected()
     }
@@ -204,5 +213,126 @@ class SharingScreensTest {
         }
         rule.onNodeWithText("Shared profile").assertIsDisplayed()
         rule.onNodeWithText("3 items · used by 1 sharing rule", substring = true).assertIsDisplayed()
+    }
+
+    // --- one tag per rule (owner decision 2026-10-09) and VAULT-MESSAGING 0.23.0 ---
+
+    @Test
+    fun theTagIsChosenOnceWithAGoldOutlineAndACheck() {
+        val chosen = mutableListOf<String>()
+        val opened = mutableListOf<String>()
+        var state by mutableStateOf(RuleEditUiState(RuleDraft("c1"), "Dana Lee", tags = listOf("address", "medical", "travel"), rules = listOf(address)))
+        rule.setContent {
+            RuleEditScreen(
+                state,
+                RuleEditActions(onTag = { chosen += it; state = state.copy(draft = state.draft.copy(tags = listOf(it))) }, onOpenRule = { opened += it }),
+            )
+        }
+        rule.onNodeWithText("Select the tag to share").assertExists()
+        rule.onNodeWithText("Items with this tag will be shared with", substring = true).assertExists()
+        rule.onNodeWithTag("rule_save").assertIsNotEnabled() // until a tag is chosen
+        rule.onNodeWithTag("rule_match_any").assertDoesNotExist() // no any/all
+        rule.onNodeWithTag("rule_tag_check_medical", useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithTag("rule_tag_medical").performSemanticsAction(SemanticsActions.OnClick)
+        assertEquals(listOf("medical"), chosen)
+        rule.onNodeWithTag("rule_tag_medical").assertIsSelected()
+        rule.onNodeWithTag("rule_tag_check_medical", useUnmergedTree = true).assertExists()
+        rule.onNodeWithTag("rule_tag_check_travel", useUnmergedTree = true).assertDoesNotExist()
+        rule.onNodeWithTag("rule_save").assertIsEnabled()
+        // "address" has its rule: not a choice, it opens that rule.
+        rule.onNodeWithTag("rule_tag_address").assertDoesNotExist()
+        rule.onNodeWithTag("rule_tag_taken_address").assertTextContains("Already shared — edit its rule", substring = true)
+        rule.onNodeWithTag("rule_tag_taken_address").performSemanticsAction(SemanticsActions.OnClick)
+        assertEquals(listOf("r1"), opened)
+    }
+
+    @Test
+    fun aRuleOfSeveralTagsIsShownReadOnly() {
+        rule.setContent {
+            RuleEditScreen(RuleEditUiState(RuleDraft.of(travel), "Dana Lee", tags = listOf("drivers-license", "travel"), rules = listOf(travel), readOnly = true), RuleEditActions())
+        }
+        rule.onNodeWithTag("rule_read_only").assertExists()
+        rule.onNodeWithTag("rule_save").assertDoesNotExist()
+        rule.onNodeWithTag("rule_delete").assertIsEnabled()
+        rule.onNodeWithTag("rule_tags").assertDoesNotExist()
+        rule.onNodeWithTag("tag_chip_travel", useUnmergedTree = true).assertExists()
+    }
+
+    /** §10.12 (0.23.0): the dry run's `outcome` and the rule that asks, named by its tags. */
+    @Test
+    fun theDryRunExplainsWhyAnAutoRuleAsksFirst() {
+        val medical = ShareRule("r5", 1, "c1", tags = listOf("medical"))
+        val preview = RulePreview(
+            listOf(
+                RuleMatch("i1", "Allergies", "medical", Sensitivity.DATA, outcome = RuleMatch.OUTCOME_ASK, askRuleId = "r5"),
+                RuleMatch("i4", "Bank", "bank_account", Sensitivity.DATA, outcome = RuleMatch.OUTCOME_INCLUDE),
+            ),
+            2,
+        )
+        rule.setContent {
+            RuleEditScreen(
+                RuleEditUiState(RuleDraft("c1", listOf("money"), mode = ShareMode.AUTO), "Dana Lee", tags = listOf("money"), preview = preview, rules = listOf(medical)),
+                RuleEditActions(),
+            )
+        }
+        rule.onNodeWithTag("rule_preview_total").assertTextEquals("2 items match: 1 shared at once, 1 asks you first.")
+        rule.onNodeWithTag("rule_match_note_i1", useUnmergedTree = true).assertTextEquals("Asks you first because your “medical” rule covers it")
+        rule.onNodeWithTag("rule_match_note_i4", useUnmergedTree = true).assertTextEquals("Shared at once")
+    }
+
+    @Test
+    fun leavingWithChangesAsksToDiscard() {
+        val asked = mutableListOf<String>()
+        rule.setContent {
+            RuleEditScreen(
+                RuleEditUiState(RuleDraft("c1", listOf("address")), "Dana Lee", tags = listOf("address"), dirty = true, confirmDiscard = true),
+                RuleEditActions(onDiscard = { asked += "discard" }),
+            )
+        }
+        rule.onNodeWithText("Discard changes to this rule?").assertExists()
+        rule.onNodeWithText("Discard").performSemanticsAction(SemanticsActions.OnClick)
+        assertEquals(listOf("discard"), asked)
+    }
+
+    /** Limits on both sides (0.23.0): the rule's summary, a received grant's, and "Try again in …" when refused. */
+    @Test
+    fun rateLimitsAreShownAndARefusalSaysWhenToTryAgain() {
+        val limited = ShareRule("r7", 1, "c1", tags = listOf("medical"), perHour = 5, perDay = 20)
+        rule.setContent { ConnectionSharingScreen(ConnectionSharingUiState("c1", "Dana Lee", rules = listOf(limited), loading = false), ConnectionSharingActions()) }
+        rule.onNodeWithTag("rule_r7").assertTextContains("up to 5 an hour · up to 20 a day · no end date", substring = true)
+    }
+
+    @Test
+    fun aReceivedGrantShowsItsLimitsAndARateLimitedFetchItsRetry() {
+        val g = GrantView("g6", "c1", GrantDirection.RECEIVED, "x2", "Card", "insurance", perHour = 5, perDay = 1)
+        rule.setContent {
+            SharedWithYouScreen(
+                SharedWithYouUiState(
+                    "c1", "Dana Lee", received = listOf(g), loading = false,
+                    refused = mapOf("g6" to "rate_limited"), retryAt = mapOf("g6" to Instant.now().plusSeconds(11 * 60 + 30)),
+                ),
+                SharedWithYouActions(),
+            )
+        }
+        rule.onNodeWithTag("received_label_g6").assertTextContains("up to 5 times an hour · up to 1 time a day", substring = true)
+        rule.onNodeWithTag("received_refused_g6").assertTextContains("Try again in 12 minutes.", substring = true)
+    }
+
+    /** #95: a shared `phone` value is shown formatted for the viewer's region, as the member's own are. */
+    @Test
+    fun aSharedPhoneNumberIsFormattedForTheRegion() {
+        val g = GrantView("g5", "c1", GrantDirection.RECEIVED, "x1", "Practice", "contact")
+        rule.setContent {
+            androidx.compose.runtime.CompositionLocalProvider(LocalPhoneRegion provides "US") {
+                SharedWithYouScreen(
+                    SharedWithYouUiState(
+                        "c1", "Dana Lee", received = listOf(g), loading = false,
+                        opened = mapOf("g5" to SharedContent("x1", "Practice", "contact", listOf(ItemFieldView("f1", "Phone", "phone", FieldValue.Text("+1 650-253-0000"))), null, null)),
+                    ),
+                    SharedWithYouActions(),
+                )
+            }
+        }
+        rule.onNodeWithText("(650) 253-0000").assertExists()
     }
 }

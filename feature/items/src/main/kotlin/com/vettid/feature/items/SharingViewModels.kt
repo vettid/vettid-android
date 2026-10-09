@@ -209,6 +209,9 @@ data class RuleEditUiState(
     val tags: List<String> = emptyList(),
     val expiry: RuleExpiry = RuleExpiry.NEVER,
     val usesText: String = "",
+    /** §10.12 (0.23.0): fetches of all the rule's items together per hour (1–3,600) and per day (1–86,400); empty: none. */
+    val perHourText: String = "",
+    val perDayText: String = "",
     val preview: RulePreview? = null,
     val previewing: Boolean = false,
     val loading: Boolean = false,
@@ -224,27 +227,59 @@ data class RuleEditUiState(
     val endPicker: EndPicker? = null,
     /** The custom end picked was not in the future or more than 3,650 days ahead. */
     val endInvalid: Boolean = false,
+    /** Something was changed since the rule was opened: leaving asks "Discard changes to this rule?". */
+    val dirty: Boolean = false,
+    val confirmDiscard: Boolean = false,
+    /**
+     * A rule naming several tags (made before one tag per rule, owner decision 2026-10-09): shown as it is and can
+     * be deleted, not changed, so that nothing it shares changes by surprise. A rule per tag replaces it.
+     */
+    val readOnly: Boolean = false,
 ) {
     val isNew: Boolean get() = draft.ruleId == null
 
     val usesValid: Boolean get() = usesText.isBlank() || usesText.toIntOrNull()?.let { it in 1..RuleDraft.MAX_USES } == true
 
+    val perHourValid: Boolean
+        get() = perHourText.isBlank() || perHourText.toIntOrNull()?.let { it in 1..RuleDraft.MAX_PER_HOUR } == true
+
+    val perDayValid: Boolean
+        get() = perDayText.isBlank() || perDayText.toIntOrNull()?.let { it in 1..RuleDraft.MAX_PER_DAY } == true
+
     /** A new rule while the connection has the most it can have (§10.12 `share_rules_subject`, 64). */
     val atRuleLimit: Boolean get() = isNew && rules.size >= RuleDraft.MAX_RULES_PER_SUBJECT
 
-    val canSave: Boolean get() = draft.tags.isNotEmpty() && usesValid && !busy && !atRuleLimit
+    /** The one tag chosen (one tag per rule, owner decision 2026-10-09). */
+    val tag: String? get() = draft.tags.singleOrNull()
 
-    /** The connection's other rules covering the same tags or matched items (§10.12: each rule applies on its own). */
+    /** Tags another rule of this connection already shares on its own, → that rule: "Already shared — edit its rule". */
+    val taken: Map<String, String>
+        get() = rules.filter { it.ruleId != draft.ruleId && it.tags.size == 1 }.associate { it.tags[0] to it.ruleId }
+
+    /** The tags this rule can take. */
+    val freeTags: List<String> get() = tags.filter { it !in taken }
+
+    /** Save is offered once a tag is chosen and every limit reads. */
+    val canSave: Boolean
+        get() = !readOnly && tag != null && usesValid && perHourValid && perDayValid && !busy && !atRuleLimit && !loading
+
+    /** The connection's other rules covering the same tags or matched items (§10.12 Overlapping rules: `ask` wins). */
     val overlaps: List<ShareRule>
         get() = RuleOverlaps.forDraft(draft.ruleId, draft.tags, preview?.matches?.map { it.itemId }.orEmpty(), rules)
+
+    /** How each rule of the connection is named (§10.12: by its tags). */
+    val names: Map<String, com.vettid.core.data.items.RuleNames.Name> get() = com.vettid.core.data.items.RuleNames.of(rules)
 }
 
 /**
- * One share rule for one connection (§10.12; a connection has up to 64, each with its own settings): the tags it
- * names (any or all), its mode — "Ask me each time" (the default, owner decision 2026-10-03) or "Share automatically"
- * — fetches of each item, an end (presets or a date and time picked), and whether items that already carry the tags
- * count. The vault's dry run shows what it would match, and the connection's other rules covering the same tags or
- * items are shown before it is saved. Per-hour and per-day limits are for agent rules only (§10.12) and not offered.
+ * One share rule for one connection (§10.12; a connection has up to 64, each with its own settings): the one tag it
+ * shares (owner decision 2026-10-09: one tag per rule, a tag another rule already shares opens that rule), its mode —
+ * "Ask me each time" (the default, owner decision 2026-10-03) or "Share automatically" — fetches of each item, and
+ * since 0.23.0 the fetches per hour and per day of all its items together, an end (presets or a date and time picked),
+ * and whether items that already carry the tag count. The vault's dry run shows what it would match and what saving
+ * does to each item (`outcome`, and the `ask` rule that holds an item, `ask_rule_id`: `ask` wins); the connection's
+ * other rules covering the same items are shown before it is saved. Saving is "Save rule" in the top bar; leaving with
+ * changes asks first.
  */
 @HiltViewModel
 @Suppress("TooManyFunctions")
@@ -273,11 +308,16 @@ class RuleEditViewModel @Inject constructor(
                             draft = RuleDraft.of(r).copy(connectionId = connectionId),
                             expiry = if (r.expiresAt == null) RuleExpiry.NEVER else RuleExpiry.KEEP,
                             usesText = r.uses?.toString().orEmpty(),
+                            perHourText = r.perHour?.toString().orEmpty(),
+                            perDayText = r.perDay?.toString().orEmpty(),
                             loading = false,
                             tags = (it.tags + r.tags).distinct().sorted(),
+                            readOnly = r.multiTag,
                         )
                     }
                     schedulePreview()
+                } else {
+                    state.update { it.copy(loading = false) }
                 }
             } catch (e: VaultFailure) {
                 state.update { it.copy(loading = false, error = e.kind, limit = e.limit) }
@@ -286,13 +326,20 @@ class RuleEditViewModel @Inject constructor(
     }
 
     private fun change(f: (RuleDraft) -> RuleDraft) {
-        state.update { it.copy(draft = f(it.draft), error = null) }
+        if (state.value.readOnly) return
+        state.update { it.copy(draft = f(it.draft), error = null, dirty = true) }
         schedulePreview()
     }
 
-    fun toggleTag(t: String) = change { d -> d.copy(tags = if (t in d.tags) d.tags - t else (d.tags + t).take(RuleDraft.MAX_TAGS)) }
-
-    fun setMatch(m: TagMatch) = change { it.copy(match = m) }
+    /**
+     * Chooses the one tag the rule shares (owner decision 2026-10-09). A tag another rule of this connection already
+     * shares is not taken here: the screen opens that rule instead.
+     */
+    fun selectTag(t: String) {
+        val s = state.value
+        if (t in s.taken || t == s.tag) return
+        change { d -> d.copy(tags = listOf(t), match = TagMatch.ANY) }
+    }
 
     fun setMode(m: ShareMode) = change { it.copy(mode = m) }
 
@@ -305,8 +352,23 @@ class RuleEditViewModel @Inject constructor(
         change { it.copy(uses = digits.toIntOrNull()) }
     }
 
+    /** Fetches per hour of all the rule's items (0.23.0 §10.12 `per_hour`, 1–3,600; empty: no limit). */
+    fun setPerHour(v: String) {
+        val digits = v.filter { it.isDigit() }.take(PER_HOUR_DIGITS)
+        state.update { it.copy(perHourText = digits) }
+        change { it.copy(perHour = digits.toIntOrNull()) }
+    }
+
+    /** Fetches per day of all the rule's items (0.23.0 §10.12 `per_day`, 1–86,400; empty: no limit). */
+    fun setPerDay(v: String) {
+        val digits = v.filter { it.isDigit() }.take(PER_DAY_DIGITS)
+        state.update { it.copy(perDayText = digits) }
+        change { it.copy(perDay = digits.toIntOrNull()) }
+    }
+
     /** A preset end from [now] in [zone]; [RuleExpiry.CUSTOM] opens the date picker (the end changes once a time is picked). */
     fun setExpiry(e: RuleExpiry, now: Instant = Instant.now(), zone: ZoneId = ZoneId.systemDefault()) {
+        if (state.value.readOnly) return
         when (e) {
             RuleExpiry.KEEP -> state.update { it.copy(expiry = e, endInvalid = false) }
             RuleExpiry.CUSTOM -> state.update { it.copy(endPicker = EndPicker.Date, endInvalid = false) }
@@ -357,12 +419,15 @@ class RuleEditViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 sharing.saveRule(s.draft)
-                state.update { it.copy(busy = false, done = true) }
+                state.update { it.copy(busy = false, done = true, dirty = false) }
             } catch (e: VaultFailure) {
                 state.update { it.copy(busy = false, error = e.kind, limit = e.limit) }
             }
         }
     }
+
+    /** Back or up with changes: "Discard changes to this rule?" (shown), or not. */
+    fun askDiscard(show: Boolean) = state.update { it.copy(confirmDiscard = show) }
 
     fun askDelete(show: Boolean) = state.update { it.copy(confirmDelete = show) }
 
@@ -372,7 +437,7 @@ class RuleEditViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 sharing.deleteRule(id)
-                state.update { it.copy(busy = false, done = true) }
+                state.update { it.copy(busy = false, done = true, dirty = false) }
             } catch (e: VaultFailure) {
                 state.update { it.copy(busy = false, error = e.kind, limit = e.limit) }
             }
@@ -384,6 +449,8 @@ class RuleEditViewModel @Inject constructor(
     private companion object {
         const val PREVIEW_DEBOUNCE_MS = 400L
         const val USES_DIGITS = 5
+        const val PER_HOUR_DIGITS = 4
+        const val PER_DAY_DIGITS = 5
     }
 }
 
@@ -396,8 +463,10 @@ data class SharedWithYouUiState(
     val received: List<GrantView> = emptyList(),
     /** Fetched contents by grant id, in memory while the screen is in front. */
     val opened: Map<String, SharedContent> = emptyMap(),
-    /** The connection's vault refused a fetch, by grant id (`revoked`, `expired`, `exhausted`, `unavailable`). */
+    /** The connection's vault refused a fetch, by grant id (`revoked`, `expired`, `exhausted`, `unavailable`, `rate_limited`). */
     val refused: Map<String, String> = emptyMap(),
+    /** A `rate_limited` refusal's end (0.23.0 §10.12 `retry_after`), by grant id: "Try again in …". */
+    val retryAt: Map<String, Instant> = emptyMap(),
     val fetching: String? = null,
     val loading: Boolean = true,
     val error: FailureKind? = null,
@@ -425,6 +494,9 @@ class SharedWithYouViewModel @Inject constructor(
     private val sharing: SharingRepository,
     private val connections: ConnectionsRepository,
 ) : ViewModel() {
+    /** The clock for a refusal's `retry_after` (tests set it). */
+    internal var now: () -> Instant = Instant::now
+
     private val id: String = checkNotNull(saved[SharedWithYouRoute.ARG])
     private val state = MutableStateFlow(SharedWithYouUiState(id, connections.nameOf(id)))
     val uiState: StateFlow<SharedWithYouUiState> = state.asStateFlow()
@@ -454,9 +526,15 @@ class SharedWithYouViewModel @Inject constructor(
             try {
                 when (val o = sharing.fetchShared(grantId)) {
                     is FetchOutcome.Shared -> state.update {
-                        it.copy(opened = it.opened + (grantId to o.content), refused = it.refused - grantId)
+                        it.copy(opened = it.opened + (grantId to o.content), refused = it.refused - grantId, retryAt = it.retryAt - grantId)
                     }
-                    is FetchOutcome.Refused -> state.update { it.copy(refused = it.refused + (grantId to o.reason)) }
+                    is FetchOutcome.Refused -> state.update {
+                        val until = o.retryAfter?.let { s -> now().plusSeconds(s) }
+                        it.copy(
+                            refused = it.refused + (grantId to o.reason),
+                            retryAt = if (until != null) it.retryAt + (grantId to until) else it.retryAt - grantId,
+                        )
+                    }
                 }
                 state.update { it.copy(fetching = null) }
             } catch (e: VaultFailure) {

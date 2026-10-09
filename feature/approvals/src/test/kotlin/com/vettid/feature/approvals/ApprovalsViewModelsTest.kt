@@ -49,7 +49,7 @@ class ApprovalsViewModelsTest {
 
     @Test
     fun listsWhatTheRepositoryHolds() = runTest {
-        val vm = ApprovalsViewModel(social)
+        val vm = ApprovalsViewModel(social, social)
         advanceUntilIdle()
         assertEquals(5, vm.uiState.value.approvals.size)
         assertTrue("refreshApprovals" in social.calls)
@@ -59,7 +59,7 @@ class ApprovalsViewModelsTest {
     @Test
     fun showsAPeerDeclineOnceUntilDismissed() = runTest {
         social.approvals.value = listOf(request, outgoing)
-        val vm = ApprovalsViewModel(social)
+        val vm = ApprovalsViewModel(social, social)
         advanceUntilIdle()
         social.peerDeclined("p1", "Morgan", outgoing = false)
         social.peerDeclined("c9", "Jordan", outgoing = true)
@@ -320,5 +320,80 @@ class ApprovalsViewModelsTest {
         advanceUntilIdle()
         assertEquals(FailureKind.LIMIT, vm.uiState.value.error)
         assertEquals(limit, vm.uiState.value.limit)
+    }
+
+    // --- VAULT-MESSAGING 0.23.0 §10.4.1 ---
+
+    /** A connection's asks within 10 minutes of the first are one entry; later ones start another; others stay single. */
+    @Test
+    fun aConnectionsAsksWithinTenMinutesAreOneEntry() = runTest {
+        val a = auth.copy(receivedAt = now)
+        val g = grant.copy(receivedAt = now.plusSeconds(120))
+        val c = critical.copy(receivedAt = now.plusSeconds(599))
+        val late = grant.copy(requestId = "g2", receivedAt = now.plusSeconds(600)) // the batch's 10 minutes are over
+        val other = grant.copy(requestId = "g3", connectionId = "c2", receivedAt = now.plusSeconds(60))
+        val share = Approval.ShareDecision("r1", "c1", null, emptyList(), null, now.plusSeconds(30))
+        val rows = AskBatches.group(listOf(late, c, g, other, share, a, request).sortedByDescending { it.receivedAt })
+        assertEquals(listOf("grant:g2", "batch:auth:a1", "grant:g3", "share:r1", "connection:p1"), rows.map { it.key })
+        val b = rows[1] as ApprovalEntry.Batch
+        assertEquals("c1", b.connectionId)
+        assertEquals(listOf("auth:a1", "grant:g1", "critical:u1"), b.asks.map { it.key })
+        assertEquals("Sam", b.connectionName)
+        assertEquals(now.plusSeconds(599), b.receivedAt)
+        // One ask alone is a single entry.
+        assertEquals(listOf(ApprovalEntry.One(a)), AskBatches.group(listOf(a)))
+        social.approvals.value = listOf(c, g, a)
+        val vm = ApprovalsViewModel(social, social)
+        advanceUntilIdle()
+        assertEquals(1, vm.uiState.value.entries.size)
+    }
+
+    /** A paused connection is offered to resume (or remove); resuming clears the pause, a mute stays (§10.4.1). */
+    @Test
+    fun aPausedConnectionCanBeResumedOrRemoved() = runTest {
+        val sam = com.vettid.core.data.social.ConnectionInfo(
+            "c1", "", com.vettid.core.data.social.ConnectionState.ACTIVE, firstName = "Sam", lastName = "Lee",
+            asks = com.vettid.core.data.social.AskState(muted = true, paused = true, cooldowns = 3),
+        )
+        val jo = sam.copy(id = "c2", asks = com.vettid.core.data.social.AskState())
+        social.connections.value = listOf(sam, jo)
+        val vm = ApprovalsViewModel(social, social)
+        advanceUntilIdle()
+        assertEquals(listOf("c1"), vm.uiState.value.paused.map { it.id })
+        vm.resumeAsks("c1")
+        advanceUntilIdle()
+        assertTrue("asksResume:c1" in social.calls)
+        assertTrue(vm.uiState.value.paused.isEmpty())
+        assertEquals(com.vettid.core.data.social.AskState(muted = true), social.connections.value[0].asks)
+        // Paused again, then removed after a confirmation.
+        social.connections.value = listOf(sam, jo)
+        advanceUntilIdle()
+        vm.askRemove(vm.uiState.value.paused.single())
+        advanceUntilIdle()
+        assertEquals("c1", vm.uiState.value.confirmRemove?.id)
+        vm.remove()
+        advanceUntilIdle()
+        assertTrue("remove" in social.calls)
+        assertTrue(vm.uiState.value.paused.isEmpty())
+    }
+
+    /** §10.12 (0.23.0): why a share question's item is asked, and that a decline stops what another rule shares. */
+    @Test
+    fun aShareQuestionExplainsTheRuleThatAsksAndAnItemAlreadyShared() {
+        val d = Approval.ShareDecision(
+            "r2", "c1", null,
+            listOf(
+                com.vettid.core.data.social.ShareItem("i1", "A", "medical", "data", askRuleId = "r1", alsoIn = listOf("r1", "r3")),
+                com.vettid.core.data.social.ShareItem("i2", "B", "x", "data", shared = true),
+                com.vettid.core.data.social.ShareItem("i3", "C", "x", "data"),
+            ),
+            null, now,
+        )
+        assertEquals(
+            listOf(ShareExplanations.Line.AsksFirst("r1"), ShareExplanations.Line.AlsoCovered("r3")),
+            ShareExplanations.of(d.items[0], d),
+        )
+        assertEquals(listOf(ShareExplanations.Line.AlreadyShared), ShareExplanations.of(d.items[1], d))
+        assertTrue(ShareExplanations.of(d.items[2], d).isEmpty())
     }
 }

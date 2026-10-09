@@ -426,6 +426,21 @@ object ScreenCatalog {
         request.copy(pendingId = "p2", name = "Casey Novak", sas = "770312", state = RequestState.APPROVED),
     )
 
+    /** 0.23.0 §10.12: one question per item and connection, the rule that asks first, an item already shared. */
+    private val askWins = Approval.ShareDecision(
+        "r1", "c1", null,
+        listOf(
+            ShareItem("i1", "Allergy list", "medical", "data", askRuleId = "r2", alsoIn = listOf("r2")),
+            ShareItem("i2", "Insurance card", "insurance", "data", shared = true),
+        ),
+        "rule", t0, null, "Sam Rivera",
+        tags = listOf("insurance"),
+        rules = listOf(
+            com.vettid.core.data.items.ShareRule("r1", 1, "c1", tags = listOf("insurance"), mode = com.vettid.core.data.items.ShareMode.AUTO),
+            com.vettid.core.data.items.ShareRule("r2", 1, "c1", tags = listOf("medical")),
+        ),
+    )
+
     @Composable
     private fun Ob(state: OnboardingUiState) =
         OnboardingContent(state, NoOnboarding, {}) { m -> Box(m.background(MaterialTheme.colorScheme.surfaceContainerHigh)) }
@@ -804,6 +819,22 @@ object ScreenCatalog {
                 DetailActions(),
             )
         },
+        // VAULT-MESSAGING 0.23.0 §10.4.1: a connection's asks paused after several declines, or muted.
+        "connections.detail_asks_paused" to {
+            ConnectionDetailScreen(
+                ConnectionDetailUiState(
+                    "c1", sam.copy(asks = com.vettid.core.data.social.AskState(paused = true, pausedAt = t0, cooldowns = 3)), null,
+                    loading = false, sharing = bothWays,
+                ),
+                DetailActions(),
+            )
+        },
+        "connections.detail_asks_muted" to {
+            ConnectionDetailScreen(
+                ConnectionDetailUiState("c1", sam.copy(asks = com.vettid.core.data.social.AskState(muted = true, cooldowns = 1)), null, loading = false, sharing = bothWays),
+                DetailActions(),
+            )
+        },
         "connections.detail_remove" to { ConnectionDetailScreen(ConnectionDetailUiState("c1", sam, loading = false, confirm = DetailConfirm.REMOVE), DetailActions()) },
         "invite.choose" to { InviteScreen(InviteUiState(ttls = InviteTtl.entries.toList()), InviteActions()) },
         "invite.choose_remote" to { InviteScreen(InviteUiState(ttls = InviteTtl.entries.toList(), ttl = InviteTtl.ONE_DAY), InviteActions()) },
@@ -840,6 +871,18 @@ object ScreenCatalog {
             )
         },
         "approvals.empty" to { ApprovalsScreen(ApprovalsUiState(loading = false), chrome) },
+        // 0.23.0 §10.4.1: a paused connection, and a connection's asks within 10 minutes as one entry.
+        "approvals.paused" to {
+            ApprovalsScreen(
+                ApprovalsUiState(
+                    loading = false,
+                    approvals = approvals.drop(1).take(3),
+                    paused = listOf(alex.copy(asks = com.vettid.core.data.social.AskState(paused = true, pausedAt = t0))),
+                ),
+                chrome,
+            )
+        },
+        "approvals.share_ask_wins" to { ApprovalDetailScreen(ApprovalDetailUiState(askWins.key, askWins), DecisionActions()) },
         "approvals.connection" to { ApprovalDetailScreen(ApprovalDetailUiState(request.key, request), DecisionActions()) },
         "approvals.authentication" to { ApprovalDetailScreen(ApprovalDetailUiState(approvals[1].key, approvals[1], password = "pw"), DecisionActions()) },
         "approvals.grant" to { ApprovalDetailScreen(ApprovalDetailUiState(approvals[2].key, approvals[2]), DecisionActions()) },

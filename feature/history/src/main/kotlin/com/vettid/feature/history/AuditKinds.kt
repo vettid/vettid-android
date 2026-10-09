@@ -196,5 +196,15 @@ object AuditKinds {
         "profile.core_missing" to R.string.history_kind_profile_core_missing,
         "settings.changed" to R.string.history_kind_settings_changed,
         "drop.suppressed" to R.string.history_kind_drop_suppressed,
+        "connection.asks_paused" to R.string.history_kind_connection_asks_paused,
+        "connection.asks_resumed" to R.string.history_kind_connection_asks_resumed,
+        "connection.asks_muted" to R.string.history_kind_connection_asks_muted,
+        "connection.asks_unmuted" to R.string.history_kind_connection_asks_unmuted,
+        "drop.ask_muted" to R.string.history_kind_drop_ask_muted,
+        "drop.ask_paused" to R.string.history_kind_drop_ask_paused,
+        "drop.ask_cooldown" to R.string.history_kind_drop_ask_cooldown,
+        "drop.ask_pending" to R.string.history_kind_drop_ask_pending,
+        "drop.ask_rate" to R.string.history_kind_drop_ask_rate,
+        "drop.grant_rate_limited" to R.string.history_kind_drop_grant_rate_limited,
     )
 }

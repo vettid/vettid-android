@@ -1,5 +1,7 @@
 package com.vettid.core.data.social
 
+import com.vettid.core.data.items.ShareRule
+import com.vettid.core.data.items.SharingManager
 import com.vettid.core.data.vault.FailureKind
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.vault.VaultJson
@@ -43,31 +45,33 @@ internal object SharePending {
             if (!unknownType(e)) throw e
             return fromRules(pages(rulePage, "rules", Int.MAX_VALUE), names, t)
         }
-        val tags = try {
-            pages(rulePage, "rules", Int.MAX_VALUE).mapNotNull { r -> VaultJson.str(r, "rule_id")?.let { it to r.strings("tags") } }.toMap()
+        val rules = try {
+            pages(rulePage, "rules", Int.MAX_VALUE).mapNotNull(SharingManager::rule)
         } catch (_: VaultFailure) {
-            emptyMap()
+            emptyList()
         }
+        val tags = rules.associate { it.ruleId to it.tags }
         return pending.groupBy { VaultJson.str(it, "rule_id") ?: "" }.filterKeys { it.isNotEmpty() }.map { (rule, entries) ->
             val subject = entries.first()["subject"] as? JsonObject
             Approval.ShareDecision(
                 ruleId = rule,
                 subjectConnectionId = subject?.let { VaultJson.str(it, "connection_id") },
                 subjectAgentId = subject?.let { VaultJson.str(it, "agent_id") },
-                items = entries.mapNotNull { e ->
-                    val id = VaultJson.str(e, "item_id") ?: return@mapNotNull null
-                    ShareItem(
-                        id,
-                        VaultJson.str(e, "name") ?: "",
-                        VaultJson.str(e, "category") ?: "other",
-                        VaultJson.str(e, "sensitivity") ?: "data",
-                    )
-                }.distinctBy { it.itemId },
+                items = entries.mapNotNull(ApprovalParser::shareItem).distinctBy { it.itemId },
                 reason = null,
                 receivedAt = entries.mapNotNull { ApprovalParser.instant(VaultJson.str(it, "at")) }.maxOrNull() ?: t,
                 tags = tags[rule].orEmpty(),
+                rules = sameSubject(rules, subject),
             )
         }
+    }
+
+    /** The rules of [subject] (a connection or an agent), to name the one that asks (§10.12, 0.23.0). */
+    private fun sameSubject(rules: List<ShareRule>, subject: JsonObject?): List<ShareRule> {
+        val c = subject?.let { VaultJson.str(it, "connection_id") }
+        val a = subject?.let { VaultJson.str(it, "agent_id") }
+        if (c == null && a == null) return emptyList()
+        return rules.filter { (c != null && it.connectionId == c) || (a != null && it.agentId == a) }
     }
 
     /** Every page's [key] entries (`next` passed back as `after`), at most [max]. */
@@ -84,8 +88,9 @@ internal object SharePending {
     }
 
     /** Before 0.21.0: every rule's `pending` ids, named from the item list where it has them. */
-    private fun fromRules(rules: List<JsonObject>, names: Map<String, ShareItem>, t: Instant): List<Approval.ShareDecision> =
-        rules.mapNotNull { r ->
+    private fun fromRules(rules: List<JsonObject>, names: Map<String, ShareItem>, t: Instant): List<Approval.ShareDecision> {
+        val parsed = rules.mapNotNull(SharingManager::rule)
+        return rules.mapNotNull { r ->
             val id = VaultJson.str(r, "rule_id") ?: return@mapNotNull null
             val pending = r.strings("pending")
             if (pending.isEmpty()) return@mapNotNull null
@@ -98,8 +103,10 @@ internal object SharePending {
                 reason = null,
                 receivedAt = ApprovalParser.instant(VaultJson.str(r, "updated_at")) ?: t,
                 tags = r.strings("tags"),
+                rules = sameSubject(parsed, subject),
             )
         }
+    }
 
     /**
      * Decides [include] and [decline] of one rule: [both] sends `share.decide{rule_id, include, decline}` (0.21.0, one

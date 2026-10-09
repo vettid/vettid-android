@@ -256,4 +256,30 @@ class ApprovalParserTest {
         assertEquals("denied", denied.lastResult)
         assertFalse(denied.keyChanged)
     }
+
+    /** VAULT-MESSAGING 0.23.0 §10.4.1: `<connection>.asks`; null from an older vault. */
+    @Test
+    fun aConnectionCarriesItsAsks() {
+        val json = """{"id":"C1","state":"active","asks":{"muted":true,"paused":true,"paused_at":"2026-10-09T08:00:00.000Z","cooldowns":2}}"""
+        val c = ApprovalParser.connection(com.vettid.core.vault.VaultJson.decode(Connection.serializer(), o(json)))
+        assertEquals(AskState(muted = true, paused = true, pausedAt = java.time.Instant.parse("2026-10-09T08:00:00Z"), cooldowns = 2), c.asks)
+        assertEquals(null, ApprovalParser.connection(Connection(id = "C2", state = "active")).asks)
+        // The state machine the page follows: unmuting keeps a pause, resuming keeps a mute and clears the cooldowns.
+        val a = c.asks!!
+        assertEquals(AskState(muted = false, paused = true, pausedAt = a.pausedAt, cooldowns = 2), a.muted(false))
+        assertEquals(AskState(muted = true, paused = false, pausedAt = null, cooldowns = 0), a.resumed())
+        assertEquals(false, a.resumed().muted(false).canResume)
+        assertEquals(true, AskState(cooldowns = 1).canResume)
+    }
+
+    /** §10.12 (0.23.0): a `share.pending` item's `ask_rule_id` and `shared`. */
+    @Test
+    fun aSharePendingItemSaysWhichRuleAsks() {
+        val a = ApprovalParser.parse(
+            "share.pending",
+            o("""{"rule_id":"r2","subject":{"connection_id":"c1"},"items":[{"item_id":"i1","name":"A","category":"medical","sensitivity":"data","ask_rule_id":"r1"},{"item_id":"i2","name":"B","category":"x","sensitivity":"data","shared":true},{"name":"no id"}],"reason":"rule"}"""),
+            java.time.Instant.EPOCH,
+        ) as Approval.ShareDecision
+        assertEquals(listOf(ShareItem("i1", "A", "medical", "data", askRuleId = "r1"), ShareItem("i2", "B", "x", "data", shared = true)), a.items)
+    }
 }

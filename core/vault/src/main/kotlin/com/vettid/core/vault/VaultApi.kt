@@ -747,7 +747,7 @@ class VaultApi(val device: VaultDevice) {
             }
             val fetchId = VaultJson.str(r, "fetch_id") ?: throw VaultStateException("grant.fetch without fetch_id")
             val ev = device.awaitEvent("grant.value", timeout) { VaultJson.str(it, "fetch_id") == fetchId }.body
-            VaultJson.str(ev, "error")?.let { return GrantFetched(grantId, null, null, it) }
+            VaultJson.str(ev, "error")?.let { return GrantFetched(grantId, null, null, it, VaultJson.long(ev, "retry_after")) }
             val sealed = VaultJson.str(ev, "value_sealed") ?: throw VaultStateException("grant.value without value_sealed")
             val pt = com.vettid.core.crypto.grant.GrantSeal.openValue(rk, grantId, fetchId, Base64s.decodeStd(sealed))
             return GrantFetched(grantId, pt, VaultJson.long(ev, "uses_left"), null)

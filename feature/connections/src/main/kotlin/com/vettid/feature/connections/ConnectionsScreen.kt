@@ -181,6 +181,8 @@ fun NavGraphBuilder.connectionsDestination(chrome: ShellChrome, host: Connection
                 onAskDeleteRule = vm::askDeleteRule,
                 onDeleteRule = vm::deleteRule,
                 onAskForSomething = { host.onAskFor(state.connectionId) },
+                onMuteAsks = vm::muteAsks,
+                onResumeAsks = vm::resumeAsks,
             ),
         )
     }

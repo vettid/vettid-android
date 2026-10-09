@@ -32,6 +32,9 @@ class FakeSharing : SharingRepository {
     var change = TagChange(1, 0)
     val contents = mutableMapOf<String, SharedContent>()
     val refusals = mutableMapOf<String, String>()
+
+    /** A refusal's `retry_after` (0.23.0 `rate_limited`), by grant id. */
+    val retryAfter = mutableMapOf<String, Long>()
     val saved = mutableListOf<RuleDraft>()
     private var next = 1
 
@@ -91,7 +94,7 @@ class FakeSharing : SharingRepository {
         saved += draft
         val r = ShareRule(
             draft.ruleId ?: "01RULE${next++}", (draft.version ?: 0) + 1, draft.connectionId, null, draft.tags, draft.match, draft.mode,
-            draft.uses, draft.expiresAt, draft.includeExisting,
+            draft.uses, draft.expiresAt, draft.includeExisting, perHour = draft.perHour, perDay = draft.perDay,
         )
         rulesStored.removeAll { it.ruleId == r.ruleId }
         rulesStored += r
@@ -124,7 +127,7 @@ class FakeSharing : SharingRepository {
 
     override suspend fun fetchShared(grantId: String): FetchOutcome {
         call("fetch:$grantId")
-        refusals[grantId]?.let { return FetchOutcome.Refused(it) }
+        refusals[grantId]?.let { return FetchOutcome.Refused(it, retryAfter[grantId]) }
         return contents[grantId]?.let { FetchOutcome.Shared(it) } ?: FetchOutcome.Refused("unavailable")
     }
 }
