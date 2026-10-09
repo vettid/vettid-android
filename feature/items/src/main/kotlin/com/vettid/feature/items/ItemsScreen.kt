@@ -1,18 +1,13 @@
 package com.vettid.feature.items
 
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
@@ -24,6 +19,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -48,6 +44,9 @@ import androidx.navigation.compose.composable
 import com.vettid.core.data.items.ItemSummary
 import com.vettid.core.data.items.Sensitivity
 import com.vettid.core.ui.components.BottomFloatingControls
+import com.vettid.core.ui.components.FilterChipRow
+import com.vettid.core.ui.components.TagChipLine
+import com.vettid.core.ui.components.TagDot
 import com.vettid.core.ui.components.EmptyState
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
@@ -58,6 +57,8 @@ import com.vettid.core.ui.components.VettIdFab
 import com.vettid.core.ui.components.VettIdListRow
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.theme.Spacing
+import com.vettid.core.ui.theme.TagColor
+import com.vettid.core.ui.theme.tagColor
 import kotlinx.serialization.Serializable
 
 /** Type-safe navigation route of the Vault screen (the items, ANDROID-PLAN 0.1.11). */
@@ -197,17 +198,13 @@ fun ItemsScreen(state: ItemsUiState, chrome: ShellChrome, actions: ItemsActions,
                 FilterRow(state, actions)
                 val visible = state.visible
                 if (visible.isEmpty()) {
-                    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-                        EmptyState(
-                            icon = Icons.Outlined.Search,
-                            title = stringResource(R.string.items_no_match_title),
-                            body = stringResource(R.string.items_no_match_body),
-                            modifier = Modifier.weight(1f).testTag("items_no_match"),
-                        )
-                        TextButton(onClick = actions.onClearFilters, modifier = Modifier.padding(bottom = Spacing.xxl)) {
-                            Text(stringResource(R.string.items_filters_clear))
-                        }
-                    }
+                    // The one way to clear is "✕ Clear" in the filter row above (owner request 2026-10-09).
+                    EmptyState(
+                        icon = Icons.Outlined.Search,
+                        title = stringResource(R.string.items_no_match_title),
+                        body = stringResource(R.string.items_no_match_body),
+                        modifier = Modifier.testTag("items_no_match"),
+                    )
                 } else {
                     LazyColumn(Modifier.fillMaxSize().testTag("items_list")) {
                         items(visible, key = { it.itemId }) { ItemRow(it, actions.onOpen) }
@@ -230,20 +227,14 @@ private fun ItemRow(i: ItemSummary, onOpen: (String) -> Unit) {
         meta = i.updatedAt?.let { Times.short(it) },
         tileIcon = ItemTemplates.icon(i.category),
         onClick = { onOpen(i.itemId) },
+        below = if (i.tags.isEmpty()) null else ({ TagChipLine(i.tags, label = { tagLabel(it) }) }),
         modifier = Modifier.testTag("items_row_${i.itemId}"),
     )
 }
 
 @Composable
 private fun FilterRow(state: ItemsUiState, actions: ItemsActions) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = Spacing.gutter),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.s),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    FilterChipRow(filtering = !state.filter.isEmpty, onClear = actions.onClearFilters) {
         Sensitivity.entries.forEach { s ->
             FilterChip(
                 selected = state.filter.sensitivity == s,
@@ -269,10 +260,9 @@ private fun FilterRow(state: ItemsUiState, actions: ItemsActions) {
                 anyLabel = stringResource(R.string.items_filter_tag_any),
                 onPick = actions.onTag,
                 tag = "items_filter_tag",
+                colorOf = { it },
+                selectedColor = state.filter.tag?.let { tagColor(it) },
             )
-        }
-        if (!state.filter.isEmpty) {
-            TextButton(onClick = actions.onClearFilters) { Text(stringResource(R.string.items_filters_clear)) }
         }
         TextButton(onClick = actions.onTags, modifier = Modifier.testTag("items_manage_tags")) {
             Text(stringResource(R.string.items_tags_manage))
@@ -296,6 +286,10 @@ private fun Choice(
     anyLabel: String,
     onPick: (String?) -> Unit,
     tag: String,
+    /** The tag whose colour an option shows as a dot (tag options only). */
+    colorOf: ((String) -> String)? = null,
+    /** The chip's colours while an option is picked (a tag's own colour). */
+    selectedColor: TagColor? = null,
 ) {
     var open by rememberSaveable { mutableStateOf(false) }
     Box {
@@ -304,6 +298,15 @@ private fun Choice(
             onClick = { open = true },
             label = { Text(label) },
             trailingIcon = { Icon(Icons.Outlined.ArrowDropDown, contentDescription = null) },
+            colors = if (selectedColor != null) {
+                FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = selectedColor.container,
+                    selectedLabelColor = selectedColor.onContainer,
+                    selectedTrailingIconColor = selectedColor.onContainer,
+                )
+            } else {
+                FilterChipDefaults.filterChipColors()
+            },
             modifier = Modifier.testTag(tag),
         )
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
@@ -312,10 +315,14 @@ private fun Choice(
                 onPick(null)
             })
             options.forEach { (id, text) ->
-                DropdownMenuItem(text = { Text(text) }, onClick = {
-                    open = false
-                    onPick(id)
-                })
+                DropdownMenuItem(
+                    text = { Text(text) },
+                    leadingIcon = colorOf?.let { c -> { TagDot(c(id)) } },
+                    onClick = {
+                        open = false
+                        onPick(id)
+                    },
+                )
             }
         }
     }

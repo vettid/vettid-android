@@ -74,6 +74,8 @@ data class VettIdColors(
     val card: Color,
     /** Background behind modal content (drawer, sheet). */
     val scrim: Color,
+    /** The dark theme (picks the tag colours, [TagColors]). */
+    val isDark: Boolean,
 )
 
 internal val DarkVettIdColors = VettIdColors(
@@ -88,6 +90,7 @@ internal val DarkVettIdColors = VettIdColors(
     groupedBackground = VettIdPalette.Navy850,
     card = VettIdPalette.Navy800,
     scrim = VettIdPalette.Navy950.copy(alpha = 0.6f),
+    isDark = true,
 )
 
 internal val LightVettIdColors = VettIdColors(
@@ -102,6 +105,7 @@ internal val LightVettIdColors = VettIdColors(
     groupedBackground = VettIdPalette.Mist100,
     card = VettIdPalette.Paper,
     scrim = VettIdPalette.Ink.copy(alpha = 0.4f),
+    isDark = false,
 )
 
 /**

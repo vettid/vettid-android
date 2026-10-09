@@ -168,6 +168,8 @@ private const val SEGMENTS = 4
  * (and optional secondary) action pinned to the bottom above the keyboard.
  * The [header] (the hero glyph above the title: rook, lock, check mark) is
  * centred horizontally; the title, body and [content] stay start-aligned.
+ * [topActions] go at the end of the top bar (shown with [onBack]): a full-screen editor puts its save action there
+ * ([TopBarTextAction]) and passes no [primaryLabel], so nothing sits above the keyboard while typing.
  */
 @Composable
 fun FormScaffold(
@@ -183,6 +185,7 @@ fun FormScaffold(
     secondaryLabel: String? = null,
     onSecondary: () -> Unit = {},
     header: @Composable ColumnScope.() -> Unit = {},
+    topActions: @Composable RowScope.() -> Unit = {},
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Surface(modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -192,7 +195,7 @@ fun FormScaffold(
                 .imePadding(),
         ) {
             if (onBack != null) {
-                VettIdBackTopBar(onBackClick = onBack)
+                VettIdBackTopBar(onBackClick = onBack, actions = topActions)
             } else {
                 Spacer(Modifier.statusBarsPadding().height(Spacing.xl))
             }

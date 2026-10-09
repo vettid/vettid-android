@@ -51,6 +51,7 @@ import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.VettIdFab
 import com.vettid.core.ui.components.VettIdListRow
 import com.vettid.core.ui.theme.Spacing
+import com.vettid.core.ui.theme.tagColor
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -304,6 +305,7 @@ private fun TagRow(t: TagView, onEdit: (TagView) -> Unit) {
         },
         meta = if (t.reserved) counts else null,
         tileIcon = if (t.reserved) Icons.Outlined.Person else Icons.AutoMirrored.Outlined.Label,
+        tileColors = tagColor(t.tag),
         onClick = if (t.reserved) null else ({ onEdit(t) }),
         modifier = Modifier.testTag("tag_${t.tag}"),
     )

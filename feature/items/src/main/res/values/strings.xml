@@ -11,9 +11,8 @@
     <string name="items_filter_category_any">Any category</string>
     <string name="items_filter_tag">Tag</string>
     <string name="items_filter_tag_any">Any tag</string>
-    <string name="items_filters_clear">Clear filters</string>
-    <string name="items_no_match_title">Nothing matches</string>
-    <string name="items_no_match_body">No item in your vault matches the search or filters</string>
+    <string name="items_no_match_title">No items match these filters</string>
+    <string name="items_no_match_body">Change the search, or tap “✕ Clear” above to show every item</string>
     <string name="items_row_supporting">%1$s · %2$s</string>
     <string name="items_error_list">Your vault could not be read</string>
     <string name="items_retry">Try again</string>
@@ -213,6 +212,8 @@
     <string name="items_edit_title">Edit item</string>
     <string name="items_unnamed">This item</string>
     <string name="items_save">Save</string>
+    <string name="items_save_item">Save item</string>
+    <string name="items_phone_check">Check this number</string>
     <string name="items_name">Name</string>
     <string name="items_category">Category</string>
     <string name="items_cd_choose_category">Choose a category</string>
@@ -264,7 +265,7 @@
     <string name="items_notes_kept_placeholder">Kept (hidden)</string>
     <string name="items_notes_remove">Remove the notes</string>
     <string name="items_problems_title">Check the item</string>
-    <string name="items_discard_title">Discard your changes?</string>
+    <string name="items_discard_title">Discard changes to this item?</string>
     <string name="items_discard_body">What you typed is not saved.</string>
     <string name="items_discard">Discard</string>
     <string name="items_keep_editing">Keep editing</string>

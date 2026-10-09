@@ -1,16 +1,26 @@
 package com.vettid.feature.items
 
+import android.content.Context
+import android.telephony.TelephonyManager
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import com.vettid.core.data.items.FieldKinds
 import com.vettid.core.data.items.ItemChecks
+import com.google.i18n.phonenumbers.NumberParseException
+import com.google.i18n.phonenumbers.PhoneNumberUtil
+import com.google.i18n.phonenumbers.Phonenumber
 import java.time.DateTimeException
 import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.ZoneOffset
+import java.util.Locale
 
 /**
  * What a field's input lets through while the member types or pastes (VAULT-MESSAGING §10.7 field kinds; owner
@@ -209,4 +219,122 @@ internal object DateInput {
             )
         }
     }
+}
+
+/** The region phone numbers are typed and shown in ([PhoneInput.region]); tests and the screen catalog set it. */
+val LocalPhoneRegion = staticCompositionLocalOf<String?> { null }
+
+@Composable
+internal fun phoneRegion(): String {
+    val context = LocalContext.current
+    return LocalPhoneRegion.current ?: remember(context) { PhoneInput.region(context) }
+}
+
+/**
+ * A `phone` value (owner request 2026-10-09; §10.7 allows at most 32 digits, spaces and `+-().`): the input holds the
+ * dialable characters (digits, a leading `+`) and draws libphonenumber's as-you-type format over them ([mask]), in
+ * the phone's region until a `+` and country code switch it. Saved, a number that parses is stored in international
+ * format ([stored], e.g. `+44 20 7946 0958`); one that does not keeps what was typed and only gets a "Check this
+ * number" hint ([doubtful]), never a block. Shown, a stored number is formatted for the viewer's region ([display]).
+ */
+internal object PhoneInput {
+    private val util: PhoneNumberUtil by lazy { PhoneNumberUtil.getInstance() }
+
+    /** The region numbers without `+` are read in: the network's, then the SIM's country, then the locale's. */
+    fun region(context: Context): String {
+        val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+        val iso = listOfNotNull(
+            runCatching { tm?.networkCountryIso }.getOrNull(),
+            runCatching { tm?.simCountryIso }.getOrNull(),
+            Locale.getDefault().country,
+        ).firstOrNull { it.length == 2 }
+        return iso?.uppercase(Locale.ROOT) ?: UNKNOWN
+    }
+
+    /** The dialable characters of [typed] (typed, pasted or stored): its digits, after a `+` if it starts with one. */
+    fun raw(typed: String): String {
+        val digits = typed.filter { it in '0'..'9' }
+        val plus = typed.trimStart().startsWith("+")
+        return (if (plus) "+" else "") + digits.take(MAX_DIGITS)
+    }
+
+    /** [raw] formatted as typed in [region] (a `+` and country code switch the region); [raw] when no format fits. */
+    fun asYouType(raw: String, region: String): String {
+        if (raw.isEmpty()) return raw
+        val f = util.getAsYouTypeFormatter(region)
+        var out = ""
+        for (c in raw) out = f.inputDigit(c)
+        return out.takeIf { significant(it) == raw && FieldInput.phone(it) == it } ?: raw
+    }
+
+    /**
+     * What is saved for [text] in [region]: the international format when it parses as a possible number without an
+     * extension (it always fits §10.7), else the as-you-type text (what the member saw), within §10.7's characters.
+     */
+    fun stored(text: String, region: String): String {
+        val raw = raw(text)
+        if (raw.isEmpty()) return text
+        val n = parse(raw, region)
+        val intl = n?.takeIf { !it.hasExtension() && util.isPossibleNumber(it) }
+            ?.let { util.format(it, PhoneNumberUtil.PhoneNumberFormat.INTERNATIONAL) }
+        return intl?.takeIf { FieldInput.phone(it) == it } ?: FieldInput.phone(asYouType(raw, region))
+    }
+
+    /** Whether to show "Check this number" under [text]: there are digits, and it is not a valid number. */
+    fun doubtful(text: String, region: String): Boolean {
+        val raw = raw(text)
+        return raw.any { it in '0'..'9' } && parse(raw, region)?.let { util.isValidNumber(it) } != true
+    }
+
+    /** A stored number as shown in [region]: national format there, international elsewhere; as stored if unparsed. */
+    fun display(stored: String, region: String): String {
+        val n = parse(raw(stored), region)?.takeIf { util.isValidNumber(it) } ?: return stored
+        val same = util.getRegionCodeForNumber(n) == region
+        return util.format(n, if (same) PhoneNumberUtil.PhoneNumberFormat.NATIONAL else PhoneNumberUtil.PhoneNumberFormat.INTERNATIONAL)
+    }
+
+    private fun parse(raw: String, region: String): Phonenumber.PhoneNumber? = try {
+        util.parse(raw, region)
+    } catch (_: NumberParseException) {
+        null
+    }
+
+    private fun significant(s: String): String = (if (s.trimStart().startsWith("+")) "+" else "") + s.filter { it in '0'..'9' }
+
+    /** Draws [asYouType] over the dialable characters the input holds, the cursor moving over them. */
+    class Mask(private val region: String) : VisualTransformation {
+        override fun filter(text: AnnotatedString): TransformedText {
+            val raw = text.text
+            val out = asYouType(raw, region)
+            // Where each held character is in the drawn text (all of them are in it, in order).
+            val at = IntArray(raw.length)
+            var j = 0
+            for (i in raw.indices) {
+                while (j < out.length && out[j] != raw[i]) j++
+                at[i] = j
+                j++
+            }
+            return TransformedText(
+                AnnotatedString(out),
+                object : OffsetMapping {
+                    override fun originalToTransformed(offset: Int): Int = when {
+                        offset <= 0 -> 0
+                        offset >= raw.length -> out.length
+                        else -> (at[offset - 1] + 1).coerceAtMost(out.length)
+                    }
+
+                    override fun transformedToOriginal(offset: Int): Int =
+                        at.count { it < offset }.coerceIn(0, raw.length)
+                },
+            )
+        }
+
+        override fun equals(other: Any?): Boolean = other is Mask && other.region == region
+
+        override fun hashCode(): Int = region.hashCode()
+    }
+
+    /** E.164 holds at most 15 digits; §10.7 allows 32 characters. */
+    private const val MAX_DIGITS = 15
+    private const val UNKNOWN = "ZZ"
 }

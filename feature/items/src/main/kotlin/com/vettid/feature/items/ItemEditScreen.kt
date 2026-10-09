@@ -34,7 +34,6 @@ import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.ArrowDownward
 import androidx.compose.material.icons.outlined.ArrowDropDown
 import androidx.compose.material.icons.outlined.ArrowUpward
-import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.MoreVert
@@ -47,7 +46,6 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -63,6 +61,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -70,6 +70,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vettid.core.data.items.AddressValue
@@ -83,7 +84,9 @@ import com.vettid.core.ui.components.ConfirmDialog
 import com.vettid.core.ui.components.FormScaffold
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
+import com.vettid.core.ui.components.RemovableTagChip
 import com.vettid.core.ui.components.SecretField
+import com.vettid.core.ui.components.TopBarTextAction
 import com.vettid.core.ui.theme.Spacing
 
 @Composable
@@ -91,11 +94,11 @@ internal fun ItemEditRouteContent(host: ItemsHost) {
     val vm: ItemEditViewModel = hiltViewModel()
     val state by vm.uiState.collectAsStateWithLifecycle()
     LaunchedEffect(state.savedId) { state.savedId?.let { host.replace(ItemDetailRoute(it)) } }
-    BackHandler(enabled = state.dirty && state.prompt == null) { vm.askDiscard(true) }
     ItemEditScreen(
         state = state,
         actions = ItemEditActions(
-            onBack = { if (state.dirty) vm.askDiscard(true) else host.onBack() },
+            onBack = host.onBack,
+            onAskDiscard = { vm.askDiscard(true) },
             onDiscard = {
                 vm.askDiscard(false)
                 host.onBack()
@@ -136,7 +139,10 @@ internal fun ItemEditRouteContent(host: ItemsHost) {
 
 /** What the add/edit screen can ask for. */
 data class ItemEditActions(
+    /** Leaves the editor (nothing unsaved, or after "Discard"). */
     val onBack: () -> Unit = {},
+    /** Back or up with unsaved changes: "Discard changes to this item?". */
+    val onAskDiscard: () -> Unit = {},
     val onDiscard: () -> Unit = {},
     val onKeepEditing: () -> Unit = {},
     val onName: (String) -> Unit = {},
@@ -176,6 +182,10 @@ data class ItemEditActions(
  * A secret or critical item's stored values show as kept, never revealed (VAULT-MESSAGING 0.21.0 §10.7 Kept values):
  * typing into a field replaces its value. Fields are value-first (owner feedback 2026-10-08): one input captioned with
  * the field's label, its type as a hint, and a menu to rename, retype (unsaved fields), move or remove it.
+ *
+ * Saving is "Save item" in the top bar (owner request 2026-10-09): no Save bar above the keyboard, which read as
+ * "save this field". The keyboard's Next moves to the next input and Done on the last one closes the keyboard; neither
+ * saves. Back or up with unsaved changes asks "Discard changes to this item?".
  */
 @Composable
 @Suppress("CyclomaticComplexMethod")
@@ -196,15 +206,25 @@ fun ItemEditScreen(state: ItemEditUiState, actions: ItemEditActions, modifier: M
         }
     }
     val d = state.draft
+    val leave = { if (state.dirty) actions.onAskDiscard() else actions.onBack() }
+    BackHandler(enabled = state.dirty && !state.confirmDiscard) { actions.onAskDiscard() }
+    val ime = rememberImeChain(d.fields)
     FormScaffold(
         title = stringResource(if (state.isNew) R.string.items_new_title else R.string.items_edit_title),
-        primaryLabel = stringResource(R.string.items_save),
-        onPrimary = actions.onSave,
-        primaryEnabled = !state.loading,
-        busy = state.busy,
-        onBack = actions.onBack,
+        primaryLabel = null,
+        onPrimary = {},
+        onBack = leave,
         modifier = modifier.testTag("item_edit"),
         header = { HeaderGlyph(if (state.isNew) ItemTemplates.icon(d.category) else Icons.Outlined.Edit) },
+        topActions = {
+            TopBarTextAction(
+                label = stringResource(R.string.items_save_item),
+                onClick = actions.onSave,
+                enabled = !state.loading,
+                busy = state.busy,
+                modifier = Modifier.testTag("item_edit_save"),
+            )
+        },
     ) {
         val show = state.showErrors
         val problems = state.check.problems
@@ -251,7 +271,8 @@ fun ItemEditScreen(state: ItemEditUiState, actions: ItemEditActions, modifier: M
                     }
                     else -> null
                 },
-                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Next),
+                keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ime.name.action),
+                keyboardActions = ime.name.keyboardActions,
                 modifier = Modifier.fillMaxWidth().testTag("item_edit_name"),
             )
             CategoryPicker(d.category, state.pickerCustoms, actions)
@@ -268,7 +289,8 @@ fun ItemEditScreen(state: ItemEditUiState, actions: ItemEditActions, modifier: M
             }
             d.fields.forEachIndexed { i, f ->
                 val problems = if (show) state.check.fieldProblems[i].orEmpty() else emptySet()
-                FieldEditor(FieldSlot(i, d.fields.size, focus = state.focusField == i), f, problems, actions)
+                val slot = FieldSlot(i, d.fields.size, focus = state.focusField == i, ime = ime.fields[i], requester = ime.focus[i])
+                FieldEditor(slot, f, problems, actions)
             }
             AddFieldButton(enabled = d.fields.size < ItemChecks.MAX_FIELDS, onAdd = actions.onAskAddField)
             OutlinedTextField(
@@ -332,6 +354,7 @@ fun ItemEditScreen(state: ItemEditUiState, actions: ItemEditActions, modifier: M
             onDismiss = actions.onKeepEditing,
             destructive = true,
             dismissLabel = stringResource(R.string.items_keep_editing),
+            modifier = Modifier.testTag("item_edit_discard"),
         )
     }
 }
@@ -438,13 +461,11 @@ private fun TagsSection(state: ItemEditUiState, actions: ItemEditActions) {
     if (own.isNotEmpty()) {
         FlowRow(horizontalArrangement = Arrangement.spacedBy(Spacing.s), modifier = Modifier.testTag("item_edit_tags")) {
             own.forEach { t ->
-                InputChip(
-                    selected = false,
-                    onClick = { actions.onRemoveTag(t) },
-                    label = { Text(tagLabel(t)) },
-                    trailingIcon = {
-                        Icon(Icons.Outlined.Close, contentDescription = stringResource(R.string.items_cd_remove_tag, tagLabel(t)))
-                    },
+                RemovableTagChip(
+                    label = tagLabel(t),
+                    tag = t,
+                    removeDescription = stringResource(R.string.items_cd_remove_tag, tagLabel(t)),
+                    onRemove = { actions.onRemoveTag(t) },
                 )
             }
         }
@@ -524,8 +545,36 @@ private fun impactText(i: ShareImpact): String {
     }
 }
 
-/** Where a field is in the list, and whether its value input takes the focus (it was just added). */
-private data class FieldSlot(val index: Int, val count: Int, val focus: Boolean)
+/** Where a field is in the list, whether its value input takes the focus (it was just added), and its keyboard step. */
+private data class FieldSlot(val index: Int, val count: Int, val focus: Boolean, val ime: ImeStep, val requester: FocusRequester)
+
+/**
+ * A single-line input's keyboard action: Next moves the focus to [next]'s input; Done (the last input) closes the
+ * keyboard. Neither ever saves the item (owner request 2026-10-09).
+ */
+internal class ImeStep(val action: ImeAction, val run: () -> Unit) {
+    val keyboardActions = KeyboardActions(onNext = { run() }, onDone = { run() })
+}
+
+/** The name's step and each field's: name → field 1 → … → the last field (Done). */
+private class ImeChain(val name: ImeStep, val fields: List<ImeStep>, val focus: List<FocusRequester>)
+
+@Composable
+private fun rememberImeChain(fields: List<DraftField>): ImeChain {
+    val focusManager = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focus = remember(fields.size) { List(fields.size) { FocusRequester() } }
+    val close = {
+        keyboard?.hide()
+        focusManager.clearFocus()
+    }
+    fun to(i: Int): ImeStep = if (i < focus.size) {
+        ImeStep(ImeAction.Next) { runCatching { focus[i].requestFocus() } }
+    } else {
+        ImeStep(ImeAction.Done, close)
+    }
+    return ImeChain(name = to(0), fields = List(fields.size) { to(it + 1) }, focus = focus)
+}
 
 /**
  * One field, value-first: a single input captioned with the field's label, with the keyboard of its kind, and under
@@ -548,8 +597,14 @@ private fun FieldEditor(slot: FieldSlot, f: DraftField, problems: Set<DraftProbl
     val live = DraftProblem.VALUE_INVALID.takeIf { !f.kept && FieldInput.incomplete(f.kind, f.text) }
     val error = labelProblem?.let { ItemsText.problem(it) } ?: (valueProblem ?: live)?.let { ItemsText.problem(it, f.kind) }
     // A kept value is not at hand (§10.7 Kept values): the field stays empty until the member types a new one.
-    val hint = if (f.kept) stringResource(R.string.items_field_kind_kept, kindName) else kindName
-    val focus = remember { FocusRequester() }
+    val region = phoneRegion()
+    val hint = when {
+        f.kept -> stringResource(R.string.items_field_kind_kept, kindName)
+        // Never a block: a number libphonenumber does not know is saved as typed (owner request 2026-10-09).
+        f.kind == FieldKinds.PHONE && PhoneInput.doubtful(f.text, region) -> stringResource(R.string.items_phone_check)
+        else -> kindName
+    }
+    val focus = slot.requester
     LaunchedEffect(slot.focus) {
         if (slot.focus) {
             runCatching { focus.requestFocus() }
@@ -562,7 +617,7 @@ private fun FieldEditor(slot: FieldSlot, f: DraftField, problems: Set<DraftProbl
             val input = Modifier.focusRequester(focus)
             if (f.kind == FieldKinds.ADDRESS) {
                 Text(caption, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = Spacing.m))
-                AddressEditor(f.address, input) { actions.onFieldAddress(i, it) }
+                AddressEditor(f.address, input, slot.ime) { actions.onFieldAddress(i, it) }
                 Text(
                     error ?: hint,
                     style = MaterialTheme.typography.bodySmall,
@@ -572,7 +627,7 @@ private fun FieldEditor(slot: FieldSlot, f: DraftField, problems: Set<DraftProbl
                         .testTag(if (f.kept) "item_edit_field_kept_$i" else "item_edit_field_hint_$i"),
                 )
             } else {
-                ValueEditor(i, f, caption, error ?: hint, error != null, input) { actions.onFieldText(i, it) }
+                ValueEditor(i, f, caption, error ?: hint, error != null, input, slot.ime) { actions.onFieldText(i, it) }
             }
         }
         FieldMenu(slot, f, caption, actions)
@@ -653,6 +708,7 @@ private fun ValueEditor(
     supporting: String,
     isError: Boolean,
     input: Modifier,
+    ime: ImeStep,
     onValue: (String) -> Unit,
 ) {
     val tag = input.fillMaxWidth().testTag("item_edit_field_value_$i")
@@ -663,11 +719,12 @@ private fun ValueEditor(
             label = caption,
             error = supporting.takeIf { isError },
             supporting = supporting.takeUnless { isError },
-            imeAction = ImeAction.Next,
+            imeAction = ime.action,
+            onImeAction = ime.run,
             modifier = tag,
         )
     }
-    if (f.kind == FieldKinds.DATE) return DateEditor(i, f, caption, supporting, isError, tag, onValue)
+    if (f.kind == FieldKinds.DATE) return DateEditor(i, f, caption, supporting, isError, tag, ime, onValue)
     val keyboard = when (f.kind) {
         FieldKinds.NUMBER -> KeyboardType.Decimal
         FieldKinds.EMAIL -> KeyboardType.Email
@@ -686,9 +743,13 @@ private fun ValueEditor(
     }
     val multi = f.kind == FieldKinds.MULTILINE
     val free = f.kind == FieldKinds.TEXT || multi
+    // A phone number holds its dialable characters and is drawn as typed for the region (owner request 2026-10-09).
+    val phone = f.kind == FieldKinds.PHONE
+    val region = phoneRegion()
     OutlinedTextField(
-        value = f.text,
-        onValueChange = { v -> onValue(FieldInput.accept(f.kind, v)) },
+        value = if (phone) PhoneInput.raw(f.text) else f.text,
+        onValueChange = { v -> onValue(if (phone) PhoneInput.raw(v) else FieldInput.accept(f.kind, v)) },
+        visualTransformation = if (phone) PhoneInput.Mask(region) else VisualTransformation.None,
         label = { Text(caption) },
         placeholder = (if (f.kept) stringResource(R.string.items_field_kept_placeholder) else placeholder)?.let { p -> { Text(p) } },
         singleLine = !multi,
@@ -706,8 +767,10 @@ private fun ValueEditor(
                 f.kind == FieldKinds.OTP -> KeyboardCapitalization.Characters
                 else -> KeyboardCapitalization.None
             },
-            imeAction = if (multi) ImeAction.Default else ImeAction.Next,
+            // A multi-line value's Enter is a new line; every other input moves on or closes the keyboard.
+            imeAction = if (multi) ImeAction.Default else ime.action,
         ),
+        keyboardActions = if (multi) KeyboardActions.Default else ime.keyboardActions,
         modifier = tag,
     )
 }
@@ -726,6 +789,7 @@ private fun DateEditor(
     supporting: String,
     isError: Boolean,
     modifier: Modifier,
+    ime: ImeStep,
     onValue: (String) -> Unit,
 ) {
     var picking by rememberSaveable { mutableStateOf(false) }
@@ -758,7 +822,8 @@ private fun DateEditor(
                 )
             }
         },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ime.action),
+        keyboardActions = ime.keyboardActions,
         modifier = modifier,
     )
     if (picking) {
@@ -851,7 +916,7 @@ private const val MONTHS = 12
 private const val MAX_YEAR = 9999
 
 @Composable
-private fun AddressEditor(a: AddressValue, first: Modifier, onValue: (AddressValue) -> Unit) {
+private fun AddressEditor(a: AddressValue, first: Modifier, ime: ImeStep, onValue: (AddressValue) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(Spacing.xs)) {
         AddressPart(a.street, R.string.items_address_street, modifier = first) { onValue(a.copy(street = it)) }
         AddressPart(a.street2, R.string.items_address_street2) { onValue(a.copy(street2 = it)) }
@@ -859,18 +924,31 @@ private fun AddressEditor(a: AddressValue, first: Modifier, onValue: (AddressVal
         AddressPart(a.city, R.string.items_address_city) { onValue(a.copy(city = it)) }
         AddressPart(a.region, R.string.items_address_region) { onValue(a.copy(region = it)) }
         // ISO 3166-1 alpha-2, upper case (§10.7).
-        AddressPart(a.country, R.string.items_address_country, caps = true) { onValue(a.copy(country = FieldInput.country(it))) }
+        AddressPart(a.country, R.string.items_address_country, caps = true, ime = ime) { onValue(a.copy(country = FieldInput.country(it))) }
     }
 }
 
 @Composable
-private fun AddressPart(value: String, label: Int, caps: Boolean = false, modifier: Modifier = Modifier, onValue: (String) -> Unit) {
+@Suppress("LongParameterList")
+private fun AddressPart(
+    value: String,
+    label: Int,
+    caps: Boolean = false,
+    modifier: Modifier = Modifier,
+    ime: ImeStep? = null,
+    onValue: (String) -> Unit,
+) {
     OutlinedTextField(
         value = value,
         onValueChange = { onValue(it.replace("\n", "")) },
         label = { Text(stringResource(label)) },
         singleLine = true,
-        keyboardOptions = KeyboardOptions(capitalization = if (caps) KeyboardCapitalization.Characters else KeyboardCapitalization.Words),
+        // Next moves to the address's next part (the default action); the country takes the field's step.
+        keyboardOptions = KeyboardOptions(
+            capitalization = if (caps) KeyboardCapitalization.Characters else KeyboardCapitalization.Words,
+            imeAction = ime?.action ?: ImeAction.Next,
+        ),
+        keyboardActions = ime?.keyboardActions ?: KeyboardActions.Default,
         modifier = modifier.fillMaxWidth(),
     )
 }

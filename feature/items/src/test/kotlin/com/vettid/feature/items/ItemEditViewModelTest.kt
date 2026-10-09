@@ -109,6 +109,23 @@ class ItemEditViewModelTest {
     }
 
     @Test
+    fun aPhoneIsStoredInInternationalFormatAndAnUnknownOneAsTyped() = runTest {
+        // Owner request 2026-10-09: the input holds the dialable characters; saving formats, never blocks.
+        val vm = vm(template = "phone_number")
+        vm.setFieldText(0, PhoneInput.raw("+44 20 7946 0958"))
+        vm.save()
+        advanceUntilIdle()
+        assertEquals(FieldValue.Text("+44 20 7946 0958"), items.stored.getValue(vm.uiState.value.savedId!!).fields.single().value)
+
+        val unknown = vm(template = "phone_number")
+        unknown.setFieldText(0, "55512")
+        unknown.save()
+        advanceUntilIdle()
+        // Kept as the member saw it while typing.
+        assertEquals(FieldValue.Text("555-12"), items.stored.getValue(unknown.uiState.value.savedId!!).fields.single().value)
+    }
+
+    @Test
     fun noTemplateSuggestsAReservedTag() {
         // VAULT-ITEMS 0.1.1 (owner decision 2026-10-08): the shared profile holds only what the member tags.
         ItemTemplates.all.forEach { t ->

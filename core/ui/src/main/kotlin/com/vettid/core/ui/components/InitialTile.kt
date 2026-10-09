@@ -20,6 +20,8 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.vettid.core.ui.theme.TagColor
+import com.vettid.core.ui.theme.VettIdColors
 import com.vettid.core.ui.theme.VettIdShape
 import com.vettid.core.ui.theme.VettIdTheme
 
@@ -34,7 +36,8 @@ enum class TileStyle { Connection, Favorite, Self }
  * Rounded-square tile with an initial (Proton's avatar tile). Decorative by
  * default: the row or button around it carries the accessible label. A [photo]
  * (a shared profile photo, VAULT-MESSAGING §10.8) fills the tile instead of the
- * initial; an [icon] replaces the initial on non-person rows (History).
+ * initial; an [icon] replaces the initial on non-person rows (History). [colors] overrides the [style]'s colours
+ * (a tag's own colour on the tags screen, [com.vettid.core.ui.theme.TagColors]).
  */
 @Composable
 fun InitialTile(
@@ -44,12 +47,12 @@ fun InitialTile(
     style: TileStyle = TileStyle.Connection,
     photo: ImageBitmap? = null,
     icon: ImageVector? = null,
+    colors: TagColor? = null,
 ) {
-    val colors = VettIdTheme.colors
-    val (bg: Color, fg: Color) = when (style) {
-        TileStyle.Connection -> colors.tile to colors.onTile
-        TileStyle.Favorite -> colors.favoriteTile to colors.onFavoriteTile
-        TileStyle.Self -> colors.avatar to colors.onAvatar
+    val theme = VettIdTheme.colors
+    val (bg: Color, fg: Color) = when {
+        colors != null -> colors.container to colors.onContainer
+        else -> styleColors(style, theme)
     }
     Box(
         modifier = modifier
@@ -75,4 +78,10 @@ fun InitialTile(
             fontSize = (size * 0.45f).sp,
         )
     }
+}
+
+private fun styleColors(style: TileStyle, c: VettIdColors): Pair<Color, Color> = when (style) {
+    TileStyle.Connection -> c.tile to c.onTile
+    TileStyle.Favorite -> c.favoriteTile to c.onFavoriteTile
+    TileStyle.Self -> c.avatar to c.onAvatar
 }

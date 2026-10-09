@@ -336,6 +336,27 @@ fun GalleryScreen(
                 )
                 InitialTile("Broken", size = 40, photo = com.vettid.core.ui.components.rememberProfilePhoto("bm90IGFuIGltYWdl"))
             }
+            // Item tags in their own colours (one per tag, `@profile` gold), a removable tag, "✕ Clear" and a top bar text action.
+            Spacer(Modifier.height(Spacing.l))
+            androidx.compose.foundation.layout.FlowRow(
+                Modifier.padding(horizontal = Spacing.gutter),
+                horizontalArrangement = Arrangement.spacedBy(Spacing.s),
+                verticalArrangement = Arrangement.spacedBy(Spacing.s),
+            ) {
+                com.vettid.core.ui.components.TagChip("Shared profile", tag = "@profile")
+                listOf("travel", "money", "medical", "identity", "crypto", "family", "work", "home", "car", "school").forEach {
+                    com.vettid.core.ui.components.TagChip(it)
+                }
+                com.vettid.core.ui.components.RemovableTagChip("travel", "travel", "Remove tag travel", onRemove = {})
+                com.vettid.core.ui.components.ClearFiltersChip(onClick = {})
+                com.vettid.core.ui.components.TopBarTextAction("Save item", onClick = {})
+                com.vettid.core.ui.components.TopBarTextAction("Save item", onClick = {}, busy = true)
+            }
+            com.vettid.core.ui.components.FilterChipRow(filtering = true, onClear = {}) {
+                listOf("Standard", "Secret", "Critical", "Category", "Tag").forEach {
+                    androidx.compose.material3.FilterChip(selected = it == "Secret", onClick = {}, label = { Text(it) })
+                }
+            }
             Spacer(Modifier.height(Spacing.l))
             Row(Modifier.padding(horizontal = Spacing.gutter), horizontalArrangement = Arrangement.spacedBy(Spacing.m)) {
                 Button(

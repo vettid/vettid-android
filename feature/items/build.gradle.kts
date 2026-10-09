@@ -8,6 +8,8 @@ dependencies {
     implementation(libs.androidx.hilt.navigation.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
+    // Phone values formatted as typed and stored in international format (Apache-2.0).
+    implementation(libs.libphonenumber)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
