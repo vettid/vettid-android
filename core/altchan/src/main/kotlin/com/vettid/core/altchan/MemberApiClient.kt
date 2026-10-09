@@ -251,15 +251,17 @@ class MemberApiClient(
      * [enclave], waiting while the release starts (503 `release_starting`, §11.10.5), for at most
      * [MAX_START_TOTAL_MS] in all; then the last `release_starting` is thrown. Any other error, including
      * `503 vault_unavailable` (no release yet, or the vault service paused, MEMBER-API 1.2.0), is thrown at
-     * once: nothing retries it automatically.
+     * once: nothing retries it automatically. [onStarting] hears each `release_starting` (its `retry_after` in
+     * seconds), so that a screen can say that the release is starting.
      */
-    suspend fun enclaveWait(release: String? = null): EnclaveInfo {
+    suspend fun enclaveWait(release: String? = null, onStarting: ((Long) -> Unit)? = null): EnclaveInfo {
         var waited = 0L
         while (true) {
             try {
                 return enclave(release)
             } catch (e: MemberApiException) {
                 if (e.code != MemberApiException.RELEASE_STARTING || waited >= MAX_START_TOTAL_MS) throw e
+                onStarting?.invoke(e.retryAfterSeconds.toLong())
                 val ms = minOf(maxOf(e.retryAfterSeconds, 1) * MS_PER_S, MAX_START_WAIT_MS)
                 sleep(ms)
                 waited += ms

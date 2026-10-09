@@ -30,7 +30,7 @@ class SettingsViewModelsTest {
     private val vault = FakeVault(AppPhase.Unlocked)
     private val prefs = InMemoryPreferencesRepository()
     private val noKeys = object : AppLockKeys {
-        override fun create() = Unit
+        override fun create(method: com.vettid.core.data.prefs.AppLockMethod) = Unit
         override fun exists() = false
         override fun encryptCipher(): Cipher = error("unused")
         override fun decryptCipher(iv: ByteArray): Cipher = error("unused")
@@ -44,7 +44,7 @@ class SettingsViewModelsTest {
 
     @Test
     fun themeIsPersistedAndLockWorks() = runTest {
-        val vm = SettingsViewModel(vault, vault, prefs, AppLock(prefs, noKeys, noFile), vault)
+        val vm = SettingsViewModel(vault, vault, prefs, AppLock(prefs, noKeys, noFile), vault, com.vettid.core.testing.FakeReleaseUpdates())
         vm.setTheme(ThemePreference.DARK)
         advanceUntilIdle()
         assertEquals(ThemePreference.DARK, prefs.current.value.theme)
@@ -52,6 +52,20 @@ class SettingsViewModelsTest {
         vm.lockVault()
         advanceUntilIdle()
         assertEquals(AppPhase.Locked, vault.phase.value)
+    }
+
+    /** The app lock's method while the lock is off (owner request 2026-10-09): saved, shown, used when turned on. */
+    @Test
+    fun theAppLockMethodIsChosenWhileOff() = runTest {
+        val lock = AppLock(prefs, noKeys, noFile)
+        lock.start()
+        val vm = SettingsViewModel(vault, vault, prefs, lock, vault, com.vettid.core.testing.FakeReleaseUpdates())
+        advanceUntilIdle()
+        assertEquals(com.vettid.core.data.prefs.AppLockMethod.BIOMETRICS, vm.uiState.value.appLockMethod)
+        vm.chooseAppLockMethod(com.vettid.core.data.prefs.AppLockMethod.SCREEN_LOCK)
+        advanceUntilIdle()
+        assertEquals(com.vettid.core.data.prefs.AppLockMethod.SCREEN_LOCK, vm.uiState.value.appLockMethod)
+        assertEquals(com.vettid.core.data.prefs.AppLockMethod.SCREEN_LOCK, prefs.current.value.appLockMethod)
     }
 
     @Test

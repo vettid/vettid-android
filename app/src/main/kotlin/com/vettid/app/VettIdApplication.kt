@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.Application
 import android.os.Bundle
 import com.vettid.app.di.AppScope
+import com.vettid.app.notify.ReleaseUpdateNotifier
 import com.vettid.core.data.lock.AppLock
 import com.vettid.core.data.vault.AccountRepository
 import com.vettid.core.data.vault.AppPhase
@@ -30,6 +31,9 @@ class VettIdApplication : Application() {
     @Inject
     lateinit var connections: ConnectionPool
 
+    @Inject
+    lateinit var releaseNotifier: ReleaseUpdateNotifier
+
     override fun onCreate() {
         // Before injection, so before anything reads local state: a wipe of a replaced phone that the process did
         // not live to finish is finished now (owner decision, 2026-10-05; LocalWipe).
@@ -41,6 +45,8 @@ class VettIdApplication : Application() {
             account.refresh()
         }
         registerActivityLifecycleCallbacks(Foreground { onForeground() })
+        // The local "Vault updates" notification, once per release (owner decision 2026-10-09).
+        releaseNotifier.start()
     }
 
     /**

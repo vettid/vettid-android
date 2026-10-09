@@ -25,6 +25,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
@@ -348,6 +349,7 @@ fun InfoBanner(
     actionLabel: String? = null,
     onAction: () -> Unit = {},
     statusBarPadding: Boolean = true,
+    onDismiss: (() -> Unit)? = null,
 ) {
     val colors = MaterialTheme.colorScheme
     Surface(color = colors.surfaceContainerHigh, contentColor = colors.onSurface, modifier = modifier.fillMaxWidth()) {
@@ -373,16 +375,32 @@ fun InfoBanner(
                     Text(actionLabel, color = colors.primary, fontWeight = FontWeight.SemiBold)
                 }
             }
+            if (onDismiss != null) BannerDismiss(onDismiss, colors.onSurfaceVariant)
         }
+    }
+}
+
+/** A banner's close button ([InfoBanner], [UrgentBanner] with `onDismiss`). */
+@Composable
+private fun BannerDismiss(onDismiss: () -> Unit, tint: Color) {
+    IconButton(onClick = onDismiss, modifier = Modifier.testTag("banner_dismiss")) {
+        Icon(Icons.Outlined.Close, contentDescription = stringResource(R.string.core_ui_cd_dismiss), tint = tint)
     }
 }
 
 /**
  * The urgent banner above every top-level screen (the clone alarm, §3.5.9):
- * error colour, one line and an action. Pads for the status bar itself.
+ * error colour, one line and an action, and a close button with [onDismiss]. Pads for the status bar itself.
  */
 @Composable
-fun UrgentBanner(text: String, actionLabel: String, onClick: () -> Unit, modifier: Modifier = Modifier, statusBarPadding: Boolean = true) {
+fun UrgentBanner(
+    text: String,
+    actionLabel: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    statusBarPadding: Boolean = true,
+    onDismiss: (() -> Unit)? = null,
+) {
     val colors = MaterialTheme.colorScheme
     Surface(color = colors.error, contentColor = colors.onError, modifier = modifier.fillMaxWidth()) {
         Row(
@@ -398,6 +416,7 @@ fun UrgentBanner(text: String, actionLabel: String, onClick: () -> Unit, modifie
             TextButton(onClick = onClick, modifier = Modifier.heightIn(min = Spacing.touchTarget)) {
                 Text(actionLabel, color = colors.onError, fontWeight = FontWeight.Bold)
             }
+            if (onDismiss != null) BannerDismiss(onDismiss, colors.onError)
         }
     }
 }

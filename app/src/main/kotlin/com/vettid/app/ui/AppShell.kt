@@ -76,6 +76,15 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import com.vettid.feature.onboarding.OwnerCheckMode
 import com.vettid.feature.onboarding.OwnerCheckRoute
+import com.vettid.feature.onboarding.ReleaseUpdateRoute
+import com.vettid.feature.onboarding.releaseUpdateDestination
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 
 /**
  * App shell: navigation drawer (the only top-level navigation, no bottom tabs),
@@ -90,7 +99,7 @@ fun AppShell(
     portalUrl: String,
     alarm: CredentialAlarm?,
     onLockVault: () -> Unit,
-    onEnableAppLock: () -> Unit,
+    onEnableAppLock: (com.vettid.core.data.prefs.AppLockMethod) -> Unit,
 ) {
     val navController = rememberNavController()
     val drawerState = rememberDrawerState(DrawerValue.Closed)
@@ -136,6 +145,23 @@ fun AppShell(
         gateVm.onForeground()
         if (gated) armed = true
     }
+    // The proactive release notice (owner decision 2026-10-09): the banner, the notification's tap, and the one
+    // request for the notification permission (API 33+), made when the first notice shows and never again.
+    val releaseVm: ReleaseBannerViewModel = hiltViewModel()
+    val release by releaseVm.banner.collectAsStateWithLifecycle()
+    val openUpdate by releaseVm.openRequested.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val askNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        releaseVm.permissionAnswered(granted)
+    }
+    LaunchedEffect(release.visible, release.notificationsAsked) {
+        if (release.visible && !release.notificationsAsked && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val granted =
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            if (granted) releaseVm.markAsked() else askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     val onList = current?.let { d -> TopLevelDestination.entries.any { t -> d.hierarchy.any { it.hasRoute(t.routeClass) } } } ?: true
     val checkMode = if (gate.gated && (armed || onList)) OwnerCheckMode.GATED else asked
     LaunchedEffect(checkMode) { if (checkMode == OwnerCheckMode.GATED) showAccount = false }
@@ -187,7 +213,13 @@ fun AppShell(
                     onHoldOn = gateVm::turnHoldOn,
                     onDismissNotices = gateVm::dismissNotices,
                 )
-                val bannerShown = alarmShown || deletionShown || gate.bannerShown()
+                ReleaseUpdateBanner(
+                    release,
+                    first = !alarmShown && !deletionShown && !gate.bannerShown(),
+                    onUpdate = { navController.navigate(ReleaseUpdateRoute) { launchSingleTop = true } },
+                    onDismiss = releaseVm::dismiss,
+                )
+                val bannerShown = alarmShown || deletionShown || gate.bannerShown() || release.visible
                 Box(
                     Modifier
                         .weight(1f)
@@ -266,8 +298,10 @@ fun AppShell(
                                 onOpenAccountSite = { uri.openUri(portal) },
                                 onOwnerCheck = { holdOff -> asked = if (holdOff) OwnerCheckMode.HOLD_OFF else OwnerCheckMode.VOLUNTARY },
                                 onOpenItem = { id -> navController.navigate(ItemDetailRoute(id)) { launchSingleTop = true } },
+                                onReleaseUpdate = { navController.navigate(ReleaseUpdateRoute) { launchSingleTop = true } },
                             ),
                         )
+                        releaseUpdateDestination(onBack = { navController.popBackStack() })
                         helpDestination(onBack = { navController.popBackStack() })
                         debugTools.register(
                             this,
@@ -292,6 +326,13 @@ fun AppShell(
 
     LaunchedEffect(launchRoute) {
         if (launchRoute != null) navController.navigateTopLevel(launchRoute)
+    }
+
+    // A tap on the "Vault updates" notification: the update screen (the owner check, if due, still comes first).
+    LaunchedEffect(openUpdate) {
+        if (!openUpdate) return@LaunchedEffect
+        releaseVm.openTaken()
+        navController.navigate(ReleaseUpdateRoute) { launchSingleTop = true }
     }
 
     // An invitation link the app was opened with (§6.4): the accept screen, where the member confirms.

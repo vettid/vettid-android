@@ -3,6 +3,7 @@
     <string name="core_ui_cd_open_menu">Open navigation menu</string>
     <string name="core_ui_cd_search">Search</string>
     <string name="core_ui_cd_close_search">Close search</string>
+    <string name="core_ui_cd_dismiss">Dismiss</string>
     <string name="core_ui_cd_clear_search">Clear and close search</string>
     <string name="core_ui_cd_account">Account: %1$s</string>
     <string name="core_ui_cd_back">Back</string>

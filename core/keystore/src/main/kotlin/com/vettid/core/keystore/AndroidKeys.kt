@@ -227,9 +227,16 @@ class AppDataKey(private val alias: String = AndroidKeys.ALIAS_APP_DATA) {
      * authentication (CryptoObject); with a positive value the key stays usable
      * for that long after any authentication.
      */
-    fun create(authTimeoutSeconds: Int = 0, allowDeviceCredential: Boolean = true, preferStrongBox: Boolean = false): KeyLevel {
+    fun create(
+        authTimeoutSeconds: Int = 0,
+        allowDeviceCredential: Boolean = true,
+        preferStrongBox: Boolean = false,
+        allowBiometric: Boolean = true,
+    ): KeyLevel {
+        require(allowBiometric || allowDeviceCredential) { "app-data key: no authenticator" }
         AndroidKeys.delete(alias)
-        val authTypes = KeyProperties.AUTH_BIOMETRIC_STRONG or (if (allowDeviceCredential) KeyProperties.AUTH_DEVICE_CREDENTIAL else 0)
+        val authTypes = (if (allowBiometric) KeyProperties.AUTH_BIOMETRIC_STRONG else 0) or
+            (if (allowDeviceCredential) KeyProperties.AUTH_DEVICE_CREDENTIAL else 0)
         AndroidKeys.generateStrongBoxFirst(preferStrongBox) { sb ->
             val spec = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                 .setKeySize(256)
@@ -238,7 +245,8 @@ class AppDataKey(private val alias: String = AndroidKeys.ALIAS_APP_DATA) {
                 .setRandomizedEncryptionRequired(true)
                 .setUserAuthenticationRequired(true)
                 .setUserAuthenticationParameters(authTimeoutSeconds, authTypes)
-                .setInvalidatedByBiometricEnrollment(true)
+                // Only a biometric key is tied to the enrolled biometrics (the "Phone screen lock" method has none).
+                .setInvalidatedByBiometricEnrollment(allowBiometric)
                 .setIsStrongBoxBacked(sb)
                 .build()
             KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, AndroidKeys.PROVIDER).apply { init(spec) }.generateKey()

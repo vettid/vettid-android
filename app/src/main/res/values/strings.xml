@@ -68,4 +68,15 @@
     <string name="canary_refused_published">VettID has already published this release list or a newer one, so it is not needed.</string>
     <string name="canary_refused_format">It is not a VettID release manifest.</string>
     <string name="canary_refused_other">It could not be checked. Try again.</string>
+    <!-- The proactive release notice and its local notification (owner decision 2026-10-09, ANDROID-PLAN 0.1.19). -->
+    <string name="release_banner_available">A new vault release is available (release %1$d).</string>
+    <string name="release_banner_ending">Your vault\'s release ends on %1$s. Update now to keep your vault.</string>
+    <string name="release_banner_ending_soon">Your vault\'s release is ending. Update now to keep your vault.</string>
+    <string name="release_banner_ended">Your vault\'s release has ended. Update now to keep your vault.</string>
+    <string name="release_banner_update">Update now</string>
+    <string name="release_channel_name">Vault updates</string>
+    <string name="release_channel_description">A new release for your vault is available, or your vault\'s release is ending.</string>
+    <string name="release_notification_title">Vault update available</string>
+    <string name="release_notification_available">Release %1$d is available for your vault. Tap to update.</string>
+    <string name="release_notification_ending">Your vault\'s release ends on %1$s. Tap to update to release %2$d.</string>
 </resources>

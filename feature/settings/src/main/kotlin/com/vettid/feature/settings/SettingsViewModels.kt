@@ -6,6 +6,7 @@ import com.vettid.core.data.lock.AppLock
 import com.vettid.core.data.lock.AppLockState
 import com.vettid.core.data.policy.DeletePhrase
 import com.vettid.core.data.policy.PinPolicy
+import com.vettid.core.data.prefs.AppLockMethod
 import com.vettid.core.data.prefs.AppLockTimeout
 import com.vettid.core.data.prefs.AppPreferences
 import com.vettid.core.data.prefs.PreferencesRepository
@@ -21,6 +22,8 @@ import com.vettid.core.data.vault.RecoveryView
 import com.vettid.core.data.vault.VaultFailure
 import com.vettid.core.data.vault.VaultOverview
 import com.vettid.core.data.vault.ProfileRepository
+import com.vettid.core.data.vault.ReleaseUpdateOffer
+import com.vettid.core.data.vault.ReleaseUpdateRepository
 import com.vettid.core.data.vault.VaultRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -43,6 +46,12 @@ data class SettingsUiState(
     val error: FailureKind? = null,
     /** The member's profile photo (§10.8) for the account card; null for none. */
     val photo: String? = null,
+    /** How the app lock asks (0.1.19): the chosen method, also while the lock is off. */
+    val appLockMethod: AppLockMethod = AppLockMethod.BIOMETRICS,
+    /** The phone has a screen lock: "Phone screen lock" can be chosen (read by the screen, not the ViewModel). */
+    val screenLockSet: Boolean = true,
+    /** A release update to approve (ANDROID-PLAN 0.1.19): the "Update available" row. */
+    val update: ReleaseUpdateOffer? = null,
 )
 
 /** Settings (ANDROID-PLAN §4): theme (DataStore), app lock and its timeout (D6), lock vault; the account read-only. */
@@ -53,10 +62,13 @@ class SettingsViewModel @Inject constructor(
     private val prefs: PreferencesRepository,
     private val appLock: AppLock,
     private val profiles: ProfileRepository,
+    updates: ReleaseUpdateRepository,
 ) : ViewModel() {
     private val local = MutableStateFlow(SettingsUiState())
 
     init {
+        viewModelScope.launch { updates.offer.collect { o -> local.update { it.copy(update = o) } } }
+        viewModelScope.launch { appLock.method.collect { m -> local.update { it.copy(appLockMethod = m) } } }
         viewModelScope.launch { profiles.profile.collect { p -> local.update { it.copy(photo = p?.photo) } } }
         viewModelScope.launch { runCatching { profiles.refreshProfile() } }
     }
@@ -80,6 +92,11 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun acknowledgeInvalidated() = appLock.acknowledgeInvalidated()
+
+    /** The method while the lock is off; with the lock on the activity's prompt changes it (a new key). */
+    fun chooseAppLockMethod(m: AppLockMethod) {
+        viewModelScope.launch { appLock.chooseMethod(m) }
+    }
 
     fun lockVault() = act { vault.lock() }
 

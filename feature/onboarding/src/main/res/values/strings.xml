@@ -146,6 +146,8 @@
     <string name="app_lock_unlock">Unlock</string>
     <string name="app_lock_prompt_title">Unlock VettID</string>
     <string name="app_lock_prompt_subtitle">Confirm it is you</string>
+    <string name="app_lock_body_screen_lock">Use your phone\'s PIN, pattern or password to open VettID.</string>
+    <string name="app_lock_prompt_subtitle_screen_lock">Use your phone\'s PIN, pattern or password</string>
 
     <!-- Done, after a move -->
     <string name="onboarding_moved_title">Your vault is on this phone now</string>
@@ -226,4 +228,52 @@
     <string name="transfer_in_scan_new">Scan a new code</string>
     <string name="move_back">Back</string>
     <string name="move_cd_qr_scanner">Camera view for scanning the code</string>
+    <!-- The proactive release update (owner decision 2026-10-09, ANDROID-PLAN 0.1.19). -->
+    <string name="release_update_title">Update your vault</string>
+    <string name="release_update_body">Approve release %1$d for your vault with your vault PIN.</string>
+    <string name="release_update_approve">Approve and update</string>
+    <string name="release_update_how">VettID locks your vault, opens it again with your approval, and then opens it on the new release. This takes a moment; a release that has to start first can take a few minutes. Your vault stays locked meanwhile.</string>
+    <string name="release_update_ended_body">It has ended and is open only so that you can move your vault. Update now to keep it.</string>
+    <string name="release_update_check_first_title">Daily check first</string>
+    <string name="release_update_check_first_body">Your vault is waiting for its daily PIN and password check. Do the check first, then update.</string>
+    <string name="release_update_none_title">Your vault is up to date</string>
+    <string name="release_update_none_body">Your vault runs the newest release.</string>
+    <string name="release_update_running_title">Updating your vault to release %1$d…</string>
+    <string name="release_update_returning_title">Returning to release %1$d…</string>
+    <string name="release_update_step_lock">Lock your vault</string>
+    <string name="release_update_step_approve">Move from release %1$d to release %2$d</string>
+    <string name="release_update_step_open">Open your vault on release %1$d</string>
+    <string name="release_update_step_return">Opening your vault on release %1$d</string>
+    <string name="release_update_starting">Release %1$d is starting. This can take a few minutes.</string>
+    <string name="release_update_keep_open">Keep VettID open until this is done.</string>
+    <string name="release_update_done_title">Your vault is updated</string>
+    <string name="release_update_done_body">Your vault now runs release %1$d (fingerprint %2$s) and is open.</string>
+    <string name="release_update_continue">Continue</string>
+    <string name="release_update_refused_title">The update was refused</string>
+    <string name="release_update_refused_body">Your vault stayed on release %1$d and is open.</string>
+    <string name="release_update_refused_why">Why</string>
+    <string name="release_update_refused_target">Release %1$d is not an active release in the release list your vault trusts.</string>
+    <string name="release_update_refused_downgrade">Release %1$d is not newer than your vault\'s release.</string>
+    <string name="release_update_refused_approval">Your vault could not verify this phone\'s approval.</string>
+    <string name="release_update_refused_seal_key">Your vault did not accept the sealing key of release %1$d.</string>
+    <string name="release_update_refused_pending">Another update is already under way for your vault.</string>
+    <string name="release_update_refused_write">Your vault could not record the update. Try again later.</string>
+    <string name="release_update_refused_other">Your vault did not move (%1$s).</string>
+    <string name="release_update_failed_title">The update did not go through</string>
+    <string name="release_update_failed_body_open">Nothing changed: your vault stays on release %1$d and is open.</string>
+    <string name="release_update_failed_body_locked">Nothing changed: your vault stays on release %1$d. It is locked; enter your PIN to try again.</string>
+    <string name="release_update_retry">Try again</string>
+    <string name="release_update_not_now">Not now</string>
+    <string name="release_update_unlock_only">Unlock without updating</string>
+    <string name="release_update_backoff">Too many wrong PINs. Wait, then try again.</string>
+    <string name="release_update_start_failed">The new release did not start. Try again later.</string>
+    <string name="release_update_new_failed_title">Release %1$d did not open your vault</string>
+    <string name="release_update_new_failed_body">Your vault was moved to release %1$d but did not open there. Try again, or return to release %2$d: that is possible until release %1$d has opened your vault once.</string>
+    <string name="release_update_new_failed_body_no_return">Your vault was moved to release %1$d but did not open there. Try again with your PIN.</string>
+    <string name="release_update_new_failed_why">What happened</string>
+    <string name="release_update_return">Return to release %1$d</string>
+    <string name="release_update_return_confirm_title">Return to release %1$d?</string>
+    <string name="release_update_return_confirm_body">Your vault goes back to release %1$d and opens there. You can approve release %2$d again later.</string>
+    <string name="release_update_abandoned_title">Back on release %1$d</string>
+    <string name="release_update_abandoned_body">Your vault runs release %1$d again and is open. You can update to release %2$d later.</string>
 </resources>
