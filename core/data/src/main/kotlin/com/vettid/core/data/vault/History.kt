@@ -10,25 +10,28 @@ import java.time.Instant
  * The History screen's categories (ANDROID-PLAN 0.1.11 "History", VAULT-MESSAGING 0.20.0 §10.9): each is the set of
  * audit kind prefixes it sends as `kinds` (an entry matches a prefix when its `kind` equals it or starts with it
  * followed by `.`). Every kind of §10.9 falls in exactly one; [OTHER] holds a kind a newer vault adds outside these
- * prefixes, which appears under "All" only (it is not a filter).
+ * prefixes, which appears under "All" only (it is not a filter). [id] is the category's stable, untranslated name in
+ * a History export file (ANDROID-PLAN 0.1.17).
  */
-enum class AuditCategory(val prefixes: List<String>) {
+enum class AuditCategory(val id: String, val prefixes: List<String>) {
     /** Unlocks and owner checks. */
-    VAULT_ACCESS(listOf("vault", "owner_check")),
-    SECURITY(listOf("credential", "identity", "recovery")),
-    DEVICES(listOf("device", "approval")),
-    CONNECTIONS(listOf("connection", "intro", "profile")),
-    MESSAGES(listOf("message", "call")),
+    VAULT_ACCESS("unlocks", listOf("vault", "owner_check")),
+
+    /** 0.1.17: `audit` (`audit.exported`, a History export) belongs here. */
+    SECURITY("security", listOf("credential", "identity", "recovery", "audit")),
+    DEVICES("devices", listOf("device", "approval")),
+    CONNECTIONS("connections", listOf("connection", "intro", "profile")),
+    MESSAGES("messages", listOf("message", "call")),
 
     /** "Vault (items, sharing, wallet)". */
-    ITEMS(listOf("item", "tag", "share", "grant", "critical-secret", "wallet")),
-    AGENTS(listOf("leash", "action")),
-    LOCATION(listOf("location")),
-    ACCOUNT(listOf("account", "settings")),
+    ITEMS("vault", listOf("item", "tag", "share", "grant", "critical-secret", "wallet")),
+    AGENTS("agents", listOf("leash", "action")),
+    LOCATION("location", listOf("location")),
+    ACCOUNT("account", listOf("account", "settings")),
 
     /** Blocked and dropped messages. */
-    DROPPED(listOf("drop")),
-    OTHER(emptyList()),
+    DROPPED("dropped", listOf("drop")),
+    OTHER("other", emptyList()),
     ;
 
     companion object {

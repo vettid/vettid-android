@@ -29,6 +29,7 @@ import androidx.compose.material.icons.outlined.EventNote
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.LocationOn
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.LockOpen
 import androidx.compose.material.icons.outlined.People
 import androidx.compose.material.icons.outlined.Search
@@ -62,6 +63,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
@@ -111,6 +113,10 @@ data class HistoryHost(
     val onOpenConnection: (String) -> Unit,
     /** Opens an item of the Vault (an item entry's detail). */
     val onOpenItem: (String) -> Unit = {},
+    /** The credential alarm (an open alarm refuses a History export, ANDROID-PLAN 0.1.17). */
+    val onOpenAlarm: () -> Unit = {},
+    /** The owner-check screen (an export answered `owner_check_required`). */
+    val onOwnerCheck: () -> Unit = {},
 )
 
 /** Registers History, a connection's History and the entry detail. */
@@ -133,12 +139,26 @@ fun NavGraphBuilder.historyDestination(chrome: ShellChrome, host: HistoryHost) {
 @Composable
 private fun HistoryRouteContent(chrome: ShellChrome, host: HistoryHost, onBack: (() -> Unit)?) {
     val vm: HistoryViewModel = hiltViewModel()
+    val exportVm: HistoryExportViewModel = hiltViewModel()
     val state by vm.uiState.collectAsStateWithLifecycle()
+    val exportStep by exportVm.step.collectAsStateWithLifecycle()
+    val dates = if (state.filter.since != null || state.filter.until != null) dateLabel(state) else null
+    if (exportStep != ExportStep.Closed) {
+        HistoryExportHost(
+            exportVm,
+            ExportFilterWords(state.filter, state.filter.connectionId?.let { state.connectionNames[it] }, dates),
+            onOpenAlarm = host.onOpenAlarm,
+            onOwnerCheck = host.onOwnerCheck,
+        )
+        return
+    }
     HistoryScreen(
         state = state,
         chrome = chrome,
         onBack = onBack,
         actions = HistoryActions(
+            // ANDROID-PLAN 0.1.17: exactly what the list shows (its category, connection, dates and search).
+            onExport = { exportVm.start(ExportContext(state.filter, state.connectionNames, state.itemNames)) },
             onOpen = { host.navigate(HistoryEntryRoute(it)) },
             onQuery = vm::setQuery,
             onCategory = vm::setCategory,
@@ -161,6 +181,8 @@ data class HistoryActions(
     val onClearFilters: () -> Unit = {},
     val onLoadMore: () -> Unit = {},
     val onRetry: () -> Unit = {},
+    /** The ⋯ menu's "Export…" (ANDROID-PLAN 0.1.17). */
+    val onExport: () -> Unit = {},
 )
 
 /** The icon of each group, on the entry's tile. */
@@ -253,14 +275,40 @@ fun HistoryScreen(
         }
     }
     if (onBack != null) {
-        DetailScaffold(onBackClick = onBack, modifier = modifier) {
+        DetailScaffold(onBackClick = onBack, modifier = modifier, actions = { MoreMenu(actions.onExport) }) {
             Column(Modifier.fillMaxSize()) {
                 LargeTitle(stringResource(R.string.history_title))
                 body()
             }
         }
     } else {
-        TopLevelScaffold(title = stringResource(R.string.history_title), chrome = chrome, modifier = modifier) { body() }
+        TopLevelScaffold(
+            title = stringResource(R.string.history_title),
+            chrome = chrome,
+            modifier = modifier,
+            actions = { MoreMenu(actions.onExport) },
+        ) { body() }
+    }
+}
+
+/** History's ⋯ menu: "Export…" (ANDROID-PLAN 0.1.17). */
+@Composable
+private fun MoreMenu(onExport: () -> Unit) {
+    var open by rememberSaveable { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open = true }, modifier = Modifier.testTag("history_more")) {
+            Icon(Icons.Outlined.MoreVert, contentDescription = stringResource(R.string.history_more_actions))
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            DropdownMenuItem(
+                text = { Text(stringResource(R.string.history_export_menu)) },
+                onClick = {
+                    open = false
+                    onExport()
+                },
+                modifier = Modifier.testTag("history_export_open"),
+            )
+        }
     }
 }
 
@@ -500,6 +548,10 @@ private fun EntryRow(e: AuditRecord, names: Map<String, String>, itemNames: Map<
     val connection = e.connectionId?.let { names[it] ?: stringResource(R.string.history_connection_removed) }
     // ANDROID-PLAN 0.1.11: the item's name where the entry refers to one; a removed one shows "Deleted item".
     val item = AuditKinds.itemOf(e.kind, e.ref)?.let { itemNames[it] ?: stringResource(R.string.history_item_deleted) }
+        ?: AuditKinds.exportSummary(e.kind, e.ref)?.let { (format, count) ->
+            val entries = pluralStringResource(R.plurals.history_export_count, count, count)
+            stringResource(R.string.history_export_summary, format.uppercase(), entries)
+        }
     VettIdListRow(
         title = HistoryText.title(e.kind),
         supporting = listOfNotNull(item, connection).joinToString(" · ").ifEmpty { stringResource(AuditKinds.categoryLabel(e.category)) },

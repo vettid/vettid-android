@@ -35,6 +35,7 @@ fun TopLevelScaffold(
     onSearchClick: (() -> Unit)? = null,
     search: TopBarSearch? = null,
     overlay: @Composable BoxScope.() -> Unit = {},
+    actions: @Composable RowScope.() -> Unit = {},
     content: @Composable BoxScope.() -> Unit,
 ) {
     ScreenSurface(modifier, MaterialTheme.colorScheme.background, overlay) {
@@ -49,6 +50,7 @@ fun TopLevelScaffold(
                 onSearchClick = search?.let { s -> s::open } ?: onSearchClick,
                 accountPhoto = chrome.accountPhoto,
                 searchLabel = search?.label,
+                actions = actions,
             )
         }
         Box(Modifier.weight(1f).fillMaxSize(), content = content)

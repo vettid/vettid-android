@@ -24,6 +24,7 @@ import com.vettid.core.data.vault.CredentialRepository
 import com.vettid.core.data.vault.MoveRepository
 import com.vettid.core.data.vault.RelaySafetyNet
 import com.vettid.core.data.vault.OwnerCheckRepository
+import com.vettid.core.data.vault.HistoryExportRepository
 import com.vettid.core.data.vault.HistoryRepository
 import com.vettid.core.data.vault.ProfileRepository
 import com.vettid.core.data.vault.VaultManager
@@ -140,6 +141,9 @@ object AppModule {
 
     @Provides
     fun historyRepository(m: VaultManager): HistoryRepository = m.history
+
+    @Provides
+    fun historyExportRepository(m: VaultManager): HistoryExportRepository = m.historyExport
 
     @Provides
     fun itemsRepository(m: VaultManager): ItemsRepository = m.items

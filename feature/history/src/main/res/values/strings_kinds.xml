@@ -52,6 +52,7 @@
     <string name="history_kind_credential_alarm_confirmed">Credential alarm answered</string>
     <string name="history_kind_credential_alarm_resolved">Credential alarm resolved</string>
     <string name="history_kind_credential_reset">Credential reset</string>
+    <string name="history_kind_audit_exported">History exported</string>
     <string name="history_kind_recovery_requested">Recovery requested</string>
     <string name="history_kind_recovery_replaced">Recovery request replaced</string>
     <string name="history_kind_recovery_bad_code">Wrong recovery code</string>

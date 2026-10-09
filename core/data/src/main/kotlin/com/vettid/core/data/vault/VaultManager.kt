@@ -173,6 +173,9 @@ class VaultManager(
     /** The member's audit log (VAULT-MESSAGING §10.9), read-only: the History screen. */
     val history = HistoryManager(ops = { VaultAuditOps(session().api) })
 
+    /** The History export (VAULT-MESSAGING 0.22.0 §10.9): `audit.export`, then `audit.list` below its `upto_seq`. */
+    val historyExport = HistoryExportManager(ops = { VaultAuditExportOps(session().api) }, audit = { VaultAuditOps(session().api) })
+
     /** The member's items (VAULT-MESSAGING §10.7): the Vault screens. The list is read while the vault is open. */
     val items = ItemsManager(scope, ops = { VaultItemsOps(session().api) })
 

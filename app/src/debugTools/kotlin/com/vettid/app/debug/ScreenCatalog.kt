@@ -15,7 +15,14 @@ import com.vettid.app.ui.AccountSheet
 import com.vettid.core.data.vault.AuditCategory
 import com.vettid.core.data.vault.AuditFilter
 import com.vettid.core.data.vault.AuditRecord
+import com.vettid.core.data.vault.ExportAnswer
+import com.vettid.core.data.vault.ExportFormat
 import com.vettid.feature.history.DatePreset
+import com.vettid.feature.history.ExportFilterWords
+import com.vettid.feature.history.ExportRefusal
+import com.vettid.feature.history.ExportStep
+import com.vettid.feature.history.HistoryExportActions
+import com.vettid.feature.history.HistoryExportContent
 import com.vettid.feature.history.HistoryActions
 import com.vettid.feature.history.HistoryEntryScreen
 import com.vettid.feature.history.HistoryEntryUiState
@@ -284,6 +291,7 @@ object ScreenCatalog {
     /** History samples (ANDROID-PLAN 0.1.11). */
     private val historyNames = mapOf("c1" to "Alice Moreau", "c2" to "Bob Okafor")
     private val historyEntries = listOf(
+        AuditRecord("e10", 10, Instant.now().minusSeconds(60), "audit.exported", deviceId = "app-1", ref = "format=csv;count=40;seqs=1-9;filters=none"),
         AuditRecord("e9", 9, Instant.now().minusSeconds(120), "message.received", connectionId = "c1", ref = "m-01J9", direction = "in"),
         AuditRecord("e8", 8, Instant.now().minusSeconds(900), "vault.unlocked"),
         AuditRecord("e7", 7, Instant.now().minusSeconds(3_600), "connection.added", connectionId = "c2"),
@@ -293,6 +301,15 @@ object ScreenCatalog {
         AuditRecord("e3", 3, Instant.now().minusSeconds(300_000), "drop.rate_limited", connectionId = "c3"),
         AuditRecord("e2", 2, Instant.now().minusSeconds(400_000), "leash.item.read.summary", deviceId = "agent-1", ref = "12"),
         AuditRecord("e1", 1, Instant.now().minusSeconds(500_000), "zebra.future_kind"),
+    )
+    private val exportPreview = ExportAnswer(
+        count = 40, more = false, uptoSeq = 790, uptoHash = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=", oldestSeq = 700, newestSeq = 790,
+        oldestAt = Instant.parse("2026-10-01T09:12:00Z"), newestAt = Instant.parse("2026-10-08T17:40:00Z"),
+    )
+    private val exportWords = ExportFilterWords(
+        AuditFilter(category = AuditCategory.MESSAGES, connectionId = "c1", query = "lisbon", since = Instant.parse("2026-10-01T04:00:00Z")),
+        connectionName = "Alice Moreau",
+        dates = "Last 7 days",
     )
     private val namePending = NameRequestView(4, "Sam", "King", Instant.parse("2026-10-07T12:00:00Z"), NameRequestState.PENDING)
     private val nameRefused = namePending.copy(state = NameRequestState.REFUSED, reason = NameRequestView.REASON_TOO_SOON)
@@ -892,6 +909,45 @@ object ScreenCatalog {
         },
         "history.entry_unknown" to {
             HistoryEntryScreen(HistoryEntryUiState(historyEntries.last(), loading = false), onBack = {})
+        },
+        // History export (ANDROID-PLAN 0.1.17, VAULT-MESSAGING 0.22.0 §10.9): each step of History ⋯ → "Export…".
+        "history.export_preparing" to { HistoryExportContent(ExportStep.Previewing, exportWords, HistoryExportActions()) },
+        "history.export_confirm" to { HistoryExportContent(ExportStep.Confirm(exportPreview), exportWords, HistoryExportActions()) },
+        "history.export_confirm_json" to {
+            HistoryExportContent(ExportStep.Confirm(exportPreview, ExportFormat.JSON), ExportFilterWords(), HistoryExportActions())
+        },
+        "history.export_confirm_more" to {
+            HistoryExportContent(
+                ExportStep.Confirm(exportPreview.copy(count = 10_000, more = true), ExportFormat.CSV),
+                ExportFilterWords(),
+                HistoryExportActions(),
+            )
+        },
+        "history.export_nothing" to { HistoryExportContent(ExportStep.NothingToExport, exportWords, HistoryExportActions()) },
+        "history.export_alarm" to { HistoryExportContent(ExportStep.Refused(ExportRefusal.ALARM), exportWords, HistoryExportActions()) },
+        "history.export_old_vault" to { HistoryExportContent(ExportStep.Refused(ExportRefusal.OLD_VAULT), exportWords, HistoryExportActions()) },
+        "history.export_pin" to { HistoryExportContent(ExportStep.Pin(exportPreview, ExportFormat.CSV), exportWords, HistoryExportActions()) },
+        "history.export_pin_wrong" to {
+            HistoryExportContent(ExportStep.Pin(exportPreview, ExportFormat.CSV, error = FailureKind.BAD_PIN), exportWords, HistoryExportActions())
+        },
+        "history.export_pin_backoff" to {
+            HistoryExportContent(
+                ExportStep.Pin(exportPreview, ExportFormat.CSV, error = FailureKind.BACKOFF, retryUntil = Instant.now().plusSeconds(90)),
+                exportWords,
+                HistoryExportActions(),
+            )
+        },
+        "history.export_reading" to { HistoryExportContent(ExportStep.Reading(25, 40), exportWords, HistoryExportActions()) },
+        "history.export_save" to {
+            HistoryExportContent(ExportStep.Save("vettid-history-20261008-140312.csv", ExportFormat.CSV, requested = true), exportWords, HistoryExportActions())
+        },
+        "history.export_writing" to { HistoryExportContent(ExportStep.Writing, exportWords, HistoryExportActions()) },
+        "history.export_done" to { HistoryExportContent(ExportStep.Done(40, 40), exportWords, HistoryExportActions()) },
+        "history.export_done_partial" to { HistoryExportContent(ExportStep.Done(38, 40), exportWords, HistoryExportActions()) },
+        "history.export_failed" to { HistoryExportContent(ExportStep.Failed(FailureKind.NETWORK), exportWords, HistoryExportActions()) },
+        "history.export_save_failed" to { HistoryExportContent(ExportStep.Failed(null, saveFailed = true), exportWords, HistoryExportActions()) },
+        "history.export_owner_check" to {
+            HistoryExportContent(ExportStep.Failed(FailureKind.OWNER_CHECK_REQUIRED), exportWords, HistoryExportActions())
         },
         // The profile photo (owner request 2026-10-07).
         "settings.shared_profile_photo_preview" to {
