@@ -4,6 +4,7 @@
 package com.vettid.app.debug
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import com.vettid.core.data.items.AddressValue
 import com.vettid.core.data.items.DraftField
 import com.vettid.core.data.items.FieldValue
@@ -27,6 +28,7 @@ import com.vettid.feature.items.ItemEditUiState
 import com.vettid.feature.items.ItemsActions
 import com.vettid.feature.items.ItemsScreen
 import com.vettid.feature.items.ItemsUiState
+import com.vettid.feature.items.LocalPhoneRegion
 import com.vettid.feature.items.PasswordPrompt
 import com.vettid.feature.items.PasswordPurpose
 import com.vettid.feature.items.TemplatePickerScreen
@@ -124,6 +126,28 @@ internal object ItemsCatalog {
         return ItemEditUiState(itemId = if (isNew) null else "01J", draft = d, check = ItemChecks.check(named), showErrors = errors, nameHint = hint)
     }
 
+    // Phone numbers (owner request 2026-10-09): typed in the US, a UK one with its +44, one too short to be valid.
+    private val phoneDraft = ItemDraft(
+        "Phones", "contact", "phone_number", Sensitivity.DATA, listOf("family"),
+        listOf(
+            DraftField(label = "Mobile", kind = "phone", text = "6502530000"),
+            DraftField(label = "London office", kind = "phone", text = "+442079460958"),
+            DraftField(label = "Old number", kind = "phone", text = "55512"),
+        ),
+    )
+    private val phones = ItemDetail(
+        "01JPHONE00000000000000000", 1, "Phones", "contact", Sensitivity.DATA, "phone_number", listOf("family"),
+        listOf(
+            ItemFieldView("f1", "Mobile", "phone", FieldValue.Text("+1 650-253-0000")),
+            ItemFieldView("f2", "London office", "phone", FieldValue.Text("+44 20 7946 0958")),
+            ItemFieldView("f3", "Old number", "phone", FieldValue.Text("555 12")),
+        ),
+        createdAt = t0,
+    )
+
+    @Composable
+    private fun InUs(content: @Composable () -> Unit) = CompositionLocalProvider(LocalPhoneRegion provides "US", content = content)
+
     private fun detail(d: ItemDetail, vararg extra: (ItemDetailUiState) -> ItemDetailUiState): ItemDetailUiState =
         extra.fold(ItemDetailUiState(d.itemId, d, loading = false)) { s, f -> f(s) }
 
@@ -176,6 +200,8 @@ internal object ItemsCatalog {
         "items.filtered" to { ItemsScreen(ItemsUiState(list, ItemFilter(tag = "travel", sensitivity = Sensitivity.DATA), ListLoad.LOADED), chrome, ItemsActions()) },
         "items.empty" to { ItemsScreen(ItemsUiState(load = ListLoad.LOADED), chrome, ItemsActions()) },
         "items.no_match" to { ItemsScreen(ItemsUiState(list, ItemFilter(query = "zzz"), ListLoad.LOADED), chrome, ItemsActions()) },
+        // One clear action, "✕ Clear" at the end of the filter chips (owner request 2026-10-09).
+        "items.no_match_filtered" to { ItemsScreen(ItemsUiState(list, ItemFilter(tag = "travel", sensitivity = Sensitivity.CRITICAL), ListLoad.LOADED), chrome, ItemsActions()) },
         "items.error" to { ItemsScreen(ItemsUiState(load = ListLoad.FAILED, error = FailureKind.NETWORK), chrome, ItemsActions()) },
         "items.templates" to { TemplatePickerScreen(onBack = {}, onPick = {}) },
         "items.detail" to { ItemDetailScreen(detail(passport), ItemDetailActions()) },
@@ -195,6 +221,11 @@ internal object ItemsCatalog {
         "items.detail_delete" to { ItemDetailScreen(detail(passport, { it.copy(dialog = DetailDialog.DELETE) }), ItemDetailActions()) },
         "items.detail_missing" to { ItemDetailScreen(ItemDetailUiState("01J", loading = false, missing = true), ItemDetailActions()) },
         "items.edit_new" to { ItemEditScreen(edit(newDraft), ItemEditActions()) },
+        // "Save item" in the top bar, no Save bar above the keyboard; back with changes asks (owner request 2026-10-09).
+        "items.edit_saving" to { ItemEditScreen(edit(newDraft).copy(busy = true), ItemEditActions()) },
+        "items.edit_discard" to { ItemEditScreen(edit(cardDraft).copy(dirty = true, confirmDiscard = true), ItemEditActions()) },
+        "items.edit_phone" to { InUs { ItemEditScreen(edit(phoneDraft), ItemEditActions()) } },
+        "items.detail_phone" to { InUs { ItemDetailScreen(detail(phones), ItemDetailActions()) } },
         "items.edit_problems" to { ItemEditScreen(edit(badDraft, errors = true), ItemEditActions()) },
         "items.edit_profile" to { ItemEditScreen(edit(profileDraft, isNew = false), ItemEditActions()) },
         "items.edit_blank" to { ItemEditScreen(edit(ItemDraft()), ItemEditActions()) },

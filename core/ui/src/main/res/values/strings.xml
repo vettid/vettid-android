@@ -26,4 +26,11 @@
     <string name="core_ui_step_done">done</string>
     <string name="core_ui_step_failed">failed</string>
     <string name="core_ui_cd_safety_code">Safety code %1$s</string>
+    <string name="core_ui_clear">Clear</string>
+    <string name="core_ui_cd_clear_filters">Clear filters</string>
+    <string name="core_ui_tags_more">+%1$d</string>
+    <plurals name="core_ui_cd_tags_more">
+        <item quantity="one">%1$d more tag</item>
+        <item quantity="other">%1$d more tags</item>
+    </plurals>
 </resources>

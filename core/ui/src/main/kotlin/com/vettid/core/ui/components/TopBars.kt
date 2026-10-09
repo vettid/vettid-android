@@ -15,8 +15,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -29,6 +31,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -121,6 +124,31 @@ fun VettIdBackTopBar(
         }
         Spacer(Modifier.weight(1f))
         actions()
+    }
+}
+
+/**
+ * A text action at the end of a top bar ("Save item" in the item editor): gold text, a progress ring in its place
+ * while [busy] (then not clickable).
+ */
+@Composable
+fun TopBarTextAction(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    busy: Boolean = false,
+) {
+    TextButton(onClick = onClick, enabled = enabled && !busy, modifier = modifier) {
+        if (busy) {
+            CircularProgressIndicator(
+                Modifier.size(18.dp).testTag("top_bar_action_busy"),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(Modifier.width(Spacing.s))
+        }
+        Text(label, fontWeight = FontWeight.SemiBold)
     }
 }
 

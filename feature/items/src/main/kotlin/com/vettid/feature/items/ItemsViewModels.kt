@@ -505,6 +505,16 @@ class ItemEditViewModel @Inject constructor(
     private fun named(d: ItemDraft, s: ItemEditUiState = state.value): ItemDraft =
         if (d.name.isBlank() && s.nameHint != null) d.copy(name = s.nameHint) else d
 
+    /** The phone's region, for numbers typed without `+` (owner request 2026-10-09). */
+    private val phoneRegion: String by lazy { PhoneInput.region(context) }
+
+    /** Phone values as saved: international format when they parse, else as typed ([PhoneInput.stored]). */
+    private fun phonesStored(d: ItemDraft): ItemDraft = d.copy(
+        fields = d.fields.map { f ->
+            if (f.kind == FieldKinds.PHONE && f.text.isNotBlank()) f.copy(text = PhoneInput.stored(f.text, phoneRegion)) else f
+        },
+    )
+
     private fun change(f: (ItemDraft) -> ItemDraft) = setDraft(f(state.value.draft))
 
     private fun changeField(i: Int, f: (DraftField) -> DraftField) =
@@ -704,7 +714,7 @@ class ItemEditViewModel @Inject constructor(
     @Suppress("CyclomaticComplexMethod") // create or replace, any sensitivity, then the protection
     private fun send(p: PasswordPrompt?, pw: String) {
         val s = state.value
-        val draft = named(s.draft, s)
+        val draft = phonesStored(named(s.draft, s))
         val to = s.protectionTo
         state.update { it.copy(busy = true, error = null, limit = null) }
         viewModelScope.launch {

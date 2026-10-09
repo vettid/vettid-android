@@ -8,13 +8,12 @@
     <string name="history_chain_broken">Your vault\'s history does not match what this phone saw before</string>
     <string name="history_empty_title">No history yet</string>
     <string name="history_empty_body">What happens in your vault is recorded here: unlocks, connections, messages, items and more</string>
-    <string name="history_no_match_title">Nothing matches</string>
-    <string name="history_no_match_body">Try fewer filters or other words</string>
+    <string name="history_no_match_title">No activity matches these filters</string>
+    <string name="history_no_match_body">Change the search, or tap “✕ Clear” above to show all activity</string>
     <string name="history_error_title">History could not be loaded</string>
     <string name="history_retry">Try again</string>
     <string name="history_loading_more">Loading older entries</string>
     <string name="history_end">Start of your history</string>
-    <string name="history_filters_clear">Clear filters</string>
 
     <string name="history_category_all">All</string>
     <string name="history_category_vault_access">Unlocks and owner checks</string>

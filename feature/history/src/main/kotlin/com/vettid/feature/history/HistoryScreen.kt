@@ -1,7 +1,5 @@
 package com.vettid.feature.history
 
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,7 +13,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -76,6 +73,7 @@ import com.vettid.core.data.vault.AuditCategory
 import com.vettid.core.data.vault.AuditFilter
 import com.vettid.core.data.vault.AuditRecord
 import com.vettid.core.data.vault.messageRes
+import com.vettid.core.ui.components.FilterChipRow
 import com.vettid.core.ui.components.DetailScaffold
 import com.vettid.core.ui.components.EmptyState
 import com.vettid.core.ui.components.LargeTitle
@@ -255,20 +253,13 @@ fun HistoryScreen(
                         body = stringResource(R.string.history_empty_body),
                         modifier = Modifier.testTag("history_empty"),
                     )
-                    state.entries.isEmpty() && state.end -> Column(
-                        Modifier.fillMaxSize(),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        EmptyState(
-                            icon = Icons.Outlined.Search,
-                            title = stringResource(R.string.history_no_match_title),
-                            body = stringResource(R.string.history_no_match_body),
-                            modifier = Modifier.weight(1f).testTag("history_no_match"),
-                        )
-                        TextButton(onClick = actions.onClearFilters, modifier = Modifier.padding(bottom = Spacing.xxl)) {
-                            Text(stringResource(R.string.history_filters_clear))
-                        }
-                    }
+                    // The one way to clear is "✕ Clear" in the filter row above (owner request 2026-10-09).
+                    state.entries.isEmpty() && state.end -> EmptyState(
+                        icon = Icons.Outlined.Search,
+                        title = stringResource(R.string.history_no_match_title),
+                        body = stringResource(R.string.history_no_match_body),
+                        modifier = Modifier.testTag("history_no_match"),
+                    )
                     else -> EntryList(state, actions)
                 }
             }
@@ -348,14 +339,7 @@ private fun FilterRow(state: HistoryUiState, actions: HistoryActions) {
     var datesOpen by rememberSaveable { mutableStateOf(false) }
     var pickRange by rememberSaveable { mutableStateOf(false) }
     var pickConnection by rememberSaveable { mutableStateOf(false) }
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = Spacing.gutter),
-        horizontalArrangement = Arrangement.spacedBy(Spacing.s),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
+    FilterChipRow(filtering = !state.filter.isEmpty, onClear = actions.onClearFilters) {
         Box {
             FilterChip(
                 selected = state.datePreset != DatePreset.ANY,
@@ -400,9 +384,6 @@ private fun FilterRow(state: HistoryUiState, actions: HistoryActions) {
                 label = { Text(stringResource(AuditKinds.categoryLabel(c))) },
                 modifier = Modifier.testTag("history_category_${c.name.lowercase()}"),
             )
-        }
-        if (!state.filter.isEmpty) {
-            TextButton(onClick = actions.onClearFilters) { Text(stringResource(R.string.history_filters_clear)) }
         }
     }
     if (pickRange) {

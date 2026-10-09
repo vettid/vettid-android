@@ -71,7 +71,7 @@ import com.vettid.core.ui.components.LocalUserPresence
 import com.vettid.core.ui.components.NoticeCard
 import com.vettid.core.ui.components.NoticeKind
 import com.vettid.core.ui.components.PillAction
-import com.vettid.core.ui.components.TagLabel
+import com.vettid.core.ui.components.TagChip
 import com.vettid.core.ui.format.Times
 import com.vettid.core.ui.theme.Spacing
 import kotlinx.coroutines.delay
@@ -224,7 +224,7 @@ private fun DetailBody(item: ItemDetail, state: ItemDetailUiState, actions: Item
                 horizontalArrangement = Arrangement.spacedBy(Spacing.s),
                 verticalArrangement = Arrangement.spacedBy(Spacing.xs),
             ) {
-                item.tags.forEach { TagLabel(tagLabel(it)) }
+                item.tags.forEach { TagChip(tagLabel(it), tag = it) }
             }
         }
         Spacer(Modifier.height(Spacing.m))
@@ -316,6 +316,7 @@ private fun FieldRow(f: ItemFieldView, revealed: Boolean, shown: Boolean, action
     val context = LocalContext.current
     val v = f.value
     val masked = FieldKinds.masked(f.kind)
+    val region = phoneRegion()
     val text = when (v) {
         null -> null
         is FieldValue.Text -> v.text
@@ -328,6 +329,8 @@ private fun FieldRow(f: ItemFieldView, revealed: Boolean, shown: Boolean, action
                 text == null || !revealed -> stringResource(R.string.items_hidden_value)
                 text.isEmpty() -> stringResource(R.string.items_empty_value)
                 masked && !shown -> stringResource(R.string.items_masked_value)
+                // National format in the number's own country, international elsewhere (owner request 2026-10-09).
+                f.kind == FieldKinds.PHONE -> PhoneInput.display(text, region)
                 else -> text
             }
             Text(

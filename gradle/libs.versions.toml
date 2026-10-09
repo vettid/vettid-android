@@ -36,6 +36,8 @@ okhttp = "5.5.0"
 # QR codes (ANDROID-PLAN §4 Connections): ZXing core (Apache-2.0, pure Java) draws and
 # decodes them, CameraX feeds the scanner. No ML Kit: nothing that needs Play services.
 zxing = "3.5.4"
+# Phone values formatted while typed, stored in international format (Apache-2.0, pure Java).
+libphonenumber = "9.0.41"
 camerax = "1.6.2"
 
 [libraries]
@@ -76,6 +78,7 @@ androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version
 bouncycastle-bcprov = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
 zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
+libphonenumber = { group = "com.googlecode.libphonenumber", name = "libphonenumber", version.ref = "libphonenumber" }
 androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
 androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
 androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }

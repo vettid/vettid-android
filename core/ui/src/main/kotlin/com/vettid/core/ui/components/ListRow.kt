@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -22,6 +23,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.vettid.core.ui.theme.Spacing
+import com.vettid.core.ui.theme.TagColor
 
 /** Trailing icon action on a [VettIdListRow] (Proton's star). */
 data class RowAction(
@@ -34,7 +36,8 @@ data class RowAction(
 /**
  * List row (Proton mailbox): initial tile, name and preview lines, date on the
  * first line's end and an optional trailing action under it. [emphasized] marks
- * unread rows (bold, full-contrast text); [tileStyle] marks favourites.
+ * unread rows (bold, full-contrast text); [tileStyle] marks favourites; [tileColors] colours the tile (a tag's
+ * colour). [below] goes under the preview line (an item's tags, [TagChipLine]).
  */
 @Composable
 fun VettIdListRow(
@@ -49,6 +52,8 @@ fun VettIdListRow(
     onClick: (() -> Unit)? = null,
     tilePhoto: ImageBitmap? = null,
     tileIcon: ImageVector? = null,
+    tileColors: TagColor? = null,
+    below: (@Composable () -> Unit)? = null,
 ) {
     val colors = MaterialTheme.colorScheme
     val lineColor = if (emphasized) colors.onSurface else colors.onSurfaceVariant
@@ -60,7 +65,7 @@ fun VettIdListRow(
             .padding(start = Spacing.gutter, end = Spacing.xs, top = Spacing.m, bottom = Spacing.m),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        InitialTile(name = tileName, size = 40, style = tileStyle, photo = tilePhoto, icon = tileIcon)
+        InitialTile(name = tileName, size = 40, style = tileStyle, photo = tilePhoto, icon = tileIcon, colors = tileColors)
         Spacer(Modifier.width(Spacing.l))
         Column(Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -106,6 +111,10 @@ fun VettIdListRow(
                         )
                     }
                 }
+            }
+            if (below != null) {
+                Spacer(Modifier.height(Spacing.xs))
+                below()
             }
         }
     }
