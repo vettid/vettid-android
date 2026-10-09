@@ -36,8 +36,19 @@ class HistoryPagerTest {
     ) : AuditOps {
         enum class Mode { V020, IGNORES, REFUSES }
 
-        val all: List<AuditEntry>
+        var all: List<AuditEntry>
+            private set
         val calls = mutableListOf<Map<String, Any?>>()
+
+        /** The vault records one more entry (newest, a minute after the last), chained to the last. */
+        fun append(kind: String) {
+            val last = all.last()
+            val seq = last.seq + 1
+            val at = Instant.parse(last.at).plus(Duration.ofMinutes(1))
+            val prev = Base64.getDecoder().decode(last.hash)
+            val h = hash(prev, seq, at.toEpochMilli(), kind, null)
+            all = all + AuditEntry("e$seq", seq, at.toString(), kind, null, null, null, null, b64(prev), b64(h))
+        }
 
         init {
             var prev = ByteArray(32)
@@ -227,5 +238,54 @@ class HistoryPagerTest {
         assertEquals("e3", repo.cached(3)?.entryId)
         repo.clear()
         assertNull(repo.cached(3))
+    }
+
+    @Test
+    fun aRefreshPutsWhatArrivedSinceOnTopAndKeepsTheRest() = runTest {
+        val log = Log(120, listOf("vault.unlocked"), t0)
+        val pager = HistoryPager(HistoryManager { log }, text, minPerLoad = 1)
+        pager.reset(AuditFilter())
+        pager.more()
+        // An export: the vault records `audit.exported` (and nothing else changed).
+        log.append("audit.exported")
+        val s = pager.refresh()
+        assertNull(log.calls.last()["before_seq"])
+        assertEquals(121L, s.entries.first().seq)
+        assertEquals("audit.exported", s.entries.first().kind)
+        assertEquals((121L downTo 21L).toList(), s.entries.map { it.seq })
+        assertFalse(s.chainBroken)
+        // The cursor is where it was: the next page goes on from 21.
+        pager.more()
+        assertEquals(21L, log.calls.last()["before_seq"])
+        // Nothing new: the list stays as it is.
+        assertEquals(pager.snapshot.entries, pager.refresh().entries)
+    }
+
+    @Test
+    fun aRefreshUnderAFilterAddsOnlyWhatMatches() = runTest {
+        val log = Log(10, listOf("vault.unlocked"), t0)
+        val pager = HistoryPager(HistoryManager { log }, text)
+        pager.reset(AuditFilter(category = AuditCategory.VAULT_ACCESS))
+        log.append("audit.exported")
+        log.append("vault.unlocked")
+        val s = pager.refresh()
+        assertEquals(listOf(12L) + (10L downTo 1L).toList(), s.entries.map { it.seq })
+        val sec = HistoryPager(HistoryManager { log }, text)
+        sec.reset(AuditFilter(category = AuditCategory.SECURITY))
+        log.append("audit.exported")
+        assertEquals(listOf(13L, 11L), sec.refresh().entries.map { it.seq })
+    }
+
+    @Test
+    fun moreThanAPageArrivedStartsOver() = runTest {
+        val log = Log(60, listOf("vault.unlocked"), t0)
+        val pager = HistoryPager(HistoryManager { log }, text)
+        pager.reset(AuditFilter())
+        repeat(55) { log.append("vault.unlocked") }
+        val s = pager.refresh()
+        // The newest page's cursor (66) is above the newest shown (60): a reset, newest first and contiguous.
+        assertEquals(115L, s.entries.first().seq)
+        assertEquals((115L downTo 115L - s.entries.size + 1).toList(), s.entries.map { it.seq })
+        assertFalse(s.chainBroken)
     }
 }

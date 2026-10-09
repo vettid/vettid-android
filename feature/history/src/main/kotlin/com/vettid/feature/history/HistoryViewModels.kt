@@ -117,6 +117,7 @@ class HistoryViewModel @Inject constructor(
     private var known: Map<String, ConnectionInfo> = emptyMap()
     private val pager = HistoryPager(history, localText = { localText(it) })
     private var job: Job? = null
+    private var refreshing = false
 
     init {
         viewModelScope.launch {
@@ -193,10 +194,36 @@ class HistoryViewModel @Inject constructor(
         }
     }
 
+    /**
+     * The list is shown again (reopened from the drawer, back from an entry, or an export closed, which the vault
+     * recorded as `audit.exported`): the newest page is read again and what arrived since goes on top. The ViewModel
+     * outlives the screen (the drawer restores it), so without this History showed what it read the first time.
+     * Nothing while the first page is loading (that read is the newest); after a failure or with nothing shown, a
+     * full reload. Runs after a load in progress (the pager reads one load at a time).
+     */
+    fun refresh() {
+        val s = state.value
+        if (s.loading) return
+        if (s.entries.isEmpty() || s.error != null) {
+            reload()
+            return
+        }
+        val before = job
+        refreshing = true
+        job = viewModelScope.launch {
+            try {
+                before?.join()
+                load { pager.refresh() }
+            } finally {
+                refreshing = false
+            }
+        }
+    }
+
     /** The list's end came into view: the next page, unless one is loading or the results have no more. */
     fun loadMore() {
         val s = state.value
-        val busy = s.loading || s.loadingMore
+        val busy = s.loading || s.loadingMore || refreshing
         if (busy || s.end || s.error != null) return
         state.update { it.copy(loadingMore = true) }
         job = viewModelScope.launch { load { pager.more() } }

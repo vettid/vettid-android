@@ -155,6 +155,9 @@ private fun HistoryRouteContent(chrome: ShellChrome, host: HistoryHost, onBack: 
         )
         return
     }
+    // Each time the list is shown (opened, reopened from the drawer, back from an entry, or the export closed: the
+    // vault recorded `audit.exported`), its newest entries are read again; the ViewModel outlives the screen.
+    LaunchedEffect(Unit) { vm.refresh() }
     HistoryScreen(
         state = state,
         chrome = chrome,

@@ -4,6 +4,7 @@ import com.vettid.core.data.vault.AuditChain
 import com.vettid.core.data.vault.AuditFilter
 import com.vettid.core.data.vault.AuditRecord
 import com.vettid.core.data.vault.AuditRequest
+import com.vettid.core.data.vault.AuditResult
 import com.vettid.core.data.vault.HistoryRepository
 
 /**
@@ -62,6 +63,46 @@ class HistoryPager(
         snapshot = Snapshot(filter = filter)
         cursor = null
         return more()
+    }
+
+    /**
+     * Reads the newest page again and puts the entries that arrived since the newest one shown on top (the vault added
+     * them while History was open or away, e.g. `audit.exported` after an export). The older entries and the cursor
+     * stay. When more arrived than the page holds (its cursor is above the newest shown), when nothing is shown yet,
+     * or when the way the search runs changed, it starts over ([reset]).
+     */
+    suspend fun refresh(): Snapshot {
+        val s = snapshot
+        val top = s.entries.firstOrNull()?.seq
+        val r = top?.let { repo.auditPage(request(s.filter, null)) }
+        return if (top == null || r == null || startsOver(s, r, top)) reset(s.filter) else prepend(s, r, top)
+    }
+
+    /** Whether [refresh] must start over: entries between the newest page and [top], or the search now runs here. */
+    private fun startsOver(s: Snapshot, r: AuditResult, top: Long): Boolean {
+        val q = s.filter.q
+        val local = s.localSearch || (q != null && !r.searchSent)
+        // The vault returned an entry `q` cannot match anywhere: it ignored the search (as in [more]).
+        val ignored = q != null && !local && r.entries.any { !couldMatch(q, it) }
+        if (ignored) repo.searchIgnored()
+        val next = r.nextBeforeSeq
+        return ignored || local != s.localSearch || (next != null && next > top + 1)
+    }
+
+    /** The entries of [r] newer than [top] that the list shows, on top of [s]. */
+    private fun prepend(s: Snapshot, r: AuditResult, top: Long): Snapshot {
+        val q = s.filter.q
+        val fresh = r.entries.filter { e ->
+            e.seq > top && s.filter.acceptsExceptSearch(e) && (q == null || !s.localSearch || AuditFilter.matches(q, localText(e)))
+        }
+        return if (fresh.isEmpty()) {
+            s
+        } else {
+            s.copy(
+                entries = fresh + s.entries,
+                chainBroken = s.chainBroken || (s.filter.isEmpty && !AuditChain.consistent(fresh + s.entries.first())),
+            ).also { snapshot = it }
+        }
     }
 
     /** Reads older entries (nothing once [Snapshot.end]). */
