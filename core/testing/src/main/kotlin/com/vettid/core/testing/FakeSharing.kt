@@ -73,11 +73,8 @@ class FakeSharing : SharingRepository {
     override suspend fun setTagColor(tag: String, color: String) {
         call("setTagColor:$tag:$color")
         if (tag.startsWith("@")) throw VaultFailure(FailureKind.OTHER, "bad_request")
-        val old = registry.tags.firstOrNull { it.tag == tag }
-        registry = registry.copy(
-            version = registry.version + 1,
-            tags = if (old == null) registry.tags + TagView(tag, color = color) else registry.tags.map { if (it.tag == tag) it.copy(color = color) else it },
-        )
+        val tags = if (registry.tags.none { it.tag == tag }) registry.tags + TagView(tag) else registry.tags
+        registry = registry.copy(version = registry.version + 1, tags = tags.map { if (it.tag == tag) it.copy(color = color) else it })
         publish()
     }
 
@@ -86,7 +83,8 @@ class FakeSharing : SharingRepository {
         var n = 0
         while (true) {
             val (tag, color) = next(registry.tags) ?: break
-            registry = registry.copy(version = registry.version + 1, tags = registry.tags.map { if (it.tag == tag) it.copy(color = color) else it })
+            val tags = registry.tags.map { if (it.tag == tag) it.copy(color = color) else it }
+            registry = registry.copy(version = registry.version + 1, tags = tags)
             n++
         }
         publish()

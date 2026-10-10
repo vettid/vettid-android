@@ -105,10 +105,9 @@ object TagColors {
 
     /** Exactly `#` and six hex digits (either case) parsed, opaque; null for anything else. */
     fun parse(color: String?): Color? {
-        if (color == null || color.length != HEX_LENGTH || color[0] != '#') return null
-        val digits = color.substring(1)
-        if (!digits.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) return null
-        return Color(OPAQUE or digits.toLong(HEX_RADIX))
+        val digits = color?.takeIf { it.length == HEX_LENGTH && it[0] == '#' }?.substring(1)
+        return digits?.takeIf { d -> d.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' } }
+            ?.let { Color(OPAQUE or it.toLong(HEX_RADIX)) }
     }
 
     /** The palette slot of a stored [color] (any case); -1 when it is not a palette colour. */
@@ -116,12 +115,14 @@ object TagColors {
 
     /** The colours of [tag] in a theme; [stored] is the registry's colour for it, if any. */
     fun of(tag: String, dark: Boolean, stored: String? = null): TagColor {
-        if (isOwn(tag)) return own
         val palette = if (dark) this.dark else light
-        val slot = slotOf(stored)
-        if (slot >= 0) return palette[slot]
-        parse(stored)?.let { return TagColor(it, readableOn(it)) }
-        return palette[index(tag)]
+        val other = parse(stored)
+        return when {
+            isOwn(tag) -> own
+            slotOf(stored) >= 0 -> palette[slotOf(stored)]
+            other != null -> TagColor(other, readableOn(other))
+            else -> palette[index(tag)]
+        }
     }
 
     /** The palette slot [tag] shows with [stored] (its stored one, else its hash slot); -1 for a colour outside it or [OWN_TAG]. */

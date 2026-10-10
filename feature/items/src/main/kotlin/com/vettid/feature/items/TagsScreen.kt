@@ -152,11 +152,14 @@ class TagsViewModel @Inject constructor(private val sharing: SharingRepository) 
     /** Stores the palette colour of [slot] for the picker's tag (`tag.set`, its description and icon kept). */
     fun pickColour(slot: Int) {
         val d = state.value.dialog as? TagDialog.Colour ?: return
-        val color = TagColors.stored.getOrNull(slot) ?: return
-        if (TagColors.slotOf(d.tag.color) == slot) return dismiss()
-        run {
-            sharing.setTagColor(d.tag.tag, color)
-            done()
+        val color = TagColors.stored.getOrNull(slot)
+        when {
+            color == null -> Unit
+            TagColors.slotOf(d.tag.color) == slot -> dismiss()
+            else -> run {
+                sharing.setTagColor(d.tag.tag, color)
+                done()
+            }
         }
     }
 
@@ -411,7 +414,9 @@ private fun TagColourDialog(tag: TagView, busy: Boolean, actions: TagsActions) {
             Column(verticalArrangement = Arrangement.spacedBy(Spacing.s), modifier = Modifier.selectableGroup()) {
                 palette.indices.chunked(SWATCHES_PER_ROW).forEach { row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(Spacing.xs)) {
-                        row.forEach { i -> ColourSwatch(palette[i], i, stringResource(colourNames[i]), i == current, !busy) { actions.onPickColour(i) } }
+                        row.forEach { i ->
+                            ColourSwatch(palette[i], i, stringResource(colourNames[i]), i == current, !busy) { actions.onPickColour(i) }
+                        }
                     }
                 }
             }

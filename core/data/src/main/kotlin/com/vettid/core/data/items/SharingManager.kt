@@ -227,9 +227,9 @@ class SharingManager(
         var r = registry.value ?: refreshTags()
         var count = 0
         var conflicts = 0
-        while (count < MAX_ASSIGNED) {
-            val (tag, color) = next(r.tags) ?: break
-            if (tag.startsWith("@")) break
+        var step = next(r.tags)?.takeUnless { it.first.startsWith("@") }
+        while (step != null && count < MAX_ASSIGNED) {
+            val (tag, color) = step
             r = try {
                 val v = putColor(r, tag, color)
                 count++
@@ -237,9 +237,10 @@ class SharingManager(
                 // Without a version in the answer the registry is read again for the next one.
                 if (v > 0) TagRegistry(v, tags).also { publish(it) } else refreshTags()
             } catch (e: VaultFailure) {
-                if (e.kind != FailureKind.CONFLICT || ++conflicts > MAX_CONFLICTS) break
+                if (e.kind != FailureKind.CONFLICT || ++conflicts > MAX_CONFLICTS) return count
                 refreshTags()
             }
+            step = next(r.tags)?.takeUnless { it.first.startsWith("@") }
         }
         return count
     }

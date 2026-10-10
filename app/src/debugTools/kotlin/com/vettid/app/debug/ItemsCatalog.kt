@@ -158,8 +158,17 @@ internal object ItemsCatalog {
             TagView("@profile", 1), TagView("crypto", 1), TagView("identity", 1, description = "Passports and IDs"),
             TagView("insurance", 1, listOf("01JRULE3")), TagView("medical", 3, listOf("01JRULE1")), TagView("money", 1),
             TagView("travel", 1, listOf("01JRULE2", "01JRULE4")),
-        ),
+        ).let(::coloured),
     )
+
+    /** The colours the app would have stored (ANDROID-PLAN 0.1.25: the least-used palette colour, in name order). */
+    private fun coloured(tags: List<TagView>): List<TagView> {
+        var out = tags
+        while (true) {
+            val (tag, color) = com.vettid.core.ui.theme.TagColors.next(out.map { it.tag to it.color }) ?: return out
+            out = out.map { if (it.tag == tag) it.copy(color = color) else it }
+        }
+    }
     // One tag per rule (owner decision 2026-10-09); the last names two, as rules made before it may.
     private val rules = listOf(
         ShareRule("01JRULE1", 2, "c1", tags = listOf("medical"), perDay = 20, included = listOf("i1", "i2"), pending = listOf("i3")),
@@ -275,6 +284,9 @@ internal object ItemsCatalog {
         "items.tags_rename" to {
             TagsScreen(TagsUiState(registry, loading = false, dialog = TagDialog.ConfirmRename("travel", "trips", TagChange(5, 1, 1, emptyList(), 1))), TagsActions())
         },
+        // Tag colours (ANDROID-PLAN 0.1.25): the ten swatches, the current one checked; `@profile`'s explanation.
+        "items.tags_colour" to { TagsScreen(TagsUiState(registry, loading = false, dialog = TagDialog.Colour(registry.tags[4])), TagsActions()) },
+        "items.tags_colour_profile" to { TagsScreen(TagsUiState(registry, loading = false, dialog = TagDialog.ProfileColour), TagsActions()) },
         "items.tags_in_use" to { TagsScreen(TagsUiState(registry, loading = false, error = FailureKind.IN_USE), TagsActions()) },
         "items.sharing" to { ConnectionSharingScreen(ConnectionSharingUiState("c1", "Dana Lee", rules, givenGrants, mapOf(passport.itemId to passport.summary), loading = false), ConnectionSharingActions()) },
         "items.sharing_empty" to { ConnectionSharingScreen(ConnectionSharingUiState("c1", "Dana Lee", loading = false), ConnectionSharingActions()) },

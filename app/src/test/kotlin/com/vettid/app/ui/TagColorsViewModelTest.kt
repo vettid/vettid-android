@@ -33,7 +33,10 @@ class TagColorsViewModelTest {
     private val sharing = FakeSharing().apply {
         registry = TagRegistry(
             3,
-            listOf(TagView("@profile", 1), TagView("travel", 1), TagView("medical", 2), TagView("money", 1), TagView("family", 1), TagView("work", 1, color = "#123456")),
+            listOf(
+                TagView("@profile", 1), TagView("travel", 1), TagView("medical", 2), TagView("money", 1), TagView("family", 1),
+                TagView("work", 1, color = "#123456"),
+            ),
         )
     }
 
