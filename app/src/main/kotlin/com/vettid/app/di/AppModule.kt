@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import com.vettid.app.env.currentEnvironment
 import com.vettid.app.net.ConnectivityGate
+import com.vettid.app.net.PoolEviction
 import com.vettid.core.data.account.SetupLinkInbox
 import com.vettid.core.data.social.InviteLinkInbox
 import com.vettid.core.data.env.AppEnvironment
@@ -100,8 +101,13 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun networkGate(@ApplicationContext context: Context, pool: ConnectionPool): NetworkGate =
-        ConnectivityGate(context, onNewNetwork = { pool.evictAll() })
+    fun networkGate(@ApplicationContext context: Context, eviction: PoolEviction): NetworkGate =
+        ConnectivityGate(context, onNewNetwork = { eviction.evict() })
+
+    /** Empties [connectionPool] on the IO dispatcher: closing a TLS connection writes to the network. */
+    @Provides
+    @Singleton
+    fun poolEviction(pool: ConnectionPool, @AppScope scope: CoroutineScope): PoolEviction = PoolEviction(pool, scope)
 
     /** Transport failures while the phone wakes from Doze are retried before anything reaches the screen ([TransportRetry]). */
     @Provides

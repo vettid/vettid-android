@@ -16,7 +16,7 @@ import com.vettid.core.notify.ModeController
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
-import okhttp3.ConnectionPool
+import com.vettid.app.net.PoolEviction
 import javax.inject.Inject
 
 @HiltAndroidApp
@@ -32,7 +32,7 @@ class VettIdApplication : Application() {
     lateinit var scope: CoroutineScope
 
     @Inject
-    lateinit var connections: ConnectionPool
+    lateinit var connections: PoolEviction
 
     @Inject
     lateinit var releaseNotifier: ReleaseUpdateNotifier
@@ -70,7 +70,8 @@ class VettIdApplication : Application() {
      * ([AccountRepository.onForeground]).
      */
     private fun onForeground() {
-        connections.evictAll()
+        // Off the main thread: closing a live TLS connection is a network write (NetworkOnMainThreadException).
+        connections.evict()
         account.onForeground()
         modes.retry() // a service start Android refused in the background
         if (account.phase.value is AppPhase.Unreachable) scope.launch { account.refresh() }
