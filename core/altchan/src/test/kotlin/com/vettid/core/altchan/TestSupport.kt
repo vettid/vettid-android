@@ -85,8 +85,8 @@ object TestSupport {
     }
 
     /** A sealed 5,252-byte result for [requestId], sealed to [kem]. */
-    fun sealResult(kem: KemPublicKey, type: String, requestId: String, body: String): ByteArray {
-        val inner = Inner(id = com.vettid.core.crypto.envelope.Ulid.new(), type = type, ts = Instant.now(), re = requestId, status = Inner.STATUS_OK, body = body.toByteArray())
+    fun sealResult(kem: KemPublicKey, type: String, requestId: String, body: String, ts: Instant = Instant.now()): ByteArray {
+        val inner = Inner(id = com.vettid.core.crypto.envelope.Ulid.new(), type = type, ts = ts, re = requestId, status = Inner.STATUS_OK, body = body.toByteArray())
         val padded = Padding.padFixed(inner.marshal(Mode.SEALED), Padding.ALT_CHANNEL)
         return Envelope.sealSealed(kem, Kid.ANONYMOUS, padded).first.also { check(it.size == AltChannel.RESULT_ENVELOPE_SIZE) }
     }
