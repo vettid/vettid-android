@@ -148,6 +148,9 @@ class VaultManager(
     }
     override val refusedByVault: StateFlow<Boolean> = refusals.suspected
 
+    /** `vault.locking` notices from before the vault last opened are dropped ([LockNotices]). */
+    private val lockNotices = LockNotices()
+
     private class Session(val device: VaultDevice, val api: VaultApi, val member: MemberApiClient, val alt: AltChannelFlow)
 
     /**
@@ -382,6 +385,12 @@ class VaultManager(
             launch { s.device.vaultRefusals.collect { n -> refusals.onRefusals(n, phaseFlow.value) } }
             launch { s.device.ownerCheckRequired.collect { ownerCheck.onRequired() } }
             s.device.events.collect { m ->
+                if (lockNotices.stale(m)) {
+                    // The lock before this phone's last unlock (an update's first step, or the lock an unlock of a
+                    // running vault makes), relayed late: the vault is open.
+                    android.util.Log.i("VaultManager", "dropped a vault.locking from before the last unlock")
+                    return@collect
+                }
                 onEvent(m)
                 try {
                     items.onEvent(m)
@@ -698,6 +707,8 @@ class VaultManager(
         }
         // The vault moved and locked itself (§11.10.4 step 8); the caller unlocks again.
         if (moved && !followMove) return StepOutcome(UnlockAttempt.Success, moved = true)
+        // The vault is open as of the result's ts: a vault.locking from before it is stale (LockNotices).
+        lockNotices.opened(r.at)
         val refused = r.update?.takeIf { it.result == "refused" }
         val gen = generation
         val s = session()

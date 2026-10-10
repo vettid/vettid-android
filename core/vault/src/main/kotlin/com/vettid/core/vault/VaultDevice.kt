@@ -483,7 +483,8 @@ class VaultDevice private constructor(
 
     override suspend fun openUnlockResult(raw: ByteArray): UnlockResult = lock.withLock {
         val p = pendingUnlock ?: throw VaultStateException("no pending unlock")
-        val r = UnlockResult.parse(AltResults.open(raw, secrets.kem, AltResults.TYPE_UNLOCK_RESULT, p.requestId))
+        val inner = AltResults.openInner(raw, secrets.kem, AltResults.TYPE_UNLOCK_RESULT, p.requestId)
+        val r = UnlockResult.parse(inner.body).copy(at = inner.ts)
         pendingUnlock = null
         run {
             setAlt(AltRequests.applyUnlock(alt(), p, r))

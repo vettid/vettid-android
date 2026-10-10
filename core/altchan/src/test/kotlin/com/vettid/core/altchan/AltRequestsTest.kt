@@ -147,6 +147,10 @@ class AltRequestsTest {
         assertThrows(AltResultException::class.java) { AltResults.open(raw, kem, AltResults.TYPE_UNLOCK_RESULT, rid) }
         assertThrows(AltResultException::class.java) { AltResults.open(raw.copyOf(100), kem, AltResults.TYPE_ENROLL_RESULT, rid) }
         assertThrows(AltResultException::class.java) { AltResults.open(raw, KemPrivateKey.generate(), AltResults.TYPE_ENROLL_RESULT, rid) }
+        // The inner's ts (the enclave's clock) is available: a vault.locking not newer than an unlock result is stale.
+        val ts = java.time.Instant.parse("2026-10-10T14:09:35.120Z")
+        val sealedAt = TestSupport.sealResult(kem.publicKey, AltResults.TYPE_ENROLL_RESULT, rid, "{\"ok\":true}", ts)
+        assertEquals(ts, AltResults.openInner(sealedAt, kem, AltResults.TYPE_ENROLL_RESULT, rid).ts)
         val u = UnlockResult.parse(
             """{"ok":true,"state_seq":3,"header_seq":2,"token":"t","release":"${TestSupport.pcr0}","release_number":3,"release_status":"active","manifest_serial":7}""".toByteArray(),
         )

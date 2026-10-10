@@ -12,6 +12,7 @@ import com.vettid.core.crypto.hpke.KemPrivateKey
 import com.vettid.core.crypto.json.JsonObject
 import com.vettid.core.crypto.json.StrictJson
 import java.io.IOException
+import java.time.Instant
 
 /** A sealed result could not be opened or parsed (or answers another request). */
 class AltResultException(what: String) : IOException("alternate channel: $what")
@@ -27,7 +28,10 @@ object AltResults {
      * whose inner is [type], answers [requestId] (`re`) and is padded to
      * exactly 4,096 bytes. Returns the body.
      */
-    fun open(raw: ByteArray, kem: KemPrivateKey, type: String, requestId: String): ByteArray {
+    fun open(raw: ByteArray, kem: KemPrivateKey, type: String, requestId: String): ByteArray = openInner(raw, kem, type, requestId).body
+
+    /** As [open], returning the whole inner (its `ts` is the enclave's clock when it answered). */
+    fun openInner(raw: ByteArray, kem: KemPrivateKey, type: String, requestId: String): Inner {
         if (raw.size != AltChannel.RESULT_ENVELOPE_SIZE) throw AltResultException("result size")
         try {
             val env = Envelope.parse(raw)
@@ -35,7 +39,7 @@ object AltResults {
             val (padded, _) = Envelope.openSealed(env, kem)
             val inner = Inner.parse(Padding.unpadFixed(padded, Padding.ALT_CHANNEL), Mode.SEALED)
             if (inner.type != type || inner.re != requestId) throw AltResultException("result does not answer the request")
-            return inner.body
+            return inner
         } catch (_: CryptoException) {
             throw AltResultException("result unreadable")
         }
@@ -78,6 +82,11 @@ data class UnlockResult(
      * keeps a copy of the credential, so whether the password can recover it. Null when absent (an older vault).
      */
     val credentialBackup: Boolean? = null,
+    /**
+     * The result's inner `ts`: the enclave's clock when it answered, after any lock of the running vault the unlock
+     * made (§11.4). A `vault.locking` not newer than this is from before the vault opened. Null when not known.
+     */
+    val at: Instant? = null,
 ) {
     /** The `update` member: `moved`, `abandoned` or `refused` (with a code). */
     data class Update(val to: String, val result: String, val code: String?)
