@@ -45,11 +45,12 @@ fun NotificationBellButton(bell: NotificationBell, modifier: Modifier = Modifier
         bell.urgent -> pluralStringResource(R.plurals.core_ui_notifications_unread_urgent, bell.unread, bell.unread)
         else -> pluralStringResource(R.plurals.core_ui_notifications_unread, bell.unread, bell.unread)
     }
-    IconButton(onClick = bell.onClick, modifier = modifier.testTag("top_bar_bell").semantics { contentDescription = label }) {
-        Box {
+    // The badge sits beside the button, not inside it: IconButton clips its content to a circle, which cut the badge off.
+    Box(modifier) {
+        IconButton(onClick = bell.onClick, modifier = Modifier.testTag("top_bar_bell").semantics { contentDescription = label }) {
             Icon(Icons.Outlined.Notifications, contentDescription = null)
-            if (bell.unread > 0) BellBadge(bell.unread, bell.urgent, Modifier.align(Alignment.TopEnd).offset(x = 10.dp, y = (-8).dp))
         }
+        if (bell.unread > 0) BellBadge(bell.unread, bell.urgent, Modifier.align(Alignment.TopEnd).offset(y = 4.dp))
     }
 }
 
