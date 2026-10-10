@@ -199,7 +199,12 @@ class VaultManager(
     )
 
     /** The member's audit log (VAULT-MESSAGING §10.9), read-only: the History screen. */
-    val history = HistoryManager(ops = { VaultAuditOps(session().api) })
+    val history = HistoryManager(
+        ops = { VaultAuditOps(session().api) },
+        // The rows' and the entry page's device names (ANDROID-PLAN 0.1.27), as the export resolves them.
+        devices = { VaultAuditExportOps.devicesOf(session().api.deviceList()) },
+        self = { session?.device?.deviceId },
+    )
 
     /** The History export (VAULT-MESSAGING 0.22.0 §10.9): `audit.export`, then `audit.list` below its `upto_seq`. */
     val historyExport = HistoryExportManager(ops = { VaultAuditExportOps(session().api) }, audit = { VaultAuditOps(session().api) })

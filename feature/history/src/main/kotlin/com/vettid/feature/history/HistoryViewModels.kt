@@ -52,6 +52,8 @@ data class HistoryUiState(
     val connectionNames: Map<String, String> = emptyMap(),
     /** id → name of the member's items (the Vault list), for the rows of item entries (§10.9). */
     val itemNames: Map<String, String> = emptyMap(),
+    /** id → name of the vault's devices (`device.list`), for entries with a device; null while not known. */
+    val deviceNames: Map<String, String>? = null,
     val loading: Boolean = true,
     val loadingMore: Boolean = false,
     val end: Boolean = false,
@@ -129,7 +131,15 @@ class HistoryViewModel @Inject constructor(
         viewModelScope.launch { runCatching { connections.refresh() } }
         viewModelScope.launch { items.items.collect { l -> state.update { it.copy(itemNames = l.associate { i -> i.itemId to i.name }) } } }
         if (items.load.value == ListLoad.NOT_LOADED) viewModelScope.launch { runCatching { items.refresh() } }
+        loadDevices(refresh = false)
         reload()
+    }
+
+    /** The device names (ANDROID-PLAN 0.1.27), best effort: without them rows name no device. */
+    private fun loadDevices(refresh: Boolean) {
+        viewModelScope.launch {
+            history.deviceNames(refresh)?.let { d -> state.update { it.copy(deviceNames = d) } }
+        }
     }
 
     private fun names(list: List<ConnectionInfo>): Map<String, String> =
@@ -145,6 +155,7 @@ class HistoryViewModel @Inject constructor(
             HistoryText.title(context, r.kind),
             c?.name, c?.firstName, c?.lastName, c?.accountName,
             AuditKinds.itemOf(r.kind, r.ref)?.let { state.value.itemNames[it] },
+            r.deviceId?.let { state.value.deviceNames?.get(it) },
         )
     }
 
@@ -208,6 +219,8 @@ class HistoryViewModel @Inject constructor(
             reload()
             return
         }
+        // A device may have been paired or removed meanwhile.
+        loadDevices(refresh = true)
         val before = job
         refreshing = true
         job = viewModelScope.launch {
@@ -263,6 +276,12 @@ data class HistoryEntryUiState(
     /** The item the entry refers to (§10.9 item kinds): its current name, and whether it is still in the vault. */
     val itemName: String? = null,
     val itemExists: Boolean = false,
+    /** The entry's device (ANDROID-PLAN 0.1.27): its name while listed by `device.list`, null otherwise. */
+    val deviceName: String? = null,
+    /** The device list was read, so a device it does not hold was removed. */
+    val devicesKnown: Boolean = false,
+    /** The entry's device is this phone. */
+    val thisDevice: Boolean = false,
     val loading: Boolean = true,
     val missing: Boolean = false,
     val error: FailureKind? = null,
@@ -292,10 +311,13 @@ class HistoryEntryViewModel @Inject constructor(
                     ?: history.auditPage(AuditRequest(beforeSeq = seq + 1, limit = 1)).entries.firstOrNull { it.seq == seq }
                 val c = e?.connectionId?.let { id -> connections.connections.value.firstOrNull { it.id == id } }
                 val i = e?.let { AuditKinds.itemOf(it.kind, it.ref) }?.let { id -> items.items.value.firstOrNull { it.itemId == id } }
+                val devices = e?.deviceId?.let { history.deviceNames() }
                 state.update {
                     it.copy(
                         entry = e, connectionName = c?.displayName, connectionExists = c != null, loading = false, missing = e == null,
                         itemName = i?.name, itemExists = i != null,
+                        deviceName = e?.deviceId?.let { id -> devices?.get(id) }, devicesKnown = devices != null,
+                        thisDevice = e?.deviceId != null && e.deviceId == history.selfDeviceId(),
                     )
                 }
             } catch (f: VaultFailure) {

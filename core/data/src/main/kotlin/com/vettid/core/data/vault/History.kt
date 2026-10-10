@@ -189,6 +189,17 @@ interface HistoryRepository {
      * stops sending the search and the app filters the entries it loads.
      */
     fun searchIgnored()
+
+    /**
+     * id → name of the vault's devices (`device.list`, §10.3), for the device of an entry (VAULT-MESSAGING 0.23.2:
+     * `vault.unlocked` and a device's `vault.locked` carry `device_id`; ANDROID-PLAN 0.1.27). Read once per session
+     * and kept; [refresh] reads it again. Null when it was never read (the call failed): the app then names no device,
+     * rather than calling every device removed.
+     */
+    suspend fun deviceNames(refresh: Boolean = false): Map<String, String>? = null
+
+    /** This phone's device id (from its pairing), to mark "This phone" on an entry; null when not known. */
+    fun selfDeviceId(): String? = null
 }
 
 /** The vault call behind [HistoryManager]. */
@@ -223,7 +234,12 @@ internal class VaultAuditOps(private val api: VaultApi) : AuditOps {
  * signal: it is sent until the vault refuses it with `bad_request` (then the request is sent again without it) or
  * answers it unfiltered ([searchIgnored], a staging S4 vault); from then on this session filters on the phone.
  */
-class HistoryManager(private val ops: suspend () -> AuditOps) : HistoryRepository {
+class HistoryManager(
+    private val devices: (suspend () -> Map<String, String>)? = null,
+    private val self: () -> String? = { null },
+    // Last, so that `HistoryManager { ops }` reads as before.
+    private val ops: suspend () -> AuditOps,
+) : HistoryRepository {
     @Volatile
     var searchUnsupported: Boolean = false
         private set
@@ -236,9 +252,30 @@ class HistoryManager(private val ops: suspend () -> AuditOps) : HistoryRepositor
         searchUnsupported = true
     }
 
+    @Volatile
+    private var deviceCache: Map<String, String>? = null
+
+    override suspend fun deviceNames(refresh: Boolean): Map<String, String>? {
+        val kept = deviceCache
+        val read = devices
+        return when {
+            kept != null && !refresh -> kept
+            read == null -> null
+            else -> try {
+                vaultGuard { read() }.also { deviceCache = it }
+            } catch (_: VaultFailure) {
+                // Best effort, as in the export: an older list (or none) rather than a failed History.
+                kept
+            }
+        }
+    }
+
+    override fun selfDeviceId(): String? = self()
+
     /** Forgets what was read (a wipe of this phone). */
     fun clear() {
         cache.clear()
+        deviceCache = null
         searchUnsupported = false
     }
 
