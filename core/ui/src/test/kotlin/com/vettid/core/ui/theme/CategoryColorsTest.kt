@@ -20,14 +20,10 @@ class CategoryColorsTest {
     }
 
     @Test
-    fun theVaultIsTheMembersGoldAndTheSharedHuesMatchTheTagPalette() {
+    fun theVaultIsTheMembersGold() {
+        // The tag palette changed on 2026-10-09 (distinct hues); History's categories keep their own colours.
         assertEquals(TagColors.own, CategoryColors.of(CategoryHue.GOLD, dark = false))
         assertEquals(TagColors.own, CategoryColors.of(CategoryHue.GOLD, dark = true))
-        // Green, red, teal and blue are the tag palette's own (TagColors slots 3, 0, 4, 6).
-        assertEquals(TagColors.light[3], CategoryColors.of(CategoryHue.GREEN, dark = false))
-        assertEquals(TagColors.dark[0], CategoryColors.of(CategoryHue.RED, dark = true))
-        assertEquals(TagColors.light[4], CategoryColors.of(CategoryHue.TEAL, dark = false))
-        assertEquals(TagColors.dark[6], CategoryColors.of(CategoryHue.BLUE, dark = true))
     }
 
     @Test

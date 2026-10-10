@@ -103,6 +103,8 @@ class ItemEditViewModelTest {
         val id = vm.uiState.value.savedId!!
         val saved = items.stored.getValue(id)
         assertEquals(listOf("family"), saved.tags)
+        // The tag gets its colour stored if it has none (owner decision 2026-10-09).
+        assertEquals(listOf(listOf("family")), sharing.used)
         assertEquals("postal_address", saved.template)
         assertEquals(FieldValue.Address(AddressValue(city = "London", country = "GB")), saved.fields.single().value)
         assertFalse(vm.uiState.value.inProfile)

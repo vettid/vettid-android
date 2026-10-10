@@ -206,6 +206,8 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    // TagColorsViewModelTest: the in-memory tags and owner check (TEST ONLY).
+    testImplementation(projects.core.testing)
     // The account sheet rendered under Robolectric (as :core:ui's FormScaffoldHeaderTest).
     testImplementation(libs.robolectric)
     testImplementation(platform(libs.androidx.compose.bom))

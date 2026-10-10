@@ -8,6 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.semantics.SemanticsActions
@@ -15,8 +16,10 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertTextContains
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import com.vettid.core.data.items.FieldValue
 import com.vettid.core.data.items.GrantDirection
 import com.vettid.core.data.items.GrantView
@@ -35,6 +38,7 @@ import com.vettid.core.data.items.ShareRule
 import com.vettid.core.data.items.SharedContent
 import com.vettid.core.data.items.TagRegistry
 import com.vettid.core.data.items.TagView
+import com.vettid.core.ui.theme.TagColors
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -213,6 +217,60 @@ class SharingScreensTest {
         }
         rule.onNodeWithText("Shared profile").assertIsDisplayed()
         rule.onNodeWithText("3 items · used by 1 sharing rule", substring = true).assertIsDisplayed()
+    }
+
+    // --- tag colours (owner decision 2026-10-09) ---
+
+    @Test
+    fun everyTagHasAColourButtonAndThePickerMarksTheCurrentColour() {
+        val asked = mutableListOf<String>()
+        val picked = mutableListOf<Int>()
+        val travel = TagView("travel", 1, color = TagColors.stored[3])
+        var state by mutableStateOf(TagsUiState(TagRegistry(1, listOf(TagView("@profile", 2), travel)), loading = false))
+        rule.setContent {
+            TagsScreen(
+                state,
+                TagsActions(onColour = { asked += it.tag; state = state.copy(dialog = TagDialog.Colour(it)) }, onPickColour = { picked += it }),
+            )
+        }
+        rule.onNodeWithContentDescription("Edit the colour of Shared profile").assertExists()
+        rule.onNodeWithContentDescription("Edit the colour of travel").performClick()
+        assertEquals(listOf("travel"), asked)
+        rule.onNodeWithText("Colour of travel").assertIsDisplayed()
+        // Ten swatches, the stored one checked.
+        TagColors.names.forEach { rule.onNodeWithTag("tag_colour_$it").assertExists() }
+        rule.onNodeWithTag("tag_colour_teal").assertIsSelected()
+        rule.onNodeWithContentDescription("Teal, selected").assertExists()
+        rule.onNodeWithTag("tag_colour_blue").assertIsNotSelected()
+        rule.onNodeWithTag("tag_colour_blue").performClick()
+        assertEquals(listOf(4), picked)
+    }
+
+    @Test
+    fun aTagWithoutAStoredColourShowsItsHashColourChecked() {
+        val t = TagView("medical", 1)
+        rule.setContent { TagsScreen(TagsUiState(TagRegistry(1, listOf(t)), loading = false, dialog = TagDialog.Colour(t)), TagsActions()) }
+        rule.onNodeWithTag("tag_colour_${TagColors.names[TagColors.index("medical")]}").assertIsSelected()
+    }
+
+    @Test
+    fun theSharedProfileColourIsExplained() {
+        rule.setContent {
+            TagsScreen(TagsUiState(TagRegistry(1, listOf(TagView("@profile", 2))), loading = false, dialog = TagDialog.ProfileColour), TagsActions())
+        }
+        rule.onNodeWithText("Your shared profile always uses your colour").assertIsDisplayed()
+        rule.onNodeWithTag("tag_colour_teal").assertDoesNotExist()
+    }
+
+    @Test
+    fun theTagFormOffersEditColour() {
+        val asked = mutableListOf<String>()
+        val t = TagView("travel", 1)
+        rule.setContent {
+            TagsScreen(TagsUiState(TagRegistry(1, listOf(t)), loading = false, dialog = TagDialog.Edit(t, "travel", "")), TagsActions(onColour = { asked += it.tag }))
+        }
+        rule.onNodeWithTag("tag_form_colour").performClick()
+        assertEquals(listOf("travel"), asked)
     }
 
     // --- one tag per rule (owner decision 2026-10-09) and VAULT-MESSAGING 0.23.0 ---
